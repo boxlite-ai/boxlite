@@ -163,6 +163,7 @@ func (s *executionStreamState) markReleased() {
 // Execution is a handle to a running command.
 type Execution struct {
 	handle      *C.CExecutionHandle
+	id          string
 	streamState *executionStreamState
 	// closing is the parent runtime's close-broadcast channel; Wait/Kill/
 	// ResizeTTY select on it so they unblock when Runtime.Close is called
@@ -175,6 +176,11 @@ type Execution struct {
 	Stdin io.WriteCloser
 
 	closeOnce sync.Once
+}
+
+// ID returns the canonical guest execution ID, preserved after Close.
+func (e *Execution) ID() string {
+	return e.id
 }
 
 type executionStdin struct {
@@ -269,6 +275,11 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		return nil, freeError(&cerr)
 	}
 
+	return b.executionWithCallbacks(handle, cfg)
+}
+
+// executionWithCallbacks shares stream and exit ownership across exec/attach.
+func (b *Box) executionWithCallbacks(handle *C.CExecutionHandle, cfg ExecutionOptions) (*Execution, error) {
 	state := newExecutionStreamState(cfg)
 	streamHandle := cgo.NewHandle(state)
 
@@ -285,6 +296,7 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 
 	execution := &Execution{
 		handle:      handle,
+		id:          executionHandleID(handle),
 		streamState: state,
 		closing:     b.runtime.closing,
 	}
@@ -359,6 +371,11 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 	case <-e.closing:
 		drainAndDelete(ch, h, e.closing)
 		return 0, ErrRuntimeClosed
+	}
+
+	// Recovered controls have no output pumps and therefore no drain barrier.
+	if e.streamState == nil {
+		return code, err
 	}
 
 	// Drain barrier: wait for stream pumps to flush before returning,

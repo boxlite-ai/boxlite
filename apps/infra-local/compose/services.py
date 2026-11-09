@@ -1,7 +1,7 @@
 """Declarative registry of services the orchestrator manages.
 
-11 daemon boxes + 1 one-shot bootstrap:
-  postgres, redis, minio (+ minio-init one-shot), registry, dex, jaeger,
+11 daemon boxes (the legacy minio service name now runs RustFS):
+  postgres, redis, minio, registry, dex, jaeger,
   pgadmin, registry-ui, maildev, otel-collector, caddy.
 
 otel-collector runs the upstream `otel/opentelemetry-collector` image and
@@ -42,9 +42,9 @@ class ServiceSpec:
     cmd: Optional[list[str] | Callable[["InfraConfig"], list[str]]] = None
     entrypoint: Optional[list[str]] = None   # overrides image entrypoint (e.g. ["sh"]); None keeps image default
     working_dir: Optional[str] = None
+    user: Optional[str] = None
     depends_on: list[str] = field(default_factory=list)
     healthcheck: Optional[HealthCheck] = None
-    one_shot: bool = False
     auto_remove: bool = False
 
 
@@ -112,55 +112,26 @@ SPEC_REDIS = ServiceSpec(
 
 SPEC_MINIO = ServiceSpec(
     name="minio",
-    image="minio/minio:latest",
+    image="ghcr.io/rustfs/rustfs:1.0.4-glibc",
     cpus=1,
     memory_mib=512,
     ports=[(29000, 9000), (29001, 9001)],
     env=lambda cfg: {
-        "MINIO_ROOT_USER": cfg.minio_user,
-        "MINIO_ROOT_PASSWORD": cfg.minio_password,
+        "RUSTFS_ACCESS_KEY": cfg.minio_user,
+        "RUSTFS_SECRET_KEY": cfg.minio_password,
+        "RUSTFS_CONSOLE_ENABLE": "true",
     },
-    cmd=["server", "/data", "--console-address", ":9001"],
-    volumes=lambda cfg: [(str(cfg.data_dir / "minio"), "/data")],
+    cmd=["/data"],
+    # Run as root inside this dev VM; do not chown the developer's host files.
+    user="0:0",
+    # RustFS cannot consume a MinIO data directory; keep old data untouched.
+    volumes=lambda cfg: [(str(cfg.data_dir / "rustfs"), "/data")],
     depends_on=[],
     healthcheck=HealthCheck(
-        http_url="http://127.0.0.1:29000/minio/health/live",
+        http_url="http://127.0.0.1:29000/health",
         interval_s=2.0,
         retries=30,
     ),
-)
-
-
-_MINIO_INIT_SCRIPT = """\
-set -eu
-for i in 1 2 3 4 5; do
-  if mc alias set boxlite "$MINIO_URL" "$MINIO_USER" "$MINIO_PASSWORD" 2>/dev/null; then break; fi
-  echo "init: minio not ready yet (attempt $i)"
-  sleep 2
-done
-mc alias set boxlite "$MINIO_URL" "$MINIO_USER" "$MINIO_PASSWORD"
-mc mb --ignore-existing boxlite/boxlite
-echo "init: ok - boxlite bucket ready"
-"""
-
-
-SPEC_MINIO_INIT = ServiceSpec(
-    name="minio-init",
-    image="minio/mc:latest",
-    cpus=1,
-    memory_mib=128,
-    ports=[],
-    one_shot=True,
-    depends_on=["minio"],
-    entrypoint=["sh"],
-    cmd=["-c", _MINIO_INIT_SCRIPT],
-    env=lambda cfg: {
-        "MINIO_URL": f"http://{cfg.host_hub}:{cfg.minio_host_port}",
-        "MINIO_USER": cfg.minio_user,
-        "MINIO_PASSWORD": cfg.minio_password,
-    },
-    volumes=lambda cfg: [],
-    healthcheck=None,
 )
 
 
@@ -204,6 +175,12 @@ staticClients:
       - 'http://127.0.0.1:5555/callback'
     name: 'BoxLite'
     public: true
+  # The MCP endpoint's token audience (MCP_RESOURCE_URL in api.env). `boxlite`
+  # gets a token for it with the scope `audience:server:client_id:<this id>`.
+  - id: 'http://localhost:3001/mcp'
+    name: 'BoxLite MCP'
+    public: true
+    trustedPeers: ['boxlite']
 enablePasswordDB: true
 staticPasswords:
   - email: 'admin@boxlite.dev'
@@ -538,7 +515,6 @@ SERVICES: dict[str, ServiceSpec] = {
     "postgres":    SPEC_PG,
     "redis":       SPEC_REDIS,
     "minio":       SPEC_MINIO,
-    "minio-init":  SPEC_MINIO_INIT,
     "registry":    SPEC_REGISTRY,
     "dex":         SPEC_DEX,
     "jaeger":      SPEC_JAEGER,

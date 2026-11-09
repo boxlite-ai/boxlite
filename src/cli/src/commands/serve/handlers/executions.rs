@@ -13,8 +13,9 @@ use futures::StreamExt;
 
 use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
 use super::super::{
-    ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, SessionKind, build_box_command,
-    error_from_boxlite, error_response, get_or_attach_main_session, get_or_resume_box,
+    ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, RecoveredTerminal, SessionKind,
+    build_box_command, error_from_boxlite, error_response, get_or_attach_main_session,
+    get_or_fetch_box, get_or_resume_box,
 };
 
 pub(in crate::commands::serve) async fn start_execution(
@@ -50,7 +51,12 @@ pub(in crate::commands::serve) async fn start_execution(
     };
 
     let exec_id = execution.id().clone();
-    let active = ActiveExecution::new(box_id, SessionKind::Exec, execution, stdin);
+    let active = ActiveExecution::new(
+        litebox.id().to_string(),
+        SessionKind::Exec,
+        execution,
+        stdin,
+    );
 
     state
         .executions
@@ -93,21 +99,166 @@ fn get_active_for_box(
     }
 }
 
+/// Inventory comes from the guest, not the server's stream-reader registry.
+/// Resolving an existing box never boots it; a stopped box lists no sessions.
+pub(in crate::commands::serve) async fn list_executions(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(b) => b,
+        Err(response) => return response,
+    };
+    match litebox.executions().list().await {
+        Ok(executions) => Json(serde_json::json!({"executions": executions})).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+enum ExecutionControl {
+    Registered(Arc<ActiveExecution>),
+    Recovered(boxlite::Execution),
+}
+
+impl ExecutionControl {
+    fn execution(&self) -> &boxlite::Execution {
+        match self {
+            Self::Registered(active) => active.execution(),
+            Self::Recovered(execution) => execution,
+        }
+    }
+}
+
+/// Recover control independently of whoever owns the execution's output stream.
+/// Never attach merely to send a signal, resize, or kill a discovered session.
+#[allow(clippy::result_large_err)]
+async fn execution_control(
+    state: &AppState,
+    box_id: &str,
+    exec_id: &str,
+) -> Result<ExecutionControl, Response> {
+    if let Ok(active) = get_active_for_box(&*state.executions.read().await, exec_id, box_id) {
+        return Ok(ExecutionControl::Registered(active));
+    }
+    let litebox = get_or_fetch_box(state, box_id).await?;
+    let canonical = litebox.id().to_string();
+    let registry = state.executions.read().await;
+    if registry.contains_key(exec_id) {
+        return get_active_for_box(&registry, exec_id, &canonical)
+            .map(ExecutionControl::Registered);
+    }
+    drop(registry);
+    // Recovered sessions leave the guest's live inventory the moment they
+    // exit, and a control handle has nothing left to ask then. Watch the exit
+    // now so `GET /executions/{id}` keeps answering with the real code after —
+    // the runner's `watchRecovered` in serve form.
+    match litebox.executions().get(exec_id).await {
+        Ok(execution) => {
+            state
+                .watch_recovered(&canonical, exec_id, execution.clone())
+                .await;
+            Ok(ExecutionControl::Recovered(execution))
+        }
+        Err(error) => Err(error_from_boxlite(&error)),
+    }
+}
+
+/// Only attachment claims an output reader and adds it to the replay registry.
+#[allow(clippy::result_large_err)]
+async fn recover_attached_execution(
+    state: &AppState,
+    box_id: &str,
+    exec_id: &str,
+) -> Result<Arc<ActiveExecution>, Response> {
+    if let Ok(active) = get_active_for_box(&*state.executions.read().await, exec_id, box_id) {
+        return Ok(active);
+    }
+    let litebox = get_or_fetch_box(state, box_id).await?;
+    let canonical = litebox.id().to_string();
+    {
+        // Re-check after fetching the box, still without the write lock: a
+        // session registered under the canonical id belongs to this box.
+        let registry = state.executions.read().await;
+        if registry.contains_key(exec_id) {
+            return get_active_for_box(&registry, exec_id, &canonical);
+        }
+    }
+
+    // Both guest calls below are network round trips. Hold no registry lock
+    // across them: recovery only has to be consistent at the insert, and a
+    // stalled VM must not freeze status, signal, kill or AutoStop sweeps.
+    let info = litebox
+        .executions()
+        .list()
+        .await
+        .map_err(|error| error_from_boxlite(&error))?
+        .into_iter()
+        .find(|info| info.execution_id == exec_id)
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::NOT_FOUND,
+                format!("execution not found: {exec_id}"),
+                "NotFoundError",
+                "not_found",
+            )
+        })?;
+    let mut execution = match litebox
+        .attach(boxlite::AttachOptions::execution(exec_id))
+        .await
+    {
+        Ok(execution) => execution,
+        Err(error) => {
+            // A concurrent recovery may have claimed the sole output reader
+            // first. Share the session it installed instead of surfacing the
+            // conflict; anything else is a real failure.
+            let registry = state.executions.read().await;
+            if let Ok(active) = get_active_for_box(&registry, exec_id, &canonical) {
+                return Ok(active);
+            }
+            return Err(error_from_boxlite(&error));
+        }
+    };
+    let stdin = execution.stdin();
+    let kind = if info.is_main_session {
+        SessionKind::Main
+    } else {
+        SessionKind::Exec
+    };
+    let active = ActiveExecution::new(canonical.clone(), kind, execution, stdin);
+
+    let mut registry = state.executions.write().await;
+    if registry.contains_key(exec_id) {
+        // Lost the race between the last check and this insert. Drop ours so
+        // the reader lease returns to the guest, then report the winner.
+        drop(active);
+        return get_active_for_box(&registry, exec_id, &canonical);
+    }
+    registry.insert(exec_id.to_string(), Arc::clone(&active));
+    Ok(active)
+}
+
 pub(in crate::commands::serve) async fn get_execution(
     State(state): State<Arc<AppState>>,
     Path((box_id, exec_id)): Path<(String, String)>,
 ) -> Response {
-    let executions = state.executions.read().await;
-    let active = match get_active_for_box(&executions, &exec_id, &box_id) {
-        Ok(a) => a,
-        Err(resp) => return resp,
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(litebox) => litebox,
+        Err(response) => return response,
     };
-    drop(executions);
+    let canonical = litebox.id().to_string();
+    if let Some(terminal) = state.recovered_terminal(&canonical, &exec_id).await {
+        return terminal_body(exec_id, &terminal);
+    }
 
-    let (status, exit_code) = if active.is_done() {
-        ("completed", Some(active.exit_code()))
-    } else {
-        ("running", None)
+    let control = match execution_control(&state, &canonical, &exec_id).await {
+        Ok(control) => control,
+        Err(response) => return response,
+    };
+    let (status, exit_code) = match &control {
+        ExecutionControl::Registered(active) if active.is_done() => {
+            ("completed", Some(active.exit_code()))
+        }
+        _ => ("running", None),
     };
 
     let mut body = serde_json::json!({
@@ -115,6 +266,21 @@ pub(in crate::commands::serve) async fn get_execution(
         "status": status,
     });
     if let Some(code) = exit_code {
+        body["exit_code"] = serde_json::json!(code);
+    }
+    Json(body).into_response()
+}
+
+/// Render a recovered session's recorded terminal status.
+fn terminal_body(exec_id: String, terminal: &RecoveredTerminal) -> Response {
+    if let Some(error) = &terminal.error {
+        return error_from_boxlite(&boxlite::BoxliteError::Internal(error.clone()));
+    }
+    let mut body = serde_json::json!({
+        "execution_id": exec_id,
+        "status": "completed",
+    });
+    if let Some(code) = terminal.exit_code {
         body["exit_code"] = serde_json::json!(code);
     }
     Json(body).into_response()
@@ -143,12 +309,10 @@ pub(in crate::commands::serve) async fn send_signal(
         );
     }
 
-    let executions = state.executions.read().await;
-    let active = match get_active_for_box(&executions, &exec_id, &box_id) {
-        Ok(a) => a,
-        Err(resp) => return resp,
+    let active = match execution_control(&state, &box_id, &exec_id).await {
+        Ok(control) => control,
+        Err(response) => return response,
     };
-    drop(executions);
 
     let sig_result = tokio::time::timeout(
         Duration::from_secs(10),
@@ -174,15 +338,13 @@ pub(in crate::commands::serve) async fn kill_execution(
     State(state): State<Arc<AppState>>,
     Path((box_id, exec_id)): Path<(String, String)>,
 ) -> Response {
-    let active = {
-        let executions = state.executions.read().await;
-        match get_active_for_box(&executions, &exec_id, &box_id) {
-            Ok(a) => a,
-            Err(resp) => return resp,
-        }
+    let active = match execution_control(&state, &box_id, &exec_id).await {
+        Ok(control) => control,
+        Err(response) => return response,
     };
-
-    active.mark_reaping_kill().await;
+    if let ExecutionControl::Registered(registered) = &active {
+        registered.mark_reaping_kill().await;
+    }
 
     let kill_result =
         tokio::time::timeout(Duration::from_secs(10), active.execution().kill()).await;
@@ -206,12 +368,10 @@ pub(in crate::commands::serve) async fn resize_tty(
     Path((box_id, exec_id)): Path<(String, String)>,
     Json(req): Json<ResizeRequest>,
 ) -> Response {
-    let executions = state.executions.read().await;
-    let active = match get_active_for_box(&executions, &exec_id, &box_id) {
-        Ok(a) => a,
-        Err(resp) => return resp,
+    let active = match execution_control(&state, &box_id, &exec_id).await {
+        Ok(control) => control,
+        Err(response) => return response,
     };
-    drop(executions);
 
     match active.execution().resize_tty(req.rows, req.cols).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -310,12 +470,10 @@ pub(in crate::commands::serve) async fn attach_execution(
         }
     };
 
-    let executions = state.executions.read().await;
-    let active = match get_active_for_box(&executions, &exec_id, &box_id) {
-        Ok(a) => a,
-        Err(resp) => return resp,
+    let active = match recover_attached_execution(&state, &box_id, &exec_id).await {
+        Ok(active) => active,
+        Err(response) => return response,
     };
-    drop(executions);
 
     // Claim BEFORE the HTTP upgrade so rejection is a proper 409 at the
     // HTTP level.
@@ -860,6 +1018,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         // The stub's channels must stay alive for the length of the test.
@@ -945,6 +1104,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         let (exec, stdout_tx, stderr_tx, stdin_rx, result_tx) =

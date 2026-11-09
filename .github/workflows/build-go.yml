@@ -1,8 +1,7 @@
 # Test Go SDK and tag Go module for publishing.
 #
-# Release builds download the published native library and test the Go SDK,
-# validating the same workflow that end users follow. Manual builds produce
-# the native library from the selected commit before testing its Go SDK.
+# Release tests use the C release commit and compare its run artifact with the
+# public archive before linking. Manual tests build C from their own commit.
 #
 # User workflow:
 #   go get github.com/boxlite-ai/boxlite/sdks/go
@@ -28,7 +27,68 @@ jobs:
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
-    uses: ./.github/workflows/config.yml
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.checkout.outputs.commit }}
+      tag: ${{ steps.release.outputs.tag }}
+      platforms: ${{ steps.config.outputs.platforms }}
+      go-version: ${{ steps.config.outputs.go-version }}
+    steps:
+      - name: Verify C release producer
+        if: github.event_name == 'workflow_run'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          C_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          C_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          C_WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          C_SHA: ${{ github.event.workflow_run.head_sha }}
+          C_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [[ "$C_REPOSITORY" != "$GITHUB_REPOSITORY" || ! "$C_SHA" =~ ^[0-9a-f]{40}$ || ! "$C_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo 'Invalid C release repository, commit, or run ID' >&2
+            exit 1
+          fi
+          expected=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-c.yml" --jq '.id')
+          if [[ "$C_WORKFLOW_PATH" != .github/workflows/build-c.yml || ! "$expected" =~ ^[0-9]+$ || "$C_WORKFLOW_ID" != "$expected" ]]; then
+            echo 'The triggering run is not the canonical Build C SDK workflow' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        id: checkout
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify C release tag
+        id: release
+        if: github.event_name == 'workflow_run'
+        shell: bash
+        env:
+          C_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          version=$(awk -F '"' '/^\[workspace\.package\]$/ { workspace=1; next } /^\[/ { workspace=0 } workspace && /^version = "/ { print $2; exit }' Cargo.toml)
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$RELEASE_TAG" != "v$version" ]]; then
+            echo 'The C run did not originate from the canonical workspace release tag' >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")" != "$C_SHA" ]] ||
+             ! git merge-base --is-ancestor "$C_SHA" refs/remotes/origin/main; then
+            echo 'The product tag must point to the C build commit on main' >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/ci-config
+        id: config
 
   build-c:
     name: Build manual commit C SDK
@@ -42,6 +102,9 @@ jobs:
   test:
     name: Test (${{ matrix.target }})
     needs: [config, build-c]
+    permissions:
+      contents: read
+      actions: read
     if: >-
       !cancelled() &&
       needs.config.result == 'success' &&
@@ -54,21 +117,44 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.config.outputs.sha }}
+          persist-credentials: false
 
       - uses: ./.github/actions/setup-go
         with:
           go-version: ${{ needs.config.outputs.go-version }}
 
+      - name: Download C release run artifact
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: c-sdk-${{ matrix.target }}
+          path: ${{ runner.temp }}/c-release-run
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
       - name: Download prebuilt library
         if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.config.outputs.tag }}
+          PLATFORM: ${{ matrix.target }}
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          PLATFORM="${{ matrix.target }}"
-          ARCHIVE="boxlite-c-v${VERSION}-${PLATFORM}.tar.gz"
-          URL="https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "Downloading: ${URL}"
-          curl -sL "${URL}" | tar xz -C /tmp/
-          cp "/tmp/boxlite-c-v${VERSION}-${PLATFORM}/lib/libboxlite.a" sdks/go/
+          set -euo pipefail
+          directory="boxlite-c-${RELEASE_TAG}-${PLATFORM}"
+          archive="$directory.tar.gz"
+          expected="$RUNNER_TEMP/c-release-run/$archive"
+          test -f "$expected"
+          stage=$(mktemp -d "$RUNNER_TEMP/go-c-release.XXXXXX")
+          trap 'rm -rf -- "$stage"' EXIT
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$archive" -o "$stage/$archive"
+          if ! cmp -s "$expected" "$stage/$archive"; then
+            echo "Public C archive $archive differs from the triggering run" >&2
+            exit 1
+          fi
+          tar xzf "$expected" -C "$stage"
+          cp "$stage/$directory/lib/libboxlite.a" sdks/go/
 
       - name: Download commit libboxlite.a
         if: github.event_name == 'workflow_dispatch'
@@ -97,7 +183,12 @@ jobs:
   tag-go-module:
     name: Tag Go Module
     needs: test
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
+    # The manual C build is skipped on releases; publication must also override implicit success().
+    if: >-
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -105,18 +196,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Create Go module tag
+        shell: bash
+        env:
+          C_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          TAG="sdks/go/v${VERSION}"
-          echo "Creating tag: ${TAG}"
+          set -euo pipefail
+          product_ref="refs/tags/$RELEASE_TAG"
+          go_ref="refs/tags/sdks/go/$RELEASE_TAG"
 
-          if git rev-parse "${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists, skipping"
-            exit 0
+          # Fetch the current remote ref because the tag could have moved during the matrix.
+          git fetch --no-tags origin "$product_ref"
+          if [[ "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" != "$C_SHA" ]]; then
+            echo "Product tag $RELEASE_TAG moved during Go release tests" >&2
+            exit 1
           fi
 
-          git tag "${TAG}"
-          git push origin "${TAG}"
+          if git ls-remote --exit-code --refs origin "$go_ref" >/dev/null; then
+            git fetch --no-tags origin "$go_ref"
+            if [[ "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" != "$C_SHA" ]]; then
+              echo "Go tag $go_ref points to a different commit" >&2
+              exit 1
+            fi
+            echo "Go tag $go_ref already points to $C_SHA"
+            exit 0
+          else
+            status=$?
+            # ls-remote uses 2 for an absent ref. A transport error is not absence.
+            if [[ "$status" != 2 ]]; then exit "$status"; fi
+          fi
+
+          git push origin "$C_SHA:$go_ref"

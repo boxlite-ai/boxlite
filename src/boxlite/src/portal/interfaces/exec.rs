@@ -38,6 +38,53 @@ impl ExecutionInterface {
         }
     }
 
+    pub async fn list_executions(&mut self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
+        let response = self
+            .client
+            .list_executions(boxlite_shared::ListExecutionsRequest {})
+            .await?
+            .into_inner();
+        Ok(response
+            .executions
+            .into_iter()
+            .map(|info| crate::ExecutionInfo {
+                execution_id: info.execution_id,
+                argv: info.argv,
+                started_at: info.started_at,
+                tty: info.tty,
+                is_main_session: info.is_main_session,
+            })
+            .collect())
+    }
+
+    /// Controls and wait do not acquire the session's output reader lease.
+    /// Dropping the last handle cancels its wait RPC without signalling the process.
+    pub fn control_existing(
+        &self,
+        execution_id: &str,
+        shutdown: CancellationToken,
+    ) -> crate::Execution {
+        let rx = self.wait_existing(execution_id, shutdown);
+        crate::Execution::new(
+            execution_id.to_owned(),
+            Box::new(self.clone()),
+            rx,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn wait_existing(
+        &self,
+        execution_id: &str,
+        shutdown: CancellationToken,
+    ) -> mpsc::UnboundedReceiver<ExecResult> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        ExecProtocol::spawn_wait(self.client.clone(), execution_id.to_owned(), tx, shutdown);
+        rx
+    }
+
     /// Execute a command and return execution components.
     ///
     /// # Arguments
@@ -84,6 +131,7 @@ impl ExecutionInterface {
             stdout_tx,
             stderr_tx,
             shutdown_token.clone(),
+            None,
         );
 
         // Spawn wait task for terminal status (cancellable)
@@ -123,6 +171,24 @@ impl ExecutionInterface {
 
         let execution_id = execution_id.to_string();
         tracing::debug!(execution_id = %execution_id, wire_stdin, "attaching to existing session");
+        // Claim the reader before exposing a handle or opening stdin. Otherwise
+        // an active-reader rejection would be hidden in background stderr.
+        let response = tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {
+                return Err(BoxliteError::Stopped("Attach cancelled during shutdown".into()));
+            }
+            response = self.client.attach(AttachRequest {
+                execution_id: execution_id.clone(),
+            }) => response,
+        };
+        let stream = response
+            .map_err(|status| match status.code() {
+                tonic::Code::AlreadyExists => BoxliteError::AlreadyExists(status.message().into()),
+                tonic::Code::NotFound => BoxliteError::SessionReaped(status.message().into()),
+                _ => status.into(),
+            })?
+            .into_inner();
 
         let stdin_tx = if wire_stdin {
             let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -143,6 +209,7 @@ impl ExecutionInterface {
             stdout_tx,
             stderr_tx,
             shutdown_token.clone(),
+            Some(stream),
         );
         ExecProtocol::spawn_wait(
             self.client.clone(),
@@ -317,6 +384,7 @@ impl ExecProtocol {
         stdout_tx: mpsc::UnboundedSender<String>,
         stderr_tx: mpsc::UnboundedSender<String>,
         shutdown_token: CancellationToken,
+        connected: Option<tonic::Streaming<ExecOutput>>,
     ) {
         tokio::spawn(async move {
             let request = AttachRequest {
@@ -324,13 +392,16 @@ impl ExecProtocol {
             };
 
             // Use select! to handle cancellation during initial attach
-            let response = tokio::select! {
-                biased;
-                _ = shutdown_token.cancelled() => {
-                    tracing::debug!(execution_id = %execution_id, "attach cancelled during connect");
-                    return;
-                }
-                result = client.attach(request) => result,
+            let response = match connected {
+                Some(stream) => Ok(tonic::Response::new(stream)),
+                None => tokio::select! {
+                    biased;
+                    _ = shutdown_token.cancelled() => {
+                        tracing::debug!(execution_id = %execution_id, "attach cancelled during connect");
+                        return;
+                    }
+                    result = client.attach(request) => result,
+                },
             };
 
             match response {
@@ -346,6 +417,8 @@ impl ExecProtocol {
                     // cut, doubling visible columns and desyncing TUI cursor
                     // math (see https://github.com/.../issues/...). Holding
                     // the trailing partial across chunks fixes this.
+                    let stdout_closed = stdout_tx.clone();
+                    let stderr_closed = stderr_tx.clone();
                     let mut stdout = OutputTracker::new(stdout_tx);
                     let mut stderr = OutputTracker::new(stderr_tx);
 
@@ -361,6 +434,15 @@ impl ExecProtocol {
                                 );
                                 stdout.flush();
                                 stderr.flush();
+                                break;
+                            }
+                            _ = async {
+                                stdout_closed.closed().await;
+                                stderr_closed.closed().await;
+                            } => {
+                                // Every output receiver was dropped. Stop reading so
+                                // a later client can acquire the guest reader lease;
+                                // the process and its independent wait remain alive.
                                 break;
                             }
                             msg = stream.message() => msg,
@@ -492,9 +574,13 @@ impl ExecProtocol {
                 biased;
                 _ = shutdown_token.cancelled() => {
                     tracing::debug!(execution_id = %execution_id, "Wait cancelled during shutdown");
-                    // Send a special result indicating cancellation
-                    // Using exit code -1 to indicate abnormal termination
+                    // Preserve the shutdown sentinel used by the main-session
+                    // exit-file fallback when the guest connection closes.
                     let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
+                    return;
+                }
+                _ = result_tx.closed() => {
+                    tracing::debug!(execution_id = %execution_id, "Wait cancelled after last receiver dropped");
                     return;
                 }
                 result = client.wait(request) => result,
@@ -511,10 +597,6 @@ impl ExecProtocol {
                         error = %e,
                         "Wait failed"
                     );
-                    let _ = result_tx.send(ExecResult {
-                        exit_code: -1,
-                        error_message: None,
-                    });
                 }
             }
         });
@@ -879,6 +961,10 @@ fn map_exec_error(reason: &str, detail: String) -> BoxliteError {
 // ============================================================================
 
 #[cfg(test)]
+#[path = "exec/tests.rs"]
+mod rpc_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -1011,40 +1097,6 @@ mod tests {
         // Should have waited ~50ms, not 10s
         assert!(elapsed < Duration::from_secs(1));
         assert!(elapsed >= Duration::from_millis(40)); // Allow some variance
-    }
-
-    /// Test simulating spawn_wait cancellation behavior.
-    /// When token is cancelled, the result channel should receive exit_code -1.
-    #[tokio::test]
-    async fn test_spawn_wait_cancellation_sends_result() {
-        let token = CancellationToken::new();
-        let (result_tx, mut result_rx) = mpsc::unbounded_channel();
-
-        // Simulate spawn_wait's cancellation handling
-        let token_clone = token.clone();
-        let handle = tokio::spawn(async move {
-            tokio::select! {
-                biased;
-                _ = token_clone.cancelled() => {
-                    let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
-                }
-                _ = tokio::time::sleep(Duration::from_secs(3600)) => {
-                    // Would normally wait for gRPC response
-                }
-            }
-        });
-
-        // Cancel after short delay
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        token.cancel();
-
-        // Wait for task to complete
-        handle.await.unwrap();
-
-        // Should have received cancellation result
-        let result = result_rx.recv().await;
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().exit_code, -1);
     }
 
     /// Test simulating spawn_attach cancellation behavior.

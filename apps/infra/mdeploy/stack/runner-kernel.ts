@@ -26,7 +26,7 @@ lock_runner_kernel() {
 }
 
 runner_kernel_bytes_match() {
-  [ -f "$KERNEL_PATH" ] && printf '%s  %s\\n' '${kernel.sha256}' "$KERNEL_PATH" | sha256sum --check --status
+  [ -f "$KERNEL_PATH" ] && printf '%s  %s\\n' '${kernel.sha256}' "$KERNEL_PATH" | sha256sum -c - >/dev/null 2>&1
 }
 
 runner_kernel_configuration_matches() {
@@ -71,7 +71,7 @@ fetch_runner_kernel() {
       --connect-timeout 10 --max-time 120 \\
       --retry 5 --retry-delay 2 --retry-connrefused \\
       '${kernel.url}' -o "$partial" &&
-    printf '%s  %s\\n' '${kernel.sha256}' "$partial" | sha256sum --check --status &&
+    printf '%s  %s\\n' '${kernel.sha256}' "$partial" | sha256sum -c - >/dev/null 2>&1 &&
     chmod 0444 "$partial" && mv -f "$partial" "$KERNEL_PATH"; then
     echo 'runner kernel SHA256 verified: ${kernel.sha256}'
   else
@@ -106,7 +106,7 @@ lock_runner_kernel
 if runner_kernel_matches; then echo 'runner kernel already current'; exit 0; fi
 # A failed download must not stop the serving runner or change its configuration.
 fetch_runner_kernel
-KERNEL_BACKUP=$(mktemp -d)
+KERNEL_BACKUP=$(mktemp -d "\${TMPDIR:-/tmp}/runner-kernel.XXXXXX")
 for file in "$KERNEL_ENV" "$KERNEL_DROPIN"; do
   if [ -f "$file" ]; then
     cp -a "$file" "$KERNEL_BACKUP/$(basename "$file")" || {

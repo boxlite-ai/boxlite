@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::exec::PyExecution;
+use crate::executions::PyExecutions;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
@@ -40,6 +41,13 @@ impl PyBox {
             let info = handle.info().await.map_err(map_err)?;
             Ok(PyBoxInfo::from(info))
         })
+    }
+
+    /// Get the live execution namespace without starting the box.
+    ///
+    /// Usage: `await box.executions().list()`, `await box.executions().get(id)`.
+    fn executions(&self) -> PyExecutions {
+        PyExecutions::new(Arc::clone(&self.handle))
     }
 
     /// Get the snapshot handle for snapshot operations.

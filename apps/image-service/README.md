@@ -11,7 +11,7 @@ organization's, and streams the answer straight back. Nothing else about the
 pull changes — the manifest bytes a runner receives are the bytes the upstream
 served, so the digest a client verifies still holds.
 
-- Place in the platform: [`apps/README.md`](../README.md)
+- Place in the platform: [hosted platform](../../docs/contributing/architecture/platform/README.md)
 
 > **Private images.** An organization's login for ghcr.io, Docker Hub, quay.io
 > or one of Container Registry's gcr.io hosts is read from the credential store

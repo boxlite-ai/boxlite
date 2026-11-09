@@ -67,107 +67,6 @@ impl Krun {
         Ok(Self { options })
     }
 
-    /// Transform Unix socket URIs to vsock URIs in a shell command string.
-    ///
-    /// Replaces `--{arg_name} unix://...` with `--{arg_name} vsock://PORT`
-    fn transform_shell_arg_unix_to_vsock(input: &str, arg_name: &str, vsock_port: u32) -> String {
-        use boxlite_shared::BoxTransport;
-        let vsock_uri = BoxTransport::vsock(vsock_port).to_uri();
-        let pattern = format!("--{} unix://", arg_name);
-
-        let mut result = String::new();
-        let mut chars = input.chars().peekable();
-        let mut pos = 0;
-
-        while let Some(c) = chars.next() {
-            // Check if we're at the start of the pattern
-            if c == '-' && input[pos..].starts_with(&pattern) {
-                // Copy "--{arg_name} "
-                result.push_str(&format!("--{} ", arg_name));
-
-                // Skip past the pattern
-                let skip_len = pattern.len() - 1; // -1 because we already consumed '-'
-                for _ in 0..skip_len {
-                    chars.next();
-                }
-                pos += pattern.len();
-
-                // Skip the rest of the unix path until whitespace
-                while let Some(&next) = chars.peek() {
-                    if next.is_whitespace() {
-                        break;
-                    }
-                    chars.next();
-                    pos += 1;
-                }
-
-                // Add the vsock URI
-                result.push_str(&vsock_uri);
-            } else {
-                result.push(c);
-                pos += c.len_utf8();
-            }
-        }
-
-        result
-    }
-
-    /// Transform a single Unix socket argument to vsock.
-    ///
-    /// Handles two cases:
-    /// 1. Separate arguments: ["--{arg_name}", "unix://..."]
-    /// 2. Shell command string: ["-c", "... --{arg_name} unix://... "]
-    fn transform_arg_unix_to_vsock(guest_args: &mut [String], arg_name: &str, vsock_port: u32) {
-        use boxlite_shared::BoxTransport;
-        let vsock_uri = BoxTransport::vsock(vsock_port).to_uri();
-        let pattern = format!("--{} unix://", arg_name);
-
-        for i in 0..guest_args.len() {
-            // Case 1: Separate arguments ["--{arg_name}", "unix://..."]
-            if guest_args[i] == format!("--{}", arg_name)
-                && i + 1 < guest_args.len()
-                && guest_args[i + 1].starts_with("unix://")
-            {
-                tracing::debug!(
-                    arg = arg_name,
-                    original = %guest_args[i + 1],
-                    transformed = %vsock_uri,
-                    "Transforming Unix socket to vsock URI"
-                );
-                guest_args[i + 1] = vsock_uri;
-                return;
-            }
-
-            // Case 2: Shell command string (e.g., -c "... --{arg_name} unix://... ")
-            if guest_args[i].contains(&pattern) {
-                let transformed =
-                    Self::transform_shell_arg_unix_to_vsock(&guest_args[i], arg_name, vsock_port);
-                tracing::debug!(
-                    arg = arg_name,
-                    original = %guest_args[i],
-                    transformed = %transformed,
-                    "Transforming shell command string"
-                );
-                guest_args[i] = transformed;
-                return;
-            }
-        }
-    }
-
-    /// Transform guest arguments to replace Unix socket URIs with vsock URIs.
-    ///
-    /// Transforms both --listen and --notify from Unix to vsock.
-    /// The engine bridges Unix sockets on host to vsock ports inside VM.
-    fn transform_guest_args(mut guest_args: Vec<String>) -> Vec<String> {
-        // Transform --listen unix://... -> --listen vsock://2695
-        Self::transform_arg_unix_to_vsock(&mut guest_args, "listen", network::GUEST_AGENT_PORT);
-
-        // Transform --notify unix://... -> --notify vsock://2696
-        Self::transform_arg_unix_to_vsock(&mut guest_args, "notify", network::GUEST_READY_PORT);
-
-        guest_args
-    }
-
     fn set_entrypoint(config: &InstanceSpec, ctx: &mut KrunContext) -> Result<(), BoxliteError> {
         // Prepare entrypoint - the VM runs the guest agent which will:
         // 1. Mount virtiofs shares
@@ -176,7 +75,8 @@ impl Krun {
         let guest_executable = &config.guest_entrypoint.executable;
 
         // Transform guest arguments (engine handles transport-specific transformations)
-        let guest_args = Self::transform_guest_args(config.guest_entrypoint.args.clone());
+        let guest_args =
+            crate::vmm::guest_args::transform_guest_args(config.guest_entrypoint.args.clone());
         tracing::debug!(executable = %guest_executable,
                             args_count = guest_args.len(),
                             "Configuring entrypoint");

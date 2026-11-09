@@ -22,7 +22,11 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-1' } }),
 }))
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit() {}
+  },
+}))
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     cols = 80

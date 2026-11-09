@@ -2289,6 +2289,25 @@ mod tests {
     }
 
     #[test]
+    fn engine_option_roundtrips_and_is_omitted_when_unset() {
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"engine":"Native"}}"#).unwrap();
+        assert_eq!(stored.advanced.engine, Some(crate::vmm::VmmKind::Native));
+        assert_eq!(
+            serde_json::to_value(stored).unwrap()["advanced"]["engine"],
+            serde_json::json!("Native")
+        );
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.advanced.engine, None);
+        assert!(
+            serde_json::to_value(legacy).unwrap()["advanced"]
+                .get("engine")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn privileged_option_roundtrips() {
         let stored: BoxOptions =
             serde_json::from_str(r#"{"advanced":{"privileged":true}}"#).unwrap();

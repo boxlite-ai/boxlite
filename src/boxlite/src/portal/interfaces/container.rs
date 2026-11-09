@@ -286,6 +286,25 @@ impl ContainerInterface {
             )),
         }
     }
+
+    /// Mount the share folder `source` read-only at `destination` in the
+    /// running container. The guest refuses a destination that has entries.
+    pub async fn mount(
+        &mut self,
+        container_id: &str,
+        source: &str,
+        destination: &str,
+    ) -> BoxliteResult<()> {
+        self.client
+            .mount(boxlite_shared::ContainerMountRequest {
+                container_id: container_id.to_string(),
+                source: source.to_string(),
+                destination: destination.to_string(),
+                read_only: true,
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 fn map_container_init_status(status: tonic::Status) -> BoxliteError {

@@ -5,8 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-publish = false
 description = "Virtual machine lifecycle and device model for BoxLite"
+repository = "https://github.com/boxlite-ai/boxlite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
@@ -17,6 +17,9 @@ mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net
 tracing = "0.1"
 virtio-queue = "0.18.0"
 vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 # Tests poll real pipes as virtio backend sources.

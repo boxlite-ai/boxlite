@@ -55,7 +55,7 @@ own.
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module on release; manual tests build a matching C archive first |
+| `build-go.yml` | `workflow_run`, dispatch | — | Pins release tests and the Go tag to the C build commit. Compares public archives with that run before testing. Manual tests build their own C archive. |
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
 | `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
 | `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; manual builds first produce the selected commit's C archive |
@@ -318,6 +318,14 @@ The release chain still downloads the published C archives. Reusable Runner call
 `libboxlite_source` selection: `deploy-infra.yml` supplies its existing C artifact without a
 second C build. A C build failure stops its consumers; manual runs publish no releases or tags.
 
+Runner release uploads and Go module tagging run only after successful release-origin C SDK
+builds, followed by a successful Runner build or Go test matrix respectively.
+The manual `build-c` job is intentionally skipped on that path, so each publication job uses
+`!cancelled()` and explicit prerequisite-result checks to override the implicit `success()`
+check inherited through the dependency chain. Failed or skipped prerequisites and workflow
+cancellation still prevent publication; manual builds, reusable deployment builds, and
+non-release upstream runs do not publish through these jobs.
+
 ## Do not rename these
 
 Two workflows chain off another's **display name**, not its filename. Changing the `name:` below
@@ -326,6 +334,10 @@ silently stops the chain — no error, the downstream workflow simply never fire
 | `name:` | Depended on by |
 | --- | --- |
 | `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
+
+Go release tests require the canonical C workflow and read the platform matrix and toolchain
+at that run's commit. A missing or different C run archive stops testing. Before creating
+the Go module tag, the workflow checks that the remote product tag still points to the tested commit.
 
 ## Adding a stage
 

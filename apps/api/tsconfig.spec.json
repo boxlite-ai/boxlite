@@ -4,6 +4,12 @@
     "outDir": "../../dist/out-tsc",
     "module": "commonjs",
     "moduleResolution": "node10",
+    "paths": {
+      "@boxlite-ai/api-client": ["libs/api-client/src/index.ts"],
+      "@boxlite-ai/runner-api-client": ["libs/runner-api-client/src/index.ts"],
+      "@boxlite-ai/analytics-api-client": ["libs/analytics-api-client/src/index.ts"],
+      "@visulima/disposable-email-domains/edge": ["node_modules/@visulima/disposable-email-domains/dist/edge.d.ts"]
+    },
     "resolveJsonModule": true,
     "types": ["jest", "node"]
   },
