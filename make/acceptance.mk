@@ -17,8 +17,8 @@ test\:docker\:swarm:
 	@$(DOCKER_PYTHON) tests/docker/swarm.py $(DOCKER_ACCEPTANCE_ARGS)
 
 fmt\:docker:
-	@$(DOCKER_RUFF) format scripts/build/prepare_dind_firmware.py tests/scripts/test_linux_firmware_source.py tests/scripts/test_macos_firmware_source.py tests/docker
+	@$(DOCKER_RUFF) format scripts/build/prepare_dind_firmware.py tests/scripts/test_linux_firmware_source.py tests/scripts/test_macos_firmware_source.py tests/scripts/test_swarm_acceptance.py tests/docker
 
 lint\:docker:
-	@$(DOCKER_RUFF) check scripts/build/prepare_dind_firmware.py tests/scripts/test_linux_firmware_source.py tests/scripts/test_macos_firmware_source.py tests/docker
+	@$(DOCKER_RUFF) check scripts/build/prepare_dind_firmware.py tests/scripts/test_linux_firmware_source.py tests/scripts/test_macos_firmware_source.py tests/scripts/test_swarm_acceptance.py tests/docker
 	@bash -n scripts/build/build-dind-kernel.sh

@@ -55,7 +55,7 @@ online runner, `start` stops it and boots it again with a new token.
 
 - Push to `main` touching runtime code (`src/boxlite`, `src/shared`, `src/cli`, `src/guest`,
   `sdks/**`, any `Cargo.toml`, `Cargo.lock`), Docker acceptance (`tests/docker/**`,
-  `make/acceptance.mk`, `scripts/build/*dind*`), or the workflow file itself.
+  `make/acceptance.mk`, `make/dev.mk`, `scripts/build/*dind*`), or the workflow file itself.
 - A pull request labeled `e2e-local` — the label is the cost gate, and only maintainers can
   add it. The trigger is `pull_request_target`, so fork PRs get the credentials a plain
   `pull_request` run would be denied, and the workflow definition always comes from `main`.
@@ -83,6 +83,9 @@ save or poison caches. Its native build and image caches remain on the persisten
 After ordinary integration passes, the job prepares the pinned DinD firmware with
 `make kernel:dind` and rebuilds the native Python SDK with `make dev:python`, selecting
 that firmware through `BOXLITE_LIBKRUNFW_SOURCE` for the build step.
+Both builds stream output to the job and persist it as `docker-firmware-build.log` and
+`docker-sdk-build.log` in the run's log directory, so failure and prior-run rescue uploads
+retain it. Pipeline failures preserve the build's failing status.
 
 The same KVM host then runs these real-guest checks sequentially with a local worker:
 
@@ -96,7 +99,10 @@ The topology options are supplied through `DOCKER_ACCEPTANCE_ARGS`; see the
 [Docker acceptance commands](../../../tests/docker/README.md#swarm-topologies).
 Any failed assertion fails the job. `docker-swarm-evidence-<run_id>-<run_attempt>`
 retains results, guest/worker logs and command output for seven days, including successful
-runs. Failed Box state remains under `/root/.boxlite/docker-acceptance/<run_id>-<run_attempt>`
+runs. Before normal, failure or prior-run rescue uploads, JSON and log files replace
+`hostname` and `machine_id` values with `[redacted]`. Uploads require successful redaction.
+Topology checks use the original identities before this publication step.
+Failed Box state remains under `/root/.boxlite/docker-acceptance/<run_id>-<run_attempt>`
 until the runner's disk-pressure cleanup evicts that cache.
 
 The CI runner provides one physical host. Cross-runner Swarm remains an explicit

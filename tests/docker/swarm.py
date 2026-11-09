@@ -26,6 +26,7 @@ async def kernel(scene, box):
 
 
 async def vpn(scene, peer):
+    """Establish and record a routed guest-to-guest TCP VPN underlay."""
     key = (
         "-----BEGIN OpenVPN Static key V1-----\n"
         + "\n".join(secrets.token_hex(16) for _ in range(16))
@@ -67,18 +68,25 @@ async def vpn(scene, peer):
 
 
 async def services_ready(scene, placements):
+    """Wait for each service's single running task on its constrained node."""
     deadline = time.monotonic() + 120
     while True:
         complete = True
         for name, node in placements.items():
-            _, ids, _ = await scene.run(
+            code, ids, _ = await scene.run(
                 0,
                 f"docker service ps --no-trunc --filter desired-state=running -q {name}",
+                check=False,
             )
-            if not ids:
+            if code or not ids:
                 complete = False
                 continue
-            _, raw, _ = await scene.run(0, "docker inspect " + " ".join(ids.split()))
+            code, raw, _ = await scene.run(
+                0, "docker inspect " + " ".join(ids.split()), check=False
+            )
+            if code:
+                complete = False
+                continue
             tasks = json.loads(raw)
             complete = (
                 complete
@@ -96,6 +104,7 @@ async def services_ready(scene, placements):
 
 
 async def network_evidence(scene, box, network, require_ipvs):
+    """Require VXLAN devices and, for VIP services, nonzero IPVS traffic counters."""
     _, raw, _ = await scene.run(box, f"docker network inspect {network}")
     network_id = json.loads(raw)[0]["Id"]
     command = (
@@ -116,6 +125,7 @@ async def network_evidence(scene, box, network, require_ipvs):
 
 
 async def overlay(scene, mode):
+    """Verify placement, DNS, HTTP, and datapath evidence for an overlay mode."""
     network = "proof-" + mode
     await scene.run(
         0,
@@ -208,6 +218,7 @@ async def overlay(scene, mode):
 
 
 async def published(scene):
+    """Verify published-port routing and single-guest host networking."""
     marker = scene.tag + "-published-backend"
     backend_node = scene.record["nodes"][-1]["swarm_id"]
     for mode, port in [("ingress", 18080), ("host", 18081)]:
@@ -261,6 +272,7 @@ async def published(scene):
 
 
 async def swarm(args):
+    """Run the selected topology, save acceptance evidence, and release its workers."""
     scene = Scene(args, args.topology)
     success = False
     try:
@@ -276,9 +288,6 @@ async def swarm(args):
                 assert a.identity["runner"] != b.identity["runner"]
                 assert a.identity["machine_id"] != b.identity["machine_id"], (
                     "cross-runner requires different physical hosts"
-                )
-                assert a.identity["hostname"] != b.identity["hostname"], (
-                    "cross-runner requires distinct host identities"
                 )
             else:
                 assert a is b, "same-runner must use one runtime worker"

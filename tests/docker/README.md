@@ -58,6 +58,9 @@ builds DinD firmware and the native Python SDK after ordinary integration tests,
 runs Docker/Compose, single-node Swarm and same-runner Swarm with a local Linux worker.
 Failures fail the e2e job. Each run uploads its acceptance results and logs as
 `docker-swarm-evidence-<run_id>-<run_attempt>`, retained for seven days.
+Firmware and SDK build output is retained with the acceptance logs.
+Before normal, failure and prior-run rescue uploads, hostnames and machine IDs in
+JSON and log records are replaced with `[redacted]`; uploads require successful redaction.
 
 Cross-runner acceptance requires two physical hosts and uses the explicit command above.
 
@@ -74,4 +77,5 @@ the runtime also keeps `commands.log` and `acceptance-boxes.json`.
 Successful runs remove their Boxes and close forwarders. Failures retain Box
 disks and daemon diagnostics under the selected state root. Inspect or remove
 those Boxes with the same BoxLite runtime home before deleting that directory.
-Logs include local infrastructure details and belong in private evidence storage.
+Local command output includes raw infrastructure identities and belongs in private
+evidence storage. CI publishes redacted artifacts after topology validation.
