@@ -503,8 +503,32 @@ while the initial insert is pending prevents forwarding once that insert returns
 Audit metadata excludes command arguments, file contents, SSH secrets, tunnel tokens,
 attach tickets, and raw configuration bodies. Terminal resize, file download, metrics,
 runner/box/job callbacks, preview readiness and access exchanges, and onboarding helpers
-receive no new audit. WebSocket attach and webhook portal access remain unchanged.
+receive no new audit. Webhook portal access remains unchanged.
 MCP calls inherit the target REST operation's audit without a second MCP record.
+
+WebSocket attach upgrades create a pending `attach` row after authorization and
+Box/Runner resolution, before forwarding. An insert failure refuses the connection.
+Runner acceptance completes it with `101`, without waiting for disconnect; this
+observes the upstream handshake, not proof of client receipt. A refused handshake
+records the upstream HTTP status; failure or an observed disconnect before acceptance
+records unknown (`0`) and produces no `detach`.
+
+The first observed socket close after acceptance inserts a separate `detach` row.
+For example, `attach(connectionId=X, status=101)` pairs with
+`detach(connectionId=X, status=200, durationMs=...)`. Both retain the verified actor,
+organization, canonical Box ID and execution ID. Metadata contains `connectionId`,
+`connectedAt`, and, on detach, `disconnectedAt`, monotonic `durationMs` and `hadError`.
+Detach status `200` means the close event was observed; it is neither an HTTP response
+nor a WebSocket close code. `hadError` only describes transport errors observed before
+the first close, not the user's intent or the WebSocket close-frame reason.
+
+The proxy does not inspect terminal frames for auditing. Successful long connections
+are already finalized and do not enter the 30-minute pending-log reconciliation.
+Completion or detach persistence failures emit a fixed diagnostic without interrupting
+an established connection; a failed completion remains eligible for reconciliation.
+Process termination can leave no detach record; this does not infer a disconnect time.
+API Key, JWT and one-time ticket authentication share this lifecycle and retain their
+existing authorization policy. Completed detach inserts also honor `audit.consoleLogEnabled`.
 
 Account-link adoption audits only after signature and identity validation. It records
 the primary/secondary IDs and the local ownership migration result, without an arbitrary
@@ -517,5 +541,7 @@ operations and v1 execution/file/attach routes remain available.
 
 Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
 set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
+Run `make test:apps:api TEST_FILES='attach-audit.spec|boxlite-ws-proxy.service.spec'`
+for real local WebSocket lifecycle and authentication tests.
 See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
 for backfill limits, index deployment and rollback order.

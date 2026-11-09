@@ -426,6 +426,7 @@ describe('BoxLite REST routing', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as never,
     )
 
     expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({
@@ -450,6 +451,7 @@ describe('BoxLite REST routing', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as never,
     )
 
     expect(service.matchAttachPath('/api/v1/boxes/box-1/network/tunnel?port=3000')).toBeNull()

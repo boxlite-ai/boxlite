@@ -64,6 +64,9 @@ export class AuditService implements OnApplicationBootstrap {
     const auditLog = new AuditLog(createDto)
 
     await this.auditLogRepository.insert(auditLog)
+    if (auditLog.statusCode !== undefined && this.configService.get('audit.consoleLogEnabled')) {
+      this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(auditLog)}`)
+    }
     return auditLog
   }
 
@@ -87,6 +90,10 @@ export class AuditService implements OnApplicationBootstrap {
 
     if (updateDto.organizationId) {
       auditLog.organizationId = updateDto.organizationId
+    }
+
+    if (updateDto.metadata !== undefined) {
+      auditLog.metadata = { ...auditLog.metadata, ...updateDto.metadata }
     }
 
     if (this.configService.get('audit.consoleLogEnabled')) {

@@ -4,7 +4,7 @@
  */
 
 import { Inject, Injectable, Logger } from '@nestjs/common'
-import type { IncomingMessage } from 'http'
+import type { ClientRequest, IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
@@ -23,10 +23,13 @@ import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { hasOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AttachTicketService } from '../box/services/attach-ticket.service'
+import { AuditService } from '../audit/services/audit.service'
+import { AttachAuditSession } from './attach-audit-session'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
   __boxliteRunnerBoxId?: string
+  __boxliteAttachAudit?: AttachAuditSession
 }
 
 // Matches /api/v1/boxes/<id>/executions/<id>/attach and the
@@ -36,7 +39,7 @@ const ATTACH_PATH =
   /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/(?<execId>[^/?]+)\/attach(?:\?.*)?$/
 
 type AttachMatch = { boxId: string; execId: string; tenant?: string }
-type AttachAuth = { organization: Organization; ticketBoxId?: string }
+type AttachAuth = { organization: Organization; user: User; ticketBoxId?: string }
 
 // `/attach` streams to an execution's stdin — interactive exec — so a WS upgrade
 // needs the same box-write permission the HTTP exec routes now require.
@@ -70,6 +73,7 @@ export class BoxliteWsProxyService {
     // when `skipConnections` is set, so the JWT path guards on it.
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
     private readonly attachTickets: AttachTicketService,
+    private readonly auditService: AuditService,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -92,11 +96,12 @@ export class BoxliteWsProxyService {
         return runner.apiUrl || (runner as Runner & { proxyUrl?: string }).proxyUrl || ''
       },
       on: {
-        proxyReqWs: (proxyReq: { setHeader: (name: string, value: string) => void }, req: IncomingMessage) => {
+        proxyReqWs: (proxyReq: ClientRequest, req: IncomingMessage) => {
           const runner = (req as RunnerUpgradeRequest).__boxliteRunner
           if (runner?.apiKey) {
             proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           }
+          ;(req as RunnerUpgradeRequest).__boxliteAttachAudit?.bind(proxyReq)
         },
       },
     })
@@ -164,6 +169,26 @@ export class BoxliteWsProxyService {
       }
       ;(req as RunnerUpgradeRequest).__boxliteRunner = runner
       ;(req as RunnerUpgradeRequest).__boxliteRunnerBoxId = box.id
+      let session: AttachAuditSession | undefined
+      try {
+        session = await AttachAuditSession.start(
+          this.auditService,
+          socket,
+          {
+            actorId: auth.user.id,
+            actorEmail: auth.user.email ?? '',
+            organizationId: auth.organization.id,
+            targetId: box.id,
+          },
+          match.execId,
+        )
+      } catch {
+        this.logger.warn('Failed to create attach audit')
+        this.respondAndClose(socket, 500, 'Internal Server Error')
+        return
+      }
+      if (!session) return
+      ;(req as RunnerUpgradeRequest).__boxliteAttachAudit = session
       ;(
         this.proxy as unknown as {
           upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
@@ -225,7 +250,7 @@ export class BoxliteWsProxyService {
         if (!user) return null
         if (!(await this.authorizeAttach(user, apiKey.organizationId, apiKey))) return null
         const organization = await this.organizationService.findOne(apiKey.organizationId)
-        return organization ? { organization } : null
+        return organization ? { organization, user } : null
       }
 
       // 2. JWT (OIDC) — org comes from the URL tenant; authorized per authorizeAttach.
@@ -238,7 +263,7 @@ export class BoxliteWsProxyService {
       if (!user) return null
       if (!(await this.authorizeAttach(user, urlTenant))) return null
       const organization = await this.organizationService.findOne(urlTenant)
-      return organization ? { organization } : null
+      return organization ? { organization, user } : null
     } catch {
       // Any failure (invalid JWT signature, a DB error, …) → 401. This single
       // guard is why authenticate never throws — `upgrade` calls it before its
@@ -292,7 +317,7 @@ export class BoxliteWsProxyService {
       }
       if (!(await this.authorizeAttach(user, grant.organizationId, apiKey))) return null
       const organization = await this.organizationService.findOne(grant.organizationId)
-      return organization ? { organization, ticketBoxId: grant.boxId } : null
+      return organization ? { organization, user, ticketBoxId: grant.boxId } : null
     } catch {
       return null
     }
