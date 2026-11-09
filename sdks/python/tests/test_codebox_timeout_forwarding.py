@@ -87,3 +87,93 @@ def test_run_signature_accepts_float():
         f"run() timeout is annotated {text!r}; exec() takes float | None, "
         "so an int-only annotation rejects fractional timeouts"
     )
+
+
+# -- Sync wrapper coverage ---------------------------------------------------
+#
+# greenlet is an OPTIONAL dependency (the "sync" extra) and the CI matrix does
+# not install it, so these tests must skip rather than fail when it is absent.
+# This mirrors the guard used by tests/test_sync_skillbox.py.
+try:
+    from boxlite.sync_api._codebox import SyncCodeBox
+
+    SYNC_AVAILABLE = True
+except ImportError:
+    SYNC_AVAILABLE = False
+
+sync_only = pytest.mark.skipif(not SYNC_AVAILABLE, reason="greenlet not installed")
+
+
+class _RecordingSyncExec:
+    """Records what the SYNC exec() was called with, without starting a VM.
+
+    The sync wrapper had the identical defect to the async one and would
+    regress just as silently, so it gets its own coverage.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def __call__(self, cmd, *args, **kwargs):
+        self.calls.append({"cmd": cmd, "args": args, "kwargs": kwargs})
+
+        class _Result:
+            stdout = "ok"
+            stderr = ""
+            exit_code = 0
+
+        return _Result()
+
+
+def _make_sync_codebox(monkeypatch, recorder):
+    """Build a SyncCodeBox without touching the native module or a VM."""
+    box = SyncCodeBox.__new__(SyncCodeBox)
+    monkeypatch.setattr(box, "exec", recorder, raising=False)
+    return box
+
+
+@sync_only
+def test_sync_run_forwards_timeout_to_exec(monkeypatch):
+    """The sync wrapper must forward an explicit timeout to exec()."""
+    recorder = _RecordingSyncExec()
+    box = _make_sync_codebox(monkeypatch, recorder)
+
+    box.run("print('hi')", timeout=2.5)
+
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["kwargs"].get("timeout") == 2.5
+
+
+@sync_only
+def test_sync_run_forwards_none_timeout_as_none(monkeypatch):
+    """An omitted timeout is forwarded as None, matching the async path.
+
+    Forwarding it explicitly (rather than leaving it out) keeps the two
+    wrappers equivalent in behaviour, so a future change to one cannot
+    silently diverge from the other.
+    """
+    recorder = _RecordingSyncExec()
+    box = _make_sync_codebox(monkeypatch, recorder)
+
+    box.run("print('hi')")
+
+    assert len(recorder.calls) == 1
+    # Assert the kwarg is PRESENT, not merely that its value is None: a
+    # missing key also reads as None, and that is exactly the bug.
+    assert "timeout" in recorder.calls[0]["kwargs"], (
+        "exec() was called without a timeout kwarg at all; it must be "
+        "forwarded explicitly so the two code paths stay identical"
+    )
+    assert recorder.calls[0]["kwargs"]["timeout"] is None
+
+
+@sync_only
+def test_sync_run_signature_accepts_float():
+    """exec() is typed float | None; the sync run() must accept the same."""
+    ann = inspect.signature(SyncCodeBox.run).parameters["timeout"].annotation
+    # Accept either the evaluated type or the string form (PEP 563).
+    text = str(ann)
+    assert "float" in text or ann is float, (
+        f"run() timeout is annotated {text!r}; exec() takes float | None, "
+        "so an int-only annotation rejects fractional timeouts"
+    )
