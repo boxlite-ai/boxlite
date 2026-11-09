@@ -8,6 +8,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Boxes from './Boxes'
+import type { BoxQueryParams } from '@/hooks/useBoxes'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 
 const navigate = vi.hoisted(() => vi.fn())
@@ -21,6 +22,15 @@ const state = vi.hoisted(() => ({
   // The two account-state queries do not resolve together.
   boxCountPending: false,
   placeholder: false,
+  socketEnabled: false,
+  filteredTotal: undefined as number | undefined,
+}))
+
+const mocks = vi.hoisted(() => ({
+  useBoxes: vi.fn(),
+  setQueryData: vi.fn(),
+  invalidateQueries: vi.fn(),
+  handlers: new Map<string, (event: unknown) => void>(),
 }))
 
 // Stand-ins for the two dialogs, so the assertions can read what the page
@@ -71,12 +81,21 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
 }))
 vi.mock('@/hooks/useBoxes', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useBoxes')>()),
-  useBoxes: () => ({
-    data: state.pending ? undefined : { items: state.items, total: state.total, totalPages: 1 },
-    isLoading: false,
-    isPlaceholderData: state.placeholder,
-    error: undefined,
-  }),
+  useBoxes: (key: unknown, params: BoxQueryParams) => {
+    mocks.useBoxes(key, params)
+    return {
+      data: state.pending
+        ? undefined
+        : {
+            items: state.items,
+            total: params.filters?.idOrName && state.filteredTotal !== undefined ? state.filteredTotal : state.total,
+            totalPages: 1,
+          },
+      isLoading: false,
+      isPlaceholderData: state.placeholder,
+      error: undefined,
+    }
+  },
 }))
 vi.mock('@/hooks/useApi', () => ({
   useApi: () => ({ boxApi: { listBoxesPaginated: vi.fn().mockResolvedValue({ data: { total: 0 } }) } }),
@@ -84,7 +103,16 @@ vi.mock('@/hooks/useApi', () => ({
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({ apiUrl: 'https://api.example.test', oidc: { issuer: '' } }),
 }))
-vi.mock('@/hooks/useNotificationSocket', () => ({ useNotificationSocket: () => ({ notificationSocket: null }) }))
+vi.mock('@/hooks/useNotificationSocket', () => ({
+  useNotificationSocket: () => ({
+    notificationSocket: state.socketEnabled
+      ? {
+          on: (event: string, handler: (data: unknown) => void) => mocks.handlers.set(event, handler),
+          off: (event: string) => mocks.handlers.delete(event),
+        }
+      : null,
+  }),
+}))
 vi.mock('@/hooks/queries/useApiKeysQuery', () => ({
   useApiKeysQuery: () => ({
     data: state.pending ? undefined : [],
@@ -97,7 +125,12 @@ vi.mock('@tanstack/react-query', () => ({
     data: state.pending || state.boxCountPending ? undefined : 0,
     isSuccess: !state.pending && !state.boxCountPending,
   }),
-  useQueryClient: () => ({ setQueriesData: vi.fn(), invalidateQueries: vi.fn(), cancelQueries: vi.fn() }),
+  useQueryClient: () => ({
+    setQueryData: mocks.setQueryData,
+    setQueriesData: vi.fn(),
+    invalidateQueries: mocks.invalidateQueries,
+    cancelQueries: vi.fn(),
+  }),
 }))
 // `sub` matters: Boxes keys its onboarding-skip flag on it and bails out of the
 // auto-open effect entirely without one.
@@ -149,6 +182,10 @@ describe('Boxes page, empty account', () => {
     state.pending = false
     state.boxCountPending = false
     state.placeholder = false
+    state.socketEnabled = false
+    state.filteredTotal = undefined
+    mocks.handlers.clear()
+    mocks.setQueryData.mockReset()
     // Most cases are about the empty state itself, so start from a browser that
     // has already dismissed the guide; auto-open has its own case below.
     localStorage.setItem('SkipOnboarding_user-1', 'true')
@@ -173,10 +210,51 @@ describe('Boxes page, empty account', () => {
 
   it('shows the filtered total rather than the current page size', () => {
     state.items = [{ id: 'box-1', name: 'web-api', state: 'started', createdAt: '2026-06-01T00:00:00.000Z' }]
-    state.total = 42
+    state.total = 100
+    state.filteredTotal = 42
     render()
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter boxes"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'web')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(mocks.useBoxes).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ page: 1, filters: { idOrName: 'web' } }),
+    )
     expect(document.querySelector('.resource-filter')?.textContent).toBe('42')
   })
+
+  it.each(['box.state.updated', 'box.desired-state.updated'])(
+    'reconciles %s without decrementing unrelated or duplicate removals',
+    (eventName) => {
+      state.socketEnabled = true
+      state.items = [{ id: 'visible', name: 'web-api', state: 'started', createdAt: '2026-06-01T00:00:00.000Z' }]
+      state.total = 42
+      let cached = { items: state.items, total: state.total }
+      mocks.setQueryData.mockImplementation((_key, update) => {
+        cached = update(cached)
+      })
+      render()
+      const emit = (id: string) =>
+        act(() =>
+          mocks.handlers.get(eventName)!({
+            box: { id, state: 'error', desiredState: 'destroyed' },
+            oldState: 'destroying',
+            newState: 'destroyed',
+            newDesiredState: 'destroyed',
+          }),
+        )
+      emit('outside-filter')
+      expect(cached.total).toBe(42)
+      emit('visible')
+      expect(cached.items).toHaveLength(0)
+      expect(cached.total).toBe(41)
+      emit('visible')
+      expect(cached.total).toBe(41)
+      expect(mocks.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['boxes', 'org-1'], refetchType: 'active' })
+    },
+  )
 
   it('hides the previous filter total while replacement results are pending', () => {
     state.total = 42

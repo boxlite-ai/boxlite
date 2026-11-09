@@ -182,11 +182,13 @@ const Boxes: React.FC = () => {
     [queryClient, queryKey],
   )
 
+  /** Removes a cached row once; terminal events refetch totals for unknown off-page filter membership. */
   const removeBoxFromCache = useCallback(
     (boxId: string) => {
       queryClient.setQueryData(queryKey, (oldData: any) => {
         if (!oldData?.items) return oldData
         const nextItems = oldData.items.filter((box: Box) => box.id !== boxId)
+        if (nextItems.length === oldData.items.length) return oldData
         return {
           ...oldData,
           items: nextItems,
@@ -309,7 +311,7 @@ const Boxes: React.FC = () => {
         performBoxStateOptimisticUpdate(data.box.id, updatedState)
       }
 
-      markAllBoxQueriesAsStale()
+      markAllBoxQueriesAsStale(updatedState === BoxState.DESTROYED)
     }
 
     const handleBoxDesiredStateUpdatedEvent = (data: {
@@ -329,7 +331,7 @@ const Boxes: React.FC = () => {
 
       removeBoxFromCache(data.box.id)
 
-      markAllBoxQueriesAsStale()
+      markAllBoxQueriesAsStale(true)
     }
 
     if (!notificationSocket) {

@@ -61,3 +61,5 @@ Start the mock dashboard using the commands in [dashboard development](../../../
 - Proxy tunnel tests and API tunnel-service tests passed; preview-controller tests are blocked by incompatible locally linked Axios types. These screenshots do not verify deployed authentication, payment processing or SSH establishment.
 
 - Audit regressions cover failed later-page recovery in both billing histories, stale image refresh errors, raw unknown invoice statuses, scrollable pricing, registry filter recovery.
+- Native keyboard activation was checked in Chromium at 760px and 1440px desktop widths (`mobile: false`). With only the clipboard write sink stubbed, Space produced no copy before keyup and one after release; Enter also copied the name, with the URL unchanged. This complements the jsdom event-isolation regression, which cannot synthesize native key-generated clicks.
+- Box destruction-event regressions cover both socket routes, unrelated IDs, visible IDs, duplicate events and active-query reconciliation. The filter-count test enters a real input value and checks the resulting query parameters and distinct total.
