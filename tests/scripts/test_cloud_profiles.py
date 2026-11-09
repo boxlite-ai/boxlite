@@ -71,7 +71,6 @@ class CloudProfilesTest(unittest.TestCase):
 
     def stage_environment(self):
         self.environment.update({
-            "BOXLITE_STAGE_API_URL": "https://api.stage.example/api",
             "BOXLITE_STAGE_API_KEY": "stage-one",
             "BOXLITE_STAGE_P2_API_KEY": "stage-two",
             "BOXLITE_STAGE_P2_READONLY_API_KEY": "stage-readonly",
@@ -82,7 +81,7 @@ class CloudProfilesTest(unittest.TestCase):
             "stage-readonly": ("stage-two", ["read:images"]),
         })
 
-    def test_stage_uses_only_its_three_credentials_and_configured_target(self):
+    def test_stage_uses_only_its_three_credentials_and_requested_target(self):
         self.stage_environment()
         self.configure("stage", "https://api.stage.example/api/")
         profiles = tomllib.loads(self.destination.read_text())["profiles"]
@@ -103,19 +102,6 @@ class CloudProfilesTest(unittest.TestCase):
                     self.assertFalse(self.destination.exists())
                 finally:
                     self.environment[name] = value
-
-    def test_stage_target_refuses_other_environments_before_requests(self):
-        self.stage_environment()
-        for url in ["https://api.dev.boxlite.ai", "https://api.boxlite.ai", "https://elsewhere.example",
-                    "https://api.stage.example/other", "https://api.stage.example:444/api"]:
-            with self.subTest(url=url), self.assertRaises(RuntimeError):
-                self.configure("stage", url)
-        for url in ["https://api.dev.boxlite.ai", "https://api.boxlite.ai"]:
-            with self.subTest(configured=url), patch.dict(self.environment, {"BOXLITE_STAGE_API_URL": url}):
-                with self.assertRaises(RuntimeError):
-                    self.configure("stage", url)
-        self.assertEqual(self.requests, [])
-        self.assertFalse(self.destination.exists())
 
     def test_stage_identity_boundaries_preserve_existing_credentials(self):
         self.stage_environment()

@@ -65,7 +65,7 @@ own.
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the main suite and identity lane on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Prepared GCP/AWS stages: dev/stage accept SHA/PR or stable releases; stage workflows run from main. Prod retains stable-release-only admission and promotes from selected dev/stage source (default dev) |
+| `mdeploy-all.yml` | dispatch | — | Prepared GCP/AWS stages: dev/stage accept SHA/PR or stable releases; candidate workflows can run from the selected branch, while release workflows run from main. Prod retains stable-release-only admission and promotes from selected dev/stage source (default dev) |
 | `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
 | `mbuild-release.yml` | dispatch, `workflow_call` | yes | Stable images tagged `v<X.Y.Z>-<sha>`: publish into dev/stage using the publish-only `stage` input (default dev), or promote from `source=dev` (default)/`stage` to prod; refuse versions already held by the target |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |

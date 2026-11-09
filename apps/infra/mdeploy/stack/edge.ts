@@ -41,7 +41,7 @@ export type EdgeRequest = {
    * box domain's; nothing is created per name.
    */
   userDomain: UserDomain | null
-  /** Public URL scheme for redirects and cookie behavior; separate from container TLS. */
+  /** What the proxy speaks to a box: `http` or `https`. */
   protocol: string
   /** Where it asks which runner holds a box. */
   apiUrl: $util.Input<string>

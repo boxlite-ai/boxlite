@@ -568,14 +568,14 @@ The membership policy remains best-effort in the product; the acceptance environ
 
 ## Stage cloud acceptance
 
-Run the existing `e2e-cloud` workflow with `stage=stage`. Set the repository variable
-`BOXLITE_STAGE_API_URL` to the stage HTTPS API base URL, and provide independent
+Run the existing `e2e-cloud` workflow with `stage=stage`. The API defaults to
+`https://api.stage.boxlite.ai`; the optional `BOXLITE_STAGE_API_URL` variable or
+`api_url` dispatch input overrides it, with the same precedence as dev. Provide independent
 `BOXLITE_STAGE_API_KEY`, `BOXLITE_STAGE_P2_API_KEY`, and
 `BOXLITE_STAGE_P2_READONLY_API_KEY` secrets. The p1 and p2 keys must belong to
 different organizations; p2_readonly must share p2's organization and have only
 read permissions. Missing stage settings never fall back to dev credentials.
 
-The target is validated before the health probe or authenticated metadata reads.
-An override must match the configured stage URL; known dev/prod origins are refused.
-Stage runs the main suite and identity lane, without dev's automatic sweep or
+The existing profile helper checks HTTPS, organization membership and key permissions
+before writing the test profiles. Stage runs the main suite and identity lane, without dev's automatic sweep or
 shared-subdomain fixture. Production still runs the single-profile smoke suite.

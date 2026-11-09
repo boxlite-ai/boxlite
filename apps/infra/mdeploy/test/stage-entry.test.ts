@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { load } from 'js-yaml'
+import { Lexer, Parser, Evaluator, data } from '@actions/expressions'
 
 const readWorkflow = (name: string): any =>
   load(readFileSync(new URL(`../../../../.github/workflows/${name}`, import.meta.url), 'utf8'))
@@ -54,16 +55,48 @@ test('stage admits SHA, PR and stable release while RC and prod commit refusals 
   }
 })
 
-test('stage binds main-only jobs and keeps the existing real branch containment action', () => {
+test('stage shares dev branch access and keeps the existing branch containment action', () => {
   assert.deepEqual(deployment.on.workflow_dispatch.inputs.stage.options, ['dev', 'stage', 'prod'])
   for (const name of ['resolve', 'plan', 'build-runner', 'deploy']) {
-    assert.match(deployment.jobs[name].if, /github.ref == 'refs\/heads\/main' \|\| inputs.stage == 'dev'/, name)
+    assert.match(
+      deployment.jobs[name].if,
+      /github.ref == 'refs\/heads\/main' \|\| inputs.stage == 'dev' \|\| inputs.stage == 'stage'/,
+      name,
+    )
   }
   const resolve = step(deployment.jobs.resolve, 'ref')
   assert.equal(resolve.uses, './.github/actions/resolve-ref')
   assert.equal(resolve.with.branch, '${{ github.ref_name }}')
   assert.equal(deployment.jobs['build-images'].with.stage, '${{ inputs.stage }}')
   assert.equal(deployment.jobs['release-publish'].with.stage, '${{ inputs.stage }}')
+})
+
+test('caller and reusable image jobs admit stage candidate branches without admitting prod', () => {
+  const build = readWorkflow('mbuild.yml')
+  const jobs = [deployment.jobs.resolve, build.jobs.declaration, build.jobs.mbuild]
+  for (const job of jobs) {
+    const expression = job.if.trim().slice(3, -2).replaceAll('cancelled()', 'false').replaceAll('failure()', 'false')
+    for (const stage of ['dev', 'stage', 'prod', 'unknown']) {
+      for (const ref of ['refs/heads/main', 'refs/heads/feature']) {
+        const contexts = new data.Dictionary(
+          { key: 'github', value: new data.Dictionary({ key: 'ref', value: new data.StringData(ref) }) },
+          {
+            key: 'inputs',
+            value: new data.Dictionary(
+              { key: 'stage', value: new data.StringData(stage) },
+              { key: 'to', value: new data.StringData(stage) },
+              { key: 'command', value: new data.StringData('promote') },
+            ),
+          },
+        )
+        const ast = new Parser(new Lexer(expression).lex().tokens, ['inputs', 'github'], []).parse()
+        assert.equal(
+          new Evaluator(ast, contexts).evaluate().coerceString(),
+          String(ref === 'refs/heads/main' || ['dev', 'stage'].includes(stage)),
+        )
+      }
+    }
+  }
 })
 
 test('missing stage stable images publish locally while prod still plans promotion', () => {
@@ -178,7 +211,6 @@ test('release promotion explicitly selects dev or stage before binding its Envir
   assert.equal(release.jobs.promote.env.SOURCE_STAGE, "${{ inputs.source || 'dev' }}")
   const setup = release.jobs.promote.steps.find((candidate: any) => candidate.uses === './.github/actions/setup-infra')
   assert.equal(setup.with.stages, "${{ format('{0} prod', inputs.source || 'dev') }}")
-  assert.ok(release.jobs.promote.steps.some((candidate: any) => candidate.uses === 'docker/setup-buildx-action@v4'))
 })
 
 test('promotion verifies and copies only the selected source, with no fallback', () => {

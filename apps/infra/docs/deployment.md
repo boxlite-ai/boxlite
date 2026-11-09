@@ -36,11 +36,11 @@ gh workflow run mdeploy-all.yml --ref main   -f stage=dev -f ref='#123' -f compo
 Replace `#123` with the intended PR, or use a full commit SHA. Review the resolved SHA, stage identity,
 artifact identities and complete resource diff. For a branch-contained SHA or release, reuse that ref with `apply=true`.
 For a PR, repeat `#123` and compare its newly resolved merge SHA with the preview before approving the Environment.
-A moved PR/base can change that merge SHA; a merge candidate outside main cannot be reapplied as a bare stage SHA.
+A moved PR/base can change that merge SHA; a merge candidate outside the selected branch cannot be reapplied as a bare SHA.
 
 | Ref | Allowed stages | Artifact path |
 | --- | --- | --- |
-| Full SHA | `dev`, `stage` | Ensure commit images and runner build exist; stage requires a commit on main |
+| Full SHA | `dev`, `stage` | Ensure commit images and runner build exist; the commit must belong to the selected workflow branch |
 | Open PR `#number` | `dev`, `stage` | Use the current open, mergeable PR's merge commit for images and runner build |
 | Published `vX.Y.Z` release | `dev`, `stage`, `prod` | Version-qualified images and published runner release |
 
@@ -50,7 +50,7 @@ Release dispatches run from `main`. Production accepts releases only. For a prot
 gh workflow run mdeploy-all.yml --ref main   -f stage=prod -f ref=vX.Y.Z -f components=api+runner -f apply=true -f confirm=true
 ```
 
-Stage dispatches also run from `main`, accepting full main SHAs, open PR merge candidates or published stable releases; RC inputs remain refused.
+Stage follows dev: candidate dispatches may use a workflow branch and accept its full SHAs or open PR merge candidates. Published stable releases still run from `main`; RC inputs remain refused.
 Its release images publish directly into stage; the release publisher's optional `stage` input defaults to dev for existing callers.
 Production promotion selects `source=dev` (the default) or `source=stage`; no missing-source fallback occurs.
 Production still requires a stable release on main, its published Runner assets and protected apply confirmation.

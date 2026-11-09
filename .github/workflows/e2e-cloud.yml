@@ -16,7 +16,7 @@
 #   dev    api.dev.boxlite.ai, the whole suite. Creates and deletes
 #          boxes freely, probes quotas, and sweeps boxes earlier runs
 #          stranded (see the sweep step).
-#   stage  explicit BOXLITE_STAGE_API_URL, separate identities and full suite;
+#   stage  api.stage.boxlite.ai, separate identities and full suite;
 #          no automatic sweep or dev shared-subdomain fixture.
 #   prod   api.boxlite.ai, `-m smoke` only: the handful of cases marked
 #          in apps/e2e/pytest.ini as safe against a paying stage — one
@@ -55,7 +55,7 @@
 #
 # Optional repo variables (Settings → Variables → Actions):
 #   - BOXLITE_DEV_API_URL    dev target;  defaults to api.dev.boxlite.ai
-# Stage requires BOXLITE_STAGE_API_URL and refuses overrides to another target.
+#   - BOXLITE_STAGE_API_URL stage target; defaults to api.stage.boxlite.ai
 #   - BOXLITE_PROD_API_URL   prod target; defaults to api.boxlite.ai
 #
 # Required repository variable for dev subdomain tests:
@@ -248,11 +248,10 @@ jobs:
       # default, so the workflow still runs with nothing configured.
       API_URL: >-
         ${{ inputs.api_url
-            || (inputs.stage == 'stage' && vars.BOXLITE_STAGE_API_URL)
+            || (inputs.stage == 'stage' && (vars.BOXLITE_STAGE_API_URL || 'https://api.stage.boxlite.ai'))
             || (inputs.stage == 'prod' && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai'))
             || ((inputs.stage || 'dev') == 'dev' && (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai'))
             || '' }}
-      BOXLITE_STAGE_API_URL: ${{ vars.BOXLITE_STAGE_API_URL || '' }}
       # Blank keeps apps/e2e/lib/images.py deriving the ref from
       # apps/box-images/VERSION, which is right whenever the stage runs the
       # commit under test. A stage pinned to an older box image needs this.
@@ -273,9 +272,6 @@ jobs:
         run: test -n "$BOXLITE_E2E_DOMAIN" || { echo 'Set BOXLITE_E2E_DOMAIN in repository Actions Variables'; exit 1; }
 
       # ── Health check ──────────────────────────────────────────────
-      - name: Validate cloud target
-        run: python3 apps/e2e/configure_cloud_profiles.py --target-only
-
       - name: Probe API health
         run: |
           curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \

@@ -306,9 +306,6 @@ export function assertDatabaseConnectionCompatible(connection: JsonObject, users
 export function buildDatabaseConnectionUpdate(connection: JsonObject): JsonObject {
   const options = structuredClone(connection.options ?? {})
   const existingEmail = options.attributes?.email ?? {}
-  const identifier = { ...(existingEmail.identifier ?? {}), active: true }
-  // Older connections accept verification OTP but reject the login-method selector.
-  if (Object.hasOwn(identifier, 'default_method')) identifier.default_method = 'password'
   options.disable_signup = false
   options.disable_self_service_change_password = false
   options.authentication_methods = {
@@ -323,7 +320,7 @@ export function buildDatabaseConnectionUpdate(connection: JsonObject): JsonObjec
     ...(options.attributes ?? {}),
     email: {
       ...existingEmail,
-      identifier,
+      identifier: { ...(existingEmail.identifier ?? {}), active: true, default_method: 'password' },
       profile_required: true,
       signup: {
         ...(existingEmail.signup ?? {}),
@@ -561,18 +558,6 @@ export class Auth0CliManagementClient implements Auth0ManagementClient {
     options: { data?: JsonBody; query?: Record<string, string>; allowNotFound?: boolean } = {},
   ): JsonObject | JsonObject[] | null {
     const args = ['api', method, path, '--tenant', this.tenant, '--no-input', '--no-color']
-    // CLI 1.38+ strips secrets even from an explicit projection. Keep discovery
-    // masked; only the single-client credential read used by clientSecret opts in.
-    const fields = options.query?.fields?.split(',') ?? []
-    if (
-      method === 'get' &&
-      /^clients\/[A-Za-z0-9_-]+$/.test(path) &&
-      options.query?.include_fields === 'true' &&
-      fields.includes('client_secret') &&
-      fields.every((field) => field === 'client_id' || field === 'client_secret')
-    ) {
-      args.push('--reveal-secrets')
-    }
     for (const [name, value] of Object.entries(options.query ?? {})) {
       // The Auth0 CLI requires Lucene search syntax to arrive encoded, but
       // treats encoded comma-separated `fields` as a literal field name.
@@ -1447,9 +1432,7 @@ export class Auth0LoginPolicyConfigurator {
           }),
         )
     if (!withSecret.client_secret) {
-      throw new Error(
-        `Auth0 did not return the secret for ${kind} '${clientId}'; check read:client_credentials and the client's authentication method`,
-      )
+      throw new Error(`Auth0 did not return the secret for ${kind} '${clientId}'; rotate it, then retry`)
     }
     return withSecret.client_secret
   }

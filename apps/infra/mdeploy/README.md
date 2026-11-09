@@ -167,8 +167,8 @@ The provider-shape regressions inspect actual constructor inputs; a successful p
 its artifacts exist, checks the stage digest, then previews or applies. Its `components` input
 selects artifact preparation; it is not a promise that the resource graph targets only those services.
 
-A commit or open PR merge commit is accepted for `dev` and `stage`; stage workflows themselves still run from `main`.
-`prod` requires a published release; release and stage dispatches run from `main`.
+A commit or open PR merge commit is accepted for `dev` and `stage`; both may use candidate workflow branches.
+`prod` requires a published release; release dispatches run from `main`.
 Stage release images publish into stage; prod selects release images from `source=dev` (default) or `source=stage`.
 PR/commit builds cannot promote to prod; prepare and validate the version-qualified stable release images in the chosen source first.
 The reusable image workflow and runner build job bind the stage's

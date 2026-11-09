@@ -13,20 +13,32 @@ const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev 
 const sweep = steps.find((step: any) => step.name === 'Sweep stranded boxes')
 const names = Object.keys(configure.env)
 
-const evaluate = (expression: string, stage: string, sweepRequested = true): data.ExpressionData => {
+const evaluate = (
+  expression: string,
+  stage: string,
+  sweepRequested = true,
+  variables: Record<string, string> = {},
+  apiUrl = '',
+): data.ExpressionData => {
   const contexts = new data.Dictionary(
     {
       key: 'inputs',
       value: new data.Dictionary(
         { key: 'stage', value: new data.StringData(stage) },
         { key: 'sweep', value: new data.BooleanData(sweepRequested) },
+        { key: 'api_url', value: new data.StringData(apiUrl) },
       ),
     },
     {
       key: 'secrets',
       value: new data.Dictionary(...names.map((name) => ({ key: name, value: new data.StringData(`secret-${name}`) }))),
     },
-    { key: 'vars', value: new data.Dictionary() },
+    {
+      key: 'vars',
+      value: new data.Dictionary(
+        ...Object.entries(variables).map(([key, value]) => ({ key, value: new data.StringData(value) })),
+      ),
+    },
   )
   const tokens = new Lexer(expression.slice(3, -2)).lex().tokens
   return new Evaluator(new Parser(tokens, ['inputs', 'secrets', 'vars'], []).parse(), contexts).evaluate()
@@ -35,9 +47,7 @@ const evaluate = (expression: string, stage: string, sweepRequested = true): dat
 test('cloud E2E selects only the requested stage credentials and keeps prod narrow', () => {
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.stage.options, ['dev', 'stage', 'prod'])
   const healthIndex = steps.findIndex((step: any) => step.name === 'Probe API health')
-  const targetIndex = steps.findIndex((step: any) => step.name === 'Validate cloud target')
-  assert.ok(targetIndex < healthIndex && healthIndex < steps.indexOf(configure))
-  assert.match(steps[targetIndex].run, /configure_cloud_profiles.py --target-only/)
+  assert.ok(healthIndex >= 0 && healthIndex < steps.indexOf(configure))
   for (const stage of ['dev', 'stage', 'prod', 'typo']) {
     const selected = names.filter((name) => evaluate(configure.env[name], stage).coerceString() !== '')
     assert.deepEqual(
@@ -49,8 +59,27 @@ test('cloud E2E selects only the requested stage credentials and keeps prod narr
     assert.equal(evaluate(sweep.if, stage).coerceString(), String(stage === 'dev'))
     assert.equal(evaluate(sweep.if, stage, false).coerceString(), 'false')
   }
-  assert.equal(evaluate(workflow.jobs.e2e.env.BOXLITE_STAGE_API_URL, 'stage').coerceString(), '')
   assert.deepEqual(workflow.permissions, { contents: 'read' })
   const suite = steps.find((step: any) => step.name === 'Run E2E suite')
   assert.match(suite.run, /if \[ "\$STAGE" = prod \]; then[\s\S]*-m smoke/)
+})
+
+test('stage uses the same URL override, variable and default precedence as dev', () => {
+  for (const [stage, fallback] of [
+    ['dev', 'https://api.dev.boxlite.ai'],
+    ['stage', 'https://api.stage.boxlite.ai'],
+    ['prod', 'https://api.boxlite.ai'],
+  ]) {
+    const expression = workflow.jobs.e2e.env.API_URL
+    const variables = { [`BOXLITE_${stage.toUpperCase()}_API_URL`]: 'https://configured.example.test' }
+    assert.equal(evaluate(expression, stage).coerceString(), fallback)
+    assert.equal(
+      evaluate(expression, stage, true, variables).coerceString(),
+      variables[`BOXLITE_${stage.toUpperCase()}_API_URL`],
+    )
+    assert.equal(
+      evaluate(expression, stage, true, variables, 'https://override.example.test').coerceString(),
+      'https://override.example.test',
+    )
+  }
 })

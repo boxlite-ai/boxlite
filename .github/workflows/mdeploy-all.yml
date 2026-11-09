@@ -10,7 +10,7 @@
 #
 #   a commit SHA      the development path. Images are built for this stage
 #                     under `<sha>`, the runner binary is compiled and staged in
-#                     this stage's artifacts bucket. dev or stage (main only).
+#                     this stage's artifacts bucket. dev or stage.
 #
 #   #<number>         the same path, for a pull request that has not merged.
 #                     It resolves to the commit the request would merge to
@@ -129,11 +129,9 @@ jobs:
   # a typo.
   resolve:
     name: resolve ${{ inputs.ref || github.sha }}
-    # dev is shaken out from the branch that is changing it; every other stage
-    # reaches a protected Environment and the cloud role behind it, and runs
-    # from main. An allow-list naming dev, so a stage added to the choice list
-    # later is main-only until an edit says otherwise.
-    if: ${{ github.ref == 'refs/heads/main' || inputs.stage == 'dev' }}
+    # Dev and stage can exercise candidate workflow branches. Other stages
+    # retain the main-only guard; release refs are checked separately below.
+    if: ${{ github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
     # A job-level block replaces the workflow-level one rather than merging with
     # it, so `contents: read` is restated. `pull-requests: read` is what lets a
     # request's merge resolve below, and it is granted here rather than at
@@ -189,11 +187,6 @@ jobs:
             pr="${candidate#\#}"
           elif [[ ! "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error title=ref::'$candidate' is none of a release tag (v<X.Y.Z>), a pull request (#<number>), or a full lowercase commit SHA"
-            exit 1
-          fi
-          # Candidate stages accept PR merge trees; prod remains release-only.
-          if [ "$STAGE" != 'dev' ] && [ "$STAGE" != 'stage' ] && [ -n "$pr" ]; then
-            echo "::error title=ref::pull requests deploy to dev or stage only"
             exit 1
           fi
           # Explicit commit destinations keep prod release-only and fail closed
@@ -394,7 +387,7 @@ jobs:
   plan:
     name: plan ${{ inputs.stage }}
     needs: [resolve]
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     outputs:
@@ -569,7 +562,7 @@ jobs:
     # guard every Environment-binding job here does.
     if: >-
       ${{ !cancelled() && !failure() && needs.plan.outputs.runner == 'build'
-      && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
+      && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     steps:
@@ -646,7 +639,7 @@ jobs:
     # Every artifact job is skipped when the stage already holds what it needs,
     # and a skipped dependency skips its dependents unless this says otherwise.
     # `!failure()` is what still stops a deploy whose artifacts did not arrive.
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     steps:

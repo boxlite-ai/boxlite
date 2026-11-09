@@ -109,11 +109,7 @@ test('a registry that could not be read is not a stage holding nothing', () => {
   assert.ok(absent, 'the CLI declares no exit code of its own for absence')
 
   const plan = jobAt('plan')
-  assert.match(
-    plan,
-    /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/,
-    'the status is thrown away',
-  )
+  assert.match(plan, /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/, 'the status is thrown away')
   assert.match(plan, new RegExp(`elif \\[ "\\$held" -ne ${absent} \\]; then`), 'absence is not told apart')
   assert.match(plan, /::error title=registry::/, 'a read that never landed decides the plan silently')
 })
@@ -158,7 +154,11 @@ test('a pull request resolves to the commit it would merge, never its head', () 
   assert.match(resolve, /sha="\$\(jq -r '\.potentialMergeCommit\.oid \/\/ empty' <<<"\$pr_json"\)"/)
   assert.match(resolve, /head="\$\(jq -r '\.headRefOid'/, 'the head is not read, so this test guards nothing')
   // Three refusals, each naming what the operator has to do about it.
-  for (const refused of [/is \$state, not open/, /conflicts with its base/, /has no merge commit this run can trust/]) {
+  for (const refused of [
+    /is \$state, not open/,
+    /conflicts with its base/,
+    /has no merge commit this run can trust/,
+  ]) {
     assert.match(resolve, refused, `a pull request is accepted where it should be refused: ${refused}`)
   }
   // UNKNOWN is a "not yet", not a verdict: GitHub computes it lazily and there
@@ -216,8 +216,8 @@ test('the branch check is replaced for a pull request, not skipped', () => {
 test('a pull request reaches dev or stage but never prod', () => {
   // Candidate stages accept PR merges; production still requires a release.
   const resolve = jobAt('resolve')
-  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -n "\$pr" \]; then/)
-  assert.match(resolve, /pull requests deploy to dev or stage only/)
+  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
+  assert.match(resolve, /rather than a commit or a pull request/)
 })
 
 test('reading a pull request is all the extra permission it takes', () => {

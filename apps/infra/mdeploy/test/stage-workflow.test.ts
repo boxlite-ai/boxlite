@@ -10,7 +10,7 @@ const workflow = load(
   readFileSync(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url), 'utf8'),
 ) as any
 
-test('stage accepts main SHA candidates while prod keeps its existing release-only admission', () => {
+test('stage accepts SHA candidates while prod keeps its existing release-only admission', () => {
   const script = workflow.jobs.resolve.steps.find((step: any) => step.id === 'classify').run
   const directory = mkdtempSync(join(tmpdir(), 'stage-admission-'))
   try {
@@ -39,7 +39,7 @@ test('stage accepts main SHA candidates while prod keeps its existing release-on
       assert.equal(result.status === 0, allowed, `${stage}/${ref}: ${result.stdout}${result.stderr}`)
     }
     const gate = workflow.jobs.resolve.if
-    assert.match(gate, /github.ref == 'refs\/heads\/main' \|\| inputs.stage == 'dev'/)
+    assert.match(gate, /github.ref == 'refs\/heads\/main' \|\| inputs.stage == 'dev' \|\| inputs.stage == 'stage'/)
     assert.deepEqual(workflow.on.workflow_dispatch.inputs.source.options, ['dev', 'stage'])
     assert.equal(workflow.jobs['release-publish'].with.stage, '${{ inputs.stage }}')
     assert.equal(workflow.jobs['release-promote'].with.source, '${{ inputs.source }}')
