@@ -83,9 +83,11 @@ test('requires the serialized Runner state baseline before loading the policy pa
     encoding: 'utf8',
     env: environment,
     maxBuffer: 1024 * 1024,
-    timeout: 5_000,
+    // A cold, concurrent suite must finish loading tsx and Pulumi before checking the guard.
+    timeout: 30_000,
   })
 
+  assert.ifError(result.error)
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /BOXLITE_RUNNER_STATE_BASELINE is required/)
 })
@@ -380,7 +382,11 @@ test('a Runner this deploy creates still owes every lifecycle and identity guara
   mismatchedNameTag.props.tags.Name = 'boxlite-runner-9'
 
   assert.deepEqual(
-    validateRunnerResource(runnerResource(extraRunner, { opts: { ...SAFE_OPTIONS, protect: false } }), inventory, baseline),
+    validateRunnerResource(
+      runnerResource(extraRunner, { opts: { ...SAFE_OPTIONS, protect: false } }),
+      inventory,
+      baseline,
+    ),
     ['Runner resources must keep deletion protection enabled.'],
   )
   assert.deepEqual(
