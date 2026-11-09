@@ -16,7 +16,7 @@ type SshConfig = {
   accounts: { login: string; authorized_keys: string[] }[]
 }
 
-export type SshCredentials = { privateKey: string; config: SshConfig }
+export type SshCredentials = { privateKey: string; hostPublicKey: string; config: SshConfig }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
   const result = new Uint8Array(parts.reduce((size, part) => size + part.length, 0))
@@ -78,6 +78,7 @@ export async function generateSshCredentials(): Promise<SshCredentials> {
   const [client, host] = await Promise.all([generateKey(), generateKey()])
   return {
     privateKey: client.privateKey,
+    hostPublicKey: host.publicKey,
     config: {
       listen_address: '0.0.0.0:22',
       host_private_key: host.privateKey,
@@ -120,7 +121,7 @@ export async function requestSsh(
   return status
 }
 
-export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string) {
+export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string, keyPath?: string) {
   if (!/^[a-zA-Z0-9_-]+$/.test(boxId)) throw new Error('Invalid box ID')
   const quote = (value: string) => {
     if ([...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))
@@ -130,13 +131,38 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   }
   const url = new URL(apiUrl, window.location.origin)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid API URL')
-  const cli = `boxlite --path-prefix=${quote(organizationId)}`
+  const endpoint = url.href.replace(/\/$/, '')
+  // A dedicated context keeps saved/ambient context changes from redirecting SSH.
+  // Login and proxy select the same endpoint-specific credentials without changing
+  // the user's current context or overwriting their default profile.
+  const cli = `env -u BOXLITE_REST_URL boxlite --context ${quote(`dashboard:${endpoint}`)}`
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
-  const proxy = `${cli} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
+  const proxy = `${cli} --path-prefix=${quote(organizationId)} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`
+  let chmodPath = filename
+  let identity = `-i ./${filename}`
+  if (keyPath !== undefined) {
+    if (!keyPath.trim() || keyPath.includes('${') || (keyPath.startsWith('~') && !keyPath.startsWith('~/')))
+      throw new Error('Use a literal key path or ~/path')
+    // A bare "none" is OpenSSH's no-identity sentinel, not a relative filename.
+    const path = keyPath.startsWith('-') || /^none$/i.test(keyPath) ? `./${keyPath}` : keyPath
+    const shellPath = (value: string) => (value.startsWith('~/') ? `"$HOME"/${quote(value.slice(2))}` : quote(value))
+    chmodPath = shellPath(path)
+    // -i checks the literal file before expanding percent tokens. IdentityFile
+    // avoids that pre-check so a literal percent reaches the same file as chmod.
+    // OpenSSH tilde expansion uses the account home, which may differ from HOME.
+    // Its environment expansion runs after percent expansion, preserving literal
+    // percent characters in HOME as well as in the supplied filename.
+    const identityPath = path.startsWith('~/') ? '${HOME}/' + path.slice(2) : path
+    identity =
+      path.includes('%') || path.startsWith('~/')
+        ? `-o ${quote(`IdentityFile="${identityPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`)}`
+        : `-i ${shellPath(path)}`
+  }
   return {
     filename,
-    endpoint: url.href.replace(/\/$/, ''),
-    connect: `chmod 600 ${filename}\nssh -i ./${filename} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
+    endpoint,
+    login: `${cli} auth login --url ${quote(endpoint)} --method api-key`,
+    connect: `chmod 600 ${chmodPath}\nssh ${identity} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
   }
 }

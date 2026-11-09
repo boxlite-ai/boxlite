@@ -911,14 +911,14 @@ fn a_slot_names_itself_the_way_the_kernel_parses_it() {
 }
 
 #[test]
-fn announcing_appends_each_slot_within_the_command_line_budget() {
+fn announcing_puts_each_slot_first_within_the_command_line_budget() {
     let mut slots = Slots::new();
     let taken = [slots.take().unwrap(), slots.take().unwrap()];
     let mut cmdline = String::from("console=ttyS0");
     announce(&mut cmdline, &taken).unwrap();
     assert_eq!(
         cmdline,
-        "console=ttyS0 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+        "virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 console=ttyS0"
     );
     let mut empty = String::new();
     announce(&mut empty, &taken[..1]).unwrap();
@@ -935,6 +935,31 @@ fn announcing_appends_each_slot_within_the_command_line_budget() {
     let mut fits = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - 2);
     announce(&mut fits, &taken[..1]).unwrap();
     assert_eq!(fits.len(), MAX_CMDLINE_BYTES - 1);
+}
+
+#[test]
+fn announce_puts_the_device_arguments_before_any_init_arguments() {
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap()];
+    // A quoted value may hold ` -- `; the kernel reads it as one parameter,
+    // so the device argument must not land inside the quotes.
+    let mut quoted = String::from("console=ttyS0 label=\"a -- b\" -- x");
+    announce(&mut quoted, &taken).unwrap();
+    assert!(
+        quoted.contains("label=\"a -- b\""),
+        "the quoted value changed: {quoted}"
+    );
+    assert_eq!(
+        quoted,
+        "virtio_mmio.device=4K@0xd0000000:5 console=ttyS0 label=\"a -- b\" -- x"
+    );
+
+    let mut cmdline = String::from("console=ttyS0 init=/init -- --listen vsock://2695");
+    announce(&mut cmdline, &taken).unwrap();
+    assert_eq!(
+        cmdline,
+        "virtio_mmio.device=4K@0xd0000000:5 console=ttyS0 init=/init -- --listen vsock://2695"
+    );
 }
 
 #[test]

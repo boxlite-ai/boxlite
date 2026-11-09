@@ -51,10 +51,25 @@ vi.mock('@/components/OnboardingGuideDialog', () => ({
 // Owns its own mutations and needs an ApiProvider; these tests cover the detail
 // shell, and the network panel has its own stories.
 vi.mock('./BoxNetworkSection', () => ({
-  BoxNetworkSection: () => null,
+  BoxNetworkSection: () => <div data-testid="network-section">Network settings</div>,
 }))
 
-vi.mock('./BoxSshTab', () => ({ BoxSshTab: () => <div>SSH controls</div> }))
+vi.mock('./BoxSshTab', async () => {
+  const { useState } = await import('react')
+  const { createPortal } = await import('react-dom')
+  return {
+    BoxSshTab: ({ statusContainer }: { statusContainer?: HTMLDivElement | null }) => {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(!open)}>Connect via SSH</button>
+          {open && <div>SSH controls</div>}
+          {statusContainer && createPortal(<div data-testid="ssh-status">SSH status</div>, statusContainer)}
+        </>
+      )
+    },
+  }
+})
 
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({}),
@@ -185,14 +200,21 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
   }
 
-  it('opens the SSH tab without remounting the shell', async () => {
+  it('opens SSH before the lifecycle action without tabs or remounting the shell', async () => {
     await renderBoxDetails()
-    const sshTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
-      (tab) => tab.textContent === 'SSH',
-    )!
-    await act(async () => sshTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
-    expect(sshTab.getAttribute('aria-selected')).toBe('true')
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    const ssh = buttons.find((button) => button.textContent === 'Connect via SSH')!
+    const stop = buttons.find((button) => button.textContent?.trim() === 'stop')!
+    expect(ssh).toBeDefined()
+    expect(buttons.indexOf(ssh)).toBeLessThan(buttons.indexOf(stop))
+    expect(document.querySelector('[role="tab"]')).toBeNull()
+    const network = document.querySelector('[data-testid="network-section"]')!
+    const sshStatus = document.querySelector('[data-testid="ssh-status"]')!
+    expect(network.nextElementSibling?.contains(sshStatus)).toBe(true)
+    await act(async () => ssh.click())
     expect(document.body.textContent).toContain('SSH controls')
+    await act(async () => ssh.click())
+    expect(document.body.textContent).not.toContain('SSH controls')
     expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
   })
 
