@@ -133,6 +133,119 @@ for (const [name, events] of [
   }
 }
 
+for (const event of ['push', 'pull_request_target']) {
+  test(`Docker acceptance inputs select E2E local on ${event}`, () => {
+    for (const path of ['tests/docker/acceptance.py', 'tests/docker/swarm.py', 'tests/docker/worker.py',
+      'scripts/build/prepare_dind_firmware.py', 'scripts/build/dind-kernel.config',
+      'make/acceptance.mk', 'make/dev.mk', '.github/workflows/e2e-local.yml']) {
+      assert.equal(acceptsFiles('e2e-local.yml', event, [path]), true, path)
+    }
+    assert.equal(acceptsFiles('e2e-local.yml', event, ['tests/docker/README.md']), false)
+  })
+}
+
+for (const event of ['push', 'workflow_dispatch', 'pull_request_target']) {
+  test(`E2E checkout uses the commit approved by ${event}`, () => {
+    const github = { event_name: event, sha: 'event-commit', event: event === 'pull_request_target'
+      ? { pull_request: { head: { sha: 'pr-commit' } } } : {} }
+    const evaluate = (expression: string) => runInNewContext(
+      expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), { github }, { timeout: 1000 })
+    const checkouts = workflow('e2e-local.yml').jobs['e2e-tests'].steps.filter((step: any) =>
+      step.uses?.startsWith('actions/checkout@') && (!step.if || evaluate(step.if)))
+    assert.equal(checkouts.length, 1)
+    const selected = checkouts[0].with
+    assert.equal(selected.ref?.includes('github.event.pull_request') ?? false, event === 'pull_request_target')
+    assert.equal(selected.ref ? evaluate(selected.ref) : github.sha,
+      event === 'pull_request_target' ? 'pr-commit' : 'event-commit')
+    assert.equal(selected['persist-credentials'], false)
+    assert.equal(selected.submodules, 'recursive')
+    assert.equal(selected.clean, false)
+  })
+}
+
+test('E2E guest tests cannot write GitHub Actions caches', () => {
+  assert.equal(workflow('e2e-local.yml').jobs['e2e-tests']['cache-mode'], 'read')
+})
+
+for (const failure of ['', 'kernel:dind', 'dev:python']) {
+  test(`Docker firmware and SDK build logs survive ${failure || 'success'}`, () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'docker build workflow '))
+    try {
+      const bin = join(scratch, 'bin')
+      mkdirSync(bin)
+      const calls = join(scratch, 'calls.jsonl')
+      writeFileSync(join(bin, 'make'), `#!/usr/bin/env node
+const fs = require('node:fs')
+const target = process.argv[2]
+fs.appendFileSync(process.env.MAKE_CALLS, JSON.stringify(target) + '\\n')
+console.log('build output: ' + target)
+if (target === process.env.FAIL_COMMAND) process.exit(19)
+`, { mode: 0o755 })
+      const step = workflow('e2e-local.yml').jobs['e2e-tests'].steps.find((step: any) =>
+        step.name === 'Build Docker-capable runtime and Python SDK')
+      const execution = spawnSync('bash', ['-eo', 'pipefail', '-c',
+        step.run.replaceAll('/var/log/boxlite-ci', join(scratch, 'logs'))], {
+        encoding: 'utf8', timeout: 10_000,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_WORKSPACE: scratch,
+          GH_RUN_ID: '123', GH_RUN_ATTEMPT: '2', MAKE_CALLS: calls, FAIL_COMMAND: failure },
+      })
+      assert.equal(execution.error, undefined)
+      assert.equal(execution.status, failure ? 19 : 0, execution.stderr)
+      assert.match(readFileSync(join(scratch, 'logs/123-2/docker-firmware-build.log'), 'utf8'), /build output: kernel:dind/)
+      if (failure !== 'kernel:dind') {
+        assert.match(readFileSync(join(scratch, 'logs/123-2/docker-sdk-build.log'), 'utf8'), /build output: dev:python/)
+      }
+      assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, failure === 'kernel:dind' ? 1 : 2)
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+}
+
+for (const [failure, expectedCalls] of [
+  ['', 3], ['test:docker:dind', 1], ['--topology single', 2], ['--topology same-runner', 3],
+] as const) {
+  test(`Docker E2E command execution: ${failure || 'all suites pass'}`, () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'swarm workflow '))
+    try {
+      const bin = join(scratch, 'bin')
+      mkdirSync(bin)
+      const calls = join(scratch, 'calls.jsonl')
+      writeFileSync(join(bin, 'make'), `#!/usr/bin/env node
+const fs = require('node:fs')
+const args = process.argv.slice(2)
+fs.appendFileSync(process.env.MAKE_CALLS, JSON.stringify(args) + '\\n')
+console.log('acceptance output')
+if (process.env.FAIL_COMMAND && args.join(' ').includes(process.env.FAIL_COMMAND)) process.exit(19)
+`, { mode: 0o755 })
+      const steps = workflow('e2e-local.yml').jobs['e2e-tests'].steps
+      const step = steps.find((step: any) => step.name === 'Run Docker and Swarm acceptance')
+      const script = step.run.replaceAll('/var/log/boxlite-ci', join(scratch, 'logs'))
+      const execution = spawnSync('bash', ['-eo', 'pipefail', '-c', script], {
+        encoding: 'utf8', timeout: 10_000,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_WORKSPACE: scratch,
+          GH_RUN_ID: '123', GH_RUN_ATTEMPT: '2', MAKE_CALLS: calls, FAIL_COMMAND: failure },
+      })
+      assert.equal(execution.error, undefined)
+      assert.equal(execution.status, failure ? 19 : 0, execution.stderr)
+      const invocations = readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+      assert.equal(invocations.length, expectedCalls)
+      assert.equal(invocations[0][0], 'test:docker:dind')
+      for (const [index, topology] of ['single', 'same-runner'].entries()) {
+        if (index + 1 < expectedCalls) {
+          assert.equal(invocations[index + 1][0], 'test:docker:swarm')
+          assert.ok(invocations[index + 1][1].endsWith(`--topology ${topology}`))
+        }
+      }
+      assert.ok(invocations.every((args) => args.length === 2 && args[1].includes(`--root '${scratch}'`)))
+      assert.ok(invocations.every((args) => args[1].includes(`--output '${join(scratch, 'logs/123-2/docker')}'`)))
+      assert.match(readFileSync(join(scratch, 'logs/123-2/docker-dind.log'), 'utf8'), /acceptance output/)
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+}
+
 test('Go vet and golangci-lint reuse the Linux coverage build', () => {
   const steps = workflow('test.yml').jobs.go.steps
   const buildAt = steps.findIndex((step: any) => step.run === 'make coverage:go')

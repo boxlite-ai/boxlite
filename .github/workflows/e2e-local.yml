@@ -7,7 +7,7 @@
 # Architecture:
 #   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
 #     Start stopped VM                Build + run tests             Stop VM
-#     Wait for runner online           50-min timeout               if: always()
+#     Wait for runner online           75-min timeout               if: always()
 #
 # Concurrency: only ONE e2e run at a time (single persistent VM).
 # A newer push queues behind the in-progress run instead of cancelling it.
@@ -48,6 +48,10 @@ on:
       - 'src/vmm/**'
       - 'src/hypervisor/**'
       - 'scripts/build/build-vmm-boot.sh'
+      - 'scripts/build/*dind*'
+      - 'tests/docker/**'
+      - 'make/acceptance.mk'
+      - 'make/dev.mk'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
@@ -67,10 +71,15 @@ on:
       - 'src/vmm/**'
       - 'src/hypervisor/**'
       - 'scripts/build/build-vmm-boot.sh'
+      - 'scripts/build/*dind*'
+      - 'tests/docker/**'
+      - 'make/acceptance.mk'
+      - 'make/dev.mk'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.gitmodules'
+      - '.github/workflows/e2e-local.yml'
       - '!**/*.md'
   workflow_dispatch:
     inputs:
@@ -241,10 +250,11 @@ jobs:
   e2e-tests:
     name: E2E Integration Tests
     needs: start-runner
+    cache-mode: read
     runs-on:
       - self-hosted
       - gcp-e2e
-    timeout-minutes: 50
+    timeout-minutes: 75
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
@@ -286,7 +296,27 @@ jobs:
             done
           fi
 
+      - name: Redact rescued host identities
+        id: redact_rescued_evidence
+        env:
+          EVIDENCE_ROOT: /tmp/boxlite-rescue
+        run: &redact-host-identities |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+
+          identity = re.compile(
+              r'("(?:hostname|machine_id)"\s*:\s*)"(?:\\.|[^"\\\r\n])*(?:"|$)',
+              re.MULTILINE,
+          )
+          for path in Path(os.environ["EVIDENCE_ROOT"]).rglob("*"):
+              if path.is_file() and path.suffix in {".json", ".log"}:
+                  path.write_text(identity.sub(r'\1"[redacted]"', path.read_text()))
+          PY
+
       - name: Upload rescued prior-run logs
+        if: steps.redact_rescued_evidence.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-local-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
@@ -310,13 +340,22 @@ jobs:
           find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Runner_*.log' -mtime +1 -delete 2>/dev/null || true
 
       - name: Checkout code
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+          clean: false
+
+      - name: Checkout approved PR
+        if: github.event_name == 'pull_request_target'
         uses: actions/checkout@v5
         with:
           # pull_request_target resolves to the BASE branch by default, which
           # would silently test main instead of the PR. Pin the head SHA the
-          # maintainer approved when labeling; push/dispatch keep github.sha.
+          # maintainer approved when labeling.
           # No credentials persist on the runner: fork code runs after this.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           submodules: recursive
           clean: false
@@ -426,11 +465,59 @@ jobs:
           set -o pipefail
           make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
 
+      - name: Build Docker-capable runtime and Python SDK
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          mkdir -p "$LOG_DIR"
+          set -o pipefail
+          make kernel:dind 2>&1 | tee "$LOG_DIR/docker-firmware-build.log"
+          export BOXLITE_LIBKRUNFW_SOURCE="$GITHUB_WORKSPACE/.apps-local/firmware-dind"
+          make dev:python 2>&1 | tee "$LOG_DIR/docker-sdk-build.log"
+
+      - name: Run Docker and Swarm acceptance
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -o pipefail
+          LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          mkdir -p "$LOG_DIR"
+          ACCEPTANCE_ARGS="--runner-a local --root '$GITHUB_WORKSPACE' --state-root '$HOME/.boxlite/docker-acceptance/${GH_RUN_ID}-${GH_RUN_ATTEMPT}' --output '$LOG_DIR/docker'"
+          make test:docker:dind DOCKER_ACCEPTANCE_ARGS="$ACCEPTANCE_ARGS" 2>&1 | tee "$LOG_DIR/docker-dind.log"
+          for topology in single same-runner; do
+            make test:docker:swarm DOCKER_ACCEPTANCE_ARGS="$ACCEPTANCE_ARGS --topology $topology" 2>&1 | tee "$LOG_DIR/swarm-$topology.log"
+          done
+
+      - name: Redact current host identities
+        id: redact_current_evidence
+        if: always()
+        env:
+          EVIDENCE_ROOT: /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}
+        run: *redact-host-identities
+
+      - name: Upload Docker and Swarm evidence
+        if: always() && steps.redact_current_evidence.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-swarm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/docker/
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/docker-dind.log
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/swarm-*.log
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/docker-*-build.log
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload test logs on failure or cancellation
         # `failure()` alone misses cancelled jobs (concurrency cancellation,
         # host reboot, timeout — all surface as `cancelled()`, not failure).
         # We want logs for every non-success outcome.
-        if: failure() || cancelled()
+        if: (failure() || cancelled()) && steps.redact_current_evidence.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-local-logs-${{ github.run_id }}-${{ github.run_attempt }}

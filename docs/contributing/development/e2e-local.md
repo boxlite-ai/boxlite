@@ -31,8 +31,9 @@ flowchart LR
   come online. It then removes the token from the metadata, whether or not the runner came up.
   When the zone rejects the boot for lack of capacity, the VM stays `TERMINATED`; after a
   minute in that state the job retries the start, up to 6 attempts a minute apart.
-- **e2e-tests** — runs on the self-hosted runner (`gcp-e2e` label, 50-minute timeout):
-  verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
+- **e2e-tests** — runs on the self-hosted runner (`gcp-e2e` label, 75-minute timeout):
+  verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`
+  followed by Docker and Swarm acceptance with DinD firmware.
 - **stop-runner** — always runs at the end and stops the VM so it stops costing money,
   except when a `debug` dispatch fails and leaves the VM running for the SSH session.
 
@@ -53,7 +54,8 @@ online runner, `start` stops it and boots it again with a new token.
 ### Triggers
 
 - Push to `main` touching runtime code (`src/boxlite`, `src/shared`, `src/cli`, `src/guest`,
-  `sdks/**`, any `Cargo.toml`, `Cargo.lock`, or the workflow file itself).
+  `sdks/**`, any `Cargo.toml`, `Cargo.lock`), Docker acceptance (`tests/docker/**`,
+  `make/acceptance.mk`, `make/dev.mk`, `scripts/build/*dind*`), or the workflow file itself.
 - A pull request labeled `e2e-local` — the label is the cost gate, and only maintainers can
   add it. The trigger is `pull_request_target`, so fork PRs get the credentials a plain
   `pull_request` run would be denied, and the workflow definition always comes from `main`.
@@ -68,6 +70,43 @@ online runner, `start` stops it and boots it again with a new token.
   `gh workflow run e2e-local.yml -f registries=upstream`.
   A dispatch runs the selected branch's workflow, which is how a change to this
   workflow is tested before it merges.
+
+Checkout follows the triggering event: pushes and manual dispatches use that event's
+commit, while a separate `pull_request_target` step selects the approved PR head SHA.
+The PR-head expression is confined to that step, keeping the event and cache contexts
+explicit for static analysis.
+The test job uses `cache-mode: read`, so its scoped GitHub Actions cache token cannot
+save or poison caches. Its native build and image caches remain on the persistent VM disk.
+
+### Docker and Swarm acceptance
+
+After ordinary integration passes, the job prepares the pinned DinD firmware with
+`make kernel:dind` and rebuilds the native Python SDK with `make dev:python`, selecting
+that firmware through `BOXLITE_LIBKRUNFW_SOURCE` for the build step.
+Both builds stream output to the job and persist it as `docker-firmware-build.log` and
+`docker-sdk-build.log` in the run's log directory, so failure and prior-run rescue uploads
+retain it. Pipeline failures preserve the build's failing status.
+
+The same KVM host then runs these real-guest checks sequentially with a local worker:
+
+| Make target | Topology | Coverage |
+| --- | --- | --- |
+| `test:docker:dind` | One Box | D1/D2: Docker pull, build, run and Compose service traffic |
+| `test:docker:swarm` | `single` | D3–D10: single-node Swarm networking and kernel operations |
+| `test:docker:swarm` | `same-runner` | M1–M6: two Boxes in one runtime, cross-node VIP/DNSRR and taskless-node ingress |
+
+The topology options are supplied through `DOCKER_ACCEPTANCE_ARGS`; see the
+[Docker acceptance commands](../../../tests/docker/README.md#swarm-topologies).
+Any failed assertion fails the job. `docker-swarm-evidence-<run_id>-<run_attempt>`
+retains results, guest/worker logs and command output for seven days, including successful
+runs. Before normal, failure or prior-run rescue uploads, JSON and log files replace
+`hostname` and `machine_id` values with `[redacted]`. Uploads require successful redaction.
+Topology checks use the original identities before this publication step.
+Failed Box state remains under `/root/.boxlite/docker-acceptance/<run_id>-<run_attempt>`
+until the runner's disk-pressure cleanup evicts that cache.
+
+The CI runner provides one physical host. Cross-runner Swarm remains an explicit
+two-host acceptance command; Apple Silicon single-node acceptance runs locally.
 
 ## VM & auth
 
@@ -84,7 +123,7 @@ The `ci-gha-e2e` names and the `purpose=ci-github-actions` label keep this VM ap
 product's own runners (`boxlite-app-*-runner`). Keeping the VM's disk is what makes repeat
 runs fast: the first run compiles everything, and later runs reuse the cached toolchain and
 build output. With 4 vCPUs a cold build is much slower than on the previous 16-vCPU
-`c8i.4xlarge`, so a first run can come close to the 50-minute timeout.
+`c8i.4xlarge`; the 75-minute job budget includes both integration and Docker acceptance.
 
 Authentication uses no long-lived cloud secrets, and every identity is scoped to this VM:
 
@@ -159,7 +198,7 @@ gh workflow run e2e-local.yml
 | `start-runner` times out waiting for the runner to come online | the startup script failed | read the VM's serial port output (`gcloud compute instances get-serial-port-output ci-gha-e2e-1 --project boxlite-dev-project --zone us-east5-a`) and search for `startup-script` |
 | `start-runner` fails with `could not start ci-gha-e2e-1 after 6 attempts` | `us-east5-a` has no `c3-highcpu-4` capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`) | re-run the job later; if it persists, change the VM's machine type with `gcloud compute instances set-machine-type` while it is stopped |
 | `e2e-tests` fails on low disk | `target/` build artifacts filled the disk | the job evicts caches at 80% use and refuses below 20 GB free; if it still fails, grow the disk |
-| `e2e-tests` hits its 50-minute timeout with every suite slower | box starts wait on a public registry: `boot_timing_profile` shows `stage_image_prepare` in seconds | Rust, CLI, Python and Node suites pull through a [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry); the C suite's `boxlite_simple_new` test still pulls from docker.io |
+| `e2e-tests` hits its 75-minute timeout with every suite slower | box starts wait on a public registry: `boot_timing_profile` shows `stage_image_prepare` in seconds | Rust, CLI, Python and Node suites pull through a [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry); Docker acceptance pulls pinned Docker/BusyBox images and guest packages upstream |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |
 | A labeled fork PR doesn't re-run after a push | fork approval is per-commit | remove and re-add the `e2e-local` label to approve the new head |
 

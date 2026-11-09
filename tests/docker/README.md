@@ -33,6 +33,37 @@ D1 requires `docker info`, a pulled image, a Dockerfile build with a unique
 marker and execution with `--pull=never`. D2 requires a two-service Compose
 application and HTTP 200 with that marker through the backend service name.
 
+## Swarm topologies
+
+Two Boxes in one worker exercise the same-runner topology; separate workers on
+different physical hosts exercise the cross-runner topology. Use the same
+checkout path and built SDK on both hosts for cross-runner tests.
+
+Run `make test:docker:swarm` with the same arguments and one of
+`--topology single`, `--topology same-runner`, or `--topology cross-runner`.
+The cross-runner case also requires `--runner-b user@host-b` and
+`--peer-address host-a-address`. Each topology produces its own evidence.
+
+The [Swarm guide](../../docs/guides/docker-swarm.md) describes the guest IP
+link, port exposure and network assertions. Single-node checks cover D3–D10;
+both two-node topologies independently cover M1–M6, including constrained
+cross-node VIP/DNSRR requests and ingress through a node without a backend task.
+Apple Silicon acceptance covers `--topology single` with `--runner-a local`;
+the two-node topologies are validated on Linux x86_64.
+
+## Continuous integration
+
+[E2E local](../../docs/contributing/development/e2e-local.md#docker-and-swarm-acceptance)
+builds DinD firmware and the native Python SDK after ordinary integration tests, then
+runs Docker/Compose, single-node Swarm and same-runner Swarm with a local Linux worker.
+Failures fail the e2e job. Each run uploads its acceptance results and logs as
+`docker-swarm-evidence-<run_id>-<run_attempt>`, retained for seven days.
+Firmware and SDK build output is retained with the acceptance logs.
+Before normal, failure and prior-run rescue uploads, hostnames and machine IDs in
+JSON and log records are replaced with `[redacted]`; uploads require successful redaction.
+
+Cross-runner acceptance requires two physical hosts and uses the explicit command above.
+
 ## Evidence and cleanup
 
 Each run creates a unique output directory containing `result.json`,
@@ -46,4 +77,5 @@ the runtime also keeps `commands.log` and `acceptance-boxes.json`.
 Successful runs remove their Boxes and close forwarders. Failures retain Box
 disks and daemon diagnostics under the selected state root. Inspect or remove
 those Boxes with the same BoxLite runtime home before deleting that directory.
-Logs include local infrastructure details and belong in private evidence storage.
+Local command output includes raw infrastructure identities and belongs in private
+evidence storage. CI publishes redacted artifacts after topology validation.
