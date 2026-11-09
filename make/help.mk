@@ -36,7 +36,7 @@ help:
 	@echo "    make vmm:boot:host  - Build the same kernel with Linux host tools instead"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
-	@echo "    make build:apps:api  - Build and type-check the API for production"
+	@echo "    make build:apps:api  - Build API and validate production entity metadata"
 	@echo "    make build:apps:dashboard - Build and type-check the dashboard"
 	@echo "    make build:apps:api - Build only the API service"
 	@echo ""

@@ -54,7 +54,7 @@ export class Checkpoint {
   // Historical source identity, deliberately without a source box foreign key.
   @Column() sourceBoxId: string
   @Column('uuid') sourceRunnerId: string
-  @Column() sourceState: BoxState
+  @Column('varchar') sourceState: BoxState
   @Column({ type: 'varchar', default: 'creating' }) state: CheckpointState
   @Column() arcPath: string
   @Column({ type: 'uuid', nullable: true }) exportJobId: string | null

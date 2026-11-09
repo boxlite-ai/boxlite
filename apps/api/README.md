@@ -31,6 +31,16 @@ Their SPA fixtures leave the optional MCP resource URL empty, matching the deplo
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
 
+### Production entity metadata checks
+
+`make build:apps:api` and the API Docker build validate PostgreSQL entity metadata
+from the compiled production `main.js`. The check stops before Nest initializes
+services and rejects unsupported column types without database or Redis access.
+It covers compiled mappings, not full application startup or deployed schema compatibility.
+Enum-backed varchar columns need an explicit SQL type: `Checkpoint.sourceState`
+uses `@Column('varchar')` because production compilation can emit `Object` metadata
+for the imported `BoxState` enum even when source-level Jest tests pass.
+
 ## Registration email policy
 
 The first API request from a new OIDC identity requires an email address.

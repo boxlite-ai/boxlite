@@ -57,6 +57,7 @@ build\:apps: _ensure-apps-deps
 
 build\:apps\:api: _ensure-apps-deps
 	@cd apps && yarn nx run api:build --configuration=production
+	@cd apps && node --test api/test/production-metadata.cjs
 
 build\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:build
