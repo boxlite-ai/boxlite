@@ -39,8 +39,9 @@ make test:integration:vmm:native
 make test:unit:guest
 ```
 
-The native suite boots the actual agent on an ext4 root and in an initramfs.
-A test-only child checks mount reuse, writable paths, hostname, limits, zygote inheritance, localhost TCP and Unix RPC.
+The native suite boots the actual agent from a read-only ext4 root, without an initramfs.
+A test-only launcher runs from that disk and execs the agent as PID 1.
+Its child checks the ext4 root and rejected writes, mount reuse, writable paths, hostname, limits, zygote inheritance, localhost TCP and Unix RPC.
 Separate boots check argument errors and incorrect filesystem types; namespace tests check panic and child exit policies.
 Host namespace and shutdown unit tests deny global `sync` with a test-only seccomp filter; KVM boots exercise the unfiltered sync/reset path.
 The probe is an explicitly built Cargo example and is excluded from runtime artifacts.

@@ -1,4 +1,4 @@
-//! Test-only initramfs launcher. Execs the production agent as PID 1 while a
+//! Test-only ext4 launcher. Execs the production agent as PID 1 while a
 //! child checks its observable state and Unix RPC service inside the VM.
 
 use boxlite_shared::{GuestClient, PingRequest};
@@ -94,7 +94,11 @@ fn main() {
         "fresh" | "premounted" => {
             if scenario == "premounted" {
                 premount();
-                fs::write("/mounts-before", fs::read("/proc/self/mountinfo").unwrap()).unwrap();
+                fs::write(
+                    "/run/mounts-before",
+                    fs::read("/proc/self/mountinfo").unwrap(),
+                )
+                .unwrap();
                 agent.env("HOSTNAME", "bootstrap-test");
             }
             // SAFETY: the launcher is single-threaded. Tokio is created only
@@ -131,9 +135,9 @@ fn main() {
 }
 
 fn premount() {
+    // The kernel already mounts /dev when booting from the ext4 root.
     for (path, kind) in [
         ("/proc", "proc"),
-        ("/dev", "devtmpfs"),
         ("/sys", "sysfs"),
         ("/sys/fs/cgroup", "cgroup2"),
         ("/dev/pts", "devpts"),
@@ -208,7 +212,7 @@ async fn verify(scenario: &str) {
             }
         }
         if scenario == "premounted" {
-            let before = fs::read_to_string("/mounts-before").unwrap();
+            let before = fs::read_to_string("/run/mounts-before").unwrap();
             assert!(
                 before
                     .lines()
@@ -221,6 +225,15 @@ async fn verify(scenario: &str) {
         .iter()
         .find(|m| m.mount_point == std::path::Path::new("/"))
         .unwrap();
+    assert_eq!(root.fs_type, "ext4", "root filesystem: {root:?}");
+    assert_eq!(
+        fs::read_to_string("/sys/class/block/vdb/ro")
+            .unwrap()
+            .trim(),
+        "1"
+    );
+    let error = fs::write("/root-write-probe", b"must remain read-only").unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EROFS), "{error}");
     assert!(
         root.opt_fields
             .iter()

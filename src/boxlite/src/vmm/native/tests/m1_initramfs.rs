@@ -11,7 +11,7 @@ const PROGRAM_HEADERS: u64 = 64 + 56;
 
 /// An uncompressed newc archive whose only file is the M1 `/init`.
 pub(super) fn m1_archive() -> Vec<u8> {
-    newc_archive(&[("init", 0o100_755, &print_and_restart(M1_MARKER))])
+    newc_archive("init", &print_and_restart(M1_MARKER))
 }
 
 /// A static x86_64 executable: one read-only, executable `PT_LOAD` at
@@ -73,9 +73,9 @@ fn print_and_restart(line: &str) -> Vec<u8> {
     static_program(&text)
 }
 
-/// An uncompressed newc archive of files and directories
+/// An uncompressed newc archive holding one executable file, `name`
 /// (`Documentation/driver-api/early-userspace/buffer-format.rst`).
-pub(super) fn newc_archive(entries: &[(&str, u32, &[u8])]) -> Vec<u8> {
+fn newc_archive(name: &str, data: &[u8]) -> Vec<u8> {
     fn entry(archive: &mut Vec<u8>, ino: u32, mode: u32, name: &str, data: &[u8]) {
         let fields = [
             ino,
@@ -104,9 +104,7 @@ pub(super) fn newc_archive(entries: &[(&str, u32, &[u8])]) -> Vec<u8> {
     }
 
     let mut archive = Vec::new();
-    for (index, (name, mode, data)) in entries.iter().enumerate() {
-        entry(&mut archive, index as u32 + 1, *mode, name, data);
-    }
+    entry(&mut archive, 1, 0o100_755, name, data);
     entry(&mut archive, 0, 0, "TRAILER!!!", &[]);
     archive
 }
