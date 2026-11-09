@@ -84,6 +84,7 @@ function isSelectingText(): boolean {
 }
 
 // One-click name copy that must not trigger the row's navigation click.
+/** Copies a box name without triggering navigation from its parent row. */
 function CopyNameButton({ name, className }: { name: string; className?: string }) {
   const [copied, setCopied] = useState(false)
 

@@ -112,6 +112,27 @@ async function fillAndSubmit(values: { prefix?: string; username?: string; passw
 }
 
 describe('the credential list', () => {
+  it.each(['GHCR', 'acme/', 'acme-bot'])(
+    'filters visible credentials by %s and recovers from no matches',
+    async (query) => {
+      await renderPanel()
+      const input = document.querySelector<HTMLInputElement>('[aria-label="Filter registries"]')
+      expect(input).not.toBeNull()
+      act(() => typeInto(input!, query))
+      expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+      act(() => typeInto(input!, 'no-such-registry'))
+      expect(document.querySelectorAll('.resource-list-row')).toHaveLength(0)
+      expect(document.body.textContent).toContain('No registries match')
+      expect(document.body.textContent).not.toContain('No private registries connected')
+      await act(async () => button('Clear filter')?.click())
+      expect(input!.value).toBe('')
+      expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+      expect(mocks.create).not.toHaveBeenCalled()
+      expect(mocks.update).not.toHaveBeenCalled()
+      expect(mocks.remove).not.toHaveBeenCalled()
+    },
+  )
+
   it('keeps one connection action in an empty credential list', async () => {
     state.credentials = []
     await renderPanel()

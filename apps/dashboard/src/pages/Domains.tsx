@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/form-dialog'
 import { AsciiButton } from '@/components/ascii'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { Copy, Globe, Plus, Search } from '@/components/ui/icon'
+import { Copy, Globe, Plus } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { RoutePath } from '@/enums/RoutePath'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -58,26 +58,33 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
 
   return (
     <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
-      <div className="mb-[18px] lg:mb-[22px]">
+      <div className="resource-page-header">
         <h1 className="font-display text-page font-semibold text-foreground">Domains</h1>
         <p className="mt-2 text-body leading-relaxed text-muted-foreground">
           Manage the domains used to reach your Box services.
         </p>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px]">
-          <Search className="size-[15px] shrink-0 text-brand" strokeWidth={2} />
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter domains…"
-            aria-label="Filter domains"
-            disabled={!canManage || !query.isSuccess}
-            className="w-full border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
-          />
-          <span className="font-mono text-label text-muted-foreground">{query.isSuccess ? rows.length : '—'}</span>
-        </div>
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter domains"
+          value={filter}
+          onChange={(value) => setFilter(value)}
+          count={query.isSuccess ? rows.length : '—'}
+          disabled={!canManage || !query.isSuccess}
+        />
+        {canManage && query.isSuccess && data && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-label text-muted-foreground">
+            <span className="font-mono tabular-nums">
+              {data.used} / {data.limit} domains held · {data.remaining} available
+            </span>
+            {!data.domain_suffix ? (
+              <span>Domain requests are unavailable on this deployment.</span>
+            ) : data.remaining === 0 ? (
+              <span className="text-warning">Domain limit reached. Reuse a held domain or request a higher limit.</span>
+            ) : null}
+          </div>
+        )}
         <div className="flex-1" />
         <AsciiButton variant="primary" className="h-11 sm:h-9" disabled={!canClaim} onClick={openForm}>
           <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
@@ -100,19 +107,6 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
       ) : (
         data && (
           <>
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-label text-muted-foreground">
-              <span className="font-mono tabular-nums">
-                {data.used} / {data.limit} domains held · {data.remaining} available
-              </span>
-              {!data.domain_suffix ? (
-                <span>Domain requests are unavailable on this deployment.</span>
-              ) : data.remaining === 0 ? (
-                <span className="text-warning">
-                  Domain limit reached. Reuse a held domain or request a higher limit.
-                </span>
-              ) : null}
-            </div>
-
             {data.domains.length === 0 ? (
               <ResourceEmptyState
                 title="No domains yet"

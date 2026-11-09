@@ -31,10 +31,11 @@ const STATUS: Record<string, { label: string; color: string } | undefined> = {
  * Falls back to a muted color and the raw status name for unmapped values.
  *
  * @param status - The invoice status
- * @returns Object with label text and HSL color string
+ * @returns Label, HSL color, and whether display normalization is safe
  */
-function statusMark(status: InvoiceStatus): { label: string; color: string } {
-  return STATUS[status] ?? { label: status, color: MUTED }
+function statusMark(status: InvoiceStatus): { label: string; color: string; normalizeLabel: boolean } {
+  const mapped = STATUS[status]
+  return mapped ? { ...mapped, normalizeLabel: true } : { label: status, color: MUTED, normalizeLabel: false }
 }
 
 /**
@@ -123,7 +124,7 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
               {invoiceAmount(invoice)}
             </span>
             <span className="text-right">
-              <StatusIndicator data-invoice-status label={status.label} color={status.color} />
+              <StatusIndicator data-invoice-status {...status} />
             </span>
           </div>
         )

@@ -2,6 +2,7 @@ import { type ComponentProps } from 'react'
 import { cn } from '@/lib/utils'
 import { DialogContent, DialogHeader, DialogFooter } from './dialog'
 
+/** Bounds the dialog to the viewport while allowing its body to shrink and scroll. */
 export function FormDialogContent({ className, ...props }: ComponentProps<typeof DialogContent>) {
   return (
     <DialogContent
@@ -14,6 +15,7 @@ export function FormDialogContent({ className, ...props }: ComponentProps<typeof
   )
 }
 
+/** Keeps the form title visible above the scrolling fields. */
 export function FormDialogHeader({ className, ...props }: ComponentProps<typeof DialogHeader>) {
   return (
     <DialogHeader
@@ -23,10 +25,12 @@ export function FormDialogHeader({ className, ...props }: ComponentProps<typeof 
   )
 }
 
+/** Provides the shared scroll region for fields, pricing, and validation messages. */
 export function FormDialogBody({ className, ...props }: ComponentProps<'div'>) {
   return <div className={cn('form-dialog-body', className)} {...props} />
 }
 
+/** Keeps form actions visible below the scrolling content. */
 export function FormDialogFooter({ className, ...props }: ComponentProps<typeof DialogFooter>) {
   return (
     <DialogFooter

@@ -152,6 +152,23 @@ describe('BoxTable pagination controls', () => {
     expect(onRowClick).toHaveBeenCalledTimes(1)
   })
 
+  it.each(['metaKey', 'ctrlKey', 'shiftKey', 'altKey'])('preserves native detail navigation for %s', (modifier) => {
+    const props = renderBoxTable({ data: [makeBox('native')] })
+    const link = document.querySelector<HTMLAnchorElement>('a[href="/dashboard/boxes/native"]')!
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, [modifier]: true })
+    act(() => link.dispatchEvent(event))
+    expect(event.defaultPrevented).toBe(false)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('keeps detail links native when no row callback is provided', () => {
+    renderBoxTable({ data: [makeBox('native')], onRowClick: undefined })
+    const link = document.querySelector<HTMLAnchorElement>('a[href="/dashboard/boxes/native"]')!
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    act(() => link.dispatchEvent(event))
+    expect(event.defaultPrevented).toBe(false)
+  })
+
   it('keeps a transitioning box action disabled', () => {
     const props = renderBoxTable({ data: [{ ...makeBox('busy'), state: BoxState.STARTING }] })
     const actions = document.querySelectorAll<HTMLButtonElement>('button[title="Working…"]')

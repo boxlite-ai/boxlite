@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   historiesPending: false,
   historiesError: false,
   refetchHistory: vi.fn(),
+  failLaterPage: false,
   // The wallet query has not answered yet.
   walletPending: false,
   // A top-up request is in flight.
@@ -61,7 +62,8 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
   useOwnerInvoicesQuery: (page = 1, perPage?: number) => {
     mocks.invoicesQuery(page, perPage)
-    if (mocks.historiesError) return { data: undefined, isLoading: false, isError: true, refetch: mocks.refetchHistory }
+    if (mocks.historiesError || (mocks.failLaterPage && page > 1))
+      return { data: undefined, isLoading: false, isError: true, refetch: mocks.refetchHistory }
     if (mocks.historiesPending) return { data: undefined, isLoading: true }
     return {
       data: {
@@ -87,7 +89,8 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   },
   useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
     mocks.walletTransactionsQuery(page, perPage)
-    if (mocks.historiesError) return { data: undefined, isLoading: false, isError: true, refetch: mocks.refetchHistory }
+    if (mocks.historiesError || (mocks.failLaterPage && page > 1))
+      return { data: undefined, isLoading: false, isError: true, refetch: mocks.refetchHistory }
     if (mocks.historiesPending) return { data: undefined, isLoading: true }
     return {
       data: {
@@ -161,6 +164,7 @@ describe('WalletSection top-up checkout', () => {
     mocks.fetchCheckoutUrl.mockResolvedValue('https://checkout.stripe.com/c/pay/cs_connect')
     mocks.totalsUnknown = false
     mocks.historiesError = false
+    mocks.failLaterPage = false
     mocks.refetchHistory.mockClear()
     mocks.historiesPending = false
     mocks.walletPending = false
@@ -330,6 +334,39 @@ describe('WalletSection top-up checkout', () => {
       ;[...document.querySelectorAll('button')].find((x) => x.textContent === 'Retry')!.click()
     })
     expect(mocks.refetchHistory).toHaveBeenCalledOnce()
+  })
+
+  it.each(['Billing history', 'Credit activity'])('returns from a failed later page in %s', async (tabName) => {
+    mocks.failLaterPage = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+    if (tabName === 'Credit activity') {
+      const tab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((el) =>
+        el.textContent?.includes(tabName),
+      )!
+      await act(async () => {
+        tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+        tab.click()
+      })
+    }
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((button) => button.textContent === 'Next →')!.click(),
+    )
+    await flush()
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    const previous = [...document.querySelectorAll('button')].find((button) => button.textContent === '← Previous')
+    expect(previous).toBeDefined()
+    expect(previous?.disabled).toBe(false)
+    expect(document.body.textContent).not.toContain('Page 2 of 0')
+    await act(async () => previous!.click())
+    await flush()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect(document.body.textContent).toContain(tabName === 'Billing history' ? 'BOX-2026-0002' : '2026-07-18')
   })
 
   it('loads older invoices when the billing history exceeds the first page', async () => {

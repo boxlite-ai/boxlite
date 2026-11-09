@@ -41,6 +41,7 @@ interface DataTableProps {
 
 type MemberRow = (OrganizationUser & { kind: 'member' }) | (OrganizationInvitation & { kind: 'invitation' })
 
+/** Combines members and pending invitations while preserving permission-gated role and invitation actions. */
 export function OrganizationMemberTable({
   data,
   invitations,

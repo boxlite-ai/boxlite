@@ -35,13 +35,29 @@ The short-height desktop below uses 1440×609. The details panel follows page sc
 
 ![Short-height template details](template-short.png)
 
+## Resource toolbars and overview
+
+At both 1280px and 1440px desktop widths, Boxes, Images, Private registries, Volumes and Domains share a 380×36px filter, 13px input text, and 24px title-to-section spacing. Boxes includes its overview for fleets of at least ten Boxes, with another 24px gap before the toolbar. Quota metrics fit on the toolbar at both widths.
+
+![Boxes overview and filter](boxes-toolbar.png)
+![Images filter and total size](images-toolbar.png)
+![Registry filter and action](images-registries-toolbar.png)
+![Volume toolbar](volumes-toolbar.png)
+![Domain filter and quota](domains-toolbar.png)
+
+Create Box was also inspected at 1450×609 with its price breakdown expanded. The 421px body scrolls while the header and action footer remain visible; returning to the top restores access to the name and image inputs.
+
+![Scrollable Create Box pricing](create-box-short.png)
+
 ## Reproduce
 
 Start the mock dashboard using the commands in [dashboard development](../../../../../apps/dashboard/README.md). Inspect `/dashboard/images`, `/dashboard/quickstart?method=console` and `/dashboard/boxes/mock-box-running` in a desktop viewport. Resource empty fixtures use `desktop-review-empty=1` in localStorage; set `SkipOnboarding_mock-user-00000000=true` to bypass the first-run redirect. Set `desktop-review-empty-members=1` separately for Members. Restore these fixture values to `0` after inspection. These switches are read only by mock handlers.
 
 ## Verification
 
-- Final dashboard suite: 99 files / 878 tests passed using the existing Nx dashboard target with `--run --maxWorkers=2`. Default-concurrency `make test:apps:dashboard` hit the existing five-second Quickstart interaction timeout; no timeout or assertion was relaxed.
+- Final dashboard suite: 99 files / 894 tests passed using the existing Nx dashboard target with `--run --maxWorkers=2`. Default-concurrency `make test:apps:dashboard` hit the existing five-second Quickstart interaction timeout; no timeout or assertion was relaxed.
 - Regression assertions were also run with all production files at main: the single Registry empty action, accurate inbound label and explicitly labelled image quota fail before the changes and pass with the final implementation.
 - Dashboard production build and whitespace validation passed. Formatting used `make fmt:apps FILES=...` for changed dashboard sources.
 - Proxy tunnel tests and API tunnel-service tests passed; preview-controller tests are blocked by incompatible locally linked Axios types. These screenshots do not verify deployed authentication, payment processing or SSH establishment.
+
+- Audit regressions cover failed later-page recovery in both billing histories, stale image refresh errors, raw unknown invoice statuses, scrollable pricing, registry filter recovery.

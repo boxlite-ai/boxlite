@@ -1,3 +1,4 @@
+import { ResourceFilter } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -8,7 +9,7 @@ import { OrganizationSuspendedError } from '@/api/errors'
 import { AsciiButton, StatCard } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
-import { Plus, Search } from '@/components/ui/icon'
+import { Plus } from '@/components/ui/icon'
 
 import {
   AlertDialog,
@@ -64,7 +65,7 @@ import { useAuth } from 'react-oidc-context'
 import { generatePath, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
-// Below this many boxes the stat cards repeat the table; above it they are the summary.
+// Below this many boxes the table already provides the fleet summary.
 const FLEET_THRESHOLD = 10
 
 const Boxes: React.FC = () => {
@@ -705,7 +706,7 @@ const Boxes: React.FC = () => {
   return (
     <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
       {/* header */}
-      <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
+      <div className="resource-page-header flex items-end justify-between">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Boxes</h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">
@@ -721,10 +722,8 @@ const Boxes: React.FC = () => {
         </div>
       </div>
 
-      {/* stat cards — a fleet instrument. With a handful of boxes the table
-          below says the same thing in fewer pixels, so they wait for a fleet. */}
       {(totalBoxesQuery.data ?? 0) >= FLEET_THRESHOLD && (
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:gap-[14px]">
+        <div className="mb-6 grid shrink-0 grid-cols-3 gap-3" aria-label="Boxes overview">
           <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
           <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
           <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
@@ -732,19 +731,13 @@ const Boxes: React.FC = () => {
       )}
 
       {/* toolbar */}
-      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-stretch lg:mt-[26px]">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
-          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-          <input
-            value={filters.idOrName ?? ''}
-            onChange={(e) => handleFiltersChange({ ...filters, idOrName: e.target.value || undefined })}
-            placeholder="Filter boxes…"
-            className="w-full border-0 bg-transparent p-0 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-          />
-          <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-            {boxesData?.items.length ?? 0}
-          </span>
-        </div>
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter boxes"
+          value={filters.idOrName ?? ''}
+          onChange={(value) => handleFiltersChange({ ...filters, idOrName: value || undefined })}
+          count={boxesData?.items.length ?? 0}
+        />
         <div className="flex-1" />
         {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
           <CreateBoxDialog

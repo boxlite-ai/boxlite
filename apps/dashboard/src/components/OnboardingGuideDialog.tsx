@@ -455,6 +455,7 @@ function QuickstartStepHeading({ title }: { title: string }) {
   )
 }
 
+/** Renders numbered SDK instructions with independently copyable code blocks. */
 function InlineCodeSteps({
   language,
   apiKey,
@@ -523,6 +524,7 @@ export function OnboardingGuideDialog(props: OnboardingGuideDialogProps) {
   return <OnboardingGuideContent key={`${userId}:${selectedOrganization?.id}`} {...props} />
 }
 
+/** Guides SDK, console, and prompt-based setup while keeping progress scoped to the selected account. */
 function OnboardingGuideContent({
   open,
   onOpenChange,

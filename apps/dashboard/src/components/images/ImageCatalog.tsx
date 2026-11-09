@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
@@ -16,7 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Container, Search, Trash } from '@/components/ui/icon'
+import { Container, Trash } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDeleteImageMutation } from '@/hooks/mutations/useDeleteImageMutation'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
@@ -137,48 +137,43 @@ export function ImageCatalog() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px]">
-          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter images…"
-            className="w-full border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground"
-          />
-          <span className="whitespace-nowrap font-mono text-label uppercase text-muted-foreground">{rows.length}</span>
-        </div>
-      </div>
-
-      {usage && (
-        <div className="mt-3">
-          <div className="flex flex-wrap items-center gap-4">
-            <span
-              className={cn(
-                'whitespace-nowrap font-mono text-meta tabular-nums',
-                atLimit
-                  ? 'text-destructive'
-                  : nearLimit
-                    ? 'text-yellow-600 dark:text-yellow-400'
-                    : 'text-muted-foreground',
-              )}
-            >
-              Custom images {usage.count} / {usage.limit}
-            </span>
-            <span aria-hidden="true" className="text-meta text-muted-foreground">
-              ·
-            </span>
-            <span className="whitespace-nowrap font-mono text-meta tabular-nums text-muted-foreground">
-              Total image size {formatBytes(usage.knownBytes)}
-            </span>
-            {atLimit && (
-              <span className="font-mono text-meta text-muted-foreground">
-                At the limit. Remove an image, or contact us to raise it.
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter images"
+          value={filter}
+          onChange={(value) => setFilter(value)}
+          count={rows.length}
+        />
+        {usage && (
+          <div>
+            <div className="flex flex-wrap items-center gap-4">
+              <span
+                className={cn(
+                  'whitespace-nowrap font-mono text-meta tabular-nums',
+                  atLimit
+                    ? 'text-destructive'
+                    : nearLimit
+                      ? 'text-yellow-600 dark:text-yellow-400'
+                      : 'text-muted-foreground',
+                )}
+              >
+                Custom images {usage.count} / {usage.limit}
               </span>
-            )}
+              <span aria-hidden="true" className="text-meta text-muted-foreground">
+                ·
+              </span>
+              <span className="whitespace-nowrap font-mono text-meta tabular-nums text-muted-foreground">
+                Total image size {formatBytes(usage.knownBytes)}
+              </span>
+              {atLimit && (
+                <span className="font-mono text-meta text-muted-foreground">
+                  At the limit. Remove an image, or contact us to raise it.
+                </span>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className={cn(ROW_GRID, 'resource-list-head')}>
@@ -264,7 +259,9 @@ export function ImageCatalog() {
           </p>
         ) : imagesError ? (
           <p role="alert" className="px-4 py-12 text-body text-muted-foreground">
-            Images are unavailable. Reload to try again.
+            {images.length > 0
+              ? 'Could not refresh images. Showing previously loaded data.'
+              : 'Images are unavailable. Reload to try again.'}
           </p>
         ) : rows.length === 0 && !filter.trim() ? (
           <ResourceEmptyState

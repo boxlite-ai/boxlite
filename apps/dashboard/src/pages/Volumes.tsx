@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -24,7 +24,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Dialog, DialogTitle } from '@/components/ui/dialog'
-import { Database, Plus, Search, Trash } from '@/components/ui/icon'
+import { Database, Plus, Trash } from '@/components/ui/icon'
 import { useCreateVolumeMutation } from '@/hooks/mutations/useCreateVolumeMutation'
 import { useDeleteVolumeMutation } from '@/hooks/mutations/useDeleteVolumeMutation'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -176,26 +176,20 @@ const Volumes: React.FC = () => {
 
   return (
     <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
-      <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
+      <div className="resource-page-header flex items-end justify-between">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Volumes</h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">Persistent storage across your Boxes.</p>
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
-          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter volumes…"
-            className="w-full border-0 bg-transparent p-0 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-          />
-          <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-            {rows.length}
-          </span>
-        </div>
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter volumes"
+          value={filter}
+          onChange={(value) => setFilter(value)}
+          count={rows.length}
+        />
         <div className="flex-1" />
         {canWrite && (
           <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setCreateOpen(true)}>

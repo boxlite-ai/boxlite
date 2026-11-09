@@ -33,6 +33,8 @@ const state = vi.hoisted(() => ({
   empty: false,
   loading: false,
   error: undefined as Error | undefined,
+  volumeState: 'ready',
+  errorReason: undefined as string | undefined,
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
@@ -42,7 +44,11 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
   }),
 }))
 vi.mock('@/hooks/queries/useVolumesQuery', () => ({
-  useVolumesQuery: () => ({ data: state.empty ? [] : [READY_VOLUME], isLoading: state.loading, error: state.error }),
+  useVolumesQuery: () => ({
+    data: state.empty ? [] : [{ ...READY_VOLUME, state: state.volumeState, errorReason: state.errorReason }],
+    isLoading: state.loading,
+    error: state.error,
+  }),
 }))
 vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
   useCreateVolumeMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -78,6 +84,8 @@ describe('Volumes row action "+ Box"', () => {
     state.loading = false
     state.error = undefined
     state.empty = false
+    state.volumeState = 'ready'
+    state.errorReason = undefined
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES, OrganizationRolePermissionsEnum.WRITE_BOXES]
   })
 
@@ -96,6 +104,24 @@ describe('Volumes row action "+ Box"', () => {
       root.render(<Volumes />)
     })
   }
+
+  it.each(['pending_delete', 'deleting', 'error', 'future_state'])(
+    'keeps %s volume status and action safety visible',
+    (volumeState) => {
+      state.permissions.push(OrganizationRolePermissionsEnum.DELETE_VOLUMES)
+      state.volumeState = volumeState
+      state.errorReason = volumeState === 'error' ? 'Storage unavailable' : undefined
+      renderPage()
+      const deletion = document.querySelector<HTMLButtonElement>('[aria-label="Delete subtitle-models"]')!
+      expect(deletion.disabled).toBe(volumeState !== 'error')
+      expect(rowAction('+ Box')).toBeUndefined()
+      if (volumeState === 'error') expect(document.querySelector('[title="Storage unavailable"]')).not.toBeNull()
+      if (volumeState.includes('delet')) expect(document.querySelector('[title^="Reclaiming"]')).not.toBeNull()
+      expect(document.querySelector('.resource-status')?.textContent).toBe(
+        volumeState.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase()),
+      )
+    },
+  )
 
   it('distinguishes volume loading and failure from successful empty data', () => {
     state.empty = true

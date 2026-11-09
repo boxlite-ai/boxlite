@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -162,6 +162,7 @@ function normalizePrefix(value: string): string {
  * nor test it, so the row shows what was given, not whether it still works.
  */
 export function RegistriesPanel() {
+  const [filter, setFilter] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedOrganization, organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
   const { data: credentials = [], error: listError, isLoading } = useRegistriesQuery()
@@ -169,6 +170,12 @@ export function RegistriesPanel() {
   const createRegistry = useCreateRegistryMutation()
   const updateRegistry = useUpdateRegistryMutation()
   const deleteRegistry = useDeleteRegistryMutation()
+  const needle = filter.trim().toLowerCase()
+  const rows = credentials.filter((credential) =>
+    [credential.registryHost, credential.repositoryPrefix, credential.username].some((value) =>
+      value?.toLowerCase().includes(needle),
+    ),
+  )
   const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_REGISTRIES)
   const canDelete = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_REGISTRIES)
 
@@ -288,11 +295,14 @@ export function RegistriesPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {canWrite && !unsupported && (
-        <div className="mb-[14px] flex justify-end">
-          <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
-            Connect a registry
-          </AsciiButton>
+      {!unsupported && (
+        <div className="resource-toolbar mb-[14px]">
+          <ResourceFilter label="Filter registries" value={filter} onChange={setFilter} count={rows.length} />
+          {canWrite && (
+            <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
+              Connect a registry
+            </AsciiButton>
+          )}
         </div>
       )}
 
@@ -311,7 +321,7 @@ export function RegistriesPanel() {
               <span className="text-right">Actions</span>
             </div>
 
-            {credentials.map((credential) => (
+            {rows.map((credential) => (
               <div key={credential.id} className={cn(ROW_GRID, 'resource-list-row')}>
                 <span className="resource-name">{credential.registryHost}</span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
@@ -371,6 +381,15 @@ export function RegistriesPanel() {
                   description="Connect a registry to pull private images. Public images work without credentials."
                 />
               )
+            )}
+
+            {!listError && !isLoading && credentials.length > 0 && rows.length === 0 && (
+              <div className="flex flex-col items-center gap-3 py-10 text-center text-meta text-muted-foreground">
+                <span>No registries match “{filter.trim()}”</span>
+                <AsciiButton size="sm" onClick={() => setFilter('')}>
+                  Clear filter
+                </AsciiButton>
+              </div>
             )}
 
             {credentials.length > 0 && (

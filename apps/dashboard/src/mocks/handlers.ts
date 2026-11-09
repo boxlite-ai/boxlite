@@ -151,8 +151,6 @@ export const handlers = [
       return HttpResponse.json({ ...MOCK_PAGINATED_BOXES, items, total: items.length })
     }
     const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
-    const isRunningCount = states.length === 1 && states[0] === 'started' && searchParams.get('limit') === '1'
-    if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
   // The Box API's create, which the New Box dialog calls on the page's own

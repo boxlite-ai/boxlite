@@ -264,6 +264,16 @@ describe('the image list', () => {
     expect(row?.textContent).toContain('2')
   })
 
+  it('identifies cached rows as stale when an image refresh fails', async () => {
+    state.imagesError = new BoxliteError('refresh failed')
+    await renderCatalog()
+    expect(document.body.textContent).toContain(ORG_IMAGE.name)
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      'Could not refresh images. Showing previously loaded data.',
+    )
+    expect(document.body.textContent).not.toContain('Images are unavailable')
+  })
+
   it('reports failed reads and draws no usage it cannot back', async () => {
     state.images = []
     state.imagesError = new BoxliteError('catalog unavailable')

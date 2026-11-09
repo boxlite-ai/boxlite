@@ -36,6 +36,7 @@ const EXPIRY_OPTS: { label: string; days: number | null }[] = [
   { label: '1 year', days: 365 },
 ]
 
+/** Creates an organization API key with a selected expiry and permission set, then exposes its one-time secret. */
 export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
   availablePermissions,
   className,

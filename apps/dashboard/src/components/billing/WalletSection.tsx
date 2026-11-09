@@ -103,7 +103,8 @@ function useClampPage(page: number, totalPages: number, setPage: (page: number) 
 
 /**
  * Renders pagination controls for navigating between pages.
- * Hidden when there's only one page or no pages.
+ * Hidden on the first page when no further pages are known. Later pages retain
+ * Previous during failed requests, when the total is temporarily unknown.
  *
  * @param props - Component props
  * @param props.page - Current page number
@@ -120,14 +121,15 @@ function Pager({
   totalPages: number
   onPage: (next: (current: number) => number) => void
 }) {
-  if (totalPages <= 1) {
+  if (totalPages <= 1 && page <= 1) {
     return null
   }
 
   return (
     <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
       <span>
-        Page {page} of {totalPages}
+        Page {page}
+        {totalPages > 0 && ` of ${totalPages}`}
       </span>
       <AsciiButton onClick={() => onPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
         ← Previous

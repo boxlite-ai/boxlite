@@ -20,6 +20,7 @@ const logos: Record<string, string | undefined> = {
   UNIONPAY: unionpay,
 }
 
+/** Uses bundled card logos with an accessible brand name and a generic fallback. */
 export function PaymentBrand({ brand }: { brand: string }) {
   const logo = logos[brand]
   return (

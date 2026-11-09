@@ -105,7 +105,7 @@ describe('InvoicesTable', () => {
     // an unmapped one used to reach `undefined.color` and take the page down.
     const target = render([{ ...invoice, paymentStatus: 'disputed' as Invoice['paymentStatus'] }])
 
-    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('Disputed')
+    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('disputed')
     expect(target.querySelectorAll('[data-invoice-date]')).toHaveLength(1)
   })
 

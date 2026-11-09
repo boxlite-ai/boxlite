@@ -1079,18 +1079,16 @@ export const CreateBoxDialog = ({
               </div>
             </>
           )}
+          <div className="-mx-6">
+            <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
+            {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
+            {(lifecycleError || mountError) && (
+              <p className="border-t border-border px-6 pt-3 font-mono text-[11px] text-destructive">
+                {lifecycleError ?? mountError}
+              </p>
+            )}
+          </div>
         </FormDialogBody>
-
-        {/* price — quoted from Commerce's published rates for the size above */}
-        <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
-
-        {/* footer — any blocking reason is rendered here, beside the button it
-            disables, never inside a collapsible section where it can be hidden */}
-        {(lifecycleError || mountError) && (
-          <p className="shrink-0 border-t border-border px-4 pt-3 font-mono text-[11px] text-destructive sm:px-6">
-            {lifecycleError ?? mountError}
-          </p>
-        )}
         <DialogFooter>
           <AsciiButton className="h-11 sm:h-9" type="button" onClick={() => setOpen(false)}>
             Cancel

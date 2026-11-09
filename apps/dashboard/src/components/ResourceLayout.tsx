@@ -1,7 +1,8 @@
 import { type ComponentProps, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
-import { Container } from '@/components/ui/icon'
+import { Container, Search } from '@/components/ui/icon'
 
+/** Centers a decorative resource icon, optional guidance, and secondary actions. */
 export function ResourceEmptyState({
   title,
   description,
@@ -25,15 +26,16 @@ export function ResourceEmptyState({
   )
 }
 
-/** One display treatment; callers retain ownership of business-state mapping. */
+/** Normalizes known status labels; callers can preserve unfamiliar upstream values verbatim. */
 export function StatusIndicator({
   label,
   color,
   className,
+  normalizeLabel = true,
   ...props
-}: ComponentProps<'span'> & { label: ReactNode; color: string }) {
+}: ComponentProps<'span'> & { label: ReactNode; color: string; normalizeLabel?: boolean }) {
   const text =
-    typeof label === 'string'
+    normalizeLabel && typeof label === 'string'
       ? label
           .toLowerCase()
           .replaceAll('_', ' ')
@@ -44,5 +46,35 @@ export function StatusIndicator({
       <span aria-hidden="true" className="size-1.5 shrink-0" style={{ backgroundColor: color }} />
       <span>{text}</span>
     </span>
+  )
+}
+
+/** Shared filter presentation; each resource retains its own filtering and pagination behavior. */
+export function ResourceFilter({
+  label,
+  value,
+  onChange,
+  count,
+  disabled,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  count: ReactNode
+  disabled?: boolean
+}) {
+  return (
+    <div className="resource-filter">
+      <Search aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+      <input
+        aria-label={label}
+        placeholder={`${label}…`}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
+      />
+      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{count}</span>
+    </div>
   )
 }
