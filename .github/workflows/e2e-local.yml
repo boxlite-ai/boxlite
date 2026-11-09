@@ -7,7 +7,7 @@
 # Architecture:
 #   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
 #     Start stopped VM                Build + run tests             Stop VM
-#     Wait for runner online           50-min timeout               if: always()
+#     Wait for runner online           75-min timeout               if: always()
 #
 # Concurrency: only ONE e2e run at a time (single persistent VM).
 # A newer push queues behind the in-progress run instead of cancelling it.
@@ -48,6 +48,9 @@ on:
       - 'src/vmm/**'
       - 'src/hypervisor/**'
       - 'scripts/build/build-vmm-boot.sh'
+      - 'scripts/build/*dind*'
+      - 'tests/docker/**'
+      - 'make/acceptance.mk'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
@@ -67,10 +70,14 @@ on:
       - 'src/vmm/**'
       - 'src/hypervisor/**'
       - 'scripts/build/build-vmm-boot.sh'
+      - 'scripts/build/*dind*'
+      - 'tests/docker/**'
+      - 'make/acceptance.mk'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.gitmodules'
+      - '.github/workflows/e2e-local.yml'
       - '!**/*.md'
   workflow_dispatch:
     inputs:
@@ -244,7 +251,7 @@ jobs:
     runs-on:
       - self-hosted
       - gcp-e2e
-    timeout-minutes: 50
+    timeout-minutes: 75
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
@@ -425,6 +432,40 @@ jobs:
           # The next run's Stage step rescues + uploads "$LOG_DIR".
           set -o pipefail
           make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
+
+      - name: Build Docker-capable runtime and Python SDK
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          make kernel:dind
+          export BOXLITE_LIBKRUNFW_SOURCE="$GITHUB_WORKSPACE/.apps-local/firmware-dind"
+          make dev:python
+
+      - name: Run Docker and Swarm acceptance
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -o pipefail
+          LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          mkdir -p "$LOG_DIR"
+          ACCEPTANCE_ARGS="--runner-a local --root '$GITHUB_WORKSPACE' --state-root '$HOME/.boxlite/docker-acceptance/${GH_RUN_ID}-${GH_RUN_ATTEMPT}' --output '$LOG_DIR/docker'"
+          make test:docker:dind DOCKER_ACCEPTANCE_ARGS="$ACCEPTANCE_ARGS" 2>&1 | tee "$LOG_DIR/docker-dind.log"
+          for topology in single same-runner; do
+            make test:docker:swarm DOCKER_ACCEPTANCE_ARGS="$ACCEPTANCE_ARGS --topology $topology" 2>&1 | tee "$LOG_DIR/swarm-$topology.log"
+          done
+
+      - name: Upload Docker and Swarm evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-swarm-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/docker/
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/docker-dind.log
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/swarm-*.log
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload test logs on failure or cancellation
         # `failure()` alone misses cancelled jobs (concurrency cancellation,

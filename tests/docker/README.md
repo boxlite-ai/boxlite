@@ -51,6 +51,16 @@ cross-node VIP/DNSRR requests and ingress through a node without a backend task.
 Apple Silicon acceptance covers `--topology single` with `--runner-a local`;
 the two-node topologies are validated on Linux x86_64.
 
+## Continuous integration
+
+[E2E local](../../docs/contributing/development/e2e-local.md#docker-and-swarm-acceptance)
+builds DinD firmware and the native Python SDK after ordinary integration tests, then
+runs Docker/Compose, single-node Swarm and same-runner Swarm with a local Linux worker.
+Failures fail the e2e job. Each run uploads its acceptance results and logs as
+`docker-swarm-evidence-<run_id>-<run_attempt>`, retained for seven days.
+
+Cross-runner acceptance requires two physical hosts and uses the explicit command above.
+
 ## Evidence and cleanup
 
 Each run creates a unique output directory containing `result.json`,
