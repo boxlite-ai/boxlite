@@ -201,6 +201,12 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
 })
 
 describe('ApiClient checkpoints', () => {
+  it('discovers checkpoint capability using the authenticated REST client', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { capabilities: { checkpoints_enabled: true } }, requests)
+    await expect(api.getCheckpointCapabilities()).resolves.toEqual({ checkpoints_enabled: true })
+    expect(requests[0]).toMatchObject({ method: 'get', url: '/v1/config', headers: { Authorization: 'Bearer tok' } })
+  })
   it('uses scoped authenticated requests and omits execution overrides and absent names', async () => {
     const requests: any[] = []
     const api = await makeClient(vi.fn(), 200, { box_id: 'target' }, requests)
@@ -208,7 +214,6 @@ describe('ApiClient checkpoints', () => {
     await api.createCheckpoint('org/one', 'source', 'base')
     await api.createBoxFromCheckpoint('org/one', 'checkpoint')
     await api.createBoxFromCheckpoint('org/one', 'checkpoint', 'worker')
-    await api.recoverBoxFromCheckpoint('org/one', 'checkpoint', 'target/name')
     await api.removeCheckpoint('org/one', 'base/name')
     expect(
       requests.map(({ method, url, data, headers }) => ({
@@ -230,12 +235,6 @@ describe('ApiClient checkpoints', () => {
         method: 'post',
         url: '/v1/org%2Fone/boxes',
         data: { checkpoint_id: 'checkpoint', name: 'worker' },
-        auth: 'Bearer tok',
-      },
-      {
-        method: 'post',
-        url: '/v1/org%2Fone/boxes/target%2Fname/recover',
-        data: { checkpoint_id: 'checkpoint' },
         auth: 'Bearer tok',
       },
       { method: 'delete', url: '/v1/org%2Fone/checkpoints/base%2Fname', data: undefined, auth: 'Bearer tok' },

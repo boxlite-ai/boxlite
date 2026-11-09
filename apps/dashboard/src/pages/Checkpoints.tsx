@@ -1,284 +1,202 @@
-// Copyright 2026 BoxLite AI
-// SPDX-License-Identifier: AGPL-3.0
+/*
+ * Copyright 2026 BoxLite AI
+ * SPDX-License-Identifier: AGPL-3.0
+ */
 
-import type { Checkpoint } from '@/api/checkpoint-types'
-import { AsciiButton, PanelNote, StatusMark } from '@/components/ascii'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { RoutePath } from '@/enums/RoutePath'
-import { queryKeys } from '@/hooks/queries/queryKeys'
-import { useApi } from '@/hooks/useApi'
-import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { handleApiError } from '@/lib/error-handling'
-import { formatBytes, timeAgo } from '@/lib/format'
+import { useState } from 'react'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
-import { generatePath, useNavigate } from 'react-router-dom'
+import { Checkpoint, CheckpointStatus } from '@/api/checkpoint-types'
+import { CheckpointBoxCreateDialog } from '@/components/CheckpointBoxCreateDialog'
+import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { toast } from 'sonner'
-
-type Action = { kind: 'capture' } | { kind: 'create' | 'recover' | 'delete'; checkpoint: Checkpoint }
-const LABELS = {
-  capture: 'Capture checkpoint',
-  create: 'Create Box',
-  recover: 'Recover Box',
-  delete: 'Delete checkpoint',
-}
-const TONES = { creating: 'warn', ready: 'ok', failed: 'bad', deleting: 'warn' } as const
+import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
+import { CheckpointTable } from '@/components/CheckpointTable'
+import { AsciiButton as Button } from '@/components/ascii'
+import { Plus, Search } from '@/components/ui/icon'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { useDeleteCheckpointMutation } from '@/hooks/mutations/useDeleteCheckpointMutation'
+import { useCheckpointsQuery } from '@/hooks/queries/useCheckpointsQuery'
+import { useCheckpointBoxesQuery } from '@/hooks/queries/useCheckpointBoxesQuery'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { checkpointErrorMessage, CHECKPOINTS_DISABLED_MESSAGE } from '@/lib/checkpoints'
 
 export default function Checkpoints() {
-  const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
-  if (!selectedOrganization) return <PanelNote>Select an organization to view checkpoints.</PanelNote>
-  return (
-    <CheckpointInventory
-      key={selectedOrganization.id}
-      org={selectedOrganization.id}
-      canWrite={authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)}
-    />
-  )
+  const { selectedOrganization } = useSelectedOrganization()
+  if (!selectedOrganization) return <p className="page-container py-5">Select an organization to view checkpoints.</p>
+  return <CheckpointPage key={selectedOrganization.id} />
 }
 
-function CheckpointInventory({ org, canWrite }: { org: string; canWrite: boolean }) {
-  const api = useApi()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const active = useRef(true)
-  useEffect(() => {
-    active.current = true
-    return () => {
-      active.current = false
-    }
-  }, [])
-  const [filter, setFilter] = useState('')
-  const [action, setAction] = useState<Action | null>(null)
-  const [box, setBox] = useState('')
-  const [name, setName] = useState('')
-  const checkpoints = useQuery({
-    queryKey: queryKeys.checkpoints.list(org),
-    queryFn: () => api.listCheckpoints(org),
-    refetchInterval: (query) =>
-      query.state.data?.some((checkpoint) => checkpoint.state === 'creating' || checkpoint.state === 'deleting')
-        ? 2000
-        : 10000,
-  })
-  const mutation = useMutation({
-    mutationFn: async ({ action, box, name }: { action: Action; box: string; name: string }) => {
-      if (!canWrite) throw new Error('Box write permission is required')
-      switch (action.kind) {
-        case 'capture':
-          await api.createCheckpoint(org, box, name || undefined)
-          return
-        case 'delete':
-          await api.removeCheckpoint(org, action.checkpoint.id)
-          return
-        case 'create':
-          return api.createBoxFromCheckpoint(org, action.checkpoint.id, name || undefined)
-        case 'recover':
-          return api.recoverBoxFromCheckpoint(org, action.checkpoint.id, box)
-      }
-    },
-    onSuccess: (result, variables) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.checkpoints.list(org) })
-      void queryClient.invalidateQueries({ queryKey: [...queryKeys.boxes.all, org] })
-      if (!active.current) return
-      setAction(null)
-      if (result) navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: result.box_id }))
-      else toast.success(variables.action.kind === 'capture' ? 'Checkpoint capture requested' : 'Checkpoint deleted')
-    },
-    onError: (error) => {
-      if (active.current) handleApiError(error, 'Checkpoint action failed')
-    },
-  })
-  function open(next: Action) {
-    setBox('')
-    setName('')
-    setAction(next)
-  }
-  const rows = (checkpoints.data ?? []).filter((checkpoint) =>
-    `${checkpoint.name} ${checkpoint.id} ${checkpoint.source_box_id}`.toLowerCase().includes(filter.toLowerCase()),
+function CheckpointPage() {
+  const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
+  const capabilities = useCheckpointCapabilities()
+  const checkpoints = useCheckpointsQuery(capabilities.data?.checkpoints_enabled !== false)
+  const creating = checkpoints.data?.some((checkpoint) => checkpoint.state === CheckpointStatus.CREATING) ?? false
+  const boxes = useCheckpointBoxesQuery(
+    capabilities.data?.checkpoints_enabled !== false,
+    creating,
+    checkpoints.data?.map((checkpoint) => checkpoint.source_box_id) ?? [],
   )
+  const remove = useDeleteCheckpointMutation()
+  const [filter, setFilter] = useState('')
+  const [createOpen, setCreateOpen] = useState(false)
+  const [pendingBox, setPendingBox] = useState<Checkpoint | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Checkpoint | null>(null)
+  const [confirmName, setConfirmName] = useState('')
+  const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const canDelete = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const rows = (checkpoints.data ?? []).filter((checkpoint) =>
+    `${checkpoint.name} ${checkpoint.id}`.toLowerCase().includes(filter.trim().toLowerCase()),
+  )
+  const disabled = capabilities.data?.checkpoints_enabled === false
+  const deleteConfirmed = !!pendingDelete && confirmName === pendingDelete.name
 
   return (
-    <div className="page-container pt-5 lg:pt-[26px]">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-display text-page font-semibold text-foreground">Checkpoints</h1>
-          <p className="mt-2 text-body text-muted-foreground">
-            Save a Box's disk and configuration, then create or recover Boxes from it.
-          </p>
-        </div>
-        {canWrite && (
-          <AsciiButton variant="primary" onClick={() => open({ kind: 'capture' })} disabled={mutation.isPending}>
-            Capture checkpoint
-          </AsciiButton>
-        )}
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+      <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
+        <h1 className="font-display text-page font-semibold text-foreground">Checkpoints</h1>
       </div>
-      <Input
-        aria-label="Filter checkpoints"
-        placeholder="Filter by name, ID or source Box"
-        value={filter}
-        onChange={(event) => setFilter(event.target.value)}
-        className="mb-4 max-w-md"
-      />
-      {checkpoints.isLoading && <PanelNote>Loading checkpoints…</PanelNote>}
-      {checkpoints.error && (
-        <div role="alert" className="mb-4 text-body text-destructive">
-          Unable to load checkpoints.{' '}
-          <AsciiButton size="sm" onClick={() => void checkpoints.refetch()}>
-            Retry
-          </AsciiButton>
-        </div>
-      )}
-      {!checkpoints.isLoading && !checkpoints.error && rows.length === 0 && (
-        <PanelNote>
-          {filter ? 'No matching checkpoints.' : 'No checkpoints yet. Capture one from an existing Box.'}
-        </PanelNote>
-      )}
-      {rows.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-left text-body">
-            <thead className="border-y border-border font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              <tr>
-                {['Name', 'State', 'Source Box', 'Size', 'Created', 'Actions'].map((label) => (
-                  <th key={label} scope="col" className="px-2 py-3 font-normal">
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((checkpoint) => (
-                <tr key={checkpoint.id} className="border-b border-border/60">
-                  <td className="px-2 py-4">
-                    <div>{checkpoint.name}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">{checkpoint.id}</div>
-                  </td>
-                  <td className="max-w-64 px-2 py-4">
-                    <StatusMark tone={TONES[checkpoint.state]}>{checkpoint.state}</StatusMark>
-                    {checkpoint.error_reason && (
-                      <p className="mt-1 break-words text-xs text-destructive">{checkpoint.error_reason}</p>
-                    )}
-                  </td>
-                  <td className="px-2 py-4 font-mono text-xs">{checkpoint.source_box_id}</td>
-                  <td className="px-2 py-4">{checkpoint.size_bytes ? formatBytes(checkpoint.size_bytes) : '—'}</td>
-                  <td className="px-2 py-4" title={checkpoint.created_at}>
-                    {timeAgo(checkpoint.created_at)}
-                  </td>
-                  <td className="px-2 py-4">
-                    <div className="flex gap-2">
-                      <AsciiButton
-                        size="sm"
-                        disabled={!canWrite || mutation.isPending || checkpoint.state !== 'ready'}
-                        onClick={() => open({ kind: 'create', checkpoint })}
-                        aria-label={`Create Box from ${checkpoint.name}`}
-                      >
-                        New Box
-                      </AsciiButton>
-                      <AsciiButton
-                        size="sm"
-                        disabled={!canWrite || mutation.isPending || checkpoint.state !== 'ready'}
-                        onClick={() => open({ kind: 'recover', checkpoint })}
-                        aria-label={`Recover Box from ${checkpoint.name}`}
-                      >
-                        Recover
-                      </AsciiButton>
-                      <AsciiButton
-                        size="sm"
-                        variant="danger"
-                        disabled={!canWrite || mutation.isPending || checkpoint.state === 'creating'}
-                        onClick={() => open({ kind: 'delete', checkpoint })}
-                        aria-label={`Delete ${checkpoint.name}`}
-                      >
-                        Delete
-                      </AsciiButton>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <Dialog
-        open={!!action}
-        onOpenChange={(open) => {
-          if (!open && !mutation.isPending) setAction(null)
-        }}
-      >
-        {action && (
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{LABELS[action.kind]}</DialogTitle>
-              <DialogDescription>
-                {action.kind === 'capture'
-                  ? 'Capture directly from a Box without volumes or secrets. The checkpoint remains after its source is deleted.'
-                  : action.kind === 'delete'
-                    ? `Delete ${action.checkpoint.name} and its stored archive. Boxes previously created from it remain available.`
-                    : action.kind === 'recover'
-                      ? `Replace the target Box's disk and configuration with ${action.checkpoint.name}. The target must be stopped or failed and idle.`
-                      : `Create a new Box with all execution settings saved in ${action.checkpoint.name}.`}
-              </DialogDescription>
-            </DialogHeader>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (canWrite && !mutation.isPending) mutation.mutate({ action, box: box.trim(), name: name.trim() })
-              }}
-              className="space-y-4"
+      {disabled ? (
+        <p role="status" className="my-auto text-center text-muted-foreground">
+          {CHECKPOINTS_DISABLED_MESSAGE}
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+            <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
+              <Search className="size-[15px] shrink-0 text-brand" strokeWidth={2} />
+              <input
+                aria-label="Filter checkpoints"
+                placeholder="Filter checkpoints…"
+                value={filter}
+                onChange={(event) => setFilter(event.target.value)}
+                className="w-full border-0 bg-transparent p-0 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
+              />
+              <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                {rows.length}
+              </span>
+            </div>
+            <div className="flex-1" />
+            <Button
+              variant="primary"
+              className="h-11 gap-[7px] px-[15px] text-[12.5px] font-semibold tracking-normal hover:bg-primary hover:opacity-85 sm:h-9"
+              disabled={!canWrite || !capabilities.data?.checkpoints_enabled}
+              onClick={() => setCreateOpen(true)}
             >
-              {(action.kind === 'capture' || action.kind === 'recover') && (
-                <div className="space-y-2">
-                  <Label htmlFor="checkpoint-box">{action.kind === 'capture' ? 'Source Box' : 'Target Box'}</Label>
-                  <Input
-                    id="checkpoint-box"
-                    required
-                    maxLength={128}
-                    placeholder="Box ID or name"
-                    value={box}
-                    onChange={(event) => setBox(event.target.value)}
-                    disabled={mutation.isPending}
-                  />
-                </div>
+              <Plus className="size-3.5" strokeWidth={2.4} /> New Checkpoint
+            </Button>
+          </div>
+          {capabilities.isError && (
+            <div role="alert" className="mt-6 text-sm">
+              <p>Could not load checkpoint capabilities.</p>
+              <Button variant="secondary" onClick={() => void capabilities.refetch()}>
+                Retry capabilities
+              </Button>
+            </div>
+          )}
+          {checkpoints.isError ? (
+            <div role="alert" className="mt-6 text-sm">
+              <p>{checkpointErrorMessage(checkpoints.error)}</p>
+              <Button variant="secondary" onClick={() => void checkpoints.refetch()}>
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-[14px] min-h-0 flex-1 overflow-auto">
+              <CheckpointTable
+                data={rows}
+                boxes={boxes.isError ? undefined : boxes.data}
+                loading={checkpoints.isLoading}
+                filtered={!!filter.trim()}
+                onCreate={() => setCreateOpen(true)}
+                createBoxEnabled={capabilities.data?.checkpoints_enabled === true}
+                onCreateBox={setPendingBox}
+                onDelete={(checkpoint) => {
+                  remove.reset()
+                  setConfirmName('')
+                  setPendingDelete(checkpoint)
+                }}
+              />
+              {boxes.isError && (
+                <p role="alert" className="mt-4 text-sm text-muted-foreground">
+                  Could not load source boxes.{' '}
+                  <button className="underline" onClick={() => void boxes.refetch()}>
+                    Retry
+                  </button>
+                </p>
               )}
-              {(action.kind === 'capture' || action.kind === 'create') && (
-                <div className="space-y-2">
-                  <Label htmlFor="checkpoint-name">
-                    {action.kind === 'capture' ? 'Checkpoint name (optional)' : 'Box name (optional)'}
-                  </Label>
-                  <Input
-                    id="checkpoint-name"
-                    maxLength={128}
-                    pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    disabled={mutation.isPending}
-                  />
-                </div>
+            </div>
+          )}
+          {createOpen && <CheckpointCreateDialog onClose={() => setCreateOpen(false)} />}
+          {pendingBox && <CheckpointBoxCreateDialog checkpoint={pendingBox} onClose={() => setPendingBox(null)} />}
+          <AlertDialog
+            open={!!pendingDelete}
+            onOpenChange={(open) => {
+              if (!open && !remove.isPending) setPendingDelete(null)
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete “{pendingDelete?.name}”?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently removes the checkpoint. You will no longer be able to restore its disk data.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <div className="flex flex-col gap-[7px]">
+                <label htmlFor="checkpoint-delete-confirm" className="font-mono text-[11px] text-muted-foreground">
+                  Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
+                </label>
+                <input
+                  id="checkpoint-delete-confirm"
+                  aria-label="Confirm checkpoint name"
+                  value={confirmName}
+                  onChange={(event) => setConfirmName(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={remove.isPending}
+                  className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-[13px] text-foreground outline-none focus:border-destructive"
+                />
+              </div>
+              {remove.error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {checkpointErrorMessage(remove.error)}
+                </p>
               )}
-              <DialogFooter>
-                <AsciiButton type="button" onClick={() => setAction(null)} disabled={mutation.isPending}>
-                  Cancel
-                </AsciiButton>
-                <AsciiButton
-                  type="submit"
-                  variant={action.kind === 'delete' || action.kind === 'recover' ? 'dangerSolid' : 'primary'}
-                  disabled={!canWrite || mutation.isPending}
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  disabled={!canDelete || !deleteConfirmed || remove.isPending}
+                  className="disabled:cursor-not-allowed disabled:opacity-40"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    if (!canDelete || !deleteConfirmed || !pendingDelete || remove.isPending) return
+                    remove.mutate(
+                      { checkpointId: pendingDelete.id, organizationId: selectedOrganization?.id },
+                      {
+                        onSuccess: () => {
+                          setPendingDelete(null)
+                          toast.success('Checkpoint deleted')
+                        },
+                      },
+                    )
+                  }}
                 >
-                  {mutation.isPending ? 'Working…' : LABELS[action.kind]}
-                </AsciiButton>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        )}
-      </Dialog>
+                  {remove.isPending ? 'Deleting…' : 'Delete'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>
+      )}
     </div>
   )
 }

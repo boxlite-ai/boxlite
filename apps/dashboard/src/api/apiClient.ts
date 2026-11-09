@@ -90,6 +90,10 @@ export interface PromptDraft {
 const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
 
 export class ApiClient {
+  public async getCheckpointCapabilities(): Promise<{ checkpoints_enabled: boolean }> {
+    return (await this.http.get('/v1/config', this.v1Config())).data.capabilities
+  }
+
   public async listCheckpoints(org: string): Promise<Checkpoint[]> {
     const checkpoints: Checkpoint[] = []
     const seen = new Set<string>()
@@ -124,7 +128,11 @@ export class ApiClient {
     await this.http.delete(`/v1/${encodeURIComponent(org)}/checkpoints/${encodeURIComponent(key)}`, this.v1Config())
   }
 
-  public async createBoxFromCheckpoint(org: string, key: string, name?: string): Promise<{ box_id: string }> {
+  public async createBoxFromCheckpoint(
+    org: string,
+    key: string,
+    name?: string,
+  ): Promise<{ box_id: string; name?: string }> {
     return (
       await this.http.post(
         `/v1/${encodeURIComponent(org)}/boxes`,
@@ -135,10 +143,6 @@ export class ApiClient {
         this.v1Config(),
       )
     ).data
-  }
-
-  public async recoverBoxFromCheckpoint(org: string, key: string, target: string): Promise<{ box_id: string }> {
-    return (await this.http.post(this.v1BoxPath(org, target, '/recover'), { checkpoint_id: key }, this.v1Config())).data
   }
 
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {

@@ -316,8 +316,8 @@ describe('Sidebar primary navigation', () => {
     expect([...infrastructure.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
       '/dashboard/boxes',
       '/dashboard/images',
-      '/dashboard/checkpoints',
       '/dashboard/volumes',
+      '/dashboard/checkpoints',
       '/dashboard/domains',
     ])
     expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()
