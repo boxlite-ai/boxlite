@@ -237,9 +237,9 @@ class TestSecretIntegration:
     def test_secret_header_injection_reaches_upstream(self, runtime):
         """The proxy writes the real value only into the configured header.
 
-        The guest sends the placeholder in another header. The echo service shows
-        that header unchanged and the injected Authorization header, whose echo is
-        the residual risk the secret docs warn about.
+        The guest sends a dummy Authorization and a placeholder in another header.
+        The echo service shows that header unchanged and the injected
+        Authorization header, whose echo is the documented residual risk.
         """
         real_value = "sk-test-real-key-12345"
         secret = boxlite.Secret(
@@ -267,6 +267,8 @@ class TestSecretIntegration:
                     "-O-",
                     "--header",
                     "X-Probe: <BOXLITE_SECRET:testkey>",
+                    "--header",
+                    "Authorization: Bearer dummy",
                     "https://httpbingo.org/headers",
                 ],
             )

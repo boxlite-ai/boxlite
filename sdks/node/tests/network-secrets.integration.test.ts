@@ -109,7 +109,7 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
           "import json, os, urllib.request",
           "req = urllib.request.Request(",
           "  'https://httpbingo.org/headers',",
-          "  headers={'X-Probe': os.environ['BOXLITE_SECRET_TESTKEY']},",
+          "  headers={'Authorization': 'Bearer dummy', 'X-Probe': os.environ['BOXLITE_SECRET_TESTKEY']},",
           ")",
           "headers = json.load(urllib.request.urlopen(req, timeout=20))['headers']",
           "print('probe=' + headers['X-Probe'][0])",

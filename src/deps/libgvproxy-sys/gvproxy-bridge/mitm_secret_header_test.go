@@ -117,7 +117,7 @@ func TestMitmProxy_InjectsConfiguredHeader(t *testing.T) {
 		mutate func(*http.Request)
 	}{
 		{"overwrites a guest value", func(r *http.Request) { r.Header.Set("Authorization", "Bearer fake") }},
-		{"adds a missing header", func(*http.Request) {}},
+		{"overwrites an empty header", func(r *http.Request) { r.Header.Set("Authorization", "") }},
 		{"survives a guest Connection header", func(r *http.Request) {
 			r.Header.Set("Authorization", "Bearer "+testSecretPlaceholder)
 			r.Header.Set("Connection", "Authorization")
@@ -157,35 +157,49 @@ func TestMitmProxy_KeepsRawQueryVerbatim(t *testing.T) {
 	}
 }
 
-// Real WebSocket upgrades go through ReverseProxy, so the handshake is injected.
+// WebSocket handshakes follow the same header-presence rule as HTTP requests.
 func TestMitmProxy_InjectsWebSocketHandshake(t *testing.T) {
-	seen := make(chan string, 1)
-	addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		seen <- r.Header.Get("Authorization")
-		w.Header().Set("Connection", "Upgrade")
-		w.Header().Set("Upgrade", "websocket")
-		w.WriteHeader(http.StatusSwitchingProtocols)
-	})
-	defer cleanup()
-	client := dialThroughMITM(t, newTestCA(t), testSecretHost, addr, headerTestSecrets())
+	for _, present := range []bool{true, false} {
+		name := "anonymous"
+		if present {
+			name = "authenticated"
+		}
+		t.Run(name, func(t *testing.T) {
+			seen := make(chan string, 1)
+			addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				seen <- r.Header.Get("Authorization")
+				w.Header().Set("Connection", "Upgrade")
+				w.Header().Set("Upgrade", "websocket")
+				w.WriteHeader(http.StatusSwitchingProtocols)
+			})
+			defer cleanup()
+			client := dialThroughMITM(t, newTestCA(t), testSecretHost, addr, headerTestSecrets())
 
-	req, err := http.NewRequest("GET", "https://"+testSecretHost+"/ws", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Authorization", "Bearer fake")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("status = %d, want 101", resp.StatusCode)
-	}
-	if got, want := <-seen, "Bearer "+testSecretValue; got != want {
-		t.Fatalf("upstream Authorization = %q, want %q", got, want)
+			req, err := http.NewRequest("GET", "https://"+testSecretHost+"/ws", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Upgrade", "websocket")
+			if present {
+				req.Header.Set("Authorization", "Bearer fake")
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("status = %d, want 101", resp.StatusCode)
+			}
+			want := ""
+			if present {
+				want = "Bearer " + testSecretValue
+			}
+			if got := <-seen; got != want {
+				t.Fatalf("upstream Authorization = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -202,7 +216,12 @@ func TestMitmProxy_InvalidSecretValueIsNotLogged(t *testing.T) {
 	secrets := []SecretConfig{{Name: "k", Hosts: []string{testSecretHost}, Placeholder: testSecretPlaceholder, Value: value}}
 	client := dialThroughMITM(t, newTestCA(t), testSecretHost, addr, secrets)
 
-	resp, err := client.Get("https://" + testSecretHost + "/")
+	req, err := http.NewRequest("GET", "https://"+testSecretHost+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer fake")
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

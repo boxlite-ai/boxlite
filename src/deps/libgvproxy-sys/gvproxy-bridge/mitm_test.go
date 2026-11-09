@@ -432,7 +432,7 @@ func TestInjectSecretHeaders_DefaultAuthorization(t *testing.T) {
 	secrets := []SecretConfig{
 		{Header: "", Value: "sk-real-key"},
 	}
-	injectSecretHeaders(req, secrets)
+	injectSecretHeaders(req, req.Header, secrets)
 
 	got := req.Header.Get("Authorization")
 	want := "Bearer sk-real-key"
@@ -445,11 +445,12 @@ func TestInjectSecretHeaders_ExplicitAuthorization(t *testing.T) {
 	req := &http.Request{
 		Header: http.Header{},
 	}
+	req.Header.Set("Authorization", "")
 	// Case-insensitive header name matching
 	secrets := []SecretConfig{
 		{Header: "authorization", Value: "sk-real-key"},
 	}
-	injectSecretHeaders(req, secrets)
+	injectSecretHeaders(req, req.Header, secrets)
 
 	got := req.Header.Get("Authorization")
 	want := "Bearer sk-real-key"
@@ -467,7 +468,7 @@ func TestInjectSecretHeaders_CustomHeader(t *testing.T) {
 	secrets := []SecretConfig{
 		{Header: "x-goog-api-key", Value: "AIza-real-key"},
 	}
-	injectSecretHeaders(req, secrets)
+	injectSecretHeaders(req, req.Header, secrets)
 
 	got := req.Header.Get("x-goog-api-key")
 	want := "AIza-real-key"
@@ -485,7 +486,7 @@ func TestInjectSecretHeaders_UnconfiguredHeaderNotTouched(t *testing.T) {
 	secrets := []SecretConfig{
 		{Header: "Authorization", Value: "sk-real-key"},
 	}
-	injectSecretHeaders(req, secrets)
+	injectSecretHeaders(req, req.Header, secrets)
 
 	// X-Debug should not be replaced
 	if got := req.Header.Get("X-Debug"); got != "<BOXLITE_SECRET:openai>" {
@@ -498,11 +499,14 @@ func TestInjectSecretHeaders_MultipleHeaders(t *testing.T) {
 		Header: http.Header{},
 	}
 
+	req.Header.Set("Authorization", "dummy")
+	req.Header.Set("X-Api-Key", "dummy")
+
 	secrets := []SecretConfig{
 		{Header: "Authorization", Value: "val-a"},
 		{Header: "X-Api-Key", Value: "val-b"},
 	}
-	injectSecretHeaders(req, secrets)
+	injectSecretHeaders(req, req.Header, secrets)
 
 	if got := req.Header.Get("Authorization"); got != "Bearer val-a" {
 		t.Errorf("Authorization = %q, want %q", got, "Bearer val-a")
@@ -518,8 +522,8 @@ func TestInjectSecretHeaders_EmptySecrets(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer guest-token")
 
-	injectSecretHeaders(req, nil)
-	injectSecretHeaders(req, []SecretConfig{})
+	injectSecretHeaders(req, req.Header, nil)
+	injectSecretHeaders(req, req.Header, []SecretConfig{})
 
 	if got := req.Header.Get("Authorization"); got != "Bearer guest-token" {
 		t.Errorf("Authorization = %q, want untouched", got)
@@ -542,7 +546,7 @@ func TestInjectSecretHeaders_Concurrent(t *testing.T) {
 				Header: http.Header{},
 			}
 			req.Header.Set("Authorization", "Bearer fake")
-			injectSecretHeaders(req, secrets)
+			injectSecretHeaders(req, req.Header, secrets)
 
 			got := req.Header.Get("Authorization")
 			if got != "Bearer real-value" {

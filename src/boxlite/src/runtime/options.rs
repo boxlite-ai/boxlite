@@ -502,8 +502,8 @@ pub struct BoxOptions {
     /// Secrets for MITM proxy injection into outbound HTTPS requests.
     ///
     /// When the box makes an HTTPS request to a host a secret lists, the proxy
-    /// writes the real value into the secret's configured header, overwriting
-    /// any value the box sent. Nothing else in the request is touched.
+    /// overwrites the secret's configured header only if the original request
+    /// contains it, including an empty value. Missing headers are not added.
     ///
     /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is only a dummy value
     /// for the guest's environment; the real value never enters the VM.
@@ -514,8 +514,9 @@ pub struct BoxOptions {
 /// A secret for MITM proxy injection.
 ///
 /// When the guest sends an HTTPS request to one of the listed hosts, the MITM
-/// proxy writes `value` into the configured header. An upstream that echoes that
-/// header returns the value to the guest, so bind secrets only to trusted hosts.
+/// proxy writes `value` only if the original request contains the configured
+/// header. An upstream that echoes that header returns the value to the guest,
+/// so bind secrets only to trusted hosts.
 /// Otherwise the real `value` never enters the guest VM.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Secret {

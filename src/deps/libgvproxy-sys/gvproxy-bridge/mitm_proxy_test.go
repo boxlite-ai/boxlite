@@ -770,3 +770,57 @@ func TestMitmProxy_HeaderInjection_CustomAndDefault(t *testing.T) {
 		t.Errorf("expected x-goog-api-key to be overwritten with 'AIza-real-key', got: %s", respStr)
 	}
 }
+
+func TestMitmProxy_HeaderInjection_RequiresRequestHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		header     string
+		present    bool
+		connection bool
+	}{
+		{name: "anonymous", header: "Authorization"},
+		{name: "missing custom header", header: "x-api-key"},
+		{name: "empty authorization", header: "authorization", present: true},
+		{name: "empty custom header", header: "x-api-key", present: true},
+		{name: "hop by hop authorization", header: "Authorization", present: true, connection: true},
+		{name: "connection token alone", header: "Authorization", connection: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ca := newTestCA(t)
+			addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				want := ""
+				if tc.present {
+					want = "real-key"
+					if strings.EqualFold(tc.header, "Authorization") {
+						want = "Bearer " + want
+					}
+				}
+				_, present := r.Header[http.CanonicalHeaderKey(tc.header)]
+				if present != tc.present || r.Header.Get(tc.header) != want {
+					t.Errorf("upstream %s: present=%v value=%q, want present=%v value=%q", tc.header, present, r.Header.Get(tc.header), tc.present, want)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			defer cleanup()
+			client := dialThroughMITM(t, ca, "api.example.com", addr, []SecretConfig{{Header: tc.header, Value: "real-key"}})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, "GET", "https://api.example.com/public", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("X-Unrelated", "dummy")
+			if tc.present {
+				req.Header.Set(tc.header, "")
+			}
+			if tc.connection {
+				req.Header.Set("Connection", tc.header)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+		})
+	}
+}

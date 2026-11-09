@@ -52,7 +52,9 @@ func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *
 			pr.Out.URL.Host = hostname
 			pr.Out.Host = hostname // HTTP/1.1 Host header must match
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
-			injectSecretHeaders(pr.Out, secrets)
+			// Check the incoming headers: Rewrite has already stripped hop-by-hop
+			// headers from Out, but In retains the guest's authentication intent.
+			injectSecretHeaders(pr.Out, pr.In.Header, secrets)
 		},
 		Transport:     upstreamTransport,
 		FlushInterval: -1,

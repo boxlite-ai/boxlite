@@ -136,10 +136,13 @@ inside the box cannot change that.
 
 | Request | Result |
 | --- | --- |
-| HTTPS to a listed host | Writes the header, overwriting any value the box sent, and adds it if missing |
+| HTTPS to a listed host, with the configured header | Overwrites its value, including an empty value |
+| HTTPS to a listed host, without the configured header | No injection |
 | Any other host, or plain HTTP | No injection |
 | Placeholder in another header, the query, or the body | Sent unchanged |
 
+Header names match case-insensitively on the original request, before outbound
+hop-by-hop cleanup. The value need not contain a placeholder.
 `Authorization` is written as `Bearer {value}`; any other header as `{value}`.
 
 | API | `hosts` | `header` |
@@ -149,8 +152,8 @@ inside the box cannot change that.
 | GitHub | `api.github.com` | default |
 | Gemini | `generativelanguage.googleapis.com` | `x-goog-api-key` |
 
-Pick the header the SDK in the box actually sends. Otherwise the upstream receives
-both the SDK's placeholder header and the injected header, and may return 401.
+Pick the header the SDK in the box actually sends. If the configured header is
+absent, no credential is injected and the upstream may return 401.
 
 **Create rejects:**
 - `hosts` empty, or holding an empty entry
@@ -176,8 +179,9 @@ fails recovery with an error and the old box is kept. Fix the secret, then retry
 **Migrating from placeholder substitution:** the proxy no longer searches requests
 for placeholders. A placeholder in a header other than the configured one, the
 query, or the body now reaches the upstream unchanged. Move those keys to a header
-and declare it, or keep using `Authorization: Bearer`, which needs no change. A
-request to a listed host now carries the key even if the box sent no such header.
+and declare it, or keep using `Authorization: Bearer`, which needs no change.
+Requests without the configured header remain anonymous; any existing value,
+including an empty value, triggers injection on a matching host.
 
 **Notes:**
 - The guest holds only the placeholder, exposed as `BOXLITE_SECRET_<NAME>`, so SDKs
