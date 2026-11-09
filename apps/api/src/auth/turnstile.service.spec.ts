@@ -4,6 +4,7 @@
  */
 
 import { Logger } from '@nestjs/common'
+import { turnstileConfig } from '../config/turnstile-config'
 import { TurnstileService } from './turnstile.service'
 
 const SECRET = 'private-turnstile-secret'
@@ -53,15 +54,35 @@ describe('TurnstileService Siteverify boundary', () => {
   })
 
   it.each([
+    ['Console.Example.COM', 'console.example.com'],
+    ['console.example.com', 'Console.Example.COM'],
+    ['Console.Example.COM', 'CONSOLE.EXAMPLE.COM'],
+  ])('accepts configured DNS hostname %s returned as %s', async (configured, returned) => {
+    const config = turnstileConfig({
+      TURNSTILE_SITEKEY: 'public-key',
+      TURNSTILE_SECRET_KEY: SECRET,
+      TURNSTILE_EXPECTED_HOSTNAMES: configured,
+    })
+    service = new TurnstileService({ getOrThrow: () => config } as never)
+    respond({ success: true, action: 'signup', hostname: returned })
+
+    await expect(service.verify(TOKEN)).resolves.toBeUndefined()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
     { success: false, 'error-codes': ['timeout-or-duplicate'] },
     { success: false, 'error-codes': ['invalid-input-response'] },
     { success: false, 'error-codes': ['missing-input-response'] },
     { success: true, action: 'login', hostname: 'console.example.com' },
+    { success: true, action: 'SIGNUP', hostname: 'console.example.com' },
     { success: true, action: 'signup', hostname: 'unlisted.example.com' },
     { success: true, action: 'signup', hostname: 'console.example.com.attacker.test' },
+    { success: true, action: 'signup', hostname: 'child.console.example.com' },
     { success: true, action: 'signup', hostname: 'console.example.com:443' },
     { success: true, hostname: 'console.example.com' },
     { success: true, action: 'signup' },
+    { success: true, action: 'signup', hostname: 42 },
   ])('rejects an unsuccessful or mismatched challenge', async (body) => {
     respond(body)
     await expect(service.verify(TOKEN)).rejects.toMatchObject({

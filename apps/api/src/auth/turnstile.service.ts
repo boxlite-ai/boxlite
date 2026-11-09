@@ -39,7 +39,8 @@ export class TurnstileService {
       if (
         !result.success ||
         result.action !== settings.action ||
-        !settings.expectedHostnames.includes(result.hostname)
+        typeof result.hostname !== 'string' ||
+        !settings.expectedHostnames.includes(result.hostname.toLowerCase())
       ) {
         throw new ForbiddenException({
           code: 'turnstile_verification_failed',

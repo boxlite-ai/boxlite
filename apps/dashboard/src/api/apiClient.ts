@@ -91,7 +91,8 @@ const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
 
 export class ApiClient {
   public async register(turnstileToken: string): Promise<User> {
-    return (await this.http.post<User>('/auth/register', { turnstileToken }, this.v1Config())).data
+    return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
+      .data
   }
 
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {

@@ -38,6 +38,8 @@ Set `TURNSTILE_SITEKEY`, `TURNSTILE_SECRET_KEY`, and
 list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS` defaults to 5000 and
 must be a positive integer. Invalid settings stop startup and identify the setting
 without printing its value.
+Hostname matching ignores DNS letter case and requires an exact allowlist entry;
+subdomains and suffixes are not implicitly trusted.
 
 `GET /api/config` publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
 The secret, allowed hostnames and verification timeout remain server-side. Restart
@@ -122,6 +124,8 @@ that emits the creation event and creates the default organization and owner. An
 organization failure rolls back the user. Creating a duplicate user ID returns
 `409 user_already_exists` without replacing data; other database errors retain their
 original behavior. Concurrent attempts can commit only one user and default organization.
+Both the current `user_id_pk` and legacy `PK_cace4a159ff9f2512dd42373760` user
+primary-key constraints receive this duplicate-ID handling.
 
 ## First local registration
 
@@ -136,6 +140,8 @@ internal registration endpoint is excluded from public Swagger and MCP tools.
 Existing users, including MCP tokens without profile claims, keep their local profile
 and existing permissions. New MCP users first complete registration in Dashboard.
 Notification connections check local user existence before joining rooms.
+A failed user lookup closes the transport before room admission so Socket.IO can
+retry after recovery. Unknown users and invalid credentials are rejected.
 
 ## Box startup timeouts
 

@@ -37,12 +37,23 @@ function loadTurnstile(): Promise<TurnstileApi> {
       script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
       script.async = true
       script.defer = true
+      const cleanup = () => {
+        clearTimeout(timer)
+        script.onload = null
+        script.onerror = null
+      }
       const failed = () => {
+        cleanup()
         script.remove()
         scriptLoading = undefined
         reject(new Error('Verification could not load. Please try again.'))
       }
-      script.onload = () => (window.turnstile ? resolve(window.turnstile) : failed())
+      const timer = setTimeout(failed, 10_000)
+      script.onload = () => {
+        if (!window.turnstile) return failed()
+        cleanup()
+        resolve(window.turnstile)
+      }
       script.onerror = failed
       document.head.appendChild(script)
     })

@@ -13,7 +13,7 @@ export function turnstileConfig(env: NodeJS.ProcessEnv = process.env) {
     ...new Set(
       required('TURNSTILE_EXPECTED_HOSTNAMES')
         .split(',')
-        .map((host) => host.trim()),
+        .map((host) => host.trim().toLowerCase()),
     ),
   ]
   if (expectedHostnames.some((host) => !/^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(host))) {

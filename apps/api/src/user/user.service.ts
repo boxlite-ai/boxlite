@@ -63,7 +63,8 @@ export class UserService {
             if (
               error instanceof QueryFailedError &&
               error.driverError.code === '23505' &&
-              error.driverError.constraint === 'user_id_pk'
+              (error.driverError.constraint === 'user_id_pk' ||
+                error.driverError.constraint === 'PK_cace4a159ff9f2512dd42373760')
             ) {
               throw new UserAlreadyExistsException(error)
             }

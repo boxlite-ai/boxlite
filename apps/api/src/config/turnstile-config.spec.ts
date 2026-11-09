@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { parse } from 'dotenv'
 import { turnstileConfig } from './turnstile-config'
 import { ConfigurationDto } from './dto/configuration.dto'
 
@@ -18,6 +21,26 @@ describe('Turnstile configuration', () => {
     })
   })
 
+  it('normalizes DNS case before deduplicating the hostname allowlist', () => {
+    expect(
+      turnstileConfig({
+        ...fixture,
+        TURNSTILE_EXPECTED_HOSTNAMES: ' Console.Example.COM, console.example.com, LOCALHOST ',
+      }).expectedHostnames,
+    ).toEqual(['console.example.com', 'localhost'])
+  })
+
+  it('starts from the checked-in infra-local template without external widget credentials', () => {
+    const environment = parse(readFileSync(resolve(__dirname, '../../../infra-local/api.env')))
+    expect(turnstileConfig(environment)).toEqual({
+      sitekey: '1x00000000000000000000AA',
+      secretKey: '1x0000000000000000000000000000000AA',
+      expectedHostnames: ['localhost', '127.0.0.1'],
+      timeoutMs: 5000,
+      action: 'signup',
+    })
+  })
+
   it.each(['TURNSTILE_SITEKEY', 'TURNSTILE_SECRET_KEY', 'TURNSTILE_EXPECTED_HOSTNAMES'])(
     'requires %s at startup',
     (name) => {
@@ -33,7 +56,7 @@ describe('Turnstile configuration', () => {
     )
   })
 
-  it.each(['https://example.test', 'example.test:443', 'example.test/path', 'example.test,'])(
+  it.each(['https://example.test', 'example.test:443', 'example.test/path', 'example.test,', '*.example.test'])(
     'rejects non-hostname configuration %s',
     (value) => {
       expect(() => turnstileConfig({ ...fixture, TURNSTILE_EXPECTED_HOSTNAMES: value })).toThrow(

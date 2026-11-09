@@ -73,26 +73,31 @@ describe('UserService registration events', () => {
     expect(logged[1][1]).not.toHaveProperty('organization.id')
   })
 
-  it('records a conflict as user_conflict instead of success, and rethrows', async () => {
-    const conflict = new QueryFailedError(
-      'INSERT INTO "user"',
-      [],
-      Object.assign(new Error('duplicate key value violates unique constraint'), {
-        code: '23505',
-        constraint: 'user_id_pk',
-      }),
-    )
-    const service = makeService(committingTransaction(conflict))
+  it.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
+    'records primary-key conflict %s as user_conflict instead of success, and rethrows',
+    async (constraint) => {
+      const conflict = new QueryFailedError(
+        'INSERT INTO "user"',
+        [],
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+          constraint,
+        }),
+      )
+      const service = makeService(committingTransaction(conflict))
 
-    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toMatchObject({
-      status: 409,
-      response: { code: 'user_already_exists' },
-      cause: conflict,
-    })
+      await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'user_already_exists' },
+        cause: conflict,
+      })
 
-    expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
-    expect(logged[1][1]).toEqual(expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }))
-  })
+      expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
+      expect(logged[1][1]).toEqual(
+        expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }),
+      )
+    },
+  )
 
   it('preserves an organization uniqueness failure and records it as internal', async () => {
     const failure = new QueryFailedError(

@@ -29,6 +29,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   document.querySelectorAll('script[src*="challenges.cloudflare.com"]').forEach((script) => script.remove())
   delete window.turnstile
+  vi.useRealTimers()
 })
 
 async function render(strict = false) {
@@ -39,6 +40,37 @@ async function render(strict = false) {
 }
 
 describe('Turnstile', () => {
+  it('times out a stalled script after 10 seconds and permits a clean retry', async () => {
+    vi.useFakeTimers()
+    delete window.turnstile
+    await render(true)
+    const stalled = document.querySelector<HTMLScriptElement>('script[src*="challenges.cloudflare.com"]')!
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_999)
+    })
+    expect(document.body.textContent).toContain('Loading verification')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(document.body.textContent).toContain('Verification could not load')
+    expect(stalled.isConnected).toBe(false)
+    expect(stalled.onload).toBeNull()
+    expect(stalled.onerror).toBeNull()
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button')!.click()
+    })
+    const retry = document.querySelector<HTMLScriptElement>('script[src*="challenges.cloudflare.com"]')!
+    expect(retry).not.toBe(stalled)
+    window.turnstile = api
+    await act(async () => {
+      retry.dispatchEvent(new Event('load'))
+    })
+    expect(api.render).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => options.callback('fresh-token'))
+    expect(onToken).toHaveBeenLastCalledWith('fresh-token')
+  })
+
   it.each(['error', 'load'])(
     'shares the official script and retries when %s leaves the API unavailable',
     async (event) => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
@@ -95,6 +95,47 @@ async function makeClient(
   const { ApiClient } = await import('./apiClient')
   return new ApiClient(config, 'tok', onUnauthorized)
 }
+
+describe('ApiClient registration deadline', () => {
+  let api: import('./apiClient').ApiClient
+  let send: ReturnType<typeof vi.fn<import('axios').AxiosAdapter>>
+  const onUnauthorized = vi.fn()
+
+  beforeAll(async () => {
+    vi.resetModules()
+    const { default: axios, AxiosError } = await import('axios')
+    send = vi.fn<import('axios').AxiosAdapter>(
+      (request) =>
+        new Promise<never>((_resolve, reject) => {
+          if (request.timeout) {
+            setTimeout(
+              () => reject(new AxiosError(`timeout of ${request.timeout}ms exceeded`, 'ECONNABORTED', request)),
+              request.timeout,
+            )
+          }
+        }),
+    )
+    axios.defaults.adapter = send
+    const { ApiClient } = await import('./apiClient')
+    api = new ApiClient(config, 'tok', onUnauthorized)
+  })
+
+  it('ends a stalled registration after 30 seconds without resending it or restarting authentication', async () => {
+    vi.useFakeTimers()
+    try {
+      const rejected = vi.fn()
+      void api.register('challenge-token').catch(rejected)
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(rejected).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ message: 'Operation timed out' }))
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(onUnauthorized).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('ApiClient registration', () => {
   it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {

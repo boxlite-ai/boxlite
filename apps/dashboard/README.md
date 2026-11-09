@@ -17,6 +17,16 @@ Failed or expired challenges are discarded. A lost registration response trigger
 another user check before a new challenge is requested. Service failures allow
 retry or sign-out without restarting the Auth0 login flow.
 
+Account creation requests time out after 30 seconds; account checks and verification
+script loading time out after 10 seconds. A timed-out creation request follows the
+same account check as a lost response, without automatically resending the token.
+Failed script loads release their shared loader so verification can be retried.
+
+Each newly mounted identity must pass a fresh account check, even when user data is
+cached. Once admitted, the console stays mounted during background revalidation and
+transient failures, preserving open terminals. An explicit `registration_required`
+or email rejection still blocks access and shows the relevant recovery screen.
+
 When the API rejects account creation with `disposable_email`, `email_required`,
 or `invalid_email`, the console explains the email problem and offers
 **Sign out and use another email**. These responses do not restart authentication

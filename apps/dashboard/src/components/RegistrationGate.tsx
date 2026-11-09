@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
 import { Link } from 'react-router-dom'
@@ -25,15 +25,23 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   const [emailError, setEmailError] = useState<RegistrationEmailError | null>(null)
   const [challenge, setChallenge] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [admitted, setAdmitted] = useState(false)
   const pending = useRef(false)
   const account = useQuery({
     queryKey: ['users', 'registration', user?.profile.sub],
-    queryFn: ({ signal }) => api.userApi.getAuthenticatedUser({ signal }).then((response) => response.data),
+    queryFn: ({ signal }) =>
+      api.userApi.getAuthenticatedUser({ signal, timeout: 10_000 }).then((response) => response.data),
     retry: false,
     placeholderData: undefined,
     refetchOnWindowFocus: false,
     staleTime: 0,
   })
+  const needsRegistration = account.error instanceof RegistrationError && account.error.code === 'registration_required'
+
+  useEffect(() => {
+    if (needsRegistration) setAdmitted(false)
+    else if (account.isSuccess && account.isFetchedAfterMount) setAdmitted(true)
+  }, [needsRegistration, account.isSuccess, account.isFetchedAfterMount])
 
   async function register() {
     if (!token || pending.current) return
@@ -63,9 +71,10 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
 
   if (emailError) throw emailError
   if (account.error instanceof RegistrationEmailError) throw account.error
-  if (account.isPending || account.isFetching) return <LoadingFallback />
+  // Background revalidation must not tear down live terminals for an admitted identity.
+  if (admitted && !needsRegistration) return children
+  if (!account.isFetchedAfterMount || account.isPending || account.isFetching) return <LoadingFallback />
   if (account.isSuccess) return children
-  const needsRegistration = account.error instanceof RegistrationError && account.error.code === 'registration_required'
 
   return (
     <main className="flex min-h-svh flex-col items-center justify-center gap-6 px-6 text-center">

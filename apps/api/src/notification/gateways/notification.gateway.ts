@@ -66,8 +66,16 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
       // Try JWT authentication first
       try {
         const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
-        if (!userId || !(await this.userService.findOne(userId))) {
+        if (!userId) {
           return next(new UnauthorizedException())
+        }
+        try {
+          if (!(await this.userService.findOne(userId))) return next(new UnauthorizedException())
+        } catch (error) {
+          this.logger.error('Notification user lookup failed', error)
+          // A transport close triggers Socket.IO's retry; finish middleware to clean up the pending socket.
+          socket.conn.close()
+          return next(new Error('Notification service unavailable'))
         }
 
         // Join the user room for user scoped notifications
