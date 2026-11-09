@@ -190,11 +190,13 @@ and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
 On the main-based branch, the Dashboard suite passed all 97 test files
-and 856 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+and 858 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
 inner border at desktop and narrow widths, with no horizontal content overflow;
 the title keeps its position relative to the dialog while the body scrolls.
+Browser accessibility-tree verification confirms that the key input's description
+includes the active hint, authorization reminder and validation error together.
 
 ### Recovery after configuration changes
 
