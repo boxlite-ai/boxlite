@@ -54,7 +54,9 @@ retain reset state until INIT/SIPI.
 
 `KvmVm::supported_cpuid` exposes host-supported CPU features. A VMM can remove
 features or adjust topology, then pass the result to `KvmVcpu::set_cpu_features`
-before entry. `X86CpuidEntry` preserves subleaf matching without leaking the
+before `set_boot_registers`, including in register-only hardware tests: KVM
+validates long-mode control registers against the installed CPUID policy.
+`X86CpuidEntry` preserves subleaf matching without leaking the
 KVM ABI. Legacy stateful CPUID entries are omitted because this type cannot
 preserve their read sequence; other unsupported KVM flags are rejected.
 MSRs are explicit index/value writes. A short KVM write is an error identifying

@@ -4,34 +4,88 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import * as ts from 'typescript'
+import type { NestFactory } from '@nestjs/core'
 
-describe('API HTTP server timeout configuration', () => {
-  it('disables the request body timeout for slow file uploads', () => {
-    const source = readFileSync(join(__dirname, 'main.ts'), 'utf8')
-    const sourceFile = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-    let disablesRequestTimeout = false
+jest.mock('./tracing', () => ({ otelSdk: { start: jest.fn() } }))
+jest.mock('./app.module', () => ({ AppModule: class {} }))
+jest.mock('@nestjs/core', () => ({ NestFactory: { create: jest.fn() } }))
+jest.mock('@nestjs/common', () => ({
+  Logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+  ValidationPipe: jest.fn(),
+}))
+jest.mock('@nestjs/microservices', () => ({ Transport: {} }))
+jest.mock('typeorm', () => ({ DataSource: class {}, MigrationExecutor: class {} }))
+jest.mock('kafkajs', () => ({ Partitioners: {} }))
+jest.mock('nestjs-pino', () => ({ Logger: class {}, LoggerErrorInterceptor: jest.fn() }))
+jest.mock('@nestjs/swagger', () => ({
+  SwaggerModule: { createDocument: jest.fn(() => ({})), setup: jest.fn() },
+}))
+jest.mock('node:fs', () => ({ readFileSync: jest.fn(() => '{}') }))
+jest.mock('./config/typed-config.service', () => ({ TypedConfigService: class {} }))
+jest.mock('./auth/failed-auth-tracker.service', () => ({ FailedAuthTrackerService: class {} }))
+jest.mock('./filters/all-exceptions.filter', () => ({ AllExceptionsFilter: jest.fn() }))
+jest.mock('./interceptors/metrics.interceptor', () => ({ MetricsInterceptor: jest.fn() }))
+jest.mock('./audit/interceptors/audit.interceptor', () => ({ AuditInterceptor: class {} }))
+jest.mock('./api-key/api-key.service', () => ({ ApiKeyService: class {} }))
+jest.mock('./app.service', () => ({ BOXLITE_ADMIN_USER_ID: 'admin' }))
+jest.mock('./organization/services/organization.service', () => ({ OrganizationService: class {} }))
+jest.mock('./openapi.config', () => ({ getOpenApiConfig: jest.fn(() => ({})) }))
+jest.mock('./common/utils/app-mode', () => ({
+  isApiEnabled: () => true,
+  isWorkerEnabled: () => false,
+}))
+jest.mock('./boxlite-rest/boxlite-ws-proxy.service', () => ({ BoxliteWsProxyService: class {} }))
+jest.mock('./mcp/mcp.controller', () => ({ mcpStrategy: {} }))
+jest.mock('./mcp/mcp-auth-metadata', () => ({ MCP_ROOT_ROUTES: [] }))
+jest.mock('./mcp/mcp-body', () => ({ useApiBodyParsers: jest.fn() }))
+jest.mock('./mcp/mcp-tools', () => ({ McpTools: class {} }))
+jest.mock('./mcp/mcp-routes', () => ({ servedOperations: () => [] }))
 
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isBinaryExpression(node) &&
-        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-        ts.isPropertyAccessExpression(node.left) &&
-        ts.isIdentifier(node.left.expression) &&
-        node.left.expression.text === 'httpServer' &&
-        node.left.name.text === 'requestTimeout' &&
-        ts.isNumericLiteral(node.right) &&
-        node.right.text === '0'
-      ) {
-        disablesRequestTimeout = true
-      }
-      ts.forEachChild(node, visit)
+describe('API bootstrap listener', () => {
+  const environment = process.env
+  const argv = process.argv
+
+  afterEach(() => {
+    process.env = environment
+    process.argv = argv
+    jest.resetModules()
+  })
+
+  it.each([undefined, '', '127.0.0.1'])('binds host=%s and disables request body timeout', async (host) => {
+    process.env = { ...environment, OTEL_ENABLED: 'false', CERT_PATH: '', CERT_KEY_PATH: '' }
+    delete process.env.BOXLITE_LISTEN_HOST
+    if (host !== undefined) process.env.BOXLITE_LISTEN_HOST = host
+    process.argv = ['node', 'main.js']
+    const listen = jest.fn().mockResolvedValue(undefined)
+    const httpServer = { on: jest.fn(), requestTimeout: -1 }
+    const service = {
+      get: (key: string) => (key === 'port' ? 3300 : undefined),
+      register: jest.fn(),
+      matchAttachPath: jest.fn(() => false),
     }
-
-    visit(sourceFile)
-
-    expect(disablesRequestTimeout).toBe(true)
+    const app = {
+      get: jest.fn(() => service),
+      useLogger: jest.fn(),
+      flushLogs: jest.fn(),
+      enableCors: jest.fn(),
+      set: jest.fn(),
+      useGlobalFilters: jest.fn(),
+      useGlobalInterceptors: jest.fn(),
+      useGlobalPipes: jest.fn(),
+      setGlobalPrefix: jest.fn(),
+      enableShutdownHooks: jest.fn(),
+      init: jest.fn().mockResolvedValue(undefined),
+      getHttpAdapter: () => ({ getInstance: () => ({}) }),
+      connectMicroservice: () => ({ listen: jest.fn().mockResolvedValue(undefined) }),
+      getHttpServer: () => httpServer,
+      listen,
+    }
+    // Reset modules lets each case execute the real bootstrap entry again.
+    const factory = require('@nestjs/core').NestFactory as typeof NestFactory
+    jest.mocked(factory.create).mockResolvedValue(app as never)
+    require('./main')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(listen).toHaveBeenCalledWith(3300, host || '0.0.0.0')
+    expect(httpServer.requestTimeout).toBe(0)
   })
 })

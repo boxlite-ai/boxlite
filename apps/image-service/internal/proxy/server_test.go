@@ -167,12 +167,12 @@ func TestServeStopsListeningAfterTheDrain(t *testing.T) {
 // A managed local stack must not bind other loopback or external interfaces.
 func TestStartHonorsLoopbackListenerHost(t *testing.T) {
 	t.Setenv("BOXLITE_LISTEN_HOST", "127.0.0.1")
-	other, err := net.Listen("tcp4", "127.0.0.2:0")
+	held, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Close()
-	port := other.Addr().(*net.TCPAddr).Port
+	port := held.Addr().(*net.TCPAddr).Port
+	held.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -184,7 +184,7 @@ func TestStartHonorsLoopbackListenerHost(t *testing.T) {
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-done:
-			t.Fatalf("loopback listener could not coexist with another address: %v", err)
+			t.Fatalf("loopback listener exited before becoming healthy: %v", err)
 		default:
 		}
 		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port) + HealthPath)
@@ -199,6 +199,18 @@ func TestStartHonorsLoopbackListenerHost(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("loopback listener did not become healthy")
+}
+
+// Rejecting an invalid host proves Start uses the setting, rather than silently
+// listening on all interfaces. No extra loopback alias is needed on macOS.
+func TestStartRejectsInvalidListenerHost(t *testing.T) {
+	t.Setenv("BOXLITE_LISTEN_HOST", "127.0.0.1:invalid")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := Start(ctx, &config.Config{Port: 0, ShutdownTimeoutSec: 1}, nil)
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:invalid") {
+		t.Fatalf("Start ignored the invalid listener host: %v", err)
+	}
 }
 
 // An occupied address must fail instead of reporting readiness.

@@ -23,6 +23,14 @@ Node's native loader to exercise the published ESM package and its bundled domai
 Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
 Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
 
+### Listener configuration tests
+
+`BOXLITE_LISTEN_HOST` selects the API listener address; unset or empty retains
+`0.0.0.0`, while the managed local E2E launcher supplies `127.0.0.1`.
+`make test:apps:api TEST_FILES=main.spec.ts` exercises the real bootstrap entry
+with infrastructure dependencies mocked and checks the address passed to Nest's
+listener for all three cases. It does not start PostgreSQL or a VM.
+
 ## Registration email policy
 
 The first API request from a new OIDC identity requires an email address.
