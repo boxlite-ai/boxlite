@@ -385,7 +385,7 @@ export function BoxTable({
                   onRowClick?.(box)
                 }}
                 onKeyDown={(e) => {
-                  if (!onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
+                  if (e.target !== e.currentTarget || !onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
                   e.preventDefault()
                   onRowClick(box)
                 }}

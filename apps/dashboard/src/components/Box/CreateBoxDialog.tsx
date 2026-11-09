@@ -217,6 +217,7 @@ function CappedResourcesNote({ items }: { items: { label: string; unit: string; 
 //
 // Only the first may render as $0.00. Commerce settles the real charge, so this
 // is labelled an estimate rather than a price.
+/** Quotes the selected resource size from published rates while distinguishing loading, unavailable, and unmetered states. */
 function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
   const config = useConfig()
   const pricesQuery = useUsagePricesQuery()
@@ -564,6 +565,7 @@ function MountRow({
   )
 }
 
+/** Collects a Box image, resource size, mounts, and lifecycle policy, validates them, and submits creation for the current organization. */
 export const CreateBoxDialog = ({
   className,
   children,

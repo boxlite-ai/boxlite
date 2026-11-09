@@ -144,6 +144,11 @@ export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
 const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
 
+/** The same Covers label is used for display and local filtering. */
+function registryCoverage(prefix?: string): string {
+  return prefix ? `${prefix}*` : 'every repository'
+}
+
 const EMPTY_FORM = { registryHost: 'ghcr.io', repositoryPrefix: '', username: '', password: '' }
 
 /** The API wants whole path segments ending in `/`; an unterminated prefix is completed rather than refused. */
@@ -172,7 +177,7 @@ export function RegistriesPanel() {
   const deleteRegistry = useDeleteRegistryMutation()
   const needle = filter.trim().toLowerCase()
   const rows = credentials.filter((credential) =>
-    [credential.registryHost, credential.repositoryPrefix, credential.username].some((value) =>
+    [credential.registryHost, registryCoverage(credential.repositoryPrefix), credential.username].some((value) =>
       value?.toLowerCase().includes(needle),
     ),
   )
@@ -297,7 +302,13 @@ export function RegistriesPanel() {
     <div className="flex min-h-0 flex-1 flex-col">
       {!unsupported && (
         <div className="resource-toolbar mb-[14px]">
-          <ResourceFilter label="Filter registries" value={filter} onChange={setFilter} count={rows.length} />
+          <ResourceFilter
+            label="Filter registries"
+            value={filter}
+            onChange={setFilter}
+            count={isLoading || listError ? '—' : rows.length}
+            disabled={isLoading}
+          />
           {canWrite && (
             <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
               Connect a registry
@@ -325,7 +336,7 @@ export function RegistriesPanel() {
               <div key={credential.id} className={cn(ROW_GRID, 'resource-list-row')}>
                 <span className="resource-name">{credential.registryHost}</span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
-                  {credential.repositoryPrefix ? `${credential.repositoryPrefix}*` : 'every repository'}
+                  {registryCoverage(credential.repositoryPrefix)}
                 </span>
                 <span className="truncate font-mono text-meta text-muted-foreground">{credential.username}</span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
@@ -368,7 +379,11 @@ export function RegistriesPanel() {
               </div>
             ))}
 
-            {listError ? (
+            {isLoading ? (
+              <p role="status" className="px-4 py-12 text-body text-muted-foreground">
+                Loading registries…
+              </p>
+            ) : listError ? (
               <div className="py-10 text-center font-mono text-meta text-muted-foreground">
                 Credentials could not be loaded.
               </div>

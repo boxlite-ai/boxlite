@@ -63,3 +63,7 @@ Resource list pages share a 24px title-to-toolbar gap, a 36px desktop toolbar, a
 The Boxes overview displays total, running, and stopped counts when the organization holds at least ten Boxes, preserving main’s existing threshold. Counts remain independent of list filters and pagination; loading uses the existing placeholder. The overview sits between the title and toolbar with 24px gaps.
 
 Registry credential guidance belongs to the relevant form fields, not a permanent list footer. The secret field explains that saved credentials cannot be viewed; the repository-prefix field retains scope guidance and briefly explains longest-prefix precedence. Both Connect and Update show these notes without repeating them in the dialog introduction.
+
+## Filter and keyboard boundaries
+
+Boxes displays the API’s filtered total beside its filter, independent of the current page size. Registry filtering uses the same Covers label shown in rows, including `every repository` and a scoped prefix’s trailing wildcard. Pending registry requests display a loading status and an unknown count rather than zero. Card keyboard navigation handles only events targeting the card itself; nested controls retain native Enter/Space activation.

@@ -169,6 +169,13 @@ describe('Boxes page, empty account', () => {
     })
   }
 
+  it('shows the filtered total rather than the current page size', () => {
+    state.items = [{ id: 'box-1', name: 'web-api', state: 'started', createdAt: '2026-06-01T00:00:00.000Z' }]
+    state.total = 42
+    render()
+    expect(document.querySelector('.resource-filter')?.textContent).toBe('42')
+  })
+
   it('keeps the page and leads with the table empty state', () => {
     render()
 

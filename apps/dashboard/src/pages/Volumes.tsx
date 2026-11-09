@@ -76,6 +76,7 @@ const STATE_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'idle'> = {
 // source is either a new endpoint or aggregating `BoxDto.volumes` over the
 // full box list, matching on the stored `volumeId` — the API resolves a name
 // to the volume's id before persisting it (box.service.ts).
+/** Lists persistent volumes and gates creation, mounting, and deletion by member permissions and volume state. */
 const Volumes: React.FC = () => {
   const queryClient = useQueryClient()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()

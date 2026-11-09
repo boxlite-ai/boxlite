@@ -169,6 +169,27 @@ describe('BoxTable pagination controls', () => {
     expect(event.defaultPrevented).toBe(false)
   })
 
+  it.each(['Enter', ' '])('keeps %s on a nested copy button out of card navigation', (key) => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const props = renderBoxTable({ data: [makeBox('keyboard')] })
+    const card = document.querySelector<HTMLElement>('div[role="button"]')!
+    const copy = card.querySelector<HTMLButtonElement>('button[title="Copy name"]')!
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    act(() => {
+      copy.focus()
+      copy.dispatchEvent(event)
+    })
+    expect(event.defaultPrevented).toBe(false)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+    // jsdom does not synthesize a native button click from keyboard events.
+    act(() => copy.click())
+    expect(writeText).toHaveBeenCalledWith('box-keyboard')
+    expect(props.onRowClick).not.toHaveBeenCalled()
+    act(() => card.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
+    expect(props.onRowClick).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps a transitioning box action disabled', () => {
     const props = renderBoxTable({ data: [{ ...makeBox('busy'), state: BoxState.STARTING }] })
     const actions = document.querySelectorAll<HTMLButtonElement>('button[title="Working…"]')

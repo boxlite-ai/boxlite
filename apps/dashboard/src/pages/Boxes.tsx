@@ -68,6 +68,7 @@ import { toast } from 'sonner'
 // Below this many boxes the table already provides the fleet summary.
 const FLEET_THRESHOLD = 10
 
+/** Lists and filters paginated Boxes, with organization-wide fleet counts and permission-gated lifecycle actions. */
 const Boxes: React.FC = () => {
   const api = useApi()
   const { boxApi } = api
@@ -736,7 +737,7 @@ const Boxes: React.FC = () => {
           label="Filter boxes"
           value={filters.idOrName ?? ''}
           onChange={(value) => handleFiltersChange({ ...filters, idOrName: value || undefined })}
-          count={boxesData?.items.length ?? 0}
+          count={boxesData?.total ?? '—'}
         />
         <div className="flex-1" />
         {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (

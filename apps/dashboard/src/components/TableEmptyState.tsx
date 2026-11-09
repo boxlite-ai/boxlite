@@ -30,6 +30,7 @@ interface TableEmptyStateProps {
   className?: string
 }
 
+/** Spans the table columns with the shared resource empty state and optional guidance. */
 export function TableEmptyState({ colSpan, message, icon, description, className = '' }: TableEmptyStateProps) {
   return (
     <TableRow className="hover:bg-background">

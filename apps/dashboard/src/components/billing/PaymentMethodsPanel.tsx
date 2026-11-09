@@ -69,6 +69,7 @@ function SetupButton({
   )
 }
 
+/** Displays saved card identities and preserves setup access through loading, empty, and error states. */
 export function PaymentMethodsPanel({
   paymentMethods,
   isLoading,

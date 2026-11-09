@@ -56,6 +56,7 @@ const shortHour = (value: string) => {
 
 const ROW = 'grid grid-cols-[1fr_110px_110px_110px] items-center gap-x-4'
 
+/** Displays daily or hourly usage costs, with totals calculated for the active time window. */
 export function CostOverTime() {
   const [view, setView] = useState<'chart' | 'list'>('chart')
   // Pinned once per mount: a window recomputed every render would churn the
