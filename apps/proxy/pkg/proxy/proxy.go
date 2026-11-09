@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -210,7 +211,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	})
 
 	httpServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
+		Addr:              net.JoinHostPort(os.Getenv("BOXLITE_LISTEN_HOST"), fmt.Sprint(config.ProxyPort)),
 		Handler:           sanitizeTunnelRequests(connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -164,8 +164,44 @@ func TestServeStopsListeningAfterTheDrain(t *testing.T) {
 	rebound.Close()
 }
 
-// Start refuses a port it cannot bind rather than reporting itself up, so the
-// platform never routes a pull at a process that is not listening.
+// A managed local stack must not bind other loopback or external interfaces.
+func TestStartHonorsLoopbackListenerHost(t *testing.T) {
+	t.Setenv("BOXLITE_LISTEN_HOST", "127.0.0.1")
+	other, err := net.Listen("tcp4", "127.0.0.2:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	port := other.Addr().(*net.TCPAddr).Port
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Start(ctx, &config.Config{Port: port, ShutdownTimeoutSec: 1}, nil)
+	}()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("loopback listener could not coexist with another address: %v", err)
+		default:
+		}
+		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port) + HealthPath)
+		if err == nil {
+			response.Body.Close()
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("loopback listener did not become healthy")
+}
+
+// An occupied address must fail instead of reporting readiness.
 func TestStartFailsOnAPortItCannotBind(t *testing.T) {
 	// The wildcard address, because that is what Start binds: holding only
 	// 127.0.0.1 leaves 0.0.0.0 free on some platforms and the bind succeeds.

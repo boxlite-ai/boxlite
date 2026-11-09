@@ -170,7 +170,7 @@ async function bootstrap() {
   // Starts listening for shutdown hooks
   app.enableShutdownHooks()
 
-  const host = '0.0.0.0'
+  const host = process.env.BOXLITE_LISTEN_HOST || '0.0.0.0'
   const port = configService.get('port')
 
   if (isApiEnabled()) {
