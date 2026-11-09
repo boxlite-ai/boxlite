@@ -1164,10 +1164,10 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
         configuration,
         || Ok(MockVm::new()),
         |_, config| {
-            assert!(
-                config
-                    .cmdline
-                    .ends_with("virtio_mmio.device=4K@0xd0001000:6")
+            assert_eq!(
+                config.cmdline,
+                "virtio_mmio.device=4K@0xd0000000:5 \
+                 virtio_mmio.device=4K@0xd0001000:6 console=ttyS0"
             );
             Ok(BootRegisters::default())
         },

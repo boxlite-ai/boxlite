@@ -660,7 +660,10 @@ starts the init arguments, so the caller's text is never parsed.
   module.
 - **Test seam.** `Vm::with_backend` keeps the old closure signature for tests
   that add mock, conflict or legacy devices directly; `with_devices` hands the
-  closure the mutable `VmConfig` so `add_all` can announce slots.
+  closure the mutable `VmConfig` so `add_all` can announce slots. The aggregate
+  filesystem wiring test checks both device announcements followed by the
+  original command line: without disks, the balloon occupies slot 0 and
+  virtio-fs occupies slot 1.
 
 ## Virtio block device
 
