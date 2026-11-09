@@ -168,6 +168,75 @@ fn checkpoint_managed_archive_roundtrip_replay_digest_and_source_independence() 
 }
 
 #[test]
+fn checkpoint_managed_archive_binds_metadata_but_accepts_changed_payloads_and_legacy() {
+    use std::io::Read;
+    let (runtime, _home) = runtime();
+    let catalog = &runtime.checkpoint_catalog;
+    let source = crate::litebox::checkpoint::pair::tests::cloud_fixture(|_| {});
+    let deps = pair::open(&source.path().join("pair"))
+        .unwrap()
+        .dependencies;
+    let mut info = record(catalog, "source", "cloud-source", "ready");
+    info.memory_bytes = deps.memory_bytes;
+    let home = tempfile::tempdir().unwrap();
+    let original = home.path().join("original.zst");
+    archive::pack(source.path(), &info, &original).unwrap();
+    for mode in ["payload", "metadata", "legacy"] {
+        let decoder = zstd::stream::read::Decoder::new(File::open(&original).unwrap()).unwrap();
+        let mut input = tar::Archive::new(decoder);
+        let changed = home.path().join(mode);
+        let encoder =
+            zstd::stream::write::Encoder::new(File::create(&changed).unwrap(), 1).unwrap();
+        let mut output = tar::Builder::new(encoder);
+        for entry in input.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().into_owned();
+            let mut header = entry.header().clone();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if name == Path::new("manifest.json") && mode == "legacy" {
+                let mut manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                manifest["version"] = 1.into();
+                manifest.as_object_mut().unwrap().remove("metadata_sha256");
+                bytes = serde_json::to_vec(&manifest).unwrap();
+            } else if name == Path::new("pair/snapshot.mem") {
+                if mode == "metadata" {
+                    // Valid same-size configuration change with the original manifest identity.
+                    let at = bytes
+                        .windows(b"alpine:latest".len())
+                        .position(|b| b == b"alpine:latest")
+                        .unwrap();
+                    bytes[at..at + b"alpine:latest".len()].copy_from_slice(b"ubuntu:latest");
+                } else {
+                    *bytes.last_mut().unwrap() ^= 1;
+                }
+            } else if mode == "payload" && name == Path::new("boot.raw") {
+                *bytes.last_mut().unwrap() ^= 1;
+            }
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            output
+                .append_data(&mut header, name, bytes.as_slice())
+                .unwrap();
+        }
+        output.into_inner().unwrap().finish().unwrap();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let result = archive::unpack(catalog, &changed, &operation);
+        if mode == "metadata" {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("metadata identity")
+            );
+            assert!(catalog.store.get(None, &operation).unwrap().is_none());
+        } else {
+            assert_eq!(result.unwrap().status, "ready");
+        }
+    }
+}
+
+#[test]
 fn checkpoint_managed_archive_rejects_duplicate_extra_missing_and_nonregular_members_before_registration()
  {
     let (runtime, _home) = runtime();

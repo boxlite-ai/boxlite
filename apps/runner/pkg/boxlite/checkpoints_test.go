@@ -169,7 +169,7 @@ func writeCheckpointArchiveFixture(path string) error {
 	}
 	archive := tar.NewWriter(encoder)
 	digest := sha256.Sum256([]byte("boot"))
-	manifest := checkpointArchiveManifest{Version: 1, Members: map[string]struct {
+	manifest := checkpointArchiveManifest{Version: 2, MetadataSHA256: strings.Repeat("c", 64), Members: map[string]struct {
 		Length int64  `json:"length"`
 		SHA256 string `json:"sha256"`
 	}{"boot.raw": {4, hex.EncodeToString(digest[:])}}}
@@ -322,9 +322,13 @@ func TestCheckpointCaptureUploadsOnlyCompleteArchive(t *testing.T) {
 	if !ok || result.SizeBytes != int64(len(archive)) {
 		t.Fatalf("missing or incomplete object: %+v", result)
 	}
-	digest := sha256.Sum256(archive)
-	if result.ContentSHA256 != hex.EncodeToString(digest[:]) {
-		t.Fatal("result does not describe uploaded bytes")
+	path := filepath.Join(t.TempDir(), "uploaded.zst")
+	if e = os.WriteFile(path, archive, 0600); e != nil {
+		t.Fatal(e)
+	}
+	manifest, e := checkpointArchiveIdentity(path)
+	if e != nil || result.ContentSHA256 != manifest.MetadataSHA256 {
+		t.Fatal("result does not bind uploaded metadata")
 	}
 	if !strings.Contains(strings.Join(native.calls, ","), "export-archive,remove") {
 		t.Fatalf("native resource not released: %v", native.calls)
@@ -350,9 +354,9 @@ func TestCheckpointFailedUploadIsNotPublishedOrRepeated(t *testing.T) {
 	}
 }
 
-func TestCheckpointManagedRestoreVerifiesContentBeforeCreatingBox(t *testing.T) {
+func TestCheckpointManagedRestoreBindsMetadataBeforeCreatingBox(t *testing.T) {
 	for _, valid := range []bool{true, false} {
-		t.Run(map[bool]string{true: "verified archive", false: "changed archive digest"}[valid], func(t *testing.T) {
+		t.Run(map[bool]string{true: "matching metadata", false: "different metadata identity"}[valid], func(t *testing.T) {
 			service, native, store := newCheckpointFixture(t)
 			path := filepath.Join(t.TempDir(), "source.checkpoint")
 			if e := writeCheckpointArchiveFixture(path); e != nil {
@@ -362,10 +366,13 @@ func TestCheckpointManagedRestoreVerifiesContentBeforeCreatingBox(t *testing.T) 
 			if e != nil {
 				t.Fatal(e)
 			}
-			digest := sha256.Sum256(data)
+			manifest, e := checkpointArchiveIdentity(path)
+			if e != nil {
+				t.Fatal(e)
+			}
 			uri := "gs://bucket/checkpoints/" + checkpointTestOrganization + "/saved.checkpoint"
 			store.files = map[string][]byte{uri: data}
-			job := CheckpointJob{Kind: "IMPORT_CHECKPOINT", BoxID: checkpointTestBox, OperationID: checkpointTestOperation, CheckpointID: checkpointTestResource, ArchiveURI: uri, ContentSHA256: hex.EncodeToString(digest[:]), OrganizationID: checkpointTestOrganization, CPU: 2, MemoryMiB: 1024}
+			job := CheckpointJob{Kind: "IMPORT_CHECKPOINT", BoxID: checkpointTestBox, OperationID: checkpointTestOperation, CheckpointID: checkpointTestResource, ArchiveURI: uri, ContentSHA256: manifest.MetadataSHA256, OrganizationID: checkpointTestOrganization, CPU: 2, MemoryMiB: 1024}
 			if !valid {
 				job.ContentSHA256 = strings.Repeat("f", 64)
 			}
@@ -379,10 +386,57 @@ func TestCheckpointManagedRestoreVerifiesContentBeforeCreatingBox(t *testing.T) 
 				}
 			} else {
 				if e == nil || result.Error.Code != "storage_error" || len(native.calls) != 0 {
-					t.Fatalf("corrupt archive reached native: %+v %v calls=%v", result, e, native.calls)
+					t.Fatalf("different checkpoint reached native: %+v %v calls=%v", result, e, native.calls)
 				}
 			}
 		})
+	}
+}
+
+func TestCheckpointCloudArchiveRequiresMetadataIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.zst")
+	if e := writeCheckpointArchiveFixture(path); e != nil {
+		t.Fatal(e)
+	}
+	encoded, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	decoder, e := zstd.NewReader(nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer decoder.Close()
+	raw, e := decoder.DecodeAll(encoded, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw = bytes.Replace(raw, []byte(`"version":2`), []byte(`"version":1`), 1)
+	encoder, e := zstd.NewWriter(nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer encoder.Close()
+	if e = os.WriteFile(path, encoder.EncodeAll(raw, nil), 0600); e != nil {
+		t.Fatal(e)
+	}
+	_, e = checkpointArchiveIdentity(path)
+	var native *sdk.Error
+	if !errors.As(e, &native) || native.Code != sdk.ErrUnsupported {
+		t.Fatalf("legacy archive: %v", e)
+	}
+}
+
+func TestCheckpointPairTransferIgnoresContentChecksum(t *testing.T) {
+	data := pairTransferFixture(t, []string{"snapshot.mem", "snapshot.qcow2"})
+	data[len(data)-1] ^= 1
+	path := filepath.Join(t.TempDir(), "pair")
+	if e := unpackCheckpointPair(bytes.NewReader(data), path); e != nil {
+		t.Fatal(e)
+	}
+	content, e := os.ReadFile(filepath.Join(path, "snapshot.mem"))
+	if e != nil || string(content) != "body" {
+		t.Fatalf("payload: %q %v", content, e)
 	}
 }
 

@@ -61,10 +61,10 @@ func checkpointTransportError(err error) error {
 	return checkpointError(sdk.ErrInvalidArgument, "invalid checkpoint transport")
 }
 
-// Pair transfer is the same two regular USTAR members and checksummed zstd
+// Pair transfer is the same two regular USTAR members and zstd
 // stream as checkpoint_transport.rs. Nothing is extracted to a supplied path.
 func unpackCheckpointPair(input io.Reader, destination string) error {
-	decoder, e := zstd.NewReader(input, zstd.WithDecoderMaxMemory(64<<20))
+	decoder, e := zstd.NewReader(input, zstd.WithDecoderMaxMemory(64<<20), zstd.IgnoreChecksum(true))
 	if e != nil {
 		return checkpointTransportError(e)
 	}
@@ -137,7 +137,7 @@ func packCheckpointPair(directory, destination string) error {
 	}
 	defer output.Close()
 	defer os.Remove(output.Name())
-	encoder, e := zstd.NewWriter(output, zstd.WithEncoderCRC(true))
+	encoder, e := zstd.NewWriter(output, zstd.WithEncoderCRC(false))
 	if e != nil {
 		return e
 	}
@@ -183,8 +183,9 @@ func packCheckpointPair(directory, destination string) error {
 }
 
 type checkpointArchiveManifest struct {
-	Version int `json:"version"`
-	Members map[string]struct {
+	Version        int    `json:"version"`
+	MetadataSHA256 string `json:"metadata_sha256"`
+	Members        map[string]struct {
 		Length int64  `json:"length"`
 		SHA256 string `json:"sha256"`
 	} `json:"members"`
@@ -195,7 +196,7 @@ func openCheckpointArchive(archivePath string) (*os.File, *zstd.Decoder, *tar.Re
 	if e != nil {
 		return nil, nil, nil, nil, checkpointStorageError(e)
 	}
-	decoder, e := zstd.NewReader(file, zstd.WithDecoderMaxMemory(64<<20))
+	decoder, e := zstd.NewReader(file, zstd.WithDecoderMaxMemory(64<<20), zstd.IgnoreChecksum(true))
 	if e != nil {
 		file.Close()
 		return nil, nil, nil, nil, checkpointStorageError(e)
@@ -209,7 +210,7 @@ func openCheckpointArchive(archivePath string) (*os.File, *zstd.Decoder, *tar.Re
 	}
 	var manifest checkpointArchiveManifest
 	e = json.NewDecoder(archive).Decode(&manifest)
-	if e != nil || manifest.Version != 1 || !validDigest(manifest.Members["boot.raw"].SHA256) || manifest.Members["boot.raw"].Length <= 0 {
+	if e != nil || (manifest.Version != 1 && manifest.Version != 2) || !validDigest(manifest.Members["boot.raw"].SHA256) || manifest.Members["boot.raw"].Length <= 0 {
 		decoder.Close()
 		file.Close()
 		return nil, nil, nil, nil, checkpointError(sdk.ErrStorage, "invalid managed boot manifest")
@@ -217,18 +218,21 @@ func openCheckpointArchive(archivePath string) (*os.File, *zstd.Decoder, *tar.Re
 	return file, decoder, archive, &manifest, nil
 }
 
-func checkpointArchiveBootDigest(archivePath string) (string, error) {
+func checkpointArchiveIdentity(archivePath string) (*checkpointArchiveManifest, error) {
 	f, d, _, m, e := openCheckpointArchive(archivePath)
 	if e != nil {
-		return "", e
+		return nil, e
 	}
 	defer f.Close()
 	defer d.Close()
-	return m.Members["boot.raw"].SHA256, nil
+	if m.Version != 2 || !validDigest(m.MetadataSHA256) {
+		return nil, checkpointError(sdk.ErrUnsupported, "cloud restore requires managed archive v2; re-export the checkpoint")
+	}
+	return m, nil
 }
 
 // Only a server-authorized managed archive may supply boot.raw. Native then
-// checks this owned copy against the uploaded pair, never its saved pathname.
+// uses this owned copy, never the uploaded pair's saved pathname.
 func extractCheckpointBoot(archivePath, destination, expected string) error {
 	file, decoder, archive, manifest, e := openCheckpointArchive(archivePath)
 	if e != nil {
@@ -267,12 +271,8 @@ func extractCheckpointBoot(archivePath, destination, expected string) error {
 		if closeErr != nil {
 			return checkpointStorageError(closeErr)
 		}
-		digest, _, e := checkpointFileDigest(destination)
-		if e != nil {
-			return checkpointStorageError(e)
-		}
-		if n != boot.Length || digest != expected {
-			return checkpointError(sdk.ErrStorage, "trusted boot checksum mismatch")
+		if n != boot.Length {
+			return checkpointError(sdk.ErrStorage, "trusted boot length mismatch")
 		}
 		return nil
 	}

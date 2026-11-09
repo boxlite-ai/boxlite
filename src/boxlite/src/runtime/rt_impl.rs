@@ -443,7 +443,7 @@ impl RuntimeImpl {
         super::import::import_box(self, archive, name).await
     }
 
-    /// Import a version-9 checkpoint pair as a new box, paused.
+    /// Import a version-9/10 checkpoint pair as a new box, paused.
     pub async fn import_checkpoint(
         self: &Arc<Self>,
         path: &std::path::Path,

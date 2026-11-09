@@ -179,10 +179,8 @@ async fn import_with_boot(
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(&boot_path)
         .map_err(invalid)?;
-    if boot.metadata().map_err(invalid)?.len() != boot_length
-        || pair::digest(&boot, 0, boot_length)? != boot_hash
-    {
-        return Err(invalid("readonly boot dependency length/checksum mismatch"));
+    if boot.metadata().map_err(invalid)?.len() != boot_length {
+        return Err(invalid("readonly boot dependency length mismatch"));
     }
     if local_paths.version == 1 {
         for (index, volume) in box_options.volumes.iter_mut().enumerate() {
@@ -223,9 +221,7 @@ async fn import_with_boot(
                     .map_err(invalid)?;
                 std::io::copy(&mut boot, &mut output).map_err(invalid)?;
                 output.sync_all().map_err(invalid)?;
-                if output.metadata().map_err(invalid)?.len() != boot_length
-                    || pair::digest(&output, 0, boot_length)? != boot_hash
-                {
+                if output.metadata().map_err(invalid)?.len() != boot_length {
                     return Err(invalid("private boot dependency changed during copy"));
                 }
                 File::open(destination).map_err(invalid)
