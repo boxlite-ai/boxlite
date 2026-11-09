@@ -14,8 +14,8 @@
  *                       deployed image nobody scanned
  *
  * `promote` moves an already-built commit between registries. It never builds:
- * the bytes that ran in dev are the bytes that run in prod. ECR shares no
- * layers between repositories, so it is a pull, a re-tag and a push.
+ * the selected source manifest and its referenced content reach the destination
+ * without selecting a host architecture or rebuilding the image.
  *
  * `verifyPublished` only asks whether a registry holds every artifact at a
  * commit, and reports it. A deploy asks before it applies anything.
@@ -318,8 +318,7 @@ const artifactRegistryRegistrar = ({
         region,
         '--repository-format',
         'docker',
-        // The same declaration ECR reads as IMMUTABLE. Nothing here addresses
-        // an image by digest, so this alone makes a commit tag mean exact bytes.
+        // Runtime selectors use tags, so they must keep naming the same image.
         ...(declared.immutableTags ? ['--immutable-tags'] : []),
       ])
       if (created.code !== 0) {
@@ -699,11 +698,28 @@ export const verifyPublished = async ({
 
 export type PromoteOutcome = PublishOutcome & { from: string }
 
+const manifestDigest = async (run: Run, address: string): Promise<string> => {
+  const result = await run('docker', ['buildx', 'imagetools', 'inspect', address, '--format', '{{json .Manifest}}'])
+  if (result.code !== 0)
+    throw new PublishError(`Could not inspect manifest ${address}: ${result.stderr.trim() || `exit ${result.code}`}`)
+  let manifest: unknown
+  try {
+    manifest = JSON.parse(result.stdout)
+  } catch {
+    throw new PublishError(`Invalid manifest descriptor for ${address}`)
+  }
+  const digest = (manifest as { digest?: unknown } | null)?.digest
+  if (typeof digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+    throw new PublishError(`Invalid manifest digest for ${address}`)
+  }
+  return digest
+}
+
 /**
  * Move a commit from one stage's registry to another's.
  *
  * The source must hold every artifact — half a release is a version that cannot
- * start — and that is checked before anything is pulled.
+ * start — and that is checked before any manifest is copied.
  */
 export const promote = async ({
   config,
@@ -742,29 +758,31 @@ export const promote = async ({
   for (const artifact of artifacts) {
     const sourceAddress = addressFor({ config, registry: from.registry, artifact, tag })
     const address = addressFor({ config, registry: to.registry, artifact, tag })
+    const digest = await manifestDigest(run, sourceAddress)
     if (await destination.isPublished(artifact, tag)) {
+      if ((await manifestDigest(run, address)) !== digest) {
+        throw new PublishError(
+          `Manifest digest conflict: ${address} differs from ${sourceAddress}; nothing was overwritten`,
+        )
+      }
       log(`${address} is already there; nothing to do.`)
       outcomes.push({ artifact, address, from: sourceAddress, built: false })
       continue
     }
-    /*
-     * Pull, re-tag, push: ECR shares no layers between repositories, so there
-     * is no manifest-only copy. Echoed, because they move whole images.
-     *
-     * The pull names the architecture for the reason the build does, and this
-     * is the worse place to miss it: `docker pull` of a multi-arch address
-     * resolves to the *host's* variant, so a promotion from an arm64
-     * workstation would carry that variant into the receiving stage — which is
-     * the one thing promoting rather than rebuilding exists to prevent.
-     */
-    log(`Pulling ${sourceAddress}`)
-    const pulled = await run('docker', ['pull', '--platform', RUNTIME_PLATFORM, sourceAddress], { echo: true })
-    if (pulled.code !== 0) throw new PublishError(`Could not pull ${sourceAddress}: docker pull exited ${pulled.code}`)
-    const tagged = await run('docker', ['tag', sourceAddress, address])
-    if (tagged.code !== 0) throw new PublishError(`Could not tag ${address}: ${tagged.stderr.trim()}`)
-    log(`Pushing ${address}`)
-    const pushed = await run('docker', ['push', address], { echo: true })
-    if (pushed.code !== 0) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
+    // Copy the complete manifest/index and referenced content. The flag keeps
+    // a single manifest from becoming a new index with a different digest.
+    const pinned = `${sourceAddress.slice(0, sourceAddress.lastIndexOf(':'))}@${digest}`
+    log(`Copying ${pinned} to ${address}`)
+    const copied = await run(
+      'docker',
+      ['buildx', 'imagetools', 'create', '--prefer-index=false', '--tag', address, pinned],
+      { echo: true },
+    )
+    if (copied.code !== 0)
+      throw new PublishError(`Could not copy manifest to ${address}: ${copied.stderr.trim() || `exit ${copied.code}`}`)
+    if ((await manifestDigest(run, address)) !== digest) {
+      throw new PublishError(`Manifest digest mismatch after copying ${sourceAddress} to ${address}`)
+    }
     log(`Promoted ${sourceAddress} to ${address}`)
     outcomes.push({ artifact, address, from: sourceAddress, built: true })
   }

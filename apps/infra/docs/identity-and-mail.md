@@ -88,6 +88,12 @@ returning-user authentication method. If the connection already has a separate
 email OTP login method, the reconciler leaves that operator-owned setting
 unchanged.
 
+Connections without an existing `email.identifier.default_method` keep that field
+absent: some Auth0 connections reject it even though they support verification OTP.
+If the selector already exists, the policy selects `password` while preserving the
+connection's other authentication methods. Enabling verification OTP does not require
+adding a passwordless login method.
+
 For an existing database connection, first open Auth0 Dashboard > Authentication
 > Database > the selected connection > Attributes, select **Activate**, confirm
 the development-environment impact acknowledgement, and save the default email
@@ -100,6 +106,15 @@ Authenticate with the Management API scopes used by preview, apply and rollback:
 ```bash
 npm run auth0:login-policy-login
 ```
+
+Use Auth0 CLI 1.38 or newer for the login-policy configurator (validated with 1.39.0).
+[These versions hide client secrets from raw API output by default](https://github.com/auth0/auth0-cli/releases/tag/v1.38.0). The configurator
+adds `--reveal-secrets` only for an explicit, single-client `client_id,client_secret`
+projection, used to configure the verification Vault and account-link Action.
+Ordinary discovery and writes retain the CLI's masking. Returned credentials stay
+in memory, secret-bearing writes use stdin, and rollback journals omit credentials.
+If a credential still is not returned, check `read:client_credentials` and the
+client's authentication method; rotating a secret does not resolve output masking.
 
 The policy requires an enabled email provider other than Auth0's built-in sender. Configure tenant mail
 through the [GCP identity/mail guide](gcp/identity-and-mail.md) or

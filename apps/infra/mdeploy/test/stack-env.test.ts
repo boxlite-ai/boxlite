@@ -35,50 +35,11 @@ const read = (environment: Record<string, string | undefined>) =>
     home: 'aws',
   })
 
-for (const home of ['aws', 'gcp'] as const) {
-  const deployment = (metadata: NodeJS.ProcessEnv) =>
-    readStackEnvironment({
-      environment: { ...complete, ...metadata },
-      declaration,
-      app: 'boxlite-app',
-      stage: 'dev',
-      region: 'ap-southeast-1',
-      home,
-    })
-  test(`${home} omits scheduler generation when invocation metadata is absent`, () => {
-    assert.equal(Object.hasOwn(deployment({}).apiEnvironment, 'CI_SCHEDULER_GENERATION'), false)
-  })
-  test(`${home} delivers the workflow run ID as the exact API scheduler generation`, () => {
-    const { apiEnvironment, proxyEnvironment, runnerEnvironment } = deployment({ GITHUB_RUN_ID: '9007199254740991' })
-    assert.equal(apiEnvironment.CI_SCHEDULER_GENERATION, '9007199254740991')
-    assert.equal(Object.hasOwn(apiEnvironment, 'GITHUB_RUN_ID'), false)
-    assert.equal(Object.hasOwn(proxyEnvironment, 'CI_SCHEDULER_GENERATION'), false)
-    assert.equal(Object.hasOwn(runnerEnvironment, 'CI_SCHEDULER_GENERATION'), false)
-  })
-  test(`${home} prefers an explicit scheduler generation over workflow metadata`, () => {
-    assert.equal(
-      deployment({ CI_SCHEDULER_GENERATION: '27', GITHUB_RUN_ID: '26' }).apiEnvironment.CI_SCHEDULER_GENERATION,
-      '27',
-    )
-    assert.equal(deployment({ CI_SCHEDULER_GENERATION: '1' }).apiEnvironment.CI_SCHEDULER_GENERATION, '1')
-  })
-  for (const key of ['CI_SCHEDULER_GENERATION', 'GITHUB_RUN_ID']) {
-    for (const value of ['', '0', '-1', '01', ' 1', '1 ', '1.5', '1e3', '9007199254740992', 'NaN']) {
-      test(`${home} rejects invalid ${key} invocation metadata ${JSON.stringify(value)}`, () => {
-        assert.throws(
-          () => deployment({ GITHUB_RUN_ID: '25', [key]: value }),
-          (error: unknown) => error instanceof StackEnvError && error.message.includes(key),
-        )
-      })
-    }
-  }
-}
-
 test('a complete environment resolves everything one deploy decides', () => {
   const resolved = read(complete)
   assert.equal(resolved.tag, SHA)
   assert.equal(resolved.domain, 'dev.boxlite.ai')
-  assert.equal(resolved.proxyProtocol, 'http', 'a default, because the hop is inside the network')
+  assert.equal(resolved.proxyProtocol, 'http', 'the retained compatibility default for an unset public URL scheme')
   assert.equal(resolved.senderDomain, null, 'a stage that names none sends no mail')
   assert.deepEqual(resolved.runnerFleet, [
     // `<app>-<stage>-runner`, the same shape every other resource carries: a

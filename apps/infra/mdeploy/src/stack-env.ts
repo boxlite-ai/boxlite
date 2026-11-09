@@ -353,9 +353,9 @@ export const readStackEnvironment = ({
     throw new StackEnvError('BOXLITE_IMAGE_TAG must be one full lowercase commit SHA, optionally prefixed "v<X.Y.Z>-"')
   }
   const proxyDomain = required(environment, 'PROXY_DOMAIN', 'every box is a name under this zone')
-  // A default rather than a requirement: the proxy speaks to a box inside the
-  // network, and `http` there is the shape every stage has used. What must
-  // never be defaulted is the zone above, which is public.
+  // The public URL scheme drives redirects and cookie behavior, independently
+  // of container-side TLS. Retain the compatibility default; HTTPS stages set
+  // this explicitly. The proxy domain above must never be defaulted.
   const proxyProtocol = optional(environment, 'PROXY_PROTOCOL') ?? 'http'
   const openapi = optional(environment, 'OTEL_OPENAPI_ENABLED')
   if (openapi !== null && !['true', 'false'].includes(openapi)) {

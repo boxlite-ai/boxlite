@@ -8,7 +8,7 @@ import {
   GcpBootstrapError,
   attributeCondition,
   bootstrapGcp,
-  promotionSourceFor,
+  promotionSourcesFor,
   type Run,
   type RunResult,
 } from './gcp.js'
@@ -574,7 +574,7 @@ test('a failing gcloud call stops the run and carries the reason', async () => {
  */
 test('a stage promoted into lets both of its accounts read the source', async () => {
   const gcloud = recorder()
-  await invoke(gcloud.run, { promotionSource: SOURCE })
+  await invoke(gcloud.run, { promotionSources: [SOURCE] })
 
   assert.deepEqual(
     projectsTouched(gcloud.calls),
@@ -628,8 +628,8 @@ test('a stage promoted into lets both of its accounts read the source', async ()
 test('a source bucket whose policy already holds a condition still takes the grant', async () => {
   const gcloud = recorder({ conditioned: [`gs://${SOURCE.bucket}`] })
   const lines: string[] = []
-  await invoke(gcloud.run, { promotionSource: SOURCE, log: (line) => lines.push(line) })
-  assert.match(lines.join('\n'), /both grants applied/, 'the bucket grant never reached the source')
+  await invoke(gcloud.run, { promotionSources: [SOURCE], log: (line) => lines.push(line) })
+  assert.match(lines.join('\n'), /2 grants applied/, 'the bucket grant never reached the source')
 })
 
 /*
@@ -683,7 +683,7 @@ test('a source that refuses the grant is reported with the command, not thrown',
     return gcloud.run(command, args, options)
   }
 
-  const result = await invoke(denied, { promotionSource: SOURCE, log: (line) => lines.push(line) })
+  const result = await invoke(denied, { promotionSources: [SOURCE], log: (line) => lines.push(line) })
   assert.equal(
     result.publisherEmail,
     'bl-app-publish@boxlite-gcp-dev.iam.gserviceaccount.com',
@@ -722,26 +722,34 @@ test('a promoteFrom that resolves to nothing is refused here, where the whole fi
     },
   }
   assert.throws(
-    () => promotionSourceFor({ config, stage: 'prod2' }),
+    () => promotionSourcesFor({ config, stage: 'prod2' }),
     /promotes from "dev-2" in \/repo\/\.mstage\.config\.json, which declares no such stage/,
   )
 
-  assert.deepEqual(promotionSourceFor({ config: { ...config, stages: { ...config.stages, prod2: { project: 'boxlite-gcp-dev', promoteFrom: 'dev2' } } }, stage: 'prod2' }), {
-    stage: 'dev2',
-    project: 'boxlite-gcp-src',
-    // Composed by the rule `mdeploy/stack/runner-binary.ts` resolves addresses
-    // from, so the grant reaches the bucket `runner:promote` actually reads.
-    bucket: 'boxlite-dev2-artifacts-boxlite-gcp-src',
-  })
+  assert.deepEqual(
+    promotionSourcesFor({
+      config: { ...config, stages: { ...config.stages, prod2: { project: 'boxlite-gcp-dev', promoteFrom: 'dev2' } } },
+      stage: 'prod2',
+    }),
+    [
+      {
+        stage: 'dev2',
+        project: 'boxlite-gcp-src',
+        // Composed by the rule `mdeploy/stack/runner-binary.ts` resolves addresses
+        // from, so the grant reaches the bucket `runner:promote` actually reads.
+        bucket: 'boxlite-dev2-artifacts-boxlite-gcp-src',
+      },
+    ],
+  )
 
   // Two stages in one project cross no boundary, and a binding saying so would
   // read as one that is not there.
-  assert.equal(
-    promotionSourceFor({
+  assert.deepEqual(
+    promotionSourcesFor({
       config: { ...config, stages: { dev2: { project: 'p' }, prod2: { project: 'p', promoteFrom: 'dev2' } } },
       stage: 'prod2',
     }),
-    undefined,
+    [],
   )
-  assert.equal(promotionSourceFor({ config, stage: 'dev2' }), undefined, 'a stage nothing promotes into')
+  assert.deepEqual(promotionSourcesFor({ config, stage: 'dev2' }), [], 'a stage nothing promotes into')
 })
