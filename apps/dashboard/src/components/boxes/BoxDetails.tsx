@@ -51,7 +51,6 @@ import { BoxCube } from '@/components/BoxCube'
 import { boxCubeState } from '@/lib/box-shape'
 import { BoxTerminalTab } from './BoxTerminalTab'
 import { BoxSshTab } from './BoxSshTab'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -123,7 +122,7 @@ export default function BoxDetails() {
   const [copied, setCopied] = useState(false)
   const [copiedName, setCopiedName] = useState(false)
   const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
-  const [sshVisited, setSshVisited] = useState(false)
+  const [sshStatusContainer, setSshStatusContainer] = useState<HTMLDivElement | null>(null)
   const refreshRef = useRef<HTMLSpanElement>(null)
 
   const updateOnboardingProgress = useCallback(
@@ -363,6 +362,7 @@ export default function BoxDetails() {
                   <RotateCcw className="size-[14px]" /> recover
                 </button>
               )}
+              <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} statusContainer={sshStatusContainer} />
               {writePermitted && isStartable(box) && (
                 <button
                   type="button"
@@ -496,6 +496,7 @@ export default function BoxDetails() {
               )}
 
               <BoxNetworkSection box={box} canManage={writePermitted} />
+              <div ref={setSshStatusContainer} />
 
               {/* `activity` names the subject, not the value type — and it is
                   the platform's own term for it (POST /:boxId/last-activity),
@@ -525,24 +526,9 @@ export default function BoxDetails() {
             </div>
 
             {/* shell / terminal */}
-            <Tabs
-              defaultValue="shell"
-              onValueChange={(value) => {
-                if (value === 'ssh') setSshVisited(true)
-              }}
-              className="h-[60vh] flex-none gap-0 border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1"
-            >
-              <TabsList variant="underline" aria-label="Box connection">
-                <TabsTrigger value="shell">Shell</TabsTrigger>
-                <TabsTrigger value="ssh">SSH</TabsTrigger>
-              </TabsList>
-              <TabsContent value="shell" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
-                <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
-              </TabsContent>
-              <TabsContent value="ssh" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
-                {sshVisited && <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} />}
-              </TabsContent>
-            </Tabs>
+            <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
+              <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
+            </div>
           </div>
         </>
       )}
