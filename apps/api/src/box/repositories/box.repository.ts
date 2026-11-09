@@ -10,6 +10,7 @@ import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Checkpoint } from '../entities/checkpoint.entity'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
+import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -166,6 +167,7 @@ export class BoxRepository extends BaseRepository<Box> {
     box: Box,
     maxCreatedBoxes?: number,
     initialize?: (manager: EntityManager) => Promise<void>,
+    afterInsert?: (manager: EntityManager) => Promise<void>,
   ): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
@@ -184,6 +186,7 @@ export class BoxRepository extends BaseRepository<Box> {
       await initialize?.(entityManager)
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
+      await afterInsert?.(entityManager)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
     })
 
@@ -329,13 +332,34 @@ export class BoxRepository extends BaseRepository<Box> {
     return this.withCreationAdmission(organizationId, maxCreatedBoxes, persist, boxId)
   }
 
+  /** Read lifecycle state and ownership in one snapshot, without changing ordinary Box projections. */
+  async findWithCheckpointState(
+    id: string,
+    organizationId?: string,
+  ): Promise<{ box: Box; checkpointState: BoxCheckpointState | null }> {
+    const { entities, raw } = await this.repository
+      .createQueryBuilder('box')
+      .leftJoin(BoxCheckpointState, 'checkpoint', 'checkpoint.boxId = box.id')
+      .addSelect('checkpoint.activeJobId', 'checkpoint_job_id')
+      .addSelect('checkpoint.sequence', 'checkpoint_sequence')
+      .where({ id, ...(organizationId === undefined ? {} : { organizationId }) })
+      .getRawAndEntities<{ checkpoint_job_id: string | null; checkpoint_sequence: number | null }>()
+    const box = entities[0]
+    if (!box) throw new NotFoundException('Box not found')
+    const checkpointState =
+      raw[0].checkpoint_sequence === null
+        ? null
+        : { boxId: id, activeJobId: raw[0].checkpoint_job_id, sequence: raw[0].checkpoint_sequence }
+    return { box, checkpointState }
+  }
+
   /** Explicit deletion fences checkpoint callbacks before the runner removes the target. */
-  async deleteCheckpointTarget(selected: Box): Promise<Box> {
-    if (!selected.checkpointJobId) throw new ConflictException('Box has no checkpoint operation')
+  async deleteCheckpointTarget(selected: Box, selectedState: BoxCheckpointState): Promise<Box> {
+    if (!selectedState.activeJobId) throw new ConflictException('Box has no checkpoint operation')
     const pending = await this.manager.findOneBy(CheckpointOperation, {
       boxId: selected.id,
       organizationId: selected.organizationId,
-      jobId: selected.checkpointJobId,
+      jobId: selectedState.activeJobId,
     })
     if (!pending) throw new ConflictException('Box has another state change in progress')
     const changed = await this.dataSource.transaction(async (manager) => {
@@ -348,20 +372,31 @@ export class BoxRepository extends BaseRepository<Box> {
         where: { id: selected.id, organizationId: selected.organizationId },
         lock: { mode: 'pessimistic_write' },
       })
-      if (!box || box.checkpointJobId !== pending.jobId || box.checkpointSequence !== pending.sequence)
+      const checkpointState = await manager.findOne(BoxCheckpointState, {
+        where: { boxId: selected.id },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (
+        !box ||
+        !checkpointState ||
+        checkpointState.activeJobId !== pending.jobId ||
+        checkpointState.sequence !== pending.sequence ||
+        checkpointState.sequence !== selectedState.sequence
+      )
         throw new ConflictException('Checkpoint operation changed; retry Box deletion')
       const previous = { ...box }
       const operation = await manager.findOne(CheckpointOperation, {
-        where: { id: pending.id, jobId: box.checkpointJobId, state: In(['pending', 'failed']) },
+        where: { id: pending.id, jobId: checkpointState.activeJobId, state: In(['pending', 'failed']) },
         lock: { mode: 'pessimistic_write' },
       })
       if (!operation) throw new ConflictException('Checkpoint operation changed; retry Box deletion')
       operation.state = 'cancelled'
       await manager.save(CheckpointOperation, operation)
+      checkpointState.activeJobId = null
+      checkpointState.sequence += 1
+      await manager.save(BoxCheckpointState, checkpointState)
       Object.assign(box, Box.getSoftDeleteUpdate(box), {
         state: BoxState.ERROR,
-        checkpointJobId: null,
-        checkpointSequence: box.checkpointSequence + 1,
         recoverable: false,
         errorReason: 'Checkpoint operation cancelled for Box deletion',
       })

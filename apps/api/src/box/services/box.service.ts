@@ -945,16 +945,20 @@ export class BoxService {
   }
 
   async destroy(boxIdOrName: string, organizationId: string | undefined, ctx: Context): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const selected = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(
+      selected.id,
+      selected.organizationId,
+    )
 
-    if (box.pending && !box.checkpointJobId) {
+    if (box.pending && !checkpointState?.activeJobId) {
       throw new BoxError('Box state change in progress')
     }
 
     const updateData = Box.getSoftDeleteUpdate(box)
 
-    const updatedBox = box.checkpointJobId
-      ? await this.boxRepository.deleteCheckpointTarget(box)
+    const updatedBox = checkpointState?.activeJobId
+      ? await this.boxRepository.deleteCheckpointTarget(box, checkpointState)
       : await this.boxRepository.updateWhere(box.id, {
           updateData,
           whereCondition: { pending: box.pending, state: box.state },

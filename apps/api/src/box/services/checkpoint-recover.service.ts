@@ -10,6 +10,7 @@ import { OrganizationBoxLimitsService } from '../../organization/services/organi
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { upstreamRefOf } from '../../image/utils/image-ref.util'
 import { Box } from '../entities/box.entity'
+import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { Runner } from '../entities/runner.entity'
 import { Checkpoint } from '../entities/checkpoint.entity'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
@@ -68,20 +69,29 @@ export class CheckpointRecoverService {
     })
     const persist = async (candidate: string) => {
       box.name = candidate
-      return this.boxes.insert(box, maxCreatedBoxes, async (manager) => {
-        const checkpoint = await manager.findOne(Checkpoint, {
-          where: { id: selected.id, organizationId: organization.id },
-          lock: { mode: 'pessimistic_write' },
-        })
-        if (!checkpoint || checkpoint.state !== 'ready' || !checkpoint.archive)
-          throw new ConflictException('Checkpoint is not ready')
-        const currentRunner = await manager.findOne(Runner, {
-          where: { id: runner.id },
-          lock: { mode: 'pessimistic_read' },
-        })
-        this.assertRunner(currentRunner, checkpoint)
-        await this.schedule(manager, checkpoint, box, 'create')
-      })
+      let checkpoint: Checkpoint
+      return this.boxes.insert(
+        box,
+        maxCreatedBoxes,
+        async (manager) => {
+          const currentCheckpoint = await manager.findOne(Checkpoint, {
+            where: { id: selected.id, organizationId: organization.id },
+            lock: { mode: 'pessimistic_write' },
+          })
+          if (!currentCheckpoint || currentCheckpoint.state !== 'ready' || !currentCheckpoint.archive)
+            throw new ConflictException('Checkpoint is not ready')
+          checkpoint = currentCheckpoint
+          const currentRunner = await manager.findOne(Runner, {
+            where: { id: runner.id },
+            lock: { mode: 'pessimistic_read' },
+          })
+          this.assertRunner(currentRunner, checkpoint)
+        },
+        async (manager) => {
+          await this.schedule(manager, checkpoint, box, 'create', manager.create(BoxCheckpointState, { boxId: box.id }))
+          await manager.save(Box, box)
+        },
+      )
     }
     try {
       return name === undefined ? await persistWithGeneratedBoxName(box.id, persist) : await persist(name)
@@ -122,6 +132,11 @@ export class CheckpointRecoverService {
           lock: { mode: 'pessimistic_write' },
         })
         if (!box) throw new NotFoundException('Recovery target not found')
+        const checkpointState =
+          (await manager.findOne(BoxCheckpointState, {
+            where: { boxId: box.id },
+            lock: { mode: 'pessimistic_write' },
+          })) ?? manager.create(BoxCheckpointState, { boxId: box.id })
         if (await manager.exists(BoxMigration, { where: { boxId: box.id, state: Not(BoxMigrationState.COMPLETED) } }))
           throw new ConflictException('Checkpoint recovery target is migrating')
         if (box.volumes?.length || box.secrets?.length)
@@ -131,12 +146,12 @@ export class CheckpointRecoverService {
           lock: { mode: 'pessimistic_write' },
         })
         if (previous?.state === 'pending') {
-          if (previous.checkpointId === checkpoint.id && box.checkpointJobId === previous.jobId) return box
+          if (previous.checkpointId === checkpoint.id && checkpointState.activeJobId === previous.jobId) return box
           throw new ConflictException('Target already has a checkpoint operation')
         }
-        if (previous && (previous.checkpointId !== checkpoint.id || previous.jobId !== box.checkpointJobId))
+        if (previous && (previous.checkpointId !== checkpoint.id || previous.jobId !== checkpointState.activeJobId))
           throw new ConflictException('Target has another unfinished checkpoint operation')
-        if (!previous && (box.pending || box.checkpointJobId))
+        if (!previous && (box.pending || checkpointState.activeJobId))
           throw new ConflictException('Target has a state change in progress')
         if (
           ![BoxState.STOPPED, BoxState.ERROR].includes(box.state) ||
@@ -177,7 +192,7 @@ export class CheckpointRecoverService {
           })
           if (!terminalJob) throw new ConflictException('Previous checkpoint attempt has not finished')
         }
-        await this.schedule(manager, checkpoint, box, 'recover', previous ?? undefined)
+        await this.schedule(manager, checkpoint, box, 'recover', checkpointState, previous ?? undefined)
         box.assertValid()
         box.enforceInvariants()
         await manager.save(Box, box)
@@ -228,6 +243,7 @@ export class CheckpointRecoverService {
     checkpoint: Checkpoint,
     box: Box,
     mode: 'create' | 'recover',
+    checkpointState: BoxCheckpointState,
     previous?: CheckpointOperation,
   ): Promise<void> {
     const operation =
@@ -238,7 +254,7 @@ export class CheckpointRecoverService {
         checkpointId: checkpoint.id,
         boxId: box.id,
         runnerId: box.runnerId,
-        sequence: box.checkpointSequence + 1,
+        sequence: checkpointState.sequence + 1,
         mode,
         environment: checkpoint.environment,
         platformEnv: {
@@ -258,11 +274,11 @@ export class CheckpointRecoverService {
     })
     Object.assign(operation, { jobId: job.id, state: 'pending', errorReason: null })
     await manager.save(CheckpointOperation, operation)
+    Object.assign(checkpointState, { activeJobId: job.id, sequence: operation.sequence })
+    await manager.save(BoxCheckpointState, checkpointState)
     Object.assign(box, {
       state: BoxState.RESTORING,
       pending: true,
-      checkpointJobId: job.id,
-      checkpointSequence: operation.sequence,
       errorReason: null,
     })
   }

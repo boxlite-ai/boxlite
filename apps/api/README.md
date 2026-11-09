@@ -172,7 +172,24 @@ Run the transaction and HTTP admission checks with
 `make test:apps:api TEST_FILES='checkpoint|job-state-handler'`, providing
 `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` and `DB_DATABASE` for a test
 PostgreSQL instance. Without `DB_HOST`, the database suites are skipped.
-Fixtures that load the Box entity must also apply the checkpoint migration.
+Checkpoint ownership lives in `box_checkpoint_state`, an optional one-to-one
+record keyed by `boxId`. Ordinary Box queries do not load this table. Lifecycle
+synchronization and deletion explicitly read Box and checkpoint ownership in
+one query; callback transactions lock the checkpoint, Box, coordination record,
+then operation in that order. The Box lock also serializes first use before a
+coordination record exists.
+
+Export releases `activeJobId` after the native export finishes. Import failure
+retains ownership for retry; success clears it while retaining `sequence`.
+For example, recovery at sequence 7 can retry with a new job ID, while the next
+recovery uses sequence 8 and rejects receipts from sequence 7. Soft deletion
+retains the coordination row; physical Box deletion cascades only that row,
+leaving independent archives and operation history intact.
+
+New Box creation validates and locks its checkpoint before insertion, then
+writes checkpoint coordination after the Box exists, all in the same admission
+transaction. The checkpoint migration creates these separate tables without
+adding columns to `box`; unrelated Box-only fixtures do not need that migration.
 The transaction tests inject a failure after the Box write and before operation
 completion; they verify rollback and concurrent replay against PostgreSQL.
 
@@ -183,7 +200,7 @@ deleting records all count. Quota and name checks run in the transaction that
 creates the export job. An unset prefix returns 503 before source mutation.
 
 Apply the checkpoint pre-deploy migration before API instances that map its
-table and ownership column. Enable capture after compatible runners are
+archive, operation and coordination tables. Enable capture after compatible runners are
 available. Rollback refuses while checkpoints or incomplete checkpoint jobs
 remain; it retains the additive, unused PostgreSQL job-resource enum value.
 

@@ -26,7 +26,6 @@ import { ReplaceBoxNetworkFlags1791000000000 } from '../../migrations/pre-deploy
 import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1791000000000-drop-box-network-flags-migration'
 import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
 import { AddNestedVirtualizationAllowlist1793870400000 } from '../../migrations/pre-deploy/1793870400000-add-nested-virtualization-allowlist-migration'
-import { AddCheckpoints1793923200000 } from '../../migrations/pre-deploy/1793923200000-add-checkpoints-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -279,7 +278,6 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new DropBoxNetworkFlags1791000000000().up(queryRunner)
       await new AddGuestPrivileged1792540800000().up(queryRunner)
       await new AddNestedVirtualizationAllowlist1793870400000().up(queryRunner)
-      await new AddCheckpoints1793923200000().up(queryRunner)
     } finally {
       await queryRunner.release()
     }

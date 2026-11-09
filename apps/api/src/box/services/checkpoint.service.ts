@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { DataSource, In, IsNull, MoreThan, Not } from 'typeorm'
 import { isUUID } from 'class-validator'
 import { Box } from '../entities/box.entity'
+import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { Checkpoint, CheckpointEnvironment } from '../entities/checkpoint.entity'
 import { Runner } from '../entities/runner.entity'
 import { BoxState } from '../enums/box-state.enum'
@@ -56,9 +57,15 @@ export class CheckpointService {
           lock: { mode: 'pessimistic_write' },
         })
         if (!box) throw new NotFoundException('Source box not found')
+        // The parent lock also serializes first use, when no coordination row exists yet.
+        const checkpointState =
+          (await manager.findOne(BoxCheckpointState, {
+            where: { boxId: box.id },
+            lock: { mode: 'pessimistic_write' },
+          })) ?? manager.create(BoxCheckpointState, { boxId: box.id })
         if (
           box.pending ||
-          box.checkpointJobId ||
+          checkpointState.activeJobId ||
           String(box.state) !== String(box.desiredState) ||
           ![BoxState.STARTED, BoxState.STOPPED].includes(box.state)
         ) {
@@ -113,7 +120,9 @@ export class CheckpointService {
         checkpoint.exportJobId = job.id
         checkpoint.activeJobId = job.id
         await manager.insert(Checkpoint, checkpoint)
-        await manager.update(Box, { id: box.id }, { pending: true, checkpointJobId: job.id })
+        checkpointState.activeJobId = job.id
+        await manager.save(BoxCheckpointState, checkpointState)
+        await manager.update(Box, { id: box.id }, { pending: true })
         sourceBox = box
         return checkpoint
       })

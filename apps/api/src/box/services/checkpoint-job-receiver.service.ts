@@ -8,6 +8,7 @@ import { DataSource } from 'typeorm'
 import { Checkpoint, CheckpointArchive } from '../entities/checkpoint.entity'
 import { Job } from '../entities/job.entity'
 import { Box } from '../entities/box.entity'
+import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -58,17 +59,21 @@ export class CheckpointJobReceiver {
         )
           return
         source = await manager.findOne(Box, {
-          where: { id: checkpoint.sourceBoxId, checkpointJobId: job.id },
+          where: { id: checkpoint.sourceBoxId },
           lock: { mode: 'pessimistic_write' },
         })
         if (source) {
-          const unchanged =
-            source.state === checkpoint.sourceState && String(source.desiredState) === String(checkpoint.sourceState)
-          await manager.update(
-            Box,
-            { id: source.id, checkpointJobId: job.id },
-            { checkpointJobId: null, ...(unchanged ? { pending: false } : {}) },
-          )
+          const checkpointState = await manager.findOne(BoxCheckpointState, {
+            where: { boxId: source.id },
+            lock: { mode: 'pessimistic_write' },
+          })
+          if (checkpointState?.activeJobId === job.id) {
+            const unchanged =
+              source.state === checkpoint.sourceState && String(source.desiredState) === String(checkpoint.sourceState)
+            checkpointState.activeJobId = null
+            await manager.save(BoxCheckpointState, checkpointState)
+            if (unchanged) await manager.update(Box, { id: source.id }, { pending: false })
+          }
         }
       } else if (job.resourceType !== ResourceType.CHECKPOINT || job.resourceId !== checkpoint.id) return
 
@@ -115,7 +120,7 @@ export class CheckpointJobReceiver {
       if (!job || ![JobStatus.COMPLETED, JobStatus.FAILED].includes(job.status)) return
       const selected = await manager.findOneBy(CheckpointOperation, { jobId, state: 'pending' })
       if (!selected) return
-      // Match admission/deletion's lock order: checkpoint, target, operation.
+      // Match admission/deletion: checkpoint, target, coordination, operation.
       const checkpoint = await manager.findOne(Checkpoint, {
         where: { id: selected.checkpointId, organizationId: selected.organizationId },
         lock: { mode: 'pessimistic_write' },
@@ -125,6 +130,10 @@ export class CheckpointJobReceiver {
         where: { id: selected.boxId, organizationId: selected.organizationId },
         lock: { mode: 'pessimistic_write' },
       })
+      const checkpointState = await manager.findOne(BoxCheckpointState, {
+        where: { boxId: selected.boxId },
+        lock: { mode: 'pessimistic_write' },
+      })
       const operation = await manager.findOne(CheckpointOperation, {
         where: { id: selected.id, jobId, state: 'pending' },
         lock: { mode: 'pessimistic_write' },
@@ -132,8 +141,9 @@ export class CheckpointJobReceiver {
       if (
         !operation ||
         !box ||
-        box.checkpointJobId !== job.id ||
-        box.checkpointSequence !== operation.sequence ||
+        !checkpointState ||
+        checkpointState.activeJobId !== job.id ||
+        checkpointState.sequence !== operation.sequence ||
         box.runnerId !== operation.runnerId ||
         job.runnerId !== operation.runnerId ||
         job.resourceType !== ResourceType.BOX ||
@@ -154,10 +164,11 @@ export class CheckpointJobReceiver {
         /^[A-Za-z0-9_-]{1,128}$/.test(result.nativeId)
       const previousState = box.state
       if (accepted) {
+        checkpointState.activeJobId = null
+        await manager.save(BoxCheckpointState, checkpointState)
         Object.assign(box, operation.environment, {
           state: BoxState.STOPPED,
           pending: false,
-          checkpointJobId: null,
           errorReason: null,
           recoverable: false,
         })
