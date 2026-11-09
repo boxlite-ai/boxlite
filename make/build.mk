@@ -58,6 +58,7 @@ build\:apps: _ensure-apps-deps
 build\:apps\:api: _ensure-apps-deps
 	@cd apps && yarn nx run api:build --configuration=production --nxBail=true --output-style=stream
 	@cd apps && node --check dist/apps/api/main.js
+	@cd apps && node --test api/test/production-metadata.cjs
 
 build\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:build
