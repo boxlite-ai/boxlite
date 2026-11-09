@@ -35,6 +35,17 @@ flowchart TD
 
 Device tag identifies the device; export key selects a child of its synthetic root; logical tag resolves legacy guest paths. Host paths stay in host configuration. Directory exports retain their own read-only policy. A single-file export contains only the staged file; the existing container subpath binding selects that file at the requested container destination.
 
+`build_aggregate_mounts` requires existing, disjoint export roots. It resolves
+symlinks and rejects equal roots or either direction of directory containment,
+regardless of read-only flags, naming both conflicting export keys. A share
+must not become reachable through another export with different policy or
+isolation boundaries. In particular, the existing
+`shared/user-volumes/<tag>` staging layout cannot be used with this aggregate
+builder alongside SHARED: configuration fails rather than exposing the staged
+file through SHARED. Independent sibling directories remain valid. This is a
+configuration-time path check, not protection against concurrent host namespace
+changes or aliases introduced by bind mounts.
+
 The existing libkrun preparation remains unchanged: single files are staged under
 `shared/user-volumes/<tag>`, with writable hardlinks and read-only startup copies.
 The legacy builders keep empty aggregate identity fields. Guest initialization
@@ -44,11 +55,14 @@ planner; malformed aggregate identities fail validation there. Dynamic attachmen
 and existing block-device mount behavior remain unchanged. This PR adds no host
 staging migration, sandbox grants or runtime stop/cleanup changes.
 
-## 数据结构与所有权
+## Data structures and ownership
 
-下图中的实线表示持有关系，虚线表示按 ID 查找。聚合层与 Linux 后端分别维护自己的
-编号空间；请求取得 `Arc` 后释放映射表锁，再执行宿主 I/O。配置转换与设备注册之间
-仍缺 native engine adapter，不能把下图当作正常 Box 已经采用 native 引擎的证明。
+Solid lines in the diagram below represent ownership; dashed lines represent
+ID-based lookup. The aggregate layer and Linux backend maintain separate ID
+spaces. Requests acquire an `Arc` and release the mapping lock before performing
+host I/O. A native engine adapter is still missing between configuration
+conversion and device registration; this diagram does not establish that normal
+Boxes use the native engine.
 
 ```mermaid
 classDiagram
@@ -79,8 +93,10 @@ classDiagram
     class AggregateState {
         BTreeMap nodes
         BTreeMap local_ids
+        BTreeMap identities
         BTreeMap handles
         u64 next_node
+        u64 next_identity
         u64 next_handle
     }
     class Export {
@@ -94,6 +110,7 @@ classDiagram
     }
     class Node {
         u64 global
+        u64 identity
         usize share
         u64 local
         bool root
@@ -137,10 +154,10 @@ classDiagram
         bool writable
         Mutex position
     }
-    AggregateMountConfig ..> FsConfig : "待引擎适配"
+    AggregateMountConfig ..> FsConfig : "Engine adapter pending"
     FsConfig *-- FsShareConfig
-    FsConfig ..> Fs : "构建设备"
-    Fs *-- AggregateFs : "Server 持有"
+    FsConfig ..> Fs : "Build device"
+    Fs *-- AggregateFs : "Owned by Server"
     AggregateFs *-- Export
     AggregateFs *-- AggregateState
     AggregateState *-- NodeRecord
@@ -149,7 +166,7 @@ classDiagram
     Handle o-- Node : "Arc"
     Export o-- PassthroughFs : "Arc"
     Node o-- PassthroughFs : "Arc"
-    PassthroughFs o-- InodeData : "根 Arc"
+    PassthroughFs o-- InodeData : "Root Arc"
     PassthroughFs *-- LinuxState
     LinuxState *-- InodeAltKey
     LinuxState *-- InodeRecord
@@ -158,11 +175,15 @@ classDiagram
     HandleData o-- InodeData : "Arc"
 ```
 
-`Buffers` 持有当前受检描述符的 `VecDeque<VolatileSlice>` 视图及剩余/已消费长度；
-`Reader` 和 `Writer` 分别包装它。`ActivationContext` 持有 RAM、队列和中断入口，
-由 `Fs` 在激活期间持有。`MountedVolumes(Vec<PathBuf>)` 记录本次建立的 guest
-聚合批次的挂载，未提交时逆序卸载。旧配置返回空 guard，不接管旧挂载的清理。
-宿主单文件暂存及生命周期保持原样；这些对象不转移原始宿主文件的所有权。
+`Buffers` owns a `VecDeque<VolatileSlice>` view of the currently validated
+descriptors and tracks remaining and consumed lengths; `Reader` and `Writer`
+wrap it. `ActivationContext` owns RAM, queues and the interrupt interface and
+is held by `Fs` during activation. `MountedVolumes(Vec<PathBuf>)` records mounts
+created for the current guest aggregate batch and unmounts them in reverse order
+unless committed. Legacy configurations return an empty guard that does not
+take over cleanup of legacy mounts. Host single-file staging and its lifecycle
+remain unchanged; these objects do not transfer ownership of the original host
+files.
 
 ## Device requests and replies
 
@@ -201,6 +222,18 @@ flowchart TD
 
 The aggregate root has node ID 1. `local_ids` maps `(share index, backend inode)` to the global node ID. `NodeRecord` tracks lookup and open ownership separately. Each request retains an `Arc` while host I/O runs; a concurrent FORGET or RELEASE cannot invalidate that request. Backend identity includes the mount ID so identical inode numbers on distinct mounts do not collide. Cross-export rename/link returns EXDEV.
 
+Guest-visible file identity is separate from the FUSE request node ID.
+`identities` maps `(share index, host device, host inode, host mount ID)` to a
+stable number used by READDIR's `d_ino` and by lookup, READDIRPLUS, getattr and
+setattr attributes. Hard links within one share use the same number even after
+their request nodes are reclaimed; different shares retain separate identities.
+Ordinary READDIR balances its temporary backend lookup and does not acquire
+guest lookup ownership. Node records and file descriptors remain reclaimable.
+The scalar identity map grows with distinct host identities observed during the
+session and is cleared on destroy/reset; it does not retain file descriptors.
+Host inode reuse may reuse a visible identity, but never revives a stale request
+node ID. Request node IDs remain independently allocated and are not reused.
+
 Read-only mutation policy belongs to the aggregate layer. Protocol lengths, descriptor direction and predictable response capacity are checked before effects. Ordinary file opens use direct I/O, zero entry/attribute timeouts and no writeback cache. WRITE returns the actual count; FSYNC/FSYNCDIR invoke host synchronization before replying. FLUSH is separate from durability. FORGET completes with zero reply bytes.
 
 ## Ownership and cleanup
@@ -219,35 +252,35 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant H as 宿主准备与运行时
-    participant V as VM 与公共 transport
-    participant W as 公共 worker
-    participant F as Fs 与 Linux 后端
-    participant G as guest 挂载适配
-    H->>H: 准备目录和单文件暂存，按卷授权
-    H->>V: 配置导出与 MMIO IRQ RAM
-    V->>F: 构建设备并打开根和辅助 fd
-    V->>W: 激活本代队列
-    G->>F: Linux 驱动挂载聚合根
-    G->>G: 绑定各导出，记录 MountedVolumes
-    alt guest 初始化失败
-        G->>G: 逆序卸载绑定，再卸载聚合根
-        H->>V: 停止 handler
+    participant H as Host preparation and runtime
+    participant V as VM and common transport
+    participant W as Common worker
+    participant F as Fs and Linux backend
+    participant G as Guest mount adapter
+    H->>H: Prepare directories and staged files with per-volume authorization
+    H->>V: Configure exports and MMIO IRQ RAM
+    V->>F: Build device and open root and auxiliary fds
+    V->>W: Activate this generation of queues
+    G->>F: Mount aggregate root through the Linux driver
+    G->>G: Bind each export and record MountedVolumes
+    alt Guest initialization fails
+        G->>G: Unmount bindings in reverse order then the aggregate root
+        H->>V: Stop handler
     else transport reset
-        V->>W: 停止本代并等待回调
-        W-->>V: 回调已退出
-        V->>F: reset 会话，释放节点和句柄
-        V->>V: 清空队列配置，允许新激活
-    else 正常 VM 停止
-        V->>V: 停止并 join vCPU
-        V->>W: shutdown 并 join
-        W-->>V: 不再访问 RAM
-        V->>V: 设备仍存在时解除 RAM 注册
-        V->>F: 字段析构释放设备和后端 fd
-        V->>V: 释放 RAM backing
+        V->>W: Stop this generation and wait for the callback
+        W-->>V: Callback has exited
+        V->>F: Reset session and release nodes and handles
+        V->>V: Clear queue configuration and allow reactivation
+    else Normal VM stop
+        V->>V: Stop and join vCPUs
+        V->>W: Shut down and join
+        W-->>V: No further RAM access
+        V->>V: Unregister RAM while devices still exist
+        V->>F: Field destruction releases device and backend fds
+        V->>V: Release backing RAM
     end
-    alt 停止失败
-        V-->>H: 返回错误，保留可能仍被访问的 RAM
+    alt Stop fails
+        V-->>H: Return an error and retain potentially accessed RAM
     end
 ```
 
@@ -382,24 +415,24 @@ Go toolchain built libgvproxy, then failed in libkrunfw install-name adjustment
 because the required executable was unavailable. No release archive was produced.
 These are open acceptance items, not passing results.
 
-## 验收编号与证据层次
+## Acceptance IDs and evidence layers
 
-| 编号 | 当前证据 | 限制 |
+| ID | Current evidence | Limitations |
 | --- | --- | --- |
-| F01–F05 | `fs_protocol` 的真实对象创建、属性、读写、删除/改名；Linux 后端身份矩阵 | 宿主固定身份，不切换请求凭据 |
-| F06 | 内存设备旧 nodeid/fh；真实 guest rename/unlink 后 fstat/fsync | 各层结果分开记录 |
-| F07 | 300 文件小缓冲 READDIR/PLUS、引用回收 | 不以测试自造回复为证据 |
-| F08–F10 | 真实 symlink/hardlink/xattr，跨 share EXDEV，宿主移出目录边界 | 不支持的操作保留明确 errno |
-| F11–F12 | WRITE 实际计数；真实 FSYNC/FSYNCDIR；worker FSYNC/FDATASYNC gate验证回复等待与EIO；三次FLUSH后READ及RELEASE/FORGET fd回归 | gate是注入时序，成功同步执行真实syscall；持久化不由FLUSH承诺 |
-| F13–F17 | statfs、allocation、seek、rename flags、INIT 及 unsupported 协议测试 | 未扩大到 DAX、锁或特殊文件数据访问 |
-| B01–B03 | 一个设备混合导出、同名路由、独立身份、ro 修改入口、真实 guest 组合挂载 | 正常 Box native 路径仍缺引擎适配 |
-| B04/B07/B12 | 越界/移名对象、宿主身份、rw 写穿/ro 快照/EXDEV | 未做完整 jailed native Box 验收 |
-| B05 | lookup/open/inflight 独立所有权、FORGET/PLUS、真实 fd 回收 | 编号在会话内不复用 |
-| B06 | DIRECT_IO/零超时契约；同 guest fd 协调 host rewrite；MAP_PRIVATE 初始 fault 和 MAP_SHARED ENODEV | 不保证已有 private mmap 后续修改可见 |
-| B08–B09 | 分段/方向/容量、公共冻结描述符、indirect、双队列、通知、激活/reset | 沿公共队列和 transport 边界 |
-| B10 | 真正 lease 阻塞 OPEN、其他 Fs 延迟、reset 超时/成功、注入 gate、RAM Arc通过；四链补充最终复现reset超时失败 | 后续公共框架优化：持续补充时drain停止进展；已知失败保留，不阻塞本次功能交付；已补真实Fs读回调与mock VM注册/释放联合测试 |
-| B11 | EMFILE 根/辅助 fd、第二导出失败、ENOSPC/短写注入、反复 populated reset/destroy/drop | 注入错误与真实磁盘满分别标明 |
-| B13–B14 | 配置、挂载、最小真实 guest 与旧引擎准备回归 | 完整 Box、exit.json、独立 copy RPC、双引擎运行待外部集成 |
+| F01–F05 | Real object creation, attributes, reads/writes and removal/rename in `fs_protocol`; Linux backend identity matrix | Fixed host identity; request credentials are not switched |
+| F06 | Stale nodeid/fh on the in-memory device; fstat/fsync after real guest rename/unlink | Results recorded separately for each layer |
+| F07 | Small-buffer READDIR/PLUS over 300 files and reference reclamation | Test-fabricated replies are not evidence |
+| F08–F10 | Real symlink/hardlink/xattr, cross-share EXDEV and host moves outside directory boundaries | Unsupported operations retain explicit errno values |
+| F11–F12 | Actual WRITE counts; real FSYNC/FSYNCDIR; worker FSYNC/FDATASYNC gates verify reply waiting and EIO; READ after three FLUSH operations and RELEASE/FORGET fd regressions | Gates inject timing; successful synchronization executes real syscalls; FLUSH does not promise durability |
+| F13–F17 | Protocol tests for statfs, allocation, seek, rename flags, INIT and unsupported operations | Does not extend to DAX, locks or special-file data access |
+| B01–B03 | Mixed exports on one device, same-name routing, independent identities, read-only mutation entry points and real guest combined mounts | Normal Box native path still needs an engine adapter |
+| B04/B07/B12 | Out-of-boundary and renamed objects, host identity, writable write-through, read-only snapshots and EXDEV | Full jailed native Box acceptance not performed |
+| B05 | Separate lookup/open/inflight ownership, FORGET/PLUS and real fd reclamation | IDs are not reused within a session |
+| B06 | DIRECT_IO and zero-timeout contract; coordinated host rewrite through the same guest fd; initial MAP_PRIVATE faults and MAP_SHARED ENODEV | Later changes are not guaranteed visible through an existing private mmap |
+| B08–B09 | Segmentation, direction, capacity, common frozen descriptors, indirect descriptors, dual queues, notifications and activation/reset | Follows common queue and transport boundaries |
+| B10 | Real lease-blocked OPEN, delays to other Fs devices, reset timeout/success, injected gates and RAM Arc checks pass; replenishment over four chains ultimately reproduces a reset timeout failure | Follow-up common-framework optimization: drain stop progress under continuous replenishment; known failure retained without blocking this functional delivery; joint real Fs read callback and mock VM registration/release tests added |
+| B11 | EMFILE on root/auxiliary fds, second-export failure, injected ENOSPC/short writes and repeated populated reset/destroy/drop | Injected errors and real disk exhaustion are identified separately |
+| B13–B14 | Configuration, mounts, a minimal real guest and legacy-engine preparation regressions | Full Box, exit.json, independent copy RPC and dual-engine execution await external integration |
 
 ## Source attribution
 

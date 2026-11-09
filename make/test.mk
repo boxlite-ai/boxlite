@@ -334,7 +334,7 @@ test\:integration\:vmm\:mounts: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/t
 test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-init
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests::guest_mounts:: -- --ignored --test-threads=1
-# A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
+
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
 	@test "$$(uname -s -m)" = "Darwin arm64" || { echo "macOS arm64 is required" >&2; exit 1; }

@@ -225,6 +225,9 @@ impl GuestVolumeManager {
     /// Build matching exports and mount instructions for one aggregate device.
     ///
     /// Export keys preserve logical share names; legacy builders remain per-tag.
+    /// Aggregate export roots must exist and be disjoint, including after
+    /// resolving symlinks. Reject overlaps rather than exposing a share through
+    /// another export with different access policy or isolation boundaries.
     pub fn build_aggregate_mounts(&self, device_tag: &str) -> BoxliteResult<AggregateMountConfig> {
         if device_tag.is_empty() || device_tag.len() > 36 || device_tag.contains('\0') {
             return Err(BoxliteError::Storage("Invalid aggregate device tag".into()));
@@ -242,6 +245,24 @@ impl GuestVolumeManager {
                     share.tag
                 )));
             }
+        }
+        let mut roots: Vec<(&str, PathBuf)> = Vec::with_capacity(self.fs_shares.len());
+        for share in &self.fs_shares {
+            let root = share.host_path.canonicalize().map_err(|error| {
+                BoxliteError::Storage(format!(
+                    "Cannot resolve aggregate export {:?}: {error}",
+                    share.tag
+                ))
+            })?;
+            for (tag, other) in &roots {
+                if root.starts_with(other) || other.starts_with(&root) {
+                    return Err(BoxliteError::Storage(format!(
+                        "Overlapping aggregate exports {:?} and {:?}",
+                        tag, share.tag
+                    )));
+                }
+            }
+            roots.push((&share.tag, root));
         }
         let mut mounts = self.build_guest_mounts();
         for mount in &mut mounts {
@@ -284,16 +305,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn aggregate_rejects_overlapping_single_file_exports_without_changing_legacy() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let shared = directory.path().join("shared");
+        let staging = shared.join("user-volumes/uservol0");
+        let source = directory.path().join("config");
+        std::fs::write(&source, b"original").unwrap();
+        crate::volumes::stage_single_file(&staging, &source, "config", true).unwrap();
+        let alias = directory.path().join("alias");
+        symlink(&shared, &alias).unwrap();
+
+        for (parent, child) in [
+            (shared.clone(), staging.clone()),
+            (alias.clone(), staging.clone()),
+            (shared.clone(), alias.clone()),
+            (shared.clone(), alias.join("user-volumes/uservol0")),
+        ] {
+            for reverse in [false, true] {
+                let mut manager = GuestVolumeManager::new();
+                let shares = [
+                    ("shared", parent.clone(), false),
+                    ("uservol0", child.clone(), true),
+                ];
+                for index in if reverse { [1, 0] } else { [0, 1] } {
+                    let (tag, path, read_only) = &shares[index];
+                    manager.add_fs_share(tag, path.clone(), None, *read_only, None);
+                }
+                let error = manager
+                    .build_aggregate_mounts("boxlite")
+                    .expect_err("aggregate must reject overlapping export roots");
+                assert!(error.to_string().contains("shared"), "{error}");
+                assert!(error.to_string().contains("uservol0"), "{error}");
+
+                let legacy = manager.build_vmm_config();
+                assert_eq!(legacy.fs_shares.shares().len(), 2);
+                for (export, (_, path, read_only)) in
+                    legacy.fs_shares.shares().iter().zip(if reverse {
+                        [shares[1].clone(), shares[0].clone()]
+                    } else {
+                        shares
+                    })
+                {
+                    assert_eq!(export.host_path, path);
+                    assert_eq!(export.read_only, read_only);
+                }
+            }
+        }
+        assert_eq!(std::fs::read(source).unwrap(), b"original");
+    }
+
+    #[test]
     fn aggregate_exports_and_mounts_share_one_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let shared = directory.path().join("shared");
+        // A common string prefix is not a directory containment relationship.
+        let data = directory.path().join("shared-data");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::create_dir(&data).unwrap();
         let mut manager = GuestVolumeManager::new();
-        manager.add_fs_share("shared", "/host/shared".into(), None, false, None);
-        manager.add_fs_share(
-            "vol0",
-            "/host/data".into(),
-            Some("/data"),
-            true,
-            Some("container0".into()),
-        );
+        manager.add_fs_share("shared", shared.clone(), None, false, None);
+        manager.add_fs_share("vol0", data, Some("/data"), true, Some("container0".into()));
         let config = manager.build_aggregate_mounts("boxlite").unwrap();
         assert_eq!(config.device_tag, "boxlite");
         let mounts = &config.guest_mounts;
@@ -314,10 +387,7 @@ mod tests {
             assert_eq!(*read_only, export.read_only);
         }
         assert_eq!(mounts.len(), 2);
-        assert_eq!(
-            config.exports.shares()[0].host_path,
-            Path::new("/host/shared")
-        );
+        assert_eq!(config.exports.shares()[0].host_path, shared);
         let VolumeConfig::Virtiofs {
             mount_point,
             container_id,

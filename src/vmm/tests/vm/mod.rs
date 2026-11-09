@@ -1167,7 +1167,7 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
             assert!(
                 config
                     .cmdline
-                    .ends_with("virtio_mmio.device=4K@0xd0000000:5")
+                    .ends_with("virtio_mmio.device=4K@0xd0001000:6")
             );
             Ok(BootRegisters::default())
         },
@@ -1176,13 +1176,13 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
     .unwrap();
     let mut id = [0; 4];
     vm.chipset.dispatch(VcpuExit::MmioRead {
-        guest_addr: 0xd000_0008,
+        guest_addr: 0xd000_1008,
         bytes: &mut id,
     });
     assert_eq!(u32::from_le_bytes(id), 26);
     let mut tag = [0; 4];
     vm.chipset.dispatch(VcpuExit::MmioRead {
-        guest_addr: 0xd000_0100,
+        guest_addr: 0xd000_1100,
         bytes: &mut tag,
     });
     assert_eq!(&tag, b"aggr");

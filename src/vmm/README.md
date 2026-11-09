@@ -55,8 +55,8 @@ arm64 and macOS arm64 remain required M2 qualification gates, blocked by their
 boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not qualify
 those platforms or complete M2. The BoxLite engine adapter, engine selection
 and `native` feature wiring are separate M2 work.
-The Linux x86_64 virtio-fs implementation also runs against real host files
-and in-memory queues.
+The Linux virtio-fs device is also composed when configured; its native Box
+engine adapter remains pending.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 

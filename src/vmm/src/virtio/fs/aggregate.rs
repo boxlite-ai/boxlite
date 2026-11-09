@@ -21,7 +21,7 @@ use super::filesystem::{
     Context, DirEntry, Entry, Extensions, FileSystem, FsOptions, GetxattrReply, ListxattrReply,
     OpenOptions, SetattrValid, ZeroCopyReader, ZeroCopyWriter,
 };
-use super::linux::passthrough::PassthroughFs;
+use super::linux::passthrough::{InodeAltKey, PassthroughFs};
 
 const ROOT: u64 = 1;
 const TIMEOUT: Duration = Duration::ZERO;
@@ -46,6 +46,7 @@ struct Export {
 
 struct Node {
     global: u64,
+    identity: u64,
     share: usize,
     local: u64,
     backend: Arc<PassthroughFs>,
@@ -98,8 +99,11 @@ impl Drop for Handle {
 struct State {
     nodes: BTreeMap<u64, NodeRecord>,
     local_ids: BTreeMap<(usize, u64), u64>,
+    // Scalar identities survive node reclamation, without retaining backend FDs.
+    identities: BTreeMap<(usize, InodeAltKey), u64>,
     handles: BTreeMap<u64, Arc<Handle>>,
     next_node: u64,
+    next_identity: u64,
     next_handle: u64,
 }
 
@@ -126,9 +130,9 @@ fn component(name: &CStr, mutation: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn normalize(mut entry: Entry, global: u64) -> Entry {
+fn normalize(mut entry: Entry, global: u64, identity: u64) -> Entry {
     entry.inode = global;
-    entry.attr.st_ino = global;
+    entry.attr.st_ino = identity;
     entry
 }
 
@@ -179,6 +183,7 @@ impl AggregateFs {
             shares: exports,
             state: Mutex::new(State {
                 next_node: first,
+                next_identity: first,
                 next_handle: 1,
                 ..State::default()
             }),
@@ -197,6 +202,7 @@ impl AggregateFs {
                 .or_insert_with(|| NodeRecord {
                     node: Arc::new(Node {
                         global: export.root,
+                        identity: export.root,
                         share,
                         local: ROOT,
                         backend: export.backend.clone(),
@@ -263,8 +269,10 @@ impl AggregateFs {
     fn insert_entry(&self, share: usize, entry: Entry) -> io::Result<Entry> {
         let local = entry.inode;
         let backend = &self.shares[share].backend;
+        let key = (share, backend.identity(local)?);
         let mut state = self.state.lock().unwrap();
-        let global = if let Some(global) = state.local_ids.get(&(share, local)).copied() {
+        let (global, identity) = if let Some(global) = state.local_ids.get(&(share, local)).copied()
+        {
             let record = state
                 .nodes
                 .get_mut(&global)
@@ -275,9 +283,17 @@ impl AggregateFs {
                     .checked_add(1)
                     .ok_or_else(|| errno(libc::EOVERFLOW))?;
             }
-            global
+            (global, record.node.identity)
         } else {
             let global = allocate(&mut state.next_node)?;
+            let identity = match state.identities.get(&key) {
+                Some(identity) => *identity,
+                None => {
+                    let identity = allocate(&mut state.next_identity)?;
+                    state.identities.insert(key, identity);
+                    identity
+                }
+            };
             // retain is map-only: it reserves the in-flight object reference,
             // distinct from the guest lookup that produced this entry.
             backend.retain(local)?;
@@ -287,6 +303,7 @@ impl AggregateFs {
                 NodeRecord {
                     node: Arc::new(Node {
                         global,
+                        identity,
                         share,
                         local,
                         backend: backend.clone(),
@@ -296,9 +313,9 @@ impl AggregateFs {
                     opens: 0,
                 },
             );
-            global
+            (global, identity)
         };
-        Ok(normalize(entry, global))
+        Ok(normalize(entry, global, identity))
     }
 
     fn collect_zero(state: &mut State, inode: u64) -> Option<NodeRecord> {
@@ -439,15 +456,14 @@ impl AggregateFs {
             }
             let entry = if name == c"." {
                 let (mut attr, _) = node.backend.getattr(ctx, node.local, None)?;
-                attr.st_ino = node.global;
+                attr.st_ino = node.identity;
                 entry_from_attr(node.global, attr)
             } else {
                 entry_from_attr(ROOT, synthetic_attr(self.shares.len()))
             };
-            let global = entry.inode;
             let result = add(
                 DirEntry {
-                    ino: global,
+                    ino: entry.attr.st_ino,
                     offset: cookie,
                     type_: libc::DT_DIR as u32,
                     name: name.to_bytes(),
@@ -535,6 +551,7 @@ impl FileSystem for AggregateFs {
         let (handles, nodes) = {
             let mut state = self.state.lock().unwrap();
             state.local_ids.clear();
+            state.identities.clear();
             (mem::take(&mut state.handles), mem::take(&mut state.nodes))
         };
         drop(handles);
@@ -587,7 +604,7 @@ impl FileSystem for AggregateFs {
         };
         let local_handle = held.as_ref().map(|handle| handle.local);
         let (mut attr, timeout) = node.backend.getattr(ctx, node.local, local_handle)?;
-        attr.st_ino = node.global;
+        attr.st_ino = node.identity;
         Ok((attr, timeout))
     }
 
@@ -614,7 +631,7 @@ impl FileSystem for AggregateFs {
             held.as_ref().map(|handle| handle.local),
             valid,
         )?;
-        attr.st_ino = node.global;
+        attr.st_ino = node.identity;
         Ok((attr, timeout))
     }
 
@@ -902,7 +919,7 @@ impl FileSystem for AggregateFs {
                 let entry = self.map_entry(node.share, found)?;
                 let global = entry.inode;
                 let result = add(DirEntry {
-                    ino: global,
+                    ino: entry.attr.st_ino,
                     offset: cookie,
                     ..dirent
                 });
@@ -947,7 +964,7 @@ impl FileSystem for AggregateFs {
                 let global = entry.inode;
                 let result = add(
                     DirEntry {
-                        ino: global,
+                        ino: entry.attr.st_ino,
                         offset: cookie,
                         ..dirent
                     },

@@ -33,7 +33,7 @@ use crate::{
 
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, one block per configured disk, then the reporting
-/// balloon. Adding a device is one `add_slot_device` line here;
+/// balloon, then an optional filesystem. Adding a device is one `add_slot_device` line here;
 /// [`crate::vm`] stays unchanged.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(

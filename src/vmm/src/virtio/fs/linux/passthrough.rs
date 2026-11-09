@@ -99,7 +99,7 @@ fn statx(file: &File) -> io::Result<(libc::stat64, u64)> {
 }
 
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq)]
-struct InodeAltKey {
+pub(crate) struct InodeAltKey {
     ino: u64,
     dev: u64,
     mnt_id: u64,
@@ -117,6 +117,7 @@ impl InodeAltKey {
 
 struct InodeData {
     inode: u64,
+    identity: InodeAltKey,
     file: File,
 }
 
@@ -250,7 +251,11 @@ impl PassthroughFs {
         )?;
         let (attr, mount) = statx(&file)?;
         let fs = Self {
-            root: Arc::new(InodeData { inode: ROOT, file }),
+            root: Arc::new(InodeData {
+                inode: ROOT,
+                identity: InodeAltKey::new(&attr, mount),
+                file,
+            }),
             root_key: InodeAltKey::new(&attr, mount),
             proc_self_fd: openat(
                 libc::AT_FDCWD,
@@ -292,6 +297,15 @@ impl PassthroughFs {
                 },
             );
         }
+    }
+
+    /// Return host identity independently of the reclaimable local node number.
+    pub(crate) fn identity(&self, inode: u64) -> io::Result<InodeAltKey> {
+        self.state()
+            .inodes
+            .get(&inode)
+            .map(|record| record.data.identity.clone())
+            .ok_or_else(|| errno(libc::EBADF))
     }
 
     /// Retain a local lookup for an aggregate Node Arc, without performing I/O.
@@ -414,7 +428,11 @@ impl PassthroughFs {
                 record.data.clone()
             } else {
                 let inode = next(&mut state.next_inode)?;
-                let data = Arc::new(InodeData { inode, file });
+                let data = Arc::new(InodeData {
+                    inode,
+                    identity: key.clone(),
+                    file,
+                });
                 state.inodes.insert(
                     inode,
                     key,

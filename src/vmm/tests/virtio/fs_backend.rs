@@ -186,6 +186,44 @@ fn read_write_fsync_and_open_handle_survive_rename_unlink() {
 }
 
 #[test]
+fn cold_readdir_preserves_hardlink_identity_without_lookup_references() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("a"), b"same").unwrap();
+    fs::hard_link(dir.0.join("a"), dir.0.join("b")).unwrap();
+    let fs = dir.backend();
+    let (rw, ro, _) = roots(&fs);
+    let handle = fs.opendir(ctx(), rw, 0).unwrap().0.unwrap();
+    let mut entries = Vec::new();
+    fs.readdir(ctx(), rw, handle, 4096, 0, |entry| {
+        if entry.name != b"." && entry.name != b".." {
+            entries.push(entry.ino);
+        }
+        Ok(1)
+    })
+    .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0], entries[1],
+        "cold READDIR must identify hardlinks"
+    );
+    fs.releasedir(ctx(), rw, 0, handle).unwrap();
+
+    for name in [c"a", c"b"] {
+        let entry = fs.lookup(ctx(), rw, name).unwrap();
+        assert_eq!(entry.attr.st_ino, entries[0]);
+        assert_eq!(
+            fs.getattr(ctx(), entry.inode, None).unwrap().0.st_ino,
+            entries[0]
+        );
+        fs.forget(ctx(), entry.inode, 1);
+        error(fs.getattr(ctx(), entry.inode, None), libc::EBADF);
+    }
+    let readonly = fs.lookup(ctx(), ro, c"a").unwrap();
+    assert_ne!(readonly.attr.st_ino, entries[0]);
+    fs.forget(ctx(), readonly.inode, 1);
+}
+
+#[test]
 fn hardlinks_are_stable_and_share_identity_is_not_host_identity() {
     let dir = Directory::new();
     fs::write(dir.0.join("a"), b"same").unwrap();
