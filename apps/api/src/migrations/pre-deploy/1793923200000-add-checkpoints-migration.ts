@@ -3,8 +3,10 @@ import { MigrationInterface, QueryRunner } from 'typeorm'
 export class AddCheckpoints1793923200000 implements MigrationInterface {
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TYPE "job_resourcetype_enum" ADD VALUE IF NOT EXISTS 'CHECKPOINT'`)
-    await queryRunner.query(`ALTER TABLE "box" ADD "checkpointJobId" uuid`)
-    await queryRunner.query(`ALTER TABLE "box" ADD "checkpointSequence" integer NOT NULL DEFAULT 0`)
+    await queryRunner.query(`CREATE TABLE "box_checkpoint_state" (
+      "boxId" varchar NOT NULL PRIMARY KEY REFERENCES "box"("id") ON DELETE CASCADE,
+      "activeJobId" uuid, "sequence" integer NOT NULL DEFAULT 0
+    )`)
     await queryRunner.query(`CREATE TABLE "checkpoint" (
       "id" uuid NOT NULL, "organizationId" uuid NOT NULL, "name" varchar NOT NULL,
       "sourceBoxId" varchar NOT NULL, "sourceRunnerId" uuid NOT NULL, "sourceState" varchar NOT NULL,
@@ -49,8 +51,7 @@ export class AddCheckpoints1793923200000 implements MigrationInterface {
     if (uses.count !== 0) throw new Error('Finish or cancel checkpoint operations before reverting checkpoint storage')
     await queryRunner.query(`DROP TABLE "checkpoint_operation"`)
     await queryRunner.query(`DROP TABLE "checkpoint"`)
-    await queryRunner.query(`ALTER TABLE "box" DROP COLUMN "checkpointJobId"`)
-    await queryRunner.query(`ALTER TABLE "box" DROP COLUMN "checkpointSequence"`)
+    await queryRunner.query(`DROP TABLE "box_checkpoint_state"`)
     // PostgreSQL cannot remove an enum value without rebuilding the type and
     // its dependent job table. The unused additive value is safe to retain.
   }

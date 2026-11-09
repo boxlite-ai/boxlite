@@ -66,6 +66,7 @@ import { Checkpoint } from './entities/checkpoint.entity'
 import { CheckpointService } from './services/checkpoint.service'
 import { CheckpointJobReceiver } from './services/checkpoint-job-receiver.service'
 import { CheckpointOperation } from './entities/checkpoint-operation.entity'
+import { BoxCheckpointState } from './entities/box-checkpoint-state.entity'
 import { CheckpointRecoverService } from './services/checkpoint-recover.service'
 import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
 
@@ -90,6 +91,7 @@ import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
       Domain,
       Checkpoint,
       CheckpointOperation,
+      BoxCheckpointState,
     ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],

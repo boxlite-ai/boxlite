@@ -214,12 +214,6 @@ export class Box {
   @Column({ default: false, type: 'boolean' })
   pending: boolean | undefined = false
 
-  @Column({ type: 'uuid', nullable: true })
-  checkpointJobId?: string | null
-
-  @Column({ type: 'int', default: 0 })
-  checkpointSequence = 0
-
   @Column({ type: 'character varying' })
   authToken = nanoid(32).toLowerCase()
 

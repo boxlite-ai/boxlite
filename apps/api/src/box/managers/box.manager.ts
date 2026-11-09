@@ -335,13 +335,11 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     }
 
     try {
-      const box = await this.boxRepository.findOneOrFail({
-        where: { id: boxId },
-      })
+      const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(boxId)
 
       // Checkpoint import commits its configuration before ordinary lifecycle
       // reconciliation may start or stop the replacement.
-      if (box.checkpointJobId) return
+      if (checkpointState?.activeJobId) return
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
         if (
