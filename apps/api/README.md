@@ -535,13 +535,9 @@ the primary/secondary IDs and the local ownership migration result, without an a
 organization association. Local success does not claim that subsequent Auth0 linking
 succeeded. Retry attempts are recorded even when adoption is already complete.
 
-The obsolete Toolbox URL endpoint, DTO/configuration fields and SMS MFA enrollment
-endpoint are removed from the API and generated clients. Existing Auth0 management
-operations and v1 execution/file/attach routes remain available.
-
 Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
 set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
 Run `make test:apps:api TEST_FILES='attach-audit.spec|boxlite-ws-proxy.service.spec'`
 for real local WebSocket lifecycle and authentication tests.
 See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
-for backfill limits, index deployment and rollback order.
+for backfill limits and index details.

@@ -378,10 +378,6 @@ The cutoff has no lower time bound, so downtime cannot strand old pending record
 This dedicated SQL transition preserves final statuses without the ORM subscriber;
 ordinary per-record updates still use that subscriber.
 
-After old API instances exit, the post-deploy migration removes `region.toolboxProxyUrl`.
-Rollback restores a nullable column, not deleted historical values; restore it before
-running an old API. The partial audit index can remain during application rollback.
-
 ### `webhook_initialization`
 
 Tracks provisioning of the organization's Svix application, with its own retry
