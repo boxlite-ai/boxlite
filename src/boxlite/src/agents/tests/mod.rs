@@ -110,10 +110,11 @@ async fn unsupported_operations_fail_before_reaching_the_box() {
         expected("agent.respond")
     );
     assert_eq!(unsupported_message(agent.state()), expected("agent.state"));
-    assert_eq!(
-        unsupported_message(turn.events(AgentEventsOptions::default()).await),
-        expected("turn.events")
-    );
+    // turn.events is supported: it reaches the Box, which this test network refuses.
+    assert!(matches!(
+        turn.events(AgentEventsOptions::default()).await.err(),
+        Some(BoxliteError::Network(message)) if message.contains(NO_TUNNELS)
+    ));
     assert_eq!(
         unsupported_message(turn.steer("left", AgentControlOptions::default()).await),
         expected("turn.steer")

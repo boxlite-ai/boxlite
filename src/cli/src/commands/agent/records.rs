@@ -12,6 +12,7 @@ use boxlite::agents::{
 use boxlite::{BoxliteError, BoxliteResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 pub(super) fn agent_state(state: &AgentState) -> Value {
     json!({
@@ -120,6 +121,37 @@ pub(super) fn event(event: &AgentEvent) -> Value {
     })
 }
 
+/// Human text for a streamed turn: each finished text block, and one line per
+/// tool call. OpenCode names a tool when its input starts and calls it later
+/// by ID, so names are remembered per call.
+#[derive(Default)]
+pub(super) struct TextPrinter {
+    tools: HashMap<String, String>,
+}
+
+impl TextPrinter {
+    pub(super) fn line(&mut self, event: &AgentEvent) -> Option<String> {
+        let data = &event.data["data"];
+        match event.kind.as_str() {
+            "session.tool.input.started" => {
+                if let (Some(id), Some(name)) = (data["id"].as_str(), data["name"].as_str()) {
+                    self.tools.insert(id.to_owned(), name.to_owned());
+                }
+                None
+            }
+            "session.tool.called" => {
+                let name = data["id"]
+                    .as_str()
+                    .and_then(|id| self.tools.get(id))
+                    .map_or("tool", String::as_str);
+                Some(format!("[{name}] {}", data["input"]))
+            }
+            "session.text.ended" => data["text"].as_str().map(str::to_owned),
+            _ => None,
+        }
+    }
+}
+
 /// Parse `--agent-config`; unknown fields are rejected rather than ignored.
 pub(super) fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
     #[derive(Deserialize)]
@@ -176,7 +208,7 @@ fn agent_status(status: AgentStatus) -> &'static str {
     }
 }
 
-fn turn_status(status: AgentTurnStatus) -> &'static str {
+pub(super) fn turn_status(status: AgentTurnStatus) -> &'static str {
     match status {
         AgentTurnStatus::Queued => "queued",
         AgentTurnStatus::Running => "running",

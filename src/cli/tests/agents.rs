@@ -220,23 +220,87 @@ async fn agents_drive_opencode_across_cli_processes() {
     let name = "cli-agent";
     opencode_box(&ctx, name, model_port);
 
-    let created = agent_json(
-        &ctx,
-        &[
-            "create",
+    let create = |model: &str| {
+        let config = format!(r#"{{"model":"{model}"}}"#);
+        let created = agent_json(
+            &ctx,
+            &[
+                "create",
+                name,
+                "--agent",
+                "opencode",
+                "--agent-config",
+                &config,
+            ],
+        );
+        created["id"].as_str().unwrap().to_owned()
+    };
+    let agent_id = create("fake/fake-model");
+    assert!(agent_id.starts_with("ses_"), "{agent_id}");
+
+    // Default `send` streams the turn as text: a tool line, then the answer.
+    let streamed = ctx
+        .new_cmd()
+        .timeout(Duration::from_secs(180))
+        .args([
+            "agent",
+            "send",
             name,
             "--agent",
-            "opencode",
-            "--agent-config",
-            r#"{"model":"fake/fake-model"}"#,
-        ],
+            &agent_id,
+            "READ /etc/hostname",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(streamed.get_output().stdout.clone()).unwrap();
+    let stderr = String::from_utf8(streamed.get_output().stderr.clone()).unwrap();
+    assert!(
+        stdout.contains(r#"[read] {"path":"/etc/hostname"}"#),
+        "{stdout}"
     );
-    let agent_id = created["id"].as_str().unwrap().to_owned();
-    assert!(agent_id.starts_with("ses_"), "{created}");
+    assert!(stdout.ends_with("after tool\n"), "{stdout}");
+    assert!(stderr.contains("turn msg_"), "{stderr}");
 
-    let turn = agent_json(&ctx, &["send", name, "--agent", &agent_id, "hello"]);
-    let turn_id = turn["id"].as_str().unwrap().to_owned();
-    assert_eq!(turn["agent_id"], agent_id.as_str());
+    // JSON mode: event records, then the Result.
+    let json = ctx
+        .new_cmd()
+        .timeout(Duration::from_secs(180))
+        .args([
+            "agent", "send", name, "--agent", &agent_id, "hello", "--format", "json",
+        ])
+        .assert()
+        .success();
+    let lines = json_lines(&json.get_output().stdout);
+    let (result, events) = lines.split_last().unwrap();
+    assert_eq!(result["status"], "completed", "{result}");
+    assert_eq!(result["text"], "pong: hello", "{result}");
+    let turn_id = result["turn_id"].as_str().unwrap().to_owned();
+    assert_eq!(events[0]["kind"], "session.inbox.delivered", "{events:?}");
+    assert!(
+        events
+            .iter()
+            .all(|event| event["turn_id"] == turn_id.as_str())
+    );
+
+    // Another process cannot replay a finished turn: OpenCode keeps no
+    // per-turn event log, so the stream ends with nothing to show.
+    let later = ctx
+        .new_cmd()
+        .timeout(Duration::from_secs(180))
+        .args([
+            "agent", "events", name, "--agent", &agent_id, "--turn", &turn_id,
+        ])
+        .assert()
+        .success();
+    assert!(later.get_output().stdout.is_empty());
+
+    // --detach returns the queued turn at once; wait reads its result.
+    let turn = agent_json(
+        &ctx,
+        &["send", name, "--agent", &agent_id, "again", "--detach"],
+    );
+    assert_eq!(turn["status"], "queued", "{turn}");
+    let detached = turn["id"].as_str().unwrap().to_owned();
     let result = agent_json(
         &ctx,
         &[
@@ -245,25 +309,36 @@ async fn agents_drive_opencode_across_cli_processes() {
             "--agent",
             &agent_id,
             "--turn",
-            &turn_id,
+            &detached,
             "--timeout-seconds",
             "120",
         ],
     );
-    assert_eq!(result["status"], "completed", "{result}");
-    assert_eq!(result["text"], "pong: hello", "{result}");
-    let inspected = agent_json(
-        &ctx,
-        &["inspect", name, "--agent", &agent_id, "--turn", &turn_id],
-    );
-    assert_eq!(inspected["status"], "completed", "{inspected}");
+    assert_eq!(result["text"], "pong: again", "{result}");
     let config = agent_json(
         &ctx,
         &["inspect", name, "--agent", &agent_id, "--view", "config"],
     );
     assert_eq!(config["model"], "fake/fake-model", "{config}");
 
+    // A turn that fails exits 1 and names its status on stderr.
+    let broken = create("fake/missing-model");
+    ctx.new_cmd()
+        .timeout(Duration::from_secs(180))
+        .args(["agent", "send", name, "--agent", &broken, "hello"])
+        .assert()
+        .code(1)
+        .stderr(contains("failed"));
+
     ctx.cleanup_box(name);
+}
+
+fn json_lines(bytes: &[u8]) -> Vec<Value> {
+    String::from_utf8(bytes.to_vec())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }
 
 #[test]

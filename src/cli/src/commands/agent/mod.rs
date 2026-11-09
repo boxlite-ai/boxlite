@@ -5,8 +5,9 @@ use anyhow::{Result, anyhow};
 use boxlite::agents::{
     AgentConfig, AgentControlOptions as AgentControlOptionsCore,
     AgentCreateOptions as AgentCreateOptionsCore, AgentEventStream,
-    AgentEventsOptions as AgentEventsOptionsCore, AgentSendMode,
-    AgentSendOptions as AgentSendOptionsCore, AgentWaitOptions as AgentWaitOptionsCore,
+    AgentEventsOptions as AgentEventsOptionsCore, AgentResult, AgentSendMode,
+    AgentSendOptions as AgentSendOptionsCore, AgentTurnState, AgentTurnStatus,
+    AgentWaitOptions as AgentWaitOptionsCore,
 };
 use boxlite::{Agent, AgentTurn, BoxliteRuntime, LiteBox};
 use clap::{Args, Subcommand, ValueEnum};
@@ -45,7 +46,7 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentControlOptions,
     },
-    /// Submit text and optional JSON data.
+    /// Submit text and stream the turn until it ends.
     Send {
         #[command(flatten)]
         target: AgentTarget,
@@ -53,6 +54,12 @@ pub enum AgentCommand {
         text: String,
         #[command(flatten)]
         options: AgentSendOptions,
+        /// Return the queued turn at once instead of streaming it
+        #[arg(short = 'd', long)]
+        detach: bool,
+        /// Streamed output: answer text and tool lines, or JSON Lines records
+        #[arg(long, value_enum, default_value = "default", conflicts_with = "detach")]
+        format: StreamFormat,
     },
     /// Read state, configuration, capabilities or requests.
     Inspect {
@@ -152,6 +159,15 @@ pub struct AgentCreateOptions {
     control: AgentControlOptions,
 }
 
+/// How `send` prints a streamed turn, as in `opencode run --format`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum StreamFormat {
+    /// Answer text and one line per tool call
+    Default,
+    /// One JSON record per event, then the Result record
+    Json,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum SendMode {
     Queue,
@@ -235,10 +251,15 @@ pub async fn execute(args: AgentArgs, global: &GlobalFlags) -> Result<()> {
             target,
             text,
             options,
+            detach,
+            format,
         } => {
             let agent = open_agent(&runtime, &target).await?;
             let turn = agent.send(&text, options.into_core()).await?;
-            print(&records::turn_state(&turn.state()?))
+            if detach {
+                return print(&records::turn_state(&turn.state()?));
+            }
+            stream_turn(&agent, &turn, format).await
         }
         AgentCommand::Respond {
             target,
@@ -320,6 +341,71 @@ async fn open_turn(runtime: &BoxliteRuntime, target: &TurnTarget) -> Result<Agen
 
 fn print(record: &Value) -> Result<()> {
     println!("{record}");
+    Ok(())
+}
+
+/// Stream a submitted turn, then report how it ended: exit 0 only when it
+/// completed. A turn waiting for input ends the stream, because nothing can
+/// answer it through this command; the turn itself stays in the Box.
+async fn stream_turn(agent: &Agent, turn: &AgentTurn, format: StreamFormat) -> Result<()> {
+    let turn_id = turn.state()?.id;
+    if format == StreamFormat::Default {
+        eprintln!("turn {turn_id}");
+    }
+    let events = turn.events(AgentEventsOptionsCore::default()).await?;
+    let mut stdout = std::io::stdout().lock();
+    match format {
+        StreamFormat::Json => print_events(events, &mut stdout).await?,
+        StreamFormat::Default => print_text(events, &mut stdout).await?,
+    }
+    let state = agent.get_turn(&turn_id).await?.state()?;
+    if let Some(waiting) = waiting_for_input(&state, &mut std::io::stderr()) {
+        return waiting;
+    }
+    let result = turn.wait(AgentWaitOptionsCore::default()).await?;
+    if format == StreamFormat::Json {
+        writeln!(stdout, "{}", records::result(&result))?;
+    }
+    outcome(&result)
+}
+
+/// A turn waiting for input cannot be answered through `send`: write its
+/// pending requests to `err` and fail; any other state returns `None`.
+fn waiting_for_input(state: &AgentTurnState, err: &mut impl Write) -> Option<Result<()>> {
+    if state.status != AgentTurnStatus::WaitingInput {
+        return None;
+    }
+    let written = writeln!(err, "{}", records::requests(&state.requests));
+    Some(written.map_err(anyhow::Error::from).and_then(|()| {
+        Err(anyhow!(
+            "turn {} is waiting for input, which this command cannot answer",
+            state.id
+        ))
+    }))
+}
+
+/// Exit 0 only for a completed turn; otherwise name the status and error.
+fn outcome(result: &AgentResult) -> Result<()> {
+    match result.status {
+        AgentTurnStatus::Completed => Ok(()),
+        status => Err(anyhow!(
+            "turn {} {}: {}",
+            result.turn_id,
+            records::turn_status(status),
+            result.error.as_deref().unwrap_or("no error reported")
+        )),
+    }
+}
+
+/// Print each finished text block and one line per tool call as they arrive.
+async fn print_text(mut events: AgentEventStream, out: &mut impl Write) -> Result<()> {
+    let mut printer = records::TextPrinter::default();
+    while let Some(event) = events.next().await {
+        if let Some(line) = printer.line(&event?) {
+            writeln!(out, "{line}")?;
+            out.flush()?;
+        }
+    }
     Ok(())
 }
 

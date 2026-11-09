@@ -61,7 +61,9 @@ Rust and the CLI on a local runtime forward agents to OpenCode 2.2 inside the Bo
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
-environment. Another OpenCode version fails with `Unsupported` once its service
+environment. Behind a host proxy, also set `HTTPS_PROXY=http://host.boxlite.internal:PORT`
+and `NO_PROXY=127.0.0.1,localhost,0.0.0.0`, so OpenCode reaches its own service directly.
+Another OpenCode version fails with `Unsupported` once its service
 answers, or with `Execution` when it lacks the `opencode service` commands. Remote
 runtimes and the other SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
@@ -82,10 +84,11 @@ agent.events()            ──tunnel─► GET /api/event, live only
 |---|---|
 | `agents.create` | Starts OpenCode's managed service on first use and creates a session. Only `cwd` and `config.model` (`provider/model`) are accepted |
 | `agents.get` | Reads a session by its `ses_…` ID, starting the service again after a Box restart |
-| `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
+| `agent.send` | Opens the live event stream for `turn.events` (best effort), then admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. Streams of the 8 most recent turns are kept; older ones are closed. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
 | `agent.get_turn`, `turn.state` | `get_turn` reads the turn now, among the newest 1,000 messages of the session (older turns, and IDs of messages that are not inputs, are `NotFound`); `turn.state` returns the snapshot taken when the handle was obtained. A turn is `queued` in the inbox; `running` or `waiting_input` until its run records an outcome; `completed`, `failed` or `cancelled` from that outcome; `unknown` when its execution was cut off and a later run took the next input |
 | `turn.wait` | Polls every 500 ms. A timeout, or an `unknown` turn, returns `InvalidState` and never interrupts |
 | `agent.events` | Live events of the session and of subagent sessions created while the stream is open; `cursor` is `None` and `after` is rejected. Events of the session itself that name an input in OpenCode's `inboxID` carry it as `turn_id`; subagent events have none. Opening the stream fails with `Network` after 30 s without a response. The stream ends with one error, after any events that arrived before it: `Network` when the native stream ends or fails, `Internal` for an event that is not UTF-8 JSON or a subagent session ID that OpenCode would not mint, `ResourceExhausted` for an event over 1 MiB or a 1,001st subagent session |
+| `turn.events` | One turn, cut out of the live agent stream: from its `inbox.delivered` until the turn ends, where `turn.wait` would see it end, checked at each delivery or execution event and every 500 ms while idle; `waiting_input` also ends the stream. OpenCode cannot replay a turn, so `agent.send` opens the stream before admitting the turn and the returned handle's `events` gets it whole; a handle from `get_turn` follows only from the call. Includes subagent events; `after` is rejected |
 | `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
 
 BoxLite runs OpenCode's own managed service, the `opencode serve --service`

@@ -70,6 +70,7 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
         target,
         text,
         options,
+        ..
     } = parse(&[
         "send",
         "box",
@@ -360,7 +361,9 @@ fn agents_help_and_completion_include_nine_flat_commands() {
         .render_long_help()
         .to_string();
     for text in [
-        "Submit text and optional JSON data",
+        "Submit text and stream the turn until it ends",
+        "--detach",
+        "--format <FORMAT>",
         "<BOX>",
         "--agent <AGENT>",
         "<TEXT>",
@@ -592,4 +595,145 @@ async fn agents_events_print_every_record_before_the_stream_error() {
         .map(|line| serde_json::from_str::<Value>(line).unwrap()["kind"].clone())
         .collect();
     assert_eq!(kinds, [json!("session.status"), json!("session.idle")]);
+}
+
+/// Text mode prints finished text blocks and names each tool call, from the
+/// event shapes OpenCode 2.2.2 logs.
+#[test]
+fn agents_text_printer_prints_text_blocks_and_named_tool_calls() {
+    use boxlite::agents::AgentEvent;
+    let event = |kind: &str, data: serde_json::Value| AgentEvent {
+        cursor: None,
+        agent_id: "ses".into(),
+        turn_id: Some("msg".into()),
+        kind: kind.into(),
+        data: json!({ "type": kind, "data": data }),
+    };
+    let mut printer = records::TextPrinter::default();
+    let lines: Vec<_> = [
+        event("session.inbox.delivered", json!({ "inboxID": "msg" })),
+        event(
+            "session.tool.input.started",
+            json!({ "id": "call_read", "name": "read" }),
+        ),
+        event(
+            "session.tool.called",
+            json!({ "id": "call_read", "input": { "path": "/etc/hostname" } }),
+        ),
+        event("session.text.delta", json!({ "delta": "after" })),
+        event("session.text.ended", json!({ "text": "after tool" })),
+        event(
+            "session.tool.called",
+            json!({ "id": "call_unknown", "input": {} }),
+        ),
+    ]
+    .iter()
+    .filter_map(|event| printer.line(event))
+    .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"[read] {"path":"/etc/hostname"}"#,
+            "after tool",
+            "[tool] {}",
+        ]
+    );
+}
+
+#[test]
+fn agents_send_streams_by_default_and_detach_skips_streaming() {
+    let AgentCommand::Send { detach, format, .. } =
+        parse(&["send", "box", "--agent", "agent", "hello"])
+    else {
+        panic!("expected send")
+    };
+    assert!(!detach);
+    assert_eq!(format, StreamFormat::Default);
+
+    let AgentCommand::Send { detach, format, .. } = parse(&[
+        "send", "box", "--agent", "agent", "hello", "--format", "json",
+    ]) else {
+        panic!("expected send")
+    };
+    assert!(!detach);
+    assert_eq!(format, StreamFormat::Json);
+
+    let AgentCommand::Send { detach, .. } = parse(&["send", "-d", "box", "--agent", "agent", "hi"])
+    else {
+        panic!("expected send")
+    };
+    assert!(detach);
+
+    let conflict = try_parse_from([
+        "boxlite", "agent", "send", "box", "--agent", "agent", "hi", "--detach", "--format", "json",
+    ]);
+    assert_eq!(conflict.err().unwrap().kind(), ErrorKind::ArgumentConflict);
+}
+
+fn turn_state(status: boxlite::agents::AgentTurnStatus) -> boxlite::agents::AgentTurnState {
+    use boxlite::agents::{AgentRequest, AgentRequestKind, AgentTurnState};
+    AgentTurnState {
+        id: "msg_test".into(),
+        agent_id: "ses_test".into(),
+        status,
+        cursor: None,
+        result: None,
+        requests: vec![AgentRequest {
+            id: "per_test".into(),
+            turn_id: "msg_test".into(),
+            kind: AgentRequestKind::Permission {
+                tool: "bash".into(),
+                arguments: json!({ "command": "rm -rf /tmp/x" }),
+            },
+        }],
+        steering: vec![],
+    }
+}
+
+#[test]
+fn agents_send_reports_a_turn_waiting_for_input_and_fails() {
+    use boxlite::agents::AgentTurnStatus;
+    let mut err = Vec::new();
+    let error = waiting_for_input(&turn_state(AgentTurnStatus::WaitingInput), &mut err)
+        .expect("a waiting turn ends send")
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("msg_test is waiting for input"),
+        "{error}"
+    );
+    let printed: serde_json::Value = serde_json::from_slice(&err).unwrap();
+    assert_eq!(printed[0]["id"], "per_test");
+    assert_eq!(printed[0]["kind"]["tool"], "bash");
+
+    for status in [AgentTurnStatus::Completed, AgentTurnStatus::Failed] {
+        let mut err = Vec::new();
+        assert!(waiting_for_input(&turn_state(status), &mut err).is_none());
+        assert!(err.is_empty());
+    }
+}
+
+#[test]
+fn agents_send_exits_zero_only_for_a_completed_turn() {
+    use boxlite::agents::{AgentResult, AgentTurnStatus};
+    let result = |status, error: Option<&str>| AgentResult {
+        turn_id: "msg_test".into(),
+        status,
+        outcome: None,
+        text: None,
+        data: None,
+        artifacts: vec![],
+        usage: None,
+        error: error.map(str::to_owned),
+    };
+    assert!(outcome(&result(AgentTurnStatus::Completed, None)).is_ok());
+    let failed = outcome(&result(AgentTurnStatus::Failed, Some("Model unavailable"))).unwrap_err();
+    assert_eq!(
+        failed.to_string(),
+        "turn msg_test failed: Model unavailable"
+    );
+    let cancelled = outcome(&result(AgentTurnStatus::Cancelled, None)).unwrap_err();
+    assert_eq!(
+        cancelled.to_string(),
+        "turn msg_test cancelled: no error reported"
+    );
 }

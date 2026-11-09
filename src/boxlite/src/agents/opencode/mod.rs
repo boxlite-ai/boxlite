@@ -22,6 +22,7 @@
 mod http;
 #[cfg(test)]
 mod tests;
+mod turn_log;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, PoisonError, Weak};
@@ -204,11 +205,14 @@ impl Server {
 }
 
 /// One native OpenCode session, the conversation behind an `Agent`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Session {
     server: Arc<Server>,
     id: String,
     config: AgentConfig,
+    /// Live streams `send` opened before admitting each turn, kept for that
+    /// turn's `turn.events()`; shared by clones of this handle.
+    opened: turn_log::OpenedStreams,
 }
 
 impl Session {
@@ -233,6 +237,7 @@ impl Session {
                 model,
                 ..AgentConfig::default()
             },
+            opened: turn_log::OpenedStreams::default(),
         })
     }
 }
@@ -256,9 +261,14 @@ impl AgentBackend for Session {
     }
 
     /// Durably admit `text` under a minted input ID; the snapshot reports the admission.
+    ///
+    /// The live event stream is opened first, because OpenCode cannot replay
+    /// a turn's events; `turn.events()` takes it. Opening it is best effort:
+    /// without it, `turn.events()` follows the turn from when it is called.
     async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
         let turn_id = mint_id("msg_");
         let body = prompt_body(&turn_id, text, options)?;
+        let live = self.events(&AgentEventsOptions::default()).await.ok();
         self.server
             .client
             .post_idempotent(&format!("/api/session/{}/prompt", self.id), &body)
@@ -270,6 +280,9 @@ impl AgentBackend for Session {
                     format!("agent.get_turn({turn_id:?}) reads it if OpenCode admitted it"),
                 )
             })?;
+        if let Some(live) = live {
+            self.opened.keep(&turn_id, live);
+        }
         Ok(self.turn_state(&turn_id, AgentTurnStatus::Queued, None))
     }
 
@@ -336,6 +349,40 @@ impl AgentBackend for Session {
             .events("/api/event", move |event| filter.keep(event))
             .await?;
         Ok(Box::pin(events))
+    }
+
+    /// Follow this turn on the live stream `send` opened before admitting it;
+    /// see [`turn_log`]. A handle obtained elsewhere, such as in another
+    /// process, follows the turn only from this call, because OpenCode cannot
+    /// replay a turn's events.
+    async fn turn_events(
+        &self,
+        turn_id: &str,
+        options: &AgentEventsOptions,
+    ) -> BoxliteResult<AgentEventStream> {
+        if options.after.is_some() {
+            return Err(BoxliteError::Unsupported(format!(
+                "turn.events after a cursor is not supported by {ADAPTER}"
+            )));
+        }
+        if !is_message_id(turn_id) {
+            return Err(self.missing_turn(turn_id));
+        }
+        let live = match self.opened.take(turn_id) {
+            Some(live) => live,
+            None => self.events(&AgentEventsOptions::default()).await?,
+        };
+        let session = self.clone();
+        let id = turn_id.to_owned();
+        Ok(turn_log::turn_events(
+            live,
+            turn_id.to_owned(),
+            super::TURN_POLL_INTERVAL,
+            move || {
+                let (session, id) = (session.clone(), id.clone());
+                async move { Ok(turn_log::has_ended(session.turn(&id).await?.status)) }
+            },
+        ))
     }
 }
 
@@ -844,6 +891,7 @@ fn capabilities() -> AgentCapabilities {
             "agent.capabilities",
             "turn.wait",
             "turn.state",
+            "turn.events",
         ]
         .map(String::from)
         .to_vec(),

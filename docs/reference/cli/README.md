@@ -1021,13 +1021,14 @@ go to stderr with exit code 1. Malformed arguments use the normal CLI usage erro
 Use a running Box created with `boxlite create` and `boxlite start`, or `boxlite run -d`:
 a Box that is not detached stops when the CLI process that started it exits, which cuts
 off a running turn. Each local `boxlite` process holds the BoxLite home for its whole
-run, so while `events` streams, other commands on that home fail until it ends.
+run, so while one command streams, other commands on that home fail until it ends
+([#2473](https://github.com/boxlite-ai/boxlite/issues/2473)).
 
 | Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
 | Lifecycle | `create BOX --agent IMPLEMENTATION` | Create an instance with the selected implementation and initial configuration. |
 | Lifecycle | `close BOX --agent AGENT` | End the agent. |
-| Work | `send BOX --agent AGENT TEXT` | Submit a new turn. |
+| Work | `send BOX --agent AGENT TEXT` | Submit a new turn and stream it until it ends, like `codex exec` or `opencode run`. |
 | Work | `wait BOX --agent AGENT --turn TURN` | Wait for an existing turn's result. |
 | Observe | `inspect BOX --agent AGENT [--turn TURN]` | Read agent or turn state. |
 | Observe | `events BOX --agent AGENT [--turn TURN]` | Follow agent or turn events. |
@@ -1048,6 +1049,7 @@ The optional flags are grouped by operation:
 |---|---|---|
 | `AgentCreateOptions` | `create` | `--cwd PATH`, `--agent-config JSON`, `--idempotency-key KEY` |
 | `AgentSendOptions` | `send` | `--mode queue\|reject` (default `queue`), `--data JSON`, `--idempotency-key KEY` |
+| Streaming | `send` | `--format default\|json` (default `default`); `-d, --detach` returns the queued turn instead of streaming |
 | `AgentControlOptions` | close, respond, steer, interrupt | `--idempotency-key KEY` |
 | `AgentWaitOptions` | `wait` | `--timeout-seconds SECONDS` (nonnegative whole seconds; omitted means no deadline) |
 | `AgentEventsOptions` | `events` | `--after CURSOR` |
@@ -1059,22 +1061,34 @@ data and response arguments must be valid JSON. Response JSON uses either
 `{"type":"permission","approved":false}`. The
 [agent API reference](../agents.md#inputs-and-records) describes other record fields.
 
-Output is JSON on stdout, in the
+`send` streams by default. It writes the turn ID to stderr, then prints each finished
+answer text block and one `[tool] input` line per tool call. With `--format json` it
+prints one event record per line, then the Result record.
+
+`send` exits 0 only when the turn completes. Otherwise it writes the status and error to
+stderr and exits 1. A turn waiting for a permission answer also ends the stream: its
+request goes to stderr, the exit code is 1, and the turn stays in the Box.
+
+Other output is JSON on stdout, in the
 [record shapes of the C API](../agents.md#c-api-and-ownership):
 
 | Command | Prints | Exit code |
 |---|---|---|
 | `create` | `{"id":"ses_…"}`, the ID later commands pass as `--agent` | 0 |
-| `send`, `respond`, `inspect --turn` | Turn snapshot | 0 |
+| `send --detach`, `respond`, `inspect --turn` | Turn snapshot | 0 |
 | `inspect` | Agent snapshot | 0 |
 | `inspect --view config\|capabilities\|requests` | Config, capabilities, request array | 0 |
 | `wait` | Result, including for `failed` and `cancelled` turns; branch on its `status` | 0; 1 when `--timeout-seconds` expires or the turn is `unknown`, which never interrupts it |
 | `steer` | Steering receipt | 0 |
-| `events` | One event record per line, flushed as it arrives, until the stream ends | 1 when the stream ends with an error, after every earlier record |
+| `events --turn` | That turn's live event records from now until it ends | 0 |
+| `events` | One live event record per line, flushed as it arrives, until the stream ends | 1 when the stream ends with an error, after every earlier record |
 | `close`, `interrupt` | Nothing | 0 |
 
-The agent-level OpenCode stream always ends with a `Network` error, for example
-when its Box stops, so `events` without `--turn` exits with code 1.
+OpenCode keeps no replayable log of a turn's events, so `send` opens the live stream
+before it submits and shows the whole turn. `events --turn` in another process sees
+only what happens after it starts, and nothing for a finished turn; `wait` still reads
+the result. The agent-level stream always ends with a `Network` error, for example when
+its Box stops, so `events` without `--turn` exits with code 1.
 
 ```bash
 boxlite create --name dev debian:bookworm-slim sleep infinity
@@ -1082,10 +1096,12 @@ boxlite start dev
 boxlite agent create dev --agent opencode --cwd /workspace --agent-config '{"model":"provider/model"}'
 # {"id":"ses_01K…"}
 boxlite agent send dev --agent ses_01K… "Review this code"
+# stderr: turn msg_01K…
+# [read] {"path":"/workspace/main.rs"}
+# The code …
+boxlite agent send dev --agent ses_01K… "Run the tests" --detach
 # {"id":"msg_01K…","agent_id":"ses_01K…","status":"queued",…}
 boxlite agent wait dev --agent ses_01K… --turn msg_01K… --timeout-seconds 600
-# {"turn_id":"msg_01K…","status":"completed","outcome":"answer","text":"…",…}
-boxlite agent events dev --agent ses_01K…   # until the stream ends; exit 1
 ```
 
 Agent commands accept the usual Box

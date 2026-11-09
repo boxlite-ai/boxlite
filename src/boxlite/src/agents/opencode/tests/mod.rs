@@ -195,9 +195,10 @@ fn history(newest_first: Vec<Value>) -> String {
 
 #[tokio::test]
 async fn send_queues_text_under_a_minted_id_with_the_password() {
-    let (session, requests) = scripted_session(vec![ok(
-        json!({ "data": { "type": "user", "delivery": "queue" } }),
-    )]);
+    let (session, requests) = scripted_session(vec![
+        event_response(&[]),
+        ok(json!({ "data": { "type": "user", "delivery": "queue" } })),
+    ]);
 
     let state = session
         .send("hello", &AgentSendOptions::default())
@@ -209,7 +210,7 @@ async fn send_queues_text_under_a_minted_id_with_the_password() {
         (state.status, state.agent_id.as_str()),
         (AgentTurnStatus::Queued, "ses_test")
     );
-    let request = requests.lock().unwrap()[0].clone();
+    let request = requests.lock().unwrap()[1].clone();
     assert!(
         request.starts_with("POST /api/session/ses_test/prompt HTTP/1.1"),
         "{request}"
@@ -227,7 +228,11 @@ async fn send_queues_text_under_a_minted_id_with_the_password() {
 
 #[tokio::test]
 async fn a_lost_send_response_is_retried_with_the_same_id() {
-    let (session, requests) = scripted_session(vec![String::new(), ok(json!({ "data": {} }))]);
+    let (session, requests) = scripted_session(vec![
+        event_response(&[]),
+        String::new(),
+        ok(json!({ "data": {} })),
+    ]);
 
     let state = session
         .send("hello", &AgentSendOptions::default())
@@ -238,6 +243,7 @@ async fn a_lost_send_response_is_retried_with_the_same_id() {
         .lock()
         .unwrap()
         .iter()
+        .filter(|request| request.starts_with("POST "))
         .map(|request| body_of(request))
         .collect();
     assert_eq!(bodies.len(), 2);
@@ -247,7 +253,8 @@ async fn a_lost_send_response_is_retried_with_the_same_id() {
 
 #[tokio::test]
 async fn a_send_lost_twice_names_the_turn_to_reconcile() {
-    let (session, requests) = scripted_session(vec![String::new(), String::new()]);
+    let (session, requests) =
+        scripted_session(vec![event_response(&[]), String::new(), String::new()]);
 
     let error = session
         .send("hello", &AgentSendOptions::default())
@@ -255,7 +262,7 @@ async fn a_send_lost_twice_names_the_turn_to_reconcile() {
         .err()
         .unwrap();
 
-    let turn_id = body_of(&requests.lock().unwrap()[0])["id"]
+    let turn_id = body_of(&requests.lock().unwrap()[1])["id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -271,8 +278,8 @@ async fn a_send_lost_twice_names_the_turn_to_reconcile() {
     }
     assert_eq!(
         requests.lock().unwrap().len(),
-        2,
-        "one retry, then no further submission"
+        3,
+        "the event stream, one retry, then no further submission"
     );
 }
 
@@ -410,7 +417,8 @@ async fn history_is_searched_for_at_most_1000_messages() {
 #[tokio::test]
 async fn native_errors_keep_their_tag_and_class() {
     let missing = json!({ "_tag": "SessionNotFoundError", "sessionID": "ses_test", "message": "Session not found" });
-    let (session, _) = scripted_session(vec![respond("404 Not Found", missing)]);
+    let (session, _) =
+        scripted_session(vec![event_response(&[]), respond("404 Not Found", missing)]);
 
     let error = session
         .send("hello", &AgentSendOptions::default())
@@ -1199,4 +1207,205 @@ fn event_parser_fails_on_an_event_that_is_not_utf8_json() {
 fn parse(parser: &mut EventParser, chunk: &[u8]) -> BoxliteResult<Vec<Value>> {
     let mut events = Vec::new();
     parser.push(chunk, &mut events).map(|()| events)
+}
+
+// ── turn.events: one turn out of the live stream ──────────────────────────
+
+fn log_event(kind: &str, inbox: Option<&str>) -> AgentEvent {
+    let mut data = json!({ "sessionID": "ses_test" });
+    if let Some(inbox) = inbox {
+        data["inboxID"] = json!(inbox);
+    }
+    AgentEvent {
+        cursor: None,
+        agent_id: "ses_test".into(),
+        turn_id: inbox.map(str::to_owned),
+        kind: kind.into(),
+        data: json!({ "type": kind, "data": data }),
+    }
+}
+
+/// The two-turn sequence OpenCode 2.2.2 logged for two queued inputs.
+fn two_turn_log() -> Vec<AgentEvent> {
+    vec![
+        log_event("session.inbox.enqueued", Some("msg_a")),
+        log_event("session.execution.started", None),
+        log_event("session.inbox.delivered", Some("msg_a")),
+        log_event("session.inbox.enqueued", Some("msg_b")),
+        log_event("session.step.started", None),
+        log_event("session.text.ended", None),
+        log_event("session.step.ended", None),
+        log_event("session.inbox.delivered", Some("msg_b")),
+        log_event("session.tool.called", None),
+        log_event("session.text.ended", None),
+        log_event("session.execution.succeeded", None),
+    ]
+}
+
+/// A followed log: the given events, then silence.
+fn followed(
+    events: Vec<AgentEvent>,
+) -> impl futures::Stream<Item = BoxliteResult<AgentEvent>> + Unpin {
+    futures::stream::iter(events.into_iter().map(Ok)).chain(futures::stream::pending())
+}
+
+/// A history read that answers from `answers` in order, repeating the last.
+fn history_reads(
+    answers: Vec<bool>,
+) -> (
+    impl Fn() -> futures::future::Ready<BoxliteResult<bool>>,
+    Arc<Mutex<usize>>,
+) {
+    let calls = Arc::new(Mutex::new(0));
+    let counter = Arc::clone(&calls);
+    let read = move || {
+        let mut calls = counter.lock().unwrap();
+        let answer = answers[(*calls).min(answers.len() - 1)];
+        *calls += 1;
+        futures::future::ready(Ok(answer))
+    };
+    (read, calls)
+}
+
+async fn kinds(log: Vec<AgentEvent>, turn: &str, answers: Vec<bool>) -> Vec<String> {
+    let (read, _) = history_reads(answers);
+    let events = turn_log::turn_events(followed(log), turn.into(), Duration::from_millis(20), read);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        events.map(|event| event.unwrap().kind).collect(),
+    )
+    .await
+    .expect("the turn stream must end")
+}
+
+#[tokio::test]
+async fn turn_events_cut_the_captured_log_at_each_turn_boundary() {
+    assert_eq!(
+        kinds(two_turn_log(), "msg_a", vec![true]).await,
+        [
+            "session.inbox.delivered",
+            "session.inbox.enqueued",
+            "session.step.started",
+            "session.text.ended",
+            "session.step.ended",
+        ]
+    );
+    assert_eq!(
+        kinds(two_turn_log(), "msg_b", vec![true]).await,
+        [
+            "session.inbox.delivered",
+            "session.tool.called",
+            "session.text.ended"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turn_events_continue_past_a_boundary_while_history_says_running() {
+    // A synthetic continuation and a steered input arrive mid-turn.
+    let log = vec![
+        log_event("session.inbox.delivered", Some("msg_a")),
+        log_event("session.text.ended", None),
+        log_event("session.inbox.delivered", Some("msg_synthetic")),
+        log_event("session.inbox.delivered", Some("msg_steer")),
+        log_event("session.text.ended", None),
+        log_event("session.execution.succeeded", None),
+    ];
+    assert_eq!(
+        kinds(log, "msg_a", vec![false, false, true]).await,
+        [
+            "session.inbox.delivered",
+            "session.text.ended",
+            "session.inbox.delivered",
+            "session.inbox.delivered",
+            "session.text.ended",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turn_events_end_on_the_idle_poll_when_history_lags_the_log() {
+    let log = vec![
+        log_event("session.inbox.delivered", Some("msg_a")),
+        log_event("session.text.ended", None),
+        log_event("session.execution.succeeded", None),
+    ];
+    // History still says running at the boundary, then catches up.
+    assert_eq!(
+        kinds(log, "msg_a", vec![false, true]).await,
+        [
+            "session.inbox.delivered",
+            "session.text.ended",
+            "session.execution.succeeded",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turn_events_end_empty_for_a_turn_that_ended_before_delivery() {
+    let log = vec![log_event("session.inbox.enqueued", Some("msg_a"))];
+    assert!(kinds(log, "msg_a", vec![true]).await.is_empty());
+}
+
+#[tokio::test]
+async fn turn_events_end_with_the_log_error() {
+    let (read, _) = history_reads(vec![false]);
+    let log = futures::stream::iter(vec![
+        Ok(log_event("session.inbox.delivered", Some("msg_a"))),
+        Err(BoxliteError::Network("OpenCode event stream ended".into())),
+    ]);
+    let items: Vec<_> = turn_log::turn_events(log, "msg_a".into(), Duration::from_secs(5), read)
+        .collect()
+        .await;
+    assert_eq!(items.len(), 2);
+    assert!(matches!(&items[1], Err(BoxliteError::Network(_))));
+}
+
+#[test]
+fn turn_events_treat_outcomes_and_waiting_input_as_ended() {
+    for status in [
+        AgentTurnStatus::Completed,
+        AgentTurnStatus::Failed,
+        AgentTurnStatus::Cancelled,
+        AgentTurnStatus::Unknown,
+        AgentTurnStatus::WaitingInput,
+    ] {
+        assert!(turn_log::has_ended(status), "{status:?}");
+    }
+    for status in [
+        AgentTurnStatus::Queued,
+        AgentTurnStatus::Running,
+        AgentTurnStatus::Interrupting,
+    ] {
+        assert!(!turn_log::has_ended(status), "{status:?}");
+    }
+}
+
+#[tokio::test]
+async fn send_opens_the_live_stream_before_admitting_the_turn() {
+    let delivered = json!({ "type": "session.inbox.delivered", "data": { "sessionID": "ses_test", "inboxID": "PLACEHOLDER" } });
+    let (session, requests) = scripted_session(vec![
+        event_response(&[delivered]),
+        ok(json!({ "data": { "type": "user", "delivery": "queue" } })),
+    ]);
+
+    let state = session
+        .send("hello", &AgentSendOptions::default())
+        .await
+        .unwrap();
+
+    let lines = request_lines(&requests);
+    assert!(lines[0].starts_with("GET /api/event "), "{lines:?}");
+    assert!(
+        lines[1].starts_with("POST /api/session/ses_test/prompt "),
+        "{lines:?}"
+    );
+    assert!(
+        session.opened.take(&state.id).is_some(),
+        "the stream is kept for the turn"
+    );
+    assert!(
+        session.opened.take(&state.id).is_none(),
+        "and handed out once"
+    );
 }
