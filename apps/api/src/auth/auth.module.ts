@@ -22,6 +22,10 @@ import { LogoutController } from './logout.controller'
 import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
 import { McpDelegation } from './mcp-delegation'
+import { RegistrationController } from './registration.controller'
+import { RegistrationService } from './registration.service'
+import { RegistrationJwtGuard } from './registration-jwt.guard'
+import { TurnstileService } from './turnstile.service'
 @Module({
   imports: [
     PassportModule.register({
@@ -35,8 +39,11 @@ import { McpDelegation } from './mcp-delegation'
     BoxModule,
     RegionModule,
   ],
-  controllers: [LogoutController, AccountLinkController],
+  controllers: [LogoutController, AccountLinkController, RegistrationController],
   providers: [
+    RegistrationService,
+    RegistrationJwtGuard,
+    TurnstileService,
     AccountLinkService,
     ApiKeyStrategy,
     {
@@ -69,7 +76,6 @@ import { McpDelegation } from './mcp-delegation'
             jwksUri: jwksUri,
           },
           userService,
-          configService,
           loginEvents,
         )
       },

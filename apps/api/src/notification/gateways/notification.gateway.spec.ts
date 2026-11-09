@@ -42,6 +42,7 @@ function connect(options: {
     apiKeyStrategy as never,
     organizationUserService as never,
     {} as never,
+    { findOne: jest.fn(async (id: string) => ({ id })) } as never,
   )
 
   let middleware: Middleware | undefined
@@ -135,7 +136,7 @@ describe('NotificationGateway eviction', () => {
   it("takes every socket of the user out of the organization's room", () => {
     const socketsLeave = jest.fn()
     const serverIn = jest.fn(() => ({ socketsLeave }))
-    const gateway = new NotificationGateway({} as never, {} as never, {} as never, {} as never)
+    const gateway = new NotificationGateway({} as never, {} as never, {} as never, {} as never, {} as never)
     gateway.server = { in: serverIn } as unknown as Server
 
     gateway.leaveOrganizationRoom('user-2', 'org-1')

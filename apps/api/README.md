@@ -36,10 +36,13 @@ The secret, allowed hostnames and verification timeout remain server-side. Resta
 the API to change a widget configuration; the dashboard reads it at runtime.
 Test and OpenAPI-generation fixtures supply explicit placeholder credentials.
 
-
 ## Registration email policy
 
-The first API request from a new OIDC identity requires an email address.
+New OIDC identities complete local registration through `POST /api/auth/register`,
+using an API-audience Access Token and a `turnstileToken` string of 1–2048 characters.
+Ordinary JWT-authenticated requests return `403 registration_required` until that
+account exists. Database-account email verification remains an Auth0 Action responsibility.
+The API's registration email policy requires an email address for a new local user.
 `UserService.create` trims and lowercases each non-empty email, validates its syntax,
 then rejects disposable domains before generating keys, persisting the user or creating a default organization.
 This covers database, social and enterprise OIDC identities, CLI authentication and administrator-created users.
@@ -67,6 +70,19 @@ organization failure rolls back the user. Creating a duplicate user ID returns
 `409 user_already_exists` without replacing data; other database errors retain their
 original behavior. Concurrent attempts can commit only one user and default organization.
 
+## First local registration
+
+Registration verifies the challenge server-side, including its hostname and `signup`
+action, before inserting the user and creating their default organization in one
+transaction. A new account returns `201 UserDto`; an existing identity returns `200`
+without validating the challenge again. Both require a valid JWT and request body.
+
+Challenge rejection returns `403 turnstile_verification_failed`; verification service
+failure returns `503 turnstile_unavailable`. Neither creates a local account. The
+internal registration endpoint is excluded from public Swagger and MCP tools.
+Existing users, including MCP tokens without profile claims, keep their local profile
+and existing permissions. New MCP users first complete registration in Dashboard.
+Notification connections check local user existence before joining rooms.
 
 ## Box startup timeouts
 

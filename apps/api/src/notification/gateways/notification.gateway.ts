@@ -25,6 +25,7 @@ import { RunnerDto } from '../../box/dto/runner.dto'
 import { RunnerState } from '../../box/enums/runner-state.enum'
 import { RunnerEvents } from '../../box/constants/runner-events'
 import { NotificationEmitter } from './notification-emitter.abstract'
+import { UserService } from '../../user/user.service'
 
 @WebSocketGateway({
   path: '/api/socket.io/',
@@ -41,6 +42,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
     private readonly apiKeyStrategy: ApiKeyStrategy,
     private readonly organizationUserService: OrganizationUserService,
     @InjectRedis() private readonly redis: Redis,
+    private readonly userService: UserService,
   ) {
     super()
   }
@@ -64,7 +66,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
       // Try JWT authentication first
       try {
         const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
-        if (!userId) {
+        if (!userId || !(await this.userService.findOne(userId))) {
           return next(new UnauthorizedException())
         }
 

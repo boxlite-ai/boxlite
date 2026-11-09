@@ -149,7 +149,6 @@ describe('Domain acquisition authorization', () => {
             new JwtStrategy(
               { issuer, audience, jwksUri: `${issuer}/jwks` },
               users as never,
-              config as never,
               { recordFirstUse: async () => undefined } as never,
             ),
         },
