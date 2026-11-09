@@ -12,9 +12,9 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::credential::{AccessToken, Credential};
-use super::error::{map_http_body, map_plain_reply};
+use super::error::{map_create_box_error, map_http_body, map_plain_reply};
 use super::options::BoxliteRestOptions;
-use super::types::ServerConfig;
+use super::types::{BoxResponse, CreateBoxRequest, ServerConfig};
 use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
@@ -203,12 +203,22 @@ impl ApiClient {
     /// is bounded to 4 KiB so a runaway HTML error page can't blow up
     /// terminal output.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
+        self.send_json_with_error_mapper(builder, map_http_body)
+            .await
+    }
+
+    async fn send_json_with_error_mapper<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+        map_error: fn(StatusCode, &str) -> BoxliteError,
+    ) -> BoxliteResult<T> {
         let builder = self.authorize(builder).await?;
         let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if !status.is_success() {
-            return self.handle_error(status, resp).await;
+            let text = resp.text().await.unwrap_or_default();
+            return Err(map_error(status, &text));
         }
         // Read the body as bytes once, then parse; this is what lets us
         // include the body in a parse-failure error without re-issuing the
@@ -286,6 +296,19 @@ impl ApiClient {
     ) -> BoxliteResult<T> {
         let builder = self.http.post(self.url(path)).json(body);
         self.send_json(builder).await
+    }
+
+    pub async fn create_box(&self, request: &CreateBoxRequest) -> BoxliteResult<BoxResponse> {
+        let map_error = if request.cpu_limit.is_some() {
+            map_create_box_error
+        } else {
+            map_http_body
+        };
+        self.send_json_with_error_mapper(
+            self.http.post(self.url("/boxes")).json(request),
+            map_error,
+        )
+        .await
     }
 
     pub async fn post_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {
@@ -569,15 +592,6 @@ impl ApiClient {
             )
         })?;
         ensure_capability("snapshots", capabilities.snapshots_enabled)
-    }
-
-    pub async fn require_cpu_limit_enabled(&self) -> BoxliteResult<()> {
-        // Recheck each create: an older server could silently ignore the limit.
-        let config = self.fetch_config().await?;
-        ensure_capability(
-            "CPU limit",
-            config.capabilities.and_then(|caps| caps.cpu_limit_enabled),
-        )
     }
 
     pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {

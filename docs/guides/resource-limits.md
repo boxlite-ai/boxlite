@@ -102,7 +102,7 @@ Boot and device I/O share the budget, so very low limits can reach existing star
 | Invalid numbers | Reject zero, negatives, NaN, infinity, excessive precision, and values above resolved CPUs |
 | Host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; rootless hosts need CPU delegation |
 | Enforcement failure | Refuse startup before Guest execution if the quota or process membership cannot be applied |
-| macOS | Explicit local limits return `Unsupported`; a REST client follows the server's capabilities |
+| macOS | Explicit limits return `Unsupported`, including through the public REST runtime API |
 | Existing host limits | The stricter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` meaning is unchanged |
 | Information queries | Report the configured limit, not CPU usage or a stricter effective ancestor/legacy limit |
 
@@ -121,8 +121,11 @@ An explicit limit on `get_or_create` must equal the saved limit; omission preser
 | CLI | `boxlite create --cpus 2 --cpu-limit 0.5 alpine` | `boxlite inspect` → `CpuLimit` |
 | REST/serve | `{"image":"alpine","cpus":2,"cpu_limit":0.5}` | Box response `cpu_limit` |
 
-REST clients require a fresh `cpu_limit_enabled: true` capability before sending an explicit limit.
-Older or Cloud servers without that capability are rejected; this feature does not add Cloud scheduling or billing support.
+REST clients send explicit limits directly in `POST /boxes`, without a CPU-specific `/config` request.
+Servers that reject the top-level field as unknown return an SDK `Unsupported` error naming `cpu_limit` and the refusal reason.
+For example, Cloud's `property cpu_limit should not exist` becomes `Field 'cpu_limit' is not supported by this server: property cpu_limit should not exist`.
+The client never removes the limit or retries creation; value-validation errors and unrelated server errors retain their original classification.
+Other features may still use `/config`; this feature does not add Cloud scheduling or billing support.
 The C query preserves existing structure layouts; Go info/list methods perform an additional lookup per Box using its immutable ID.
 
 Immutable configuration stores integer `cpu_limit_millicpu`; public requests and queries use numeric cores.

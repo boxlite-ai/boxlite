@@ -41,6 +41,73 @@ pub(crate) fn map_http_body(status: StatusCode, text: &str) -> BoxliteError {
     }
 }
 
+/// Only explicit CPU-limited creates interpret a strict schema's field refusal.
+/// Keep typed server errors authoritative and never infer support from a value
+/// validation error or a field name merely appearing in an expected-fields list.
+pub(crate) fn map_create_box_error(status: StatusCode, text: &str) -> BoxliteError {
+    if !matches!(status.as_u16(), 400 | 422) {
+        return map_http_body(status, text);
+    }
+    let body = serde_json::from_str::<serde_json::Value>(text).ok();
+    let envelope = body.as_ref().map(|body| {
+        body.get("error")
+            .filter(|error| error.is_object())
+            .unwrap_or(body)
+    });
+    match envelope.and_then(|error| error.get("code")) {
+        None | Some(serde_json::Value::Null) => {}
+        Some(serde_json::Value::String(code)) if code.is_empty() || code == "invalid_argument" => {}
+        _ => return map_http_body(status, text),
+    }
+    let message = envelope
+        .and_then(|error| error.get("message"))
+        .and_then(|message| message.as_str())
+        .unwrap_or(text);
+    let reason = cpu_limit_field_refusal(message).or_else(|| {
+        // Pydantic identifies the exact location separately; never include its
+        // `input` value, which may contain caller data unrelated to the refusal.
+        body.as_ref()?
+            .get("detail")?
+            .as_array()?
+            .iter()
+            .find_map(|error| {
+                let location = error.get("loc")?.as_array()?;
+                (error.get("type")?.as_str()? == "extra_forbidden"
+                    && location.len() == 2
+                    && location[0] == "body"
+                    && location[1] == "cpu_limit")
+                    .then(|| {
+                        error
+                            .get("msg")
+                            .and_then(|msg| msg.as_str())
+                            .unwrap_or("extra fields are not permitted")
+                    })
+            })
+    });
+    match reason {
+        Some(reason) => BoxliteError::Unsupported(format!(
+            "Field 'cpu_limit' is not supported by this server: {reason}"
+        )),
+        None => map_http_body(status, text),
+    }
+}
+
+fn cpu_limit_field_refusal(message: &str) -> Option<&str> {
+    let message = message
+        .strip_prefix("Failed to deserialize the JSON body into the target type: ")
+        .unwrap_or(message);
+    // Axum includes the root serde_path_to_error location; a nested location
+    // must not be mistaken for the top-level creation field.
+    let message = message.strip_prefix("cpu_limit: ").unwrap_or(message);
+    if message.starts_with("unknown field `cpu_limit`,") {
+        return Some(message);
+    }
+    message
+        .split(',')
+        .map(str::trim)
+        .find(|clause| *clause == "property cpu_limit should not exist")
+}
+
 /// Shared by both envelope shapes: a recognized `code` names the variant,
 /// otherwise the status does. Which fallback applies when neither knows the
 /// status depends on what the body left out, and the two cases are not the
@@ -103,10 +170,11 @@ fn refine_by_code(code: &str, msg: &str) -> Option<BoxliteError> {
 /// takes the most general of them — only an explicit `code` singles out the
 /// others.
 ///
-/// A status the server only ever answers with a code attached gets no arm
-/// (410 is always `session_reaped`; 422 always `image_pull_failed` or
-/// `execution_failed`): inventing a baseline would hand callers a class no
-/// server here states. 5xx is absent by the same rule — what an unavailable
+/// Statuses without an unambiguous baseline get no arm here: 410 always names
+/// `session_reaped`, while 422 can be validation, `image_pull_failed`, or
+/// `execution_failed`. Inventing a 422 baseline would conflate those errors.
+/// CPU-limit field rejection is handled by the scoped creation mapper above.
+/// 5xx is absent by the same rule — what an unavailable
 /// server deserves is decided by its caller, not by this table.
 fn refine_by_status(status: StatusCode, text: &str) -> Option<BoxliteError> {
     let msg = text.to_string();

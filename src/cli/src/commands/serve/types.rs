@@ -357,7 +357,6 @@ pub(super) struct ServerConfig {
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
-    pub cpu_limit_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
