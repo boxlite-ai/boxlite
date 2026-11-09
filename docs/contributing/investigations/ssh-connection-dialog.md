@@ -109,8 +109,9 @@ or unavailable storage falls back to component state. A remembered path is not p
 that the file exists or that authentication will succeed.
 
 The proxy command retains the existing
-`boxlite --path-prefix=… ssh --proxy -- BOX` syntax and current CLI context. CLI login
-uses the selected API endpoint; credentials are never embedded in copied commands.
+`boxlite --path-prefix=… ssh --proxy -- BOX` operation with an explicit context
+for the Dashboard endpoint. CLI login uses that same context and API endpoint;
+credentials are never embedded in copied commands.
 Path handling supports `~/`, spaces, quotes, backslashes and literal percent signs
 while rejecting control characters and `${...}` expansion. Shell quoting and
 OpenSSH token expansion are both accounted for. Relative paths resolve in the local
@@ -141,9 +142,9 @@ requested during a mutation is deferred until the mutation has committed its
 response; scope changes, permission loss, stopped boxes and unmount still invalidate
 pending work. This prevents a pre-commit read from discarding a successful Disable.
 
-Reset retains the current key and path until inbound access is ready. Its newly
-generated key stays local until the configuration POST is about to begin; failure
-before that point cannot discard the key for the unchanged server configuration.
+Reset retains the current key and path while inbound access is prepared and the
+configuration POST runs. The proposed replacement stays separately in memory until
+an enabled status exposes its host identity; failures retain both keys.
 An explicit Reset action is also available after preparation fails, using the same
 replacement confirmation and permission guards as the connection guide.
 
@@ -155,7 +156,7 @@ for a newer path. Missing-configuration recognition accepts complete known diagn
 including verified transport wrappers, and rejects missing-component diagnostics.
 
 The copied login and proxy commands both remove `BOXLITE_REST_URL` from their child
-environment before invoking the CLI, preserving the current context for both commands.
+environment before invoking the CLI and select the same endpoint-specific context.
 Relative filenames equal to `none`, case-insensitively, receive a `./` prefix so
 OpenSSH does not interpret them as disabling the identity file. The mock additionally
 requires a nonempty private-key block before accepting a generated-key envelope.
@@ -184,11 +185,42 @@ and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
 On the main-based branch, the Dashboard suite passed all 97 test files
-and 839 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+and 850 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
 inner border at desktop and narrow widths, with no horizontal content overflow;
 the title keeps its position relative to the dialog while the body scrolls.
+
+### Recovery after configuration changes
+
+An external generation change observed while SSH is disabled remains pending until
+an enabled status can expose the host identity. Re-enabling the listener does not
+silence the authorization warning for a retained client key. A local Disable alone
+is not evidence that another client changed authorization.
+
+Reset keeps the existing private key and path while holding the proposed replacement
+in memory separately. A rejected or indeterminate configuration POST therefore does
+not destroy the only copy of either key. A later enabled status selects the matching
+host identity; if it matches the proposed replacement, the guide adopts that key and
+clears the previous path. An unresolved replacement remains downloadable and is reused
+for an explicitly confirmed retry. Merely observing the old host does not discard the
+candidate: a timed-out request may still finish. No recovery read submits Setup unless
+Enable reports an exact missing-configuration diagnostic. Both keys remain memory-only.
+
+Login and ProxyCommand explicitly select a context named `dashboard:<endpoint>`.
+The full normalized endpoint supplies a deterministic, collision-free name without
+changing the user's current context or overwriting unrelated profiles. Both commands
+remove `BOXLITE_REST_URL`; explicit `--context` overrides ambient context selectors.
+This prevents an ordinary context switch or login in another terminal from redirecting
+the proxy. Deliberately modifying the same named context can still change its endpoint:
+the current CLI cannot pin an arbitrary context and URL together, so that stronger
+contract would require a CLI change outside this frontend revision.
+
+Regression checks cover disabled-generation warnings, Setup rejection before changes,
+indeterminate Setup followed by either old or replacement host identity, retained key
+downloads, and matching explicit contexts despite ambient overrides. OpenSSH identity
+checks verify the generated public key and actual identity-file loading without relying
+on the version-specific numeric key-type enum.
 
 ### Before
 

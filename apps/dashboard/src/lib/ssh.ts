@@ -131,9 +131,11 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   }
   const url = new URL(apiUrl, window.location.origin)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid API URL')
-  // Login writes the selected context, but an ambient REST URL makes ordinary
-  // CLI commands select default instead. Keep both commands on the same context.
-  const cli = 'env -u BOXLITE_REST_URL boxlite'
+  const endpoint = url.href.replace(/\/$/, '')
+  // A dedicated context keeps saved/ambient context changes from redirecting SSH.
+  // Login and proxy select the same endpoint-specific credentials without changing
+  // the user's current context or overwriting their default profile.
+  const cli = `env -u BOXLITE_REST_URL boxlite --context ${quote(`dashboard:${endpoint}`)}`
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
   const proxy = `${cli} --path-prefix=${quote(organizationId)} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`
@@ -152,7 +154,6 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
       ? `-o ${quote(`IdentityFile="${path.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`)}`
       : `-i ${shellPath(path)}`
   }
-  const endpoint = url.href.replace(/\/$/, '')
   return {
     filename,
     endpoint,

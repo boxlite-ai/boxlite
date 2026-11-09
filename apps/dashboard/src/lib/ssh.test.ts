@@ -112,7 +112,21 @@ describe('SSH connection instructions', () => {
       )
       expect(result.error).toBeUndefined()
       expect(statSync(file).mode & 0o777).toBe(0o600)
-      expect(result.stderr).toMatch(/identity file .* type 3/)
+      const publicKey = execFileSync('ssh-keygen', ['-y', '-f', file], { encoding: 'utf8' })
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .join(' ')
+      expect(publicKey).toBe(credentials.config.accounts[0].authorized_keys[0])
+      const fingerprint = execFileSync('ssh-keygen', ['-lf', file, '-E', 'sha256'], { encoding: 'utf8' })
+        .trim()
+        .split(/\s+/)[1]
+      // Numeric key enums differ between OpenSSH versions; -1 means not loaded.
+      expect(result.stderr).toMatch(/identity file .* type [0-9]+(?:\r?\n|$)/)
+      // Newer OpenSSH also identifies the exact loaded public key.
+      if (result.stderr.includes('loaded pubkey from ')) {
+        expect(result.stderr).toContain(`: ED25519 ${fingerprint}`)
+      }
       expect(result.stderr).not.toContain('not accessible')
     } finally {
       rmSync(directory, { recursive: true, force: true })
@@ -120,7 +134,7 @@ describe('SSH connection instructions', () => {
   })
 
   it.each([undefined, 'https://override.example.test'])(
-    'keeps SSH login and proxy on the current context with URL override %s',
+    'pins login and proxy to the Dashboard context with URL override %s',
     async (override) => {
       vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
       const commands = sshConnectionInstructions('https://api.example.test', 'org-1', 'box-1')
@@ -144,6 +158,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
         const env: NodeJS.ProcessEnv = {
           ...process.env,
           BOXLITE_CONTEXT: 'selected-context',
+          BOXLITE_PROFILE: 'legacy-context',
           PATH: `${directory}:${process.env.PATH}`,
           SSH_PROXY_RECORD: record,
         }
@@ -172,15 +187,51 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
           {
             url: null,
             context: 'selected-context',
-            args: ['auth', 'login', '--url', 'https://api.example.test', '--method', 'api-key'],
+            args: [
+              '--context',
+              'dashboard:https://api.example.test',
+              'auth',
+              'login',
+              '--url',
+              'https://api.example.test',
+              '--method',
+              'api-key',
+            ],
           },
-          { url: null, context: 'selected-context', args: ['--path-prefix=org-1', 'ssh', '--proxy', '--', 'box-1'] },
+          {
+            url: null,
+            context: 'selected-context',
+            args: [
+              '--context',
+              'dashboard:https://api.example.test',
+              '--path-prefix=org-1',
+              'ssh',
+              '--proxy',
+              '--',
+              'box-1',
+            ],
+          },
         ])
       } finally {
         rmSync(directory, { recursive: true, force: true })
       }
     },
   )
+
+  it('uses distinct contexts for endpoints and normalizes a trailing slash', () => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
+    for (const endpoint of [
+      'https://api.example.test',
+      'http://api.example.test',
+      'https://api.example.test:8443',
+      'https://api.example.test/team',
+    ]) {
+      const command = sshConnectionInstructions(endpoint, 'org', 'box-1')
+      expect(command.login).toContain(`--context 'dashboard:${endpoint}'`)
+      expect(command.connect).toContain(`dashboard:${endpoint}`)
+      expect(sshConnectionInstructions(`${endpoint}/`, 'org', 'box-1')).toEqual(command)
+    }
+  })
 
   it.each(['', ' ', '~/bad\nkey', '~other/key', '${HOME}/key'])('rejects ambiguous SSH key path %j', (path) => {
     vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
@@ -193,7 +244,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
     const commands = build('/api', 'org', 'box-1', '/tmp/my private key')
     expect(commands.connect).toContain("chmod 600 '/tmp/my private key'")
     expect(commands.connect).toContain("ssh -i '/tmp/my private key'")
-    expect(commands.connect).not.toContain('--context')
+    expect(commands.connect).toContain('--context')
   })
 
   it('keeps ordinary IDs readable with only the outer ProxyCommand quotes', () => {
@@ -201,7 +252,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
     const commands = sshConnectionInstructions('https://api.example.test', 'mock-org-00000000', 'mock-box-running')
     expect(commands.connect).toBe(
       'chmod 600 boxlite-mock-box-running-key\n' +
-        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=env -u BOXLITE_REST_URL boxlite --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
+        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=env -u BOXLITE_REST_URL boxlite --context '\"'\"'dashboard:https://api.example.test'\"'\"' --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
     )
   })
 
@@ -231,6 +282,8 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
       expect(result.error).toBeUndefined()
       expect(result.status).not.toBe(0) // The recording proxy cannot finish an SSH handshake.
       expect(readFileSync(record, 'utf8').split('\0').filter(Boolean)).toEqual([
+        '--context',
+        `dashboard:${apiUrl}`,
         `--path-prefix=${organization}`,
         'ssh',
         '--proxy',
@@ -244,7 +297,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
     expect(commands.connect).toContain('box@boxlite-box-1')
     expect(commands.connect).not.toContain('--listen')
     expect(commands.connect).not.toContain('--url')
-    expect(commands.connect).not.toContain('--context')
+    expect(commands.connect).toContain('--context')
     expect(commands.connect).not.toContain('StrictHostKeyChecking=no')
   })
 

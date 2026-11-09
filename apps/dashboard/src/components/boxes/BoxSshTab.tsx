@@ -87,6 +87,8 @@ function SshControls({
   const [open, setOpen] = useState(false)
   const [credentials, setCredentials] = useState<SshCredentials>()
   const credentialsRef = useRef<SshCredentials | undefined>(undefined)
+  const [replacementCredentials, setReplacementCredentials] = useState<SshCredentials>()
+  const replacementRef = useRef<SshCredentials | undefined>(undefined)
   const [identityNotice, setIdentityNotice] = useState('')
   const [remembered] = useState(() => readSshPreferences(preferenceKey))
   const [cliExpanded, setCliExpanded] = useState(true)
@@ -95,6 +97,7 @@ function SshControls({
   const [confirmSetup, setConfirmSetup] = useState<'reset'>()
   const pathHost = useRef(remembered.hostPublicKey ?? '')
   const observedGeneration = useRef<number | undefined>(undefined)
+  const authorizationChanged = useRef(false)
   const [statusRefresh, setStatusRefresh] = useState(0)
   const keyPathId = useId()
   const busy = useRef(false)
@@ -117,32 +120,45 @@ function SshControls({
     setCredentials(next)
   }, [])
 
+  const cacheReplacement = useCallback((next: SshCredentials | undefined) => {
+    replacementRef.current = next
+    setReplacementCredentials(next)
+  }, [])
+
   const observeStatus = useCallback(
     (next: SshStatus, ownMutation = false) => {
+      if (!ownMutation && observedGeneration.current !== undefined && observedGeneration.current !== next.generation) {
+        authorizationChanged.current = true
+      }
       if (next.enabled && next.host_public_key) {
+        if (replacementRef.current?.hostPublicKey === next.host_public_key) {
+          cacheCredentials(replacementRef.current)
+          cacheReplacement(undefined)
+          setKeyPath('')
+          pathHost.current = next.host_public_key
+          rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
+          setIdentityNotice('')
+          authorizationChanged.current = false
+        }
         const obsoleteCredentials =
           credentialsRef.current && credentialsRef.current.hostPublicKey !== next.host_public_key
         if (obsoleteCredentials || (pathHost.current && next.host_public_key !== pathHost.current)) {
           setKeyPath('')
           rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
           setIdentityNotice('SSH configuration changed. Enter the private key path for the current configuration.')
-        } else if (
-          !ownMutation &&
-          pathHost.current === next.host_public_key &&
-          observedGeneration.current !== undefined &&
-          observedGeneration.current !== next.generation
-        ) {
+        } else if (pathHost.current === next.host_public_key && authorizationChanged.current) {
           setIdentityNotice('SSH settings changed. Make sure this key is still authorized for this box.')
         }
         // Clear synchronously: an async continuation must not reuse a superseded key.
         if (obsoleteCredentials) cacheCredentials(undefined)
         pathHost.current = next.host_public_key
+        authorizationChanged.current = false
       }
       observedGeneration.current = next.generation
       setStatus(next)
       setStatusError('')
     },
-    [cacheCredentials, preferenceKey],
+    [cacheCredentials, cacheReplacement, preferenceKey],
   )
 
   // Ordinary refreshes defer to mutations; only lifecycle changes cancel them.
@@ -224,13 +240,15 @@ function SshControls({
           } catch (error) {
             if (version !== requestVersion.current) return
             if (sshFailureReason(error) !== 'missing-config') throw error
-            const keys = credentialsRef.current ?? (await generateSshCredentials())
+            const keys = replacementRef.current ?? credentialsRef.current ?? (await generateSshCredentials())
             if (version !== requestVersion.current) return
-            cacheCredentials(keys)
-            pathHost.current = keys.hostPublicKey
-            setKeyPath('')
-            setIdentityNotice('')
-            rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
+            if (!replacementRef.current) {
+              cacheCredentials(keys)
+              pathHost.current = keys.hostPublicKey
+              setKeyPath('')
+              setIdentityNotice('')
+              rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
+            }
             setupAttempted = true
             next = await requestSsh(api, organizationId, box.id, 'setup', keys.config)
           }
@@ -241,7 +259,7 @@ function SshControls({
         return
       }
       if (operation === 'reset') {
-        const keys = await generateSshCredentials()
+        const keys = replacementRef.current ?? (await generateSshCredentials())
         if (version !== requestVersion.current) return
         setConfirmSetup(undefined)
         if (box.network?.inbound.mode === NetworkMode.DISABLED) {
@@ -255,11 +273,8 @@ function SshControls({
           }
           if (version !== requestVersion.current) return
         }
-        cacheCredentials(keys)
-        pathHost.current = keys.hostPublicKey
-        setKeyPath('')
-        setIdentityNotice('')
-        rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
+        // A failed POST may have committed. Keep both keys until the host identifies the replacement.
+        cacheReplacement(keys)
         setupAttempted = true
         const next = await requestSsh(api, organizationId, box.id, 'setup', keys.config)
         if (version !== requestVersion.current) return
@@ -302,12 +317,12 @@ function SshControls({
     }
   }
 
-  function download() {
-    if (!credentials || !instructions) return
-    const url = URL.createObjectURL(new Blob([credentials.privateKey], { type: 'application/octet-stream' }))
+  function download(keys = credentials, replacement = false) {
+    if (!keys || !instructions) return
+    const url = URL.createObjectURL(new Blob([keys.privateKey], { type: 'application/octet-stream' }))
     const link = document.createElement('a')
     link.href = url
-    link.download = instructions.filename
+    link.download = `${instructions.filename}${replacement ? '-replacement' : ''}`
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -434,6 +449,16 @@ function SshControls({
                 </Button>
               </div>
             )}
+            {replacementCredentials && (
+              <div className="mb-5 space-y-2">
+                <p className="text-muted-foreground">
+                  Keep the replacement key until the SSH configuration is confirmed.
+                </p>
+                <Button variant="outline" onClick={() => download(replacementCredentials, true)}>
+                  Download replacement key
+                </Button>
+              </div>
+            )}
             {confirmSetup ? (
               <div className="space-y-5">
                 <p>
@@ -457,7 +482,7 @@ function SshControls({
                   disconnects existing clients.
                 </p>
                 {credentials && (
-                  <Button variant="outline" onClick={download}>
+                  <Button variant="outline" onClick={() => download()}>
                     Download private key
                   </Button>
                 )}
@@ -518,7 +543,7 @@ function SshControls({
                     title={<label htmlFor={keyPathId}>Private key path</label>}
                     action={
                       credentials ? (
-                        <Button variant="outline" onClick={download}>
+                        <Button variant="outline" onClick={() => download()}>
                           Download private key
                         </Button>
                       ) : undefined

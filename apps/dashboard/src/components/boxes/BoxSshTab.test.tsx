@@ -686,6 +686,117 @@ describe('BoxSshTab access and connection', () => {
     expect(document.querySelector('input')!.value).toBe('/tmp/saved-key')
   })
 
+  it('retains an authorization warning observed while disabled through local Enable', async () => {
+    await firstSetup()
+    await fillPath('/tmp/saved-key')
+    mocks.get.mockResolvedValue({
+      data: { ...status, enabled: false, generation: 3, host_public_key: '', host_key_fingerprint: '' },
+    })
+    await render(BoxState.STARTED, 'box-1', 1)
+    mocks.post.mockResolvedValueOnce({ data: { ...status, generation: 4 } })
+    await toggleSsh()
+    expect(document.body.textContent).toContain('Make sure this key is still authorized')
+    expect(document.querySelector('input')!.value).toBe('/tmp/saved-key')
+  })
+
+  it.each(['old host', 'replacement host'])(
+    'retains both keys after rejected Reset until observing %s',
+    async (host) => {
+      await firstSetup()
+      await fillPath('/tmp/original-key')
+      const replacement = {
+        ...credentials,
+        hostPublicKey: 'replacement-host',
+        privateKey: 'replacement-client-key',
+        config: { ...credentials.config, host_private_key: 'replacement-host-key' },
+      }
+      mocks.generate.mockResolvedValueOnce(replacement)
+      mocks.post.mockRejectedValueOnce(new Error('request rejected or response lost'))
+      await click('Reset SSH configuration…')
+      await click('Reset SSH configuration')
+      const filenames: string[] = []
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+        filenames.push(this.download)
+      })
+      await click('Download private key')
+      const readBlob = (blob: Blob) =>
+        new Promise<string>((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.readAsText(blob)
+        })
+      expect(await readBlob(blobs[0])).toBe(credentials.privateKey)
+      await click('Download replacement key')
+      expect(await readBlob(blobs[1])).toBe(replacement.privateKey)
+      expect(filenames).toEqual(['boxlite-box-1-key', 'boxlite-box-1-key-replacement'])
+      const writesBefore = mocks.post.mock.calls.length
+      mocks.get.mockResolvedValue({
+        data: host === 'old host' ? status : { ...status, host_public_key: replacement.hostPublicKey },
+      })
+      await click('Refresh status')
+      await confirmAccess()
+      await click('Download private key')
+      expect(await readBlob(blobs[2])).toBe(host === 'old host' ? credentials.privateKey : replacement.privateKey)
+      expect(document.querySelector('input')!.value).toBe(host === 'old host' ? '/tmp/original-key' : '')
+      expect(mocks.post).toHaveBeenCalledTimes(writesBefore)
+      if (host === 'old host') {
+        expect(button('Download replacement key')).toBeDefined()
+        mocks.get.mockResolvedValue({ data: { ...status, host_public_key: replacement.hostPublicKey } })
+        await render(BoxState.STARTED, 'box-1', 1)
+        await click('Download private key')
+        expect(await readBlob(blobs[3])).toBe(replacement.privateKey)
+        expect(document.querySelector('input')!.value).toBe('')
+      }
+    },
+  )
+
+  it.each(['confirmed Reset', 'missing configuration'])(
+    'reuses the unresolved replacement for %s without generating a third key',
+    async (retry) => {
+      await firstSetup()
+      const replacement = {
+        ...credentials,
+        hostPublicKey: 'replacement-host',
+        privateKey: 'replacement-key',
+        config: { ...credentials.config, host_private_key: 'replacement-host-key' },
+      }
+      mocks.generate.mockResolvedValueOnce(replacement)
+      mocks.post.mockRejectedValueOnce(new Error('response lost'))
+      await click('Reset SSH configuration…')
+      await click('Reset SSH configuration')
+      const submittedConfig = mocks.post.mock.calls.at(-1)![1]
+      mocks.post.mockResolvedValue({ data: { ...status, host_public_key: replacement.hostPublicKey } })
+      if (retry === 'confirmed Reset') {
+        await click('Reset SSH configuration…')
+        await click('Reset SSH configuration')
+      } else {
+        disabledStatus()
+        mocks.post.mockRejectedValueOnce(missingConfig)
+        await click('Refresh status')
+        await confirmAccess()
+      }
+      expect(mocks.generate).toHaveBeenCalledTimes(2)
+      expect(mocks.post).toHaveBeenLastCalledWith('v1/org-1/boxes/box-1/ssh', submittedConfig, { timeout: 30_000 })
+      expect(button('Download private key')).toBeDefined()
+      expect(document.body.textContent).not.toContain('Download replacement key')
+      const saved = Object.keys(sessionStorage)
+        .map((key) => sessionStorage.getItem(key))
+        .join('')
+      expect(saved).not.toContain(credentials.privateKey)
+      expect(saved).not.toContain(replacement.privateKey)
+    },
+  )
+
+  it('does not infer an authorization change from its own Disable and Enable', async () => {
+    await firstSetup()
+    await fillPath('/tmp/saved-key')
+    await toggleSsh()
+    mocks.post.mockResolvedValueOnce({ data: { ...status, generation: status.generation + 1 } })
+    await toggleSsh()
+    expect(document.body.textContent).not.toContain('Make sure this key is still authorized')
+    expect(document.querySelector('input')!.value).toBe('/tmp/saved-key')
+  })
+
   it('offers an explicit confirmed reset after Enable fails without replacing configuration on cancel', async () => {
     disabledStatus()
     await render()
