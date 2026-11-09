@@ -51,18 +51,20 @@ vi.mock('@/components/OnboardingGuideDialog', () => ({
 // Owns its own mutations and needs an ApiProvider; these tests cover the detail
 // shell, and the network panel has its own stories.
 vi.mock('./BoxNetworkSection', () => ({
-  BoxNetworkSection: () => null,
+  BoxNetworkSection: () => <div data-testid="network-section">Network settings</div>,
 }))
 
 vi.mock('./BoxSshTab', async () => {
   const { useState } = await import('react')
+  const { createPortal } = await import('react-dom')
   return {
-    BoxSshTab: () => {
+    BoxSshTab: ({ statusContainer }: { statusContainer?: HTMLDivElement | null }) => {
       const [open, setOpen] = useState(false)
       return (
         <>
           <button onClick={() => setOpen(!open)}>Connect via SSH</button>
           {open && <div>SSH controls</div>}
+          {statusContainer && createPortal(<div data-testid="ssh-status">SSH status</div>, statusContainer)}
         </>
       )
     },
@@ -206,6 +208,9 @@ describe('BoxDetails refresh', () => {
     expect(ssh).toBeDefined()
     expect(buttons.indexOf(ssh)).toBeLessThan(buttons.indexOf(stop))
     expect(document.querySelector('[role="tab"]')).toBeNull()
+    const network = document.querySelector('[data-testid="network-section"]')!
+    const sshStatus = document.querySelector('[data-testid="ssh-status"]')!
+    expect(network.nextElementSibling?.contains(sshStatus)).toBe(true)
     await act(async () => ssh.click())
     expect(document.body.textContent).toContain('SSH controls')
     await act(async () => ssh.click())

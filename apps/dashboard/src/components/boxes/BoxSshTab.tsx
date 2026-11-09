@@ -83,6 +83,7 @@ function SshControls({
   const [statusError, setStatusError] = useState('')
   const error = mutationError || statusError
   const reading = useRef(false)
+  const deferredRefresh = useRef(false)
   const [open, setOpen] = useState(false)
   const [credentials, setCredentials] = useState<SshCredentials>()
   const credentialsRef = useRef<SshCredentials | undefined>(undefined)
@@ -93,6 +94,7 @@ function SshControls({
   const [accessConfirmed, setAccessConfirmed] = useState(false)
   const [confirmSetup, setConfirmSetup] = useState<'reset'>()
   const pathHost = useRef(remembered.hostPublicKey ?? '')
+  const observedGeneration = useRef<number | undefined>(undefined)
   const [statusRefresh, setStatusRefresh] = useState(0)
   const keyPathId = useId()
   const busy = useRef(false)
@@ -116,7 +118,7 @@ function SshControls({
   }, [])
 
   const observeStatus = useCallback(
-    (next: SshStatus) => {
+    (next: SshStatus, ownMutation = false) => {
       if (next.enabled && next.host_public_key) {
         const obsoleteCredentials =
           credentialsRef.current && credentialsRef.current.hostPublicKey !== next.host_public_key
@@ -124,18 +126,38 @@ function SshControls({
           setKeyPath('')
           rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
           setIdentityNotice('SSH configuration changed. Enter the private key path for the current configuration.')
+        } else if (
+          !ownMutation &&
+          pathHost.current === next.host_public_key &&
+          observedGeneration.current !== undefined &&
+          observedGeneration.current !== next.generation
+        ) {
+          setIdentityNotice('SSH settings changed. Make sure this key is still authorized for this box.')
         }
         // Clear synchronously: an async continuation must not reuse a superseded key.
         if (obsoleteCredentials) cacheCredentials(undefined)
         pathHost.current = next.host_public_key
       }
+      observedGeneration.current = next.generation
       setStatus(next)
       setStatusError('')
     },
     [cacheCredentials, preferenceKey],
   )
 
+  // Ordinary refreshes defer to mutations; only lifecycle changes cancel them.
+  useEffect(
+    () => () => {
+      requestVersion.current++
+    },
+    [api, organizationId, box.id, box.state, canManage],
+  )
+
   useEffect(() => {
+    if (busy.current) {
+      deferredRefresh.current = true
+      return
+    }
     const version = ++requestVersion.current
     reading.current = false
     if (!running && box.state !== BoxState.STOPPED) {
@@ -165,9 +187,6 @@ function SshControls({
           setLoading(false)
         }
       })
-    return () => {
-      requestVersion.current++
-    }
   }, [api, organizationId, box.id, box.state, running, refreshSignal, statusRefresh, canManage, observeStatus])
 
   useEffect(() => {
@@ -217,43 +236,40 @@ function SshControls({
           }
         }
         if (version !== requestVersion.current) return
-        observeStatus(next)
+        observeStatus(next, true)
         setAccessConfirmed(true)
         return
       }
       if (operation === 'reset') {
         const keys = await generateSshCredentials()
         if (version !== requestVersion.current) return
-        cacheCredentials(keys)
-        pathHost.current = keys.hostPublicKey
         setConfirmSetup(undefined)
-        setKeyPath('')
-        setIdentityNotice('')
-        rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
-        setupAttempted = true
         if (box.network?.inbound.mode === NetworkMode.DISABLED) {
           try {
             await updateInbound.mutateAsync({ boxId: box.id, mode: NetworkMode.ENABLED })
           } catch {
             if (version === requestVersion.current) {
-              setAccessConfirmed(false)
-              setError(
-                'Unable to enable inbound access. Your key is kept here. Retry to check the current configuration.',
-              )
+              setError('Unable to enable inbound access. SSH configuration and your saved key are unchanged.')
             }
             return
           }
           if (version !== requestVersion.current) return
         }
+        cacheCredentials(keys)
+        pathHost.current = keys.hostPublicKey
+        setKeyPath('')
+        setIdentityNotice('')
+        rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
+        setupAttempted = true
         const next = await requestSsh(api, organizationId, box.id, 'setup', keys.config)
         if (version !== requestVersion.current) return
-        observeStatus(next)
+        observeStatus(next, true)
         setAccessConfirmed(true)
         return
       }
       const next = await requestSsh(api, organizationId, box.id, operation)
       if (version !== requestVersion.current) return
-      observeStatus(next)
+      observeStatus(next, true)
     } catch (error) {
       if (version === requestVersion.current) {
         if (operation === 'enable') {
@@ -279,6 +295,10 @@ function SshControls({
     } finally {
       busy.current = false
       setPending('')
+      if (deferredRefresh.current) {
+        deferredRefresh.current = false
+        setStatusRefresh((value) => value + 1)
+      }
     }
   }
 
@@ -309,14 +329,14 @@ function SshControls({
       pathError = 'Use a file path without control characters or ${…} variables.'
     }
   }
-  const keyConfirmed = !credentials || credentials.hostPublicKey === status?.host_public_key
+  const hostMatchesKey = !credentials || credentials.hostPublicKey === status?.host_public_key
   useEffect(() => {
-    if (!status?.enabled || pathError || !keyConfirmed) return
+    if (!status?.enabled || pathError || !hostMatchesKey) return
     // Never associate an old path with a newly observed host identity.
     if (pathHost.current && pathHost.current !== status.host_public_key) return
     pathHost.current = status.host_public_key
     rememberSshPreferences(preferenceKey, { keyPath, hostPublicKey: status.host_public_key })
-  }, [keyPath, pathError, status, keyConfirmed, preferenceKey])
+  }, [keyPath, pathError, status, hostMatchesKey, preferenceKey])
 
   const needsInbound = box.network?.inbound.mode === NetworkMode.DISABLED
   const statusRow = (
@@ -442,6 +462,11 @@ function SshControls({
                   </Button>
                 )}
                 <div className="flex flex-wrap justify-end gap-3">
+                  {mutationError && canManage && (
+                    <Button variant="link" disabled={disabled || !status} onClick={() => setConfirmSetup('reset')}>
+                      Reset SSH configuration…
+                    </Button>
+                  )}
                   <Button variant="outline" disabled={!!pending} onClick={() => setOpen(false)}>
                     Cancel
                   </Button>
@@ -530,9 +555,9 @@ function SshControls({
                       )}
                     </div>
                   </SshStep>
-                  {connect && status?.enabled && running && canManage && keyConfirmed && !needsInbound && (
+                  {connect && status?.enabled && running && canManage && hostMatchesKey && !needsInbound && (
                     <SshStep number={3} title="Connect">
-                      <SshCommand command={connect} />
+                      <SshCommand key={connect} command={connect} />
                       {keyPath.startsWith('./') && (
                         <p className="mt-2 text-muted-foreground">Run from the folder containing your key.</p>
                       )}

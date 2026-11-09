@@ -32,8 +32,10 @@ configures login `box` at guest address `0.0.0.0:22`. The client private key sta
 in memory and its downloaded file; only its public key is sent. The host private
 key is part of the guest configuration. Browser Ed25519 support and a secure
 context are required. The browser retains the generated host public key beside the
-client key so a fresh server response can identify the saved configuration. This
-public metadata is not added to the SSH POST body.
+client key so a fresh server response can identify the host. This does not prove
+that the client key remains authorized. An externally observed generation change
+with the same host displays a reminder to check authorization. This public metadata
+is not added to the SSH POST body.
 
 Failed setup retains generated credentials. Continuing always rechecks status and
 tries Enable when needed; only a new, verified missing-config response permits
@@ -41,7 +43,9 @@ resubmitting the same generated configuration. A matching host identity recovers
 configuration saved before a failed response, without another setup POST. An observed
 different enabled identity discards the obsolete cached private key and path; temporary
 disabled/empty identity status preserves them. Replacing existing configuration is
-available only through the separate Reset confirmation.
+available only through the separate Reset confirmation, including from a failed
+preparation's entry view. Reset preserves the existing key until inbound is ready
+and the replacement configuration is about to be submitted.
 
 Successful preparation opens the connection guide: CLI setup, private-key path,
 and a copyable command once the path is valid. It contains no Enable controls.
@@ -62,13 +66,18 @@ Leaving or reloading the page discards generated keys; closing/reopening the dia
 keeps them in component memory. Resetting SSH is a separate explicit confirmation.
 Cancelling a reset preserves the current key and path.
 
-The command uses `ProxyCommand=boxlite --path-prefix=… ssh --proxy -- BOX`, matching
+The command uses `ProxyCommand=env -u BOXLITE_REST_URL boxlite --path-prefix=… ssh --proxy -- BOX`, matching
 [the cloud CLI syntax](https://github.com/boxlite-ai/boxlite/pull/2327). Login uses
 the selected API endpoint and current CLI context; the proxy supplies neither
-`--context` nor `--url`. Empty/invalid paths hide the command. `~/`, spaces, quotes,
+`--context` nor `--url`. Both login and proxy remove `BOXLITE_REST_URL` from the child
+environment to avoid selecting different CLI contexts; other context selectors are
+preserved. Empty/invalid paths hide the command. `~/`, spaces, quotes,
 backslashes and literal percent signs are supported; control characters and
 `${...}` expansion are rejected. Relative paths resolve in the terminal's working
-directory. API credentials are loaded by the CLI, never embedded in commands.
+directory. A relative filename equal to `none`, case-insensitively, is prefixed with
+`./` so OpenSSH loads it as a key file. API credentials are loaded by the CLI, never
+embedded in commands. Copy feedback belongs to the displayed command; a late copy
+completion for an older path cannot mark the new command copied.
 Compare the host fingerprint before accepting it. The cloud proxy requires server
 tunnel support and inbound access; exiting SSH leaves the tunnel declaration open.
 Setup itself opens no tunnel.
@@ -79,7 +88,8 @@ members can inspect SSH status, but cannot enter the connection guide even when
 SSH and inbound are already enabled. If access changes after preparation,
 the guide hides the command and returns users to **Review access**. Mutations are
 not automatically retried. Pending operations block overlapping actions and closing;
-stale responses after refresh, stop, account, endpoint or scope changes are ignored.
+detail refreshes during mutations wait for the mutation to finish. Stale reads and
+responses after stop, permission, account, endpoint or scope changes are ignored.
 The title/close control stays fixed while the dialog body scrolls. Command lines
 wrap without changing copied content. The terminal remains mounted throughout.
 

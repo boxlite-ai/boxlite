@@ -36,7 +36,9 @@ function hostPublicBlob(privateKey: string) {
   string() // KDF name.
   string() // KDF options.
   if (uint32() !== 1) throw new Error('Invalid mock SSH key count')
-  return string()
+  const publicBlob = string()
+  if (!string().length) throw new Error('Missing mock SSH private-key block')
+  return publicBlob
 }
 
 function visibleStatus(saved: SshStatus = empty): SshStatus {

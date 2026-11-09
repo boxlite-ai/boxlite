@@ -4,6 +4,7 @@ import { isAxiosError } from 'axios'
 
 type SshPreferences = { keyPath?: string; hostPublicKey?: string }
 
+/** Read optional, nonsecret path preferences; unavailable storage never blocks connecting. */
 export function readSshPreferences(key?: string): SshPreferences {
   try {
     const value = key ? JSON.parse(sessionStorage.getItem(key) ?? '{}') : {}
@@ -16,6 +17,7 @@ export function readSshPreferences(key?: string): SshPreferences {
   }
 }
 
+/** Persist only in an authenticated scope; callers bind a validated path to its host identity. */
 export function rememberSshPreferences(key: string | undefined, update: SshPreferences) {
   if (!key) return
   try {
@@ -25,16 +27,22 @@ export function rememberSshPreferences(key: string | undefined, update: SshPrefe
   }
 }
 
+/** Classify actionable failures without interpreting partial diagnostics as permission to replace keys. */
 export function sshFailureReason(error: unknown): 'missing-config' | 'authentication' | 'permission' | 'unknown' {
   if (!isAxiosError(error)) return 'unknown'
   if (error.response?.status === 401) return 'authentication'
   if (error.response?.status === 403) return 'permission'
   const data = error.response?.data
-  const message = data?.error?.message ?? data?.message
-  // A conflict can also mean a stopped box. Only these server messages establish absence.
+  let message = data?.error?.message ?? data?.message
+  if (typeof message !== 'string') return 'unknown'
+  // map_tonic_err adds the operation and tonic's Display envelope to guest errors.
+  const wrapped =
+    /^(?:invalid state: )?SSH enable: status: FailedPrecondition, message: "([^"\\]*)", details: \[\], metadata: MetadataMap \{ headers: \{[^\r\n]*\} \}$/.exec(
+      message,
+    )
+  if (wrapped) message = wrapped[1]
   if (
-    typeof message === 'string' &&
-    /\b(?:SSH configuration is required|stored SSH configuration is missing|SSH has no saved configuration)\b/.test(
+    ['SSH configuration is required', 'stored SSH configuration is missing', 'SSH has no saved configuration'].includes(
       message,
     )
   )

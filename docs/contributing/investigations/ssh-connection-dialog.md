@@ -80,8 +80,8 @@ the host private key remains part of the existing configuration request. No cryp
 algorithm or request body changes.
 
 The browser retains the generated host public key beside the client private key.
-This metadata lets fresh GET and Enable responses establish whether a saved server
-configuration matches the key held by the browser. A failed Setup response can occur
+This metadata lets fresh GET and Enable responses compare host identity. It cannot
+establish whether a client key remains authorized. A failed Setup response can occur
 after configuration was persisted; matching identity recovers that configuration
 without posting Setup again. Enabled status by itself is insufficient evidence.
 
@@ -134,6 +134,38 @@ tunnel.
 
 ## Validation
 
+### Audit corrections
+
+Status refresh and mutation completion need separate lifetimes. A detail refresh
+requested during a mutation is deferred until the mutation has committed its
+response; scope changes, permission loss, stopped boxes and unmount still invalidate
+pending work. This prevents a pre-commit read from discarding a successful Disable.
+
+Reset retains the current key and path until inbound access is ready. Its newly
+generated key stays local until the configuration POST is about to begin; failure
+before that point cannot discard the key for the unchanged server configuration.
+An explicit Reset action is also available after preparation fails, using the same
+replacement confirmation and permission guards as the connection guide.
+
+A host-key match checks host identity, not whether a client key remains authorized.
+An externally observed generation change with the same host warns that the key may
+need authorization again without discarding a potentially valid private key. Copy
+feedback is scoped to the displayed command so late completion cannot report success
+for a newer path. Missing-configuration recognition accepts complete known diagnostics,
+including verified transport wrappers, and rejects missing-component diagnostics.
+
+The copied login and proxy commands both remove `BOXLITE_REST_URL` from their child
+environment before invoking the CLI, preserving the current context for both commands.
+Relative filenames equal to `none`, case-insensitively, receive a `./` prefix so
+OpenSSH does not interpret them as disabling the identity file. The mock additionally
+requires a nonempty private-key block before accepting a generated-key envelope.
+
+Regression checks exercise deferred mutation/refresh ordering, inbound failure before
+Reset submission, out-of-band authorization changes, recovery from Enable failure,
+pending-copy races, ambiguous diagnostics, real OpenSSH identity handling, CLI child
+environment, malformed mock envelopes and the sidebar portal's actual placement.
+The preview fingerprint is checked independently from the generated host public key.
+
 Regression coverage includes consent before writes, fresh reads and request ordering,
 exact missing-config recovery, reconnect after Disable, another client's host change,
 failed Setup recovered through matching GET or Enable, retained downloads, explicit
@@ -152,7 +184,7 @@ and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
 On the main-based branch, the Dashboard suite with coverage passed all 97 test files
-and 817 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+and 839 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
 inner border at desktop and narrow widths, with no horizontal content overflow;

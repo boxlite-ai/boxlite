@@ -82,6 +82,9 @@ describe('SSH REST boundary', () => {
 
 describe('SSH connection instructions', () => {
   it.each([
+    'none',
+    'NONE',
+    'NoNe',
     '~/space key',
     "./quote'key",
     './percent%h-key',
@@ -116,6 +119,69 @@ describe('SSH connection instructions', () => {
     }
   })
 
+  it.each([undefined, 'https://override.example.test'])(
+    'keeps SSH login and proxy on the current context with URL override %s',
+    async (override) => {
+      vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
+      const commands = sshConnectionInstructions('https://api.example.test', 'org-1', 'box-1')
+      const credentials = await generateSshCredentials()
+      const directory = mkdtempSync(join(tmpdir(), 'boxlite-ssh-context-test-'))
+      try {
+        const record = join(directory, 'calls.jsonl')
+        writeFileSync(join(directory, commands.filename), credentials.privateKey, { mode: 0o600 })
+        writeFileSync(
+          join(directory, 'boxlite'),
+          `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
+  url: process.env.BOXLITE_REST_URL ?? null,
+  context: process.env.BOXLITE_CONTEXT,
+  args: process.argv.slice(2),
+}) + '\\n');
+`,
+          { mode: 0o700 },
+        )
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          BOXLITE_CONTEXT: 'selected-context',
+          PATH: `${directory}:${process.env.PATH}`,
+          SSH_PROXY_RECORD: record,
+        }
+        delete env.BOXLITE_REST_URL
+        if (override) env.BOXLITE_REST_URL = override
+        const result = spawnSync(
+          '/bin/sh',
+          [
+            '-c',
+            `${commands.login}\n${commands.connect.replace('\nssh ', '\nssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=2 ')}`,
+          ],
+          {
+            cwd: directory,
+            env,
+            encoding: 'utf8',
+            timeout: 5000,
+          },
+        )
+        expect(result.error).toBeUndefined()
+        expect(
+          readFileSync(record, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line)),
+        ).toEqual([
+          {
+            url: null,
+            context: 'selected-context',
+            args: ['auth', 'login', '--url', 'https://api.example.test', '--method', 'api-key'],
+          },
+          { url: null, context: 'selected-context', args: ['--path-prefix=org-1', 'ssh', '--proxy', '--', 'box-1'] },
+        ])
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    },
+  )
+
   it.each(['', ' ', '~/bad\nkey', '~other/key', '${HOME}/key'])('rejects ambiguous SSH key path %j', (path) => {
     vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
     expect(() => sshConnectionInstructions('/api', 'org', 'box-1', path)).toThrow()
@@ -135,7 +201,7 @@ describe('SSH connection instructions', () => {
     const commands = sshConnectionInstructions('https://api.example.test', 'mock-org-00000000', 'mock-box-running')
     expect(commands.connect).toBe(
       'chmod 600 boxlite-mock-box-running-key\n' +
-        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=boxlite --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
+        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=env -u BOXLITE_REST_URL boxlite --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
     )
   })
 

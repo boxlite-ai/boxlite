@@ -131,16 +131,19 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   }
   const url = new URL(apiUrl, window.location.origin)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid API URL')
-  const cli = `boxlite --path-prefix=${quote(organizationId)}`
+  // Login writes the selected context, but an ambient REST URL makes ordinary
+  // CLI commands select default instead. Keep both commands on the same context.
+  const cli = 'env -u BOXLITE_REST_URL boxlite'
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
-  const proxy = `${cli} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
+  const proxy = `${cli} --path-prefix=${quote(organizationId)} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`
   let chmodPath = filename
   let identity = `-i ./${filename}`
   if (keyPath !== undefined) {
     if (!keyPath.trim() || keyPath.includes('${') || (keyPath.startsWith('~') && !keyPath.startsWith('~/')))
       throw new Error('Use a literal key path or ~/path')
-    const path = keyPath.startsWith('-') ? `./${keyPath}` : keyPath
+    // A bare "none" is OpenSSH's no-identity sentinel, not a relative filename.
+    const path = keyPath.startsWith('-') || /^none$/i.test(keyPath) ? `./${keyPath}` : keyPath
     const shellPath = (value: string) => (value.startsWith('~/') ? `"$HOME"/${quote(value.slice(2))}` : quote(value))
     chmodPath = shellPath(path)
     // -i checks the literal file before expanding percent tokens. IdentityFile
@@ -153,7 +156,7 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   return {
     filename,
     endpoint,
-    login: `boxlite auth login --url ${quote(endpoint)} --method api-key`,
+    login: `${cli} auth login --url ${quote(endpoint)} --method api-key`,
     connect: `chmod 600 ${chmodPath}\nssh ${identity} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
   }
 }

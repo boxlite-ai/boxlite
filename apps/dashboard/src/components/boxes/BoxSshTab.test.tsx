@@ -187,23 +187,36 @@ describe('BoxSshTab access and connection', () => {
     expect(document.body.textContent).toContain('curl -fsSL')
   })
 
-  it.each([{ error: { message: 'SSH configuration is required' } }, { message: 'SSH has no saved configuration' }])(
-    'creates a configuration only after consent and an exact missing-config response',
-    async (data) => {
-      disabledStatus()
-      await render()
-      await click('Connect via SSH')
-      expect(document.body.textContent).toContain('Setup replaces SSH accounts and host identity')
-      mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 400, data } })
-      await confirmAccess()
-      expect(mocks.generate).toHaveBeenCalledOnce()
-      expect(mocks.post).toHaveBeenLastCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
-      expect(button('Download private key')).toBeDefined()
-      expect(document.querySelector('input')!.value).toBe('')
-      expect(document.body.textContent).toContain('curl -fsSL')
-      expect(document.body.textContent).not.toContain('box@boxlite-box-1')
+  it.each([
+    { error: { message: 'SSH configuration is required' } },
+    { message: 'SSH has no saved configuration' },
+    { error: { message: 'stored SSH configuration is missing' } },
+    {
+      error: {
+        message:
+          'invalid state: SSH enable: status: FailedPrecondition, message: "SSH configuration is required", details: [], metadata: MetadataMap { headers: {} }',
+      },
     },
-  )
+    {
+      error: {
+        message:
+          'invalid state: SSH enable: status: FailedPrecondition, message: "SSH configuration is required", details: [], metadata: MetadataMap { headers: {"content-type": "application/grpc"} }',
+      },
+    },
+  ])('creates a configuration only after consent and an exact missing-config response', async (data) => {
+    disabledStatus()
+    await render()
+    await click('Connect via SSH')
+    expect(document.body.textContent).toContain('Setup replaces SSH accounts and host identity')
+    mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 400, data } })
+    await confirmAccess()
+    expect(mocks.generate).toHaveBeenCalledOnce()
+    expect(mocks.post).toHaveBeenLastCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
+    expect(button('Download private key')).toBeDefined()
+    expect(document.querySelector('input')!.value).toBe('')
+    expect(document.body.textContent).toContain('curl -fsSL')
+    expect(document.body.textContent).not.toContain('box@boxlite-box-1')
+  })
 
   it.each([undefined, 401, 403, 409, 503])(
     'never creates keys for an unrelated enable failure (%s)',
@@ -461,12 +474,16 @@ describe('BoxSshTab access and connection', () => {
     expect(writeText).toHaveBeenLastCalledWith(firstCommand)
 
     await fillPath('/tmp/second-key')
-    expect(copyButton.textContent).toBe('Copy')
-    const updatedCommand = commandBlock.querySelector('pre')!.textContent
+    const updatedBlock = [...document.querySelectorAll('pre')].find((pre) =>
+      pre.textContent?.includes('box@boxlite-box-1'),
+    )!.parentElement!
+    const updatedButton = updatedBlock.querySelector('button')!
+    expect(updatedButton.textContent).toBe('Copy')
+    const updatedCommand = updatedBlock.querySelector('pre')!.textContent
     expect(updatedCommand).not.toBe(firstCommand)
-    await act(async () => copyButton.click())
+    await act(async () => updatedButton.click())
     expect(writeText).toHaveBeenLastCalledWith(updatedCommand)
-    expect(copyButton.textContent).toBe('Copied')
+    expect(updatedButton.textContent).toBe('Copied')
     expect(mocks.post).not.toHaveBeenCalled()
   })
 
@@ -527,9 +544,10 @@ describe('BoxSshTab access and connection', () => {
     mocks.inbound.mockRejectedValueOnce(new Error('offline'))
     await click('Reset SSH configuration…')
     await click('Reset SSH configuration')
-    expect(button('Download private key')).toBeDefined()
-    expect(document.querySelector('input')).toBeNull()
+    expect(document.body.textContent).not.toContain('Download private key')
+    expect(document.querySelector('input')).not.toBeNull()
     expect(mocks.post).not.toHaveBeenCalled()
+    await click('Review access')
     await confirmAccess()
     expect(mocks.generate).toHaveBeenCalledOnce()
     expect(mocks.post).not.toHaveBeenCalled()
@@ -614,6 +632,114 @@ describe('BoxSshTab access and connection', () => {
     await act(async () => pending.resolve({ data: { ...status, enabled: false } }))
   })
 
+  it('defers a detail refresh until Disable commits and makes the next toggle Enable', async () => {
+    await render()
+    const pending = deferred<{ data: typeof status }>()
+    mocks.delete.mockReturnValueOnce(pending.promise)
+    await toggleSsh()
+    const readsBefore = mocks.get.mock.calls.length
+    await render(BoxState.STARTED, 'box-1', 1)
+    expect(mocks.get).toHaveBeenCalledTimes(readsBefore)
+    disabledStatus()
+    await act(async () => pending.resolve({ data: { ...status, enabled: false, host_public_key: '' } }))
+    expect(document.querySelector('[aria-label="SSH access"]')!.getAttribute('aria-checked')).toBe('false')
+    expect(mocks.get).toHaveBeenCalledTimes(readsBefore + 1)
+    await toggleSsh()
+    expect(mocks.delete).toHaveBeenCalledOnce()
+    expect(mocks.post).toHaveBeenLastCalledWith('v1/org-1/boxes/box-1/ssh/enable', undefined, { timeout: 30_000 })
+  })
+
+  it('retains the current downloadable key and path when Reset fails before configuration submission', async () => {
+    await firstSetup()
+    await fillPath('/tmp/original-key')
+    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
+    mocks.generate.mockResolvedValueOnce({
+      ...credentials,
+      privateKey: 'replacement-key',
+      hostPublicKey: 'replacement-host',
+    })
+    mocks.inbound.mockRejectedValueOnce(new Error('inbound unavailable'))
+    const writesBefore = mocks.post.mock.calls.length
+    await click('Reset SSH configuration…')
+    await click('Reset SSH configuration')
+    expect(mocks.post).toHaveBeenCalledTimes(writesBefore)
+    mocks.get.mockResolvedValue({ data: status })
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    await click('Download private key')
+    const downloaded = await new Promise<string>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.readAsText(blobs[0])
+    })
+    expect(downloaded).toBe(credentials.privateKey)
+    expect(document.querySelector('input')!.value).toBe('/tmp/original-key')
+  })
+
+  it('warns about changed client authorization when an external configuration reuses the host key', async () => {
+    await firstSetup()
+    await fillPath('/tmp/saved-key')
+    mocks.get.mockResolvedValue({ data: { ...status, generation: status.generation + 1 } })
+    await render(BoxState.STARTED, 'box-1', 1)
+    expect(document.body.textContent).toContain('Make sure this key is still authorized')
+    expect(button('Download private key')).toBeDefined()
+    expect(document.querySelector('input')!.value).toBe('/tmp/saved-key')
+  })
+
+  it('offers an explicit confirmed reset after Enable fails without replacing configuration on cancel', async () => {
+    disabledStatus()
+    await render()
+    mocks.post.mockRejectedValueOnce(new Error('listen address in use'))
+    await toggleSsh()
+    await click('Reset SSH configuration…')
+    expect(document.body.textContent).toContain('disconnects existing clients')
+    await click('Cancel')
+    expect(mocks.generate).not.toHaveBeenCalled()
+    expect(mocks.post).toHaveBeenCalledOnce()
+    await click('Reset SSH configuration…')
+    await click('Reset SSH configuration')
+    expect(mocks.post).toHaveBeenLastCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
+    expect(button('Download private key')).toBeDefined()
+  })
+
+  it.each(['success', 'failure'])('ignores a pending copy %s after the displayed command changes', async (outcome) => {
+    const pending = deferred<void>()
+    const writeText = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    await render()
+    await openConnection()
+    await fillPath('/tmp/old-key')
+    const block = [...document.querySelectorAll('pre')].find((pre) =>
+      pre.textContent?.includes('box@boxlite-box-1'),
+    )!.parentElement!
+    await act(async () => block.querySelector('button')!.click())
+    await fillPath('/tmp/new-key')
+    await act(async () => (outcome === 'success' ? pending.resolve() : pending.reject(new Error('denied'))))
+    const currentBlock = [...document.querySelectorAll('pre')].find((pre) =>
+      pre.textContent?.includes('box@boxlite-box-1'),
+    )!.parentElement!
+    expect(currentBlock.querySelector('button')!.textContent).toBe('Copy')
+    await act(async () => currentBlock.querySelector('button')!.click())
+    expect(currentBlock.querySelector('button')!.textContent).toBe('Copied')
+    expect(writeText).toHaveBeenLastCalledWith(currentBlock.querySelector('pre')!.textContent)
+  })
+
+  it.each([
+    'stored SSH configuration is missing a host private key',
+    'SSH configuration is required for this operation but could not be loaded',
+    'SSH has no saved configuration for this account',
+    'invalid state: SSH enable: status: FailedPrecondition, message: "stored SSH configuration is missing a host private key", details: [], metadata: MetadataMap { headers: {} }',
+    'invalid state: SSH enable: status: FailedPrecondition, message: "stored SSH configuration is missing a host private key", details: [], metadata: MetadataMap { headers: {"content-type": "application/grpc"} }',
+  ])('does not replace saved configuration after an ambiguous diagnostic: %s', async (message) => {
+    disabledStatus()
+    await render()
+    mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data: { error: { message } } } })
+    await openConnection()
+    expect(mocks.generate).not.toHaveBeenCalled()
+    expect(mocks.post).toHaveBeenCalledOnce()
+    expect(document.querySelector('input')).toBeNull()
+  })
+
   it.each(['status', 'inbound', 'keys'])('stops preparation if the box stops during %s', async (phase) => {
     disabledStatus()
     const pendingRead = deferred<{ data: typeof status }>()
@@ -669,13 +795,13 @@ describe('BoxSshTab access and connection', () => {
     expect(document.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it.each(['success', 'failure'])('ignores stale preparation %s after refresh', async (outcome) => {
+  it.each(['success', 'failure'])('ignores stale preparation %s after the box stops', async (outcome) => {
     disabledStatus()
     const pending = deferred<{ data: typeof status }>()
     await render()
     mocks.post.mockReturnValueOnce(pending.promise)
     await openConnection()
-    await render(BoxState.STARTED, 'box-1', 1)
+    await render(BoxState.STOPPED, 'box-1', 1)
     await act(async () =>
       outcome === 'success' ? pending.resolve({ data: status }) : pending.reject(new Error('stale')),
     )
