@@ -108,6 +108,15 @@ The `api:test` cache includes PostgreSQL and Redis hosts, ports, usernames, pass
 and the database name, so changing connection settings invalidates cached results.
 Coverage runs bypass the cache.
 
+## User creation transactions
+
+User creation inserts a new row and reads database defaults in the same transaction
+that emits the creation event and creates the default organization and owner. An
+organization failure rolls back the user. Creating a duplicate user ID returns
+`409 user_already_exists` without replacing data; other database errors retain their
+original behavior. Concurrent attempts can commit only one user and default organization.
+
+
 ## Box startup timeouts
 
 REST creation persists the Box before waiting up to 30 seconds for `STARTED`.

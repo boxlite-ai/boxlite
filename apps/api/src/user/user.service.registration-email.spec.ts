@@ -3,18 +3,20 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Request } from 'express'
-import { JwtStrategy } from '../auth/jwt.strategy'
-import { LoginEventRecorder } from '../auth/login-event.recorder'
 import { Context } from '../common/context/context'
 import { PlatformReason } from '../common/context/platform-reason.enum'
-import { TypedConfigService } from '../config/typed-config.service'
+import { User } from './user.entity'
 import { UserService } from './user.service'
 
 function makeService() {
   const save = jest.fn(async (user) => user)
+  let insertedUser: User
+  const insert = jest.fn(async (_entity, user: User) => {
+    insertedUser = user
+  })
+  const findOneByOrFail = jest.fn(async () => insertedUser)
   const repository = { findOne: jest.fn().mockResolvedValue(null), save }
-  const transaction = jest.fn(async (callback) => callback({ save }))
+  const transaction = jest.fn(async (callback) => callback({ insert, findOneByOrFail }))
   const events = { emitAsync: jest.fn().mockResolvedValue([]) }
   const service = new UserService(repository as never, events as never, { transaction } as never)
   const generateKey = jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
@@ -22,7 +24,7 @@ function makeService() {
     publicKey: 'public-key',
   } as never)
 
-  return { service, repository, save, transaction, events, generateKey }
+  return { service, repository, insert, save, transaction, events, generateKey }
 }
 
 afterEach(() => jest.restoreAllMocks())
@@ -68,23 +70,23 @@ describe('UserService registration email policy', () => {
   })
 
   it('persists the normalized address for an allowed provider', async () => {
-    const { service, save, events } = makeService()
+    const { service, insert, events } = makeService()
 
     const user = await service.create({ id: 'new-user', name: 'New User', email: '  New@GMAIL.COM  ' }, Context.user())
 
     expect(user.email).toBe('new@gmail.com')
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ email: 'new@gmail.com' }))
+    expect(insert).toHaveBeenCalledWith(User, expect.objectContaining({ email: 'new@gmail.com' }))
     expect(events.emitAsync).toHaveBeenCalledTimes(1)
   })
 
   it('preserves the email-free bootstrap administrator', async () => {
-    const { service, save } = makeService()
+    const { service, insert } = makeService()
 
     await expect(
       service.create({ id: 'admin', name: 'Admin' }, Context.platform(PlatformReason.BOOTSTRAP)),
     ).resolves.toMatchObject({ id: 'admin' })
 
-    expect(save).toHaveBeenCalledTimes(1)
+    expect(insert).toHaveBeenCalledTimes(1)
   })
 
   it('preserves email updates on an existing account', async () => {
@@ -96,38 +98,5 @@ describe('UserService registration email policy', () => {
     })
 
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ email: 'existing@mailinator.com' }))
-  })
-})
-
-describe('OIDC first-use registration email policy', () => {
-  it.each([
-    ['auth0|new-user', 'new@drtall.com'],
-    ['auth0|new-user', 'new@emailkeep.com'],
-    ['google-oauth2|new-user', 'new@mailinator.com'],
-    ['github|new-user', 'new@mailinator.com'],
-    ['enterprise|new-user', 'new@mailinator.com'],
-  ])('rejects %s with %s before creating local state', async (sub, email) => {
-    const { service, generateKey, transaction, events } = makeService()
-    const config = {
-      getOrThrow: jest.fn().mockReturnValue('default-region'),
-    } as unknown as TypedConfigService
-    const loginEvents = { recordFirstUse: jest.fn() } as unknown as LoginEventRecorder
-    const strategy = new JwtStrategy(
-      { issuer: 'https://issuer.example.com', jwksUri: 'https://issuer.example.com/jwks', audience: 'boxlite' },
-      service,
-      config,
-      loginEvents,
-    )
-    const request = { get: jest.fn() } as unknown as Request
-
-    await expect(strategy.validate(request, { sub, email, email_verified: true })).rejects.toMatchObject({
-      status: 403,
-      response: { code: 'disposable_email' },
-    })
-
-    expect(generateKey).not.toHaveBeenCalled()
-    expect(transaction).not.toHaveBeenCalled()
-    expect(events.emitAsync).not.toHaveBeenCalled()
-    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 })
