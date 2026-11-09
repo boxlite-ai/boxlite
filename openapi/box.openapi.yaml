@@ -2534,7 +2534,15 @@ components:
           type: [number, "null"]
           minimum: 0.01
           multipleOf: 0.001
-          description: Creation-only aggregate CPU time limit in cores, at most resolved cpus. Requires Linux, jailer and cgroup v2 CPU enforcement. Omitted or null preserves existing behavior. Clients send explicit limits directly without CPU capability discovery; unsupported servers must reject them, and clients never retry with the limit removed.
+          description: |
+            Creation-only aggregate CPU time limit in cores, at most resolved cpus.
+            Requires Linux, jailer and a writable cgroup v2 CPU quota.
+            Quota-write errors prevent startup; cgroup joining remains best-effort,
+            so a Box may start without the requested limit taking effect if membership fails.
+            Information queries report configuration, not proof of enforcement.
+            Omitted or null preserves existing behavior.
+            Clients send explicit limits directly without CPU capability discovery;
+            unsupported servers must reject them, and clients never retry with the limit removed.
           example: 0.5
         memory_mib:
           type: integer

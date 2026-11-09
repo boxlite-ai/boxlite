@@ -90,7 +90,8 @@ box = await runtime.create(options)
 print((await box.info()).cpu_limit)  # 0.5
 ```
 
-Both vCPUs and host VMM/device threads share this budget; it does not reserve physical cores or guarantee latency.
+When cgroup membership succeeds, both vCPUs and host VMM/device threads share this budget.
+It does not reserve physical cores or guarantee latency.
 Linux uses a 100 ms period: `0.5` writes `50000 100000` to `cpu.max`.
 Concurrent work can consume the budget early and then wait for the next period.
 Boot and device I/O share the budget, so very low limits can reach existing startup or operation timeouts.
@@ -101,10 +102,11 @@ Boot and device I/O share the budget, so very low limits can reach existing star
 | Omitted/null | Preserve existing CPU behavior |
 | Invalid numbers | Reject zero, negatives, NaN, infinity, excessive precision, and values above resolved CPUs |
 | Host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; rootless hosts need CPU delegation |
-| Enforcement failure | Refuse startup before Guest execution if the quota or process membership cannot be applied |
+| Quota write failure | Refuse startup before Guest execution if `cpu.max` cannot be written |
+| Membership failure | Preserve existing best-effort joining; the Box may start without the requested limit taking effect |
 | macOS | Explicit limits return `Unsupported`, including through the public REST runtime API |
 | Existing host limits | The stricter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` meaning is unchanged |
-| Information queries | Report the configured limit, not CPU usage or a stricter effective ancestor/legacy limit |
+| Information queries | Report the configured limit, not proof of enforcement, CPU usage, or a stricter effective ancestor/legacy limit |
 
 The limit is immutable after creation; changing or clearing it requires a new Box.
 Restart, reconnect, disk snapshot restore, clone, and archive import retain it.

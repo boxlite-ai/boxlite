@@ -137,7 +137,6 @@ impl<'a> ShimSpawner<'a> {
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
-            .with_required_cpu_cgroup(self.options.cpu_limit.is_some())
             .with_volumes(self.options.volumes.clone())
             .with_mounts(self.options.mounts.clone())
             .with_additional_path_access(self.additional_path_access())
@@ -248,6 +247,10 @@ impl<'a> ShimSpawner<'a> {
         })
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/cpu_limit_membership.rs"]
+mod cpu_limit_membership_tests;
 
 #[cfg(test)]
 mod tests {

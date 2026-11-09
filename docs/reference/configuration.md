@@ -188,10 +188,13 @@ cpus=4  # 4 CPU cores
 ### `cpu_limit: float | None`
 
 Optional creation-only aggregate CPU time limit in cores, independent of integer `cpus`.
-For example, `cpus=2, cpu_limit=0.5` shares half a core across both vCPUs and VMM threads.
+For example, `cpus=2, cpu_limit=0.5` shares half a core across both vCPUs and VMM threads when cgroup membership succeeds.
 Accepts `0.01` through resolved `cpus`, in `0.001` increments; the default `None` preserves existing behavior.
 
-Requires Linux, enabled jailer, and cgroup v2 CPU enforcement; explicit macOS local limits return `Unsupported`.
+Requires Linux, enabled jailer, and a writable cgroup v2 CPU quota; explicit macOS local limits return `Unsupported`.
+Quota-write errors prevent startup.
+Cgroup joining retains existing best-effort behavior, so membership failures may leave a running Box without the requested limit.
+Information queries return the configured value and do not confirm enforcement.
 The value persists across supported lifecycle operations and cannot be changed after creation.
 See [CPU time limits](../guides/resource-limits.md#creation-only-cpu-time-limit-linux) for SDK mappings, REST field rejection, and rootless requirements.
 
