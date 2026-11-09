@@ -562,7 +562,7 @@ function SshControls({
                         Find the private key file on your computer, copy its full path, and paste it below.
                       </p>
                       {identityNotice && (
-                        <p role="status" className="text-muted-foreground">
+                        <p id={`${keyPathId}-notice`} role="status" className="text-muted-foreground">
                           {identityNotice === 'authorization'
                             ? 'Make sure this key is still authorized for this box.'
                             : 'SSH configuration changed. Enter the private key path for the current configuration.'}
@@ -570,7 +570,13 @@ function SshControls({
                       )}
                       <Input
                         id={keyPathId}
-                        aria-describedby={`${keyPathId}-hint`}
+                        aria-describedby={[
+                          `${keyPathId}-hint`,
+                          identityNotice && `${keyPathId}-notice`,
+                          pathError && `${keyPathId}-error`,
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         value={keyPath}
                         onChange={(event) => {
                           setKeyPath(event.target.value)
@@ -583,7 +589,7 @@ function SshControls({
                         spellCheck={false}
                       />
                       {pathError && (
-                        <p role="alert" className="text-destructive">
+                        <p id={`${keyPathId}-error`} role="alert" className="text-destructive">
                           {pathError}
                         </p>
                       )}

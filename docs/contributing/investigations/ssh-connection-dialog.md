@@ -236,7 +236,10 @@ comes from GET or Enable. Only the acknowledged Setup response for the submitted
 configuration clears that warning. Editing the local key path dismisses only the
 path-entry hint; it does not establish client authorization. The authorization
 warning survives path edits and unchanged status refreshes until an acknowledged
-Setup replaces the configuration.
+Setup replaces the configuration. The key input's accessible description includes
+its persistent hint, any active identity/authorization notice, and any active path
+validation error. Notice and error references exist only while their elements are
+rendered; live-region roles remain for changes while focus is elsewhere.
 
 For a key path beginning with `~/`, both chmod and OpenSSH must resolve the same
 home directory, including when the path or HOME contains percent signs. The

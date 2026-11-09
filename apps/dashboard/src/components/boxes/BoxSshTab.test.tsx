@@ -150,6 +150,19 @@ async function fillPath(value: string) {
   })
 }
 
+function keyPathDescription() {
+  const input = document.querySelector('input')!
+  return input
+    .getAttribute('aria-describedby')!
+    .split(/\s+/)
+    .map((id) => {
+      const description = document.getElementById(id)
+      expect(description, `Description reference ${id} must resolve`).not.toBeNull()
+      return description!.textContent
+    })
+    .join(' ')
+}
+
 describe('BoxSshTab access and connection', () => {
   it('requires consent before enabling SSH and inbound, then opens only connection steps', async () => {
     disabledStatus()
@@ -453,6 +466,38 @@ describe('BoxSshTab access and connection', () => {
     expect(document.body.textContent).not.toContain('Make sure this key is still authorized')
   })
 
+  it.each(['authorization', 'path'])(
+    'describes the key input with its active %s notice and validation error',
+    async (notice) => {
+      await render()
+      await openConnection()
+      expect(keyPathDescription()).toContain('Find the private key file on your computer')
+      await fillPath('/tmp/saved-key')
+      await act(async () => root.render(null))
+      if (notice === 'path') mocks.get.mockResolvedValue({ data: { ...status, host_public_key: 'other-host' } })
+      await render()
+      await openConnection()
+      const expectedNotice =
+        notice === 'authorization'
+          ? 'Make sure this key is still authorized'
+          : 'Enter the private key path for the current configuration'
+      expect(keyPathDescription()).toContain(expectedNotice)
+      expect(keyPathDescription()).toContain('Find the private key file on your computer')
+      await fillPath('${HOME}/key')
+      expect(keyPathDescription()).toContain('Use a file path without control characters')
+      expect(document.querySelector('input')!.getAttribute('aria-invalid')).toBe('true')
+      if (notice === 'authorization') expect(keyPathDescription()).toContain(expectedNotice)
+      else expect(keyPathDescription()).not.toContain(expectedNotice)
+      await fillPath('/tmp/current-key')
+      expect(keyPathDescription()).not.toContain('Use a file path without control characters')
+      expect(document.querySelector('input')!.getAttribute('aria-invalid')).toBe('false')
+      await click('Reset SSH configuration…')
+      await click('Reset SSH configuration')
+      expect(keyPathDescription()).not.toContain(expectedNotice)
+      expect(keyPathDescription()).toContain('Find the private key file on your computer')
+    },
+  )
+
   it('rejects an invalid key path without replacing the saved path and recovers after correction', async () => {
     await render()
     await openConnection()
@@ -463,6 +508,7 @@ describe('BoxSshTab access and connection', () => {
     await fillPath('${HOME}/key')
     expect(document.querySelector('input')!.getAttribute('aria-invalid')).toBe('true')
     expect(document.querySelector('[role="alert"]')!.textContent).toContain('Use a file path')
+    expect(keyPathDescription()).toContain('Use a file path without control characters')
     expect(document.body.textContent).not.toContain('box@boxlite-box-1')
     expect(sessionStorage.getItem(preferenceKey)).toBe(savedPreference)
 
