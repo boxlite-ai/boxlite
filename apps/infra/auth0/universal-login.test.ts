@@ -309,6 +309,33 @@ test('the file source discovers one complete prompt document per language and pr
   }
 })
 
+test('the checked-in stage source resolves its own tenant and branding assets', async () => {
+  const source = await new FileBrandingSource().load('stage')
+  assert.deepEqual(source.target, {
+    stage: 'stage',
+    stackOrigin: 'https://stage.boxlite.ai',
+    apiOrigin: 'https://api.stage.boxlite.ai',
+    publicOidcIssuer: 'https://auth.stage.boxlite.ai/',
+    auth0TenantDomain: 'boxlite-stage.us.auth0.com',
+  })
+  assert.ok(source.assetUrls.length > 0)
+  for (const url of source.assetUrls) assert.equal(new URL(url).origin, source.target.stackOrigin)
+  const dev = await new FileBrandingSource().load('dev')
+  assert.deepEqual(source.prompts, dev.prompts)
+  assert.deepEqual(
+    source.assetUrls.map((url) => new URL(url).pathname),
+    dev.assetUrls.map((url) => new URL(url).pathname),
+  )
+  const prod = await new FileBrandingSource().load('prod')
+  assert.deepEqual(prod.target, {
+    stage: 'prod',
+    stackOrigin: 'https://app.boxlite.ai',
+    apiOrigin: 'https://api.boxlite.ai',
+    publicOidcIssuer: 'https://auth.boxlite.ai/',
+    auth0TenantDomain: 'boxlite.us.auth0.com',
+  })
+})
+
 test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and copy', async () => {
   const source = await new FileBrandingSource().load('dev')
   assert.deepEqual(source.target, {

@@ -9,16 +9,28 @@ from urllib.parse import urlsplit
 from lib.e2e_auth import api_key_permissions, credentials_path, discover_path_prefix
 
 
-def configure(stage: str, url: str, environment, destination: Path) -> None:
-    if stage not in ("dev", "prod"):
-        raise RuntimeError("stage must be dev or prod")
+def validate_target(stage: str, url: str, environment) -> None:
+    if stage not in ("dev", "stage", "prod"):
+        raise RuntimeError("stage must be dev, stage or prod")
     target = urlsplit(url)
     if (target.scheme != "https" or not target.hostname or target.username or
             target.password or target.query or target.fragment):
         raise RuntimeError("API_URL must be an HTTPS API base URL without credentials, query or fragment")
+    if stage == "stage":
+        expected = environment.get("BOXLITE_STAGE_API_URL", "")
+        if not expected:
+            raise RuntimeError("BOXLITE_STAGE_API_URL must explicitly name the stage API")
+        if url.rstrip("/") != expected.rstrip("/"):
+            raise RuntimeError("API_URL must match BOXLITE_STAGE_API_URL")
+        if target.hostname in ("api.dev.boxlite.ai", "api.boxlite.ai"):
+            raise RuntimeError("BOXLITE_STAGE_API_URL must not target dev or prod")
+
+
+def configure(stage: str, url: str, environment, destination: Path) -> None:
+    validate_target(stage, url, environment)
     names = {"p1": f"BOXLITE_{stage.upper()}_API_KEY"}
-    if stage == "dev":
-        names.update(p2="BOXLITE_DEV_P2_API_KEY", p2_readonly="BOXLITE_DEV_P2_READONLY_API_KEY")
+    if stage in ("dev", "stage"):
+        names.update(p2=f"BOXLITE_{stage.upper()}_P2_API_KEY", p2_readonly=f"BOXLITE_{stage.upper()}_P2_READONLY_API_KEY")
     for secret in names.values():
         if not environment.get(secret):
             raise RuntimeError(f"Secret {secret} is not set")
@@ -42,7 +54,7 @@ def configure(stage: str, url: str, environment, destination: Path) -> None:
             raise RuntimeError(f"{name} requires write:boxes and delete:boxes")
         profiles[name] = dict(url=url.rstrip("/"), api_key=key, auth_method="api_key", path_prefix=prefix)
 
-    if stage == "dev":
+    if stage in ("dev", "stage"):
         if profiles["p1"]["path_prefix"] == profiles["p2"]["path_prefix"]:
             raise RuntimeError("p1 and p2 must belong to different organizations")
         if profiles["p2"]["path_prefix"] != profiles["p2_readonly"]["path_prefix"]:
@@ -67,7 +79,12 @@ def configure(stage: str, url: str, environment, destination: Path) -> None:
 
 if __name__ == "__main__":
     try:
-        configure(os.environ.get("STAGE", ""), os.environ.get("API_URL", ""), os.environ, credentials_path())
+        if sys.argv[1:] == ["--target-only"]:
+            validate_target(os.environ.get("STAGE", ""), os.environ.get("API_URL", ""), os.environ)
+        elif not sys.argv[1:]:
+            configure(os.environ.get("STAGE", ""), os.environ.get("API_URL", ""), os.environ, credentials_path())
+        else:
+            raise RuntimeError("usage: configure_cloud_profiles.py [--target-only]")
     except (RuntimeError, OSError, ValueError) as exc:
         message = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
         sys.exit(f"Cloud profile setup failed: {message}")

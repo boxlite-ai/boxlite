@@ -69,6 +69,68 @@ class CloudProfilesTest(unittest.TestCase):
         self.assertEqual(set(tomllib.loads(self.destination.read_text())["profiles"]), {"p1"})
         self.assertEqual({key for _, key in self.requests}, {"key-prod"})
 
+    def stage_environment(self):
+        self.environment.update({
+            "BOXLITE_STAGE_API_URL": "https://api.stage.example/api",
+            "BOXLITE_STAGE_API_KEY": "stage-one",
+            "BOXLITE_STAGE_P2_API_KEY": "stage-two",
+            "BOXLITE_STAGE_P2_READONLY_API_KEY": "stage-readonly",
+        })
+        self.metadata.update({
+            "stage-one": ("stage-one", ["write:boxes", "delete:boxes"]),
+            "stage-two": ("stage-two", ["write:boxes", "delete:boxes"]),
+            "stage-readonly": ("stage-two", ["read:images"]),
+        })
+
+    def test_stage_uses_only_its_three_credentials_and_configured_target(self):
+        self.stage_environment()
+        self.configure("stage", "https://api.stage.example/api/")
+        profiles = tomllib.loads(self.destination.read_text())["profiles"]
+        self.assertEqual(set(profiles), {"p1", "p2", "p2_readonly"})
+        self.assertEqual({key for _, key in self.requests}, {"stage-one", "stage-two", "stage-readonly"})
+        self.assertEqual({row["url"] for row in profiles.values()}, {"https://api.stage.example/api"})
+        self.assertEqual(self.destination.stat().st_mode & 0o777, 0o600)
+
+    def test_stage_missing_configuration_never_falls_back_to_dev(self):
+        self.stage_environment()
+        for name in [key for key in self.environment if key.startswith("BOXLITE_STAGE_")]:
+            with self.subTest(name=name):
+                value = self.environment.pop(name)
+                try:
+                    with self.assertRaisesRegex(RuntimeError, name):
+                        self.configure("stage", "https://api.stage.example/api")
+                    self.assertEqual(self.requests, [])
+                    self.assertFalse(self.destination.exists())
+                finally:
+                    self.environment[name] = value
+
+    def test_stage_target_refuses_other_environments_before_requests(self):
+        self.stage_environment()
+        for url in ["https://api.dev.boxlite.ai", "https://api.boxlite.ai", "https://elsewhere.example",
+                    "https://api.stage.example/other", "https://api.stage.example:444/api"]:
+            with self.subTest(url=url), self.assertRaises(RuntimeError):
+                self.configure("stage", url)
+        for url in ["https://api.dev.boxlite.ai", "https://api.boxlite.ai"]:
+            with self.subTest(configured=url), patch.dict(self.environment, {"BOXLITE_STAGE_API_URL": url}):
+                with self.assertRaises(RuntimeError):
+                    self.configure("stage", url)
+        self.assertEqual(self.requests, [])
+        self.assertFalse(self.destination.exists())
+
+    def test_stage_identity_boundaries_preserve_existing_credentials(self):
+        self.stage_environment()
+        self.destination.parent.mkdir()
+        self.destination.write_text("existing profiles")
+        for key, value, reason in [
+            ("stage-one", ("stage-two", ["write:boxes", "delete:boxes"]), "different organizations"),
+            ("stage-readonly", ("other", []), "same organization"),
+            ("stage-readonly", ("stage-two", ["write:boxes"]), "only read permissions"),
+        ]:
+            with self.subTest(reason=reason), patch.dict(self.metadata, {key: value}):
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    self.configure("stage", "https://api.stage.example/api")
+                self.assertEqual(self.destination.read_text(), "existing profiles")
+
     def test_each_missing_dev_secret_fails_before_network_or_file_writes(self):
         for name in list(self.environment):
             if not name.startswith("BOXLITE_DEV"):

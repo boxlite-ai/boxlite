@@ -19,7 +19,8 @@ Declare the GCP project, bootstrap its prerequisites, load application values, t
 Run `make _ensure-infra-deps` from the repository root, then work from `apps/infra`.
 Copy `.mstage.config.example.json` to `.mstage.config.json` and declare `home: "gcp"`,
 the exact project, region, zone, protection and resource sizing. See [configuration](../configuration.md).
-The manual workflow accepts `dev` and `prod`; the example's `dev2` works locally but is not a workflow choice.
+The manual workflow accepts `dev`, `stage` and `prod`; stage dispatches run from main with a main SHA or published stable release.
+The example's `dev2` works locally but is not a workflow choice.
 
 ## Bootstrap a stage
 

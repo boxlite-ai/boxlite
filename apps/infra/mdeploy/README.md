@@ -141,14 +141,37 @@ Each stage declares `home`; that field selects credentials, store backend, engin
 There is no repository-wide cloud default. Read the separate [GCP](../docs/gcp/architecture.md) or
 [AWS](../docs/aws/architecture.md) architecture and operations guides for resource mappings and network paths.
 
+For the GCP `stage` environment, API, Collector and Registry Proxy declare the Service-level label `stage=stage`.
+Backoffice uses this label to scope discovery within the shared dev project; labels do not provide IAM isolation.
+These declarations leave revision labels and all other environments unchanged. Service discovery requires deployment and Cloud Asset indexing.
+
+GCP workload service accounts keep the `<appShort>-<stage>-<artifact>-run` identity format and the 30-character limit.
+For `stage`, two artifact segments use shorter names:
+
+| Workload | Service account ID | Characters |
+| --- | --- | --- |
+| Collector | `bl-app-stage-otel-run` | 21 |
+| Registry Proxy | `bl-app-stage-registry-run` | 25 |
+
+Other roles and environments retain their existing IDs. Logical resource names, workload roles and IAM references remain attached to the same account resources.
+Do not rename existing dev/prod accounts: changing an account ID replaces the identity.
+
+For the pinned GCP provider, Cloud Run container `ports` is a single `{ name, containerPort }` object;
+the Proxy and ClickStack backend `healthChecks` fields take the health-check resource's ID directly.
+These fields are not arrays, despite their plural names. Kubernetes, firewall and forwarding-rule port lists retain their separate array contracts.
+The provider-shape regressions inspect actual constructor inputs; a successful preview must also be checked for type warnings before apply.
+
 ## CI orchestration
 
 [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml) resolves the requested ref, ensures
 its artifacts exist, checks the stage digest, then previews or applies. Its `components` input
 selects artifact preparation; it is not a promise that the resource graph targets only those services.
 
-A commit or open PR merge commit is accepted for `dev`. `prod` requires a published release;
-release dispatches run from `main`. The reusable image workflow and runner build job bind the stage's
+A commit or open PR merge commit is accepted for `dev` and `stage`; stage workflows themselves still run from `main`.
+`prod` requires a published release; release and stage dispatches run from `main`.
+Stage release images publish into stage; prod selects release images from `source=dev` (default) or `source=stage`.
+PR/commit builds cannot promote to prod; prepare and validate the version-qualified stable release images in the chosen source first.
+The reusable image workflow and runner build job bind the stage's
 GitHub Environment. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
 

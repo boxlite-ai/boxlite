@@ -16,12 +16,14 @@
 #   dev    api.dev.boxlite.ai, the whole suite. Creates and deletes
 #          boxes freely, probes quotas, and sweeps boxes earlier runs
 #          stranded (see the sweep step).
+#   stage  explicit BOXLITE_STAGE_API_URL, separate identities and full suite;
+#          no automatic sweep or dev shared-subdomain fixture.
 #   prod   api.boxlite.ai, `-m smoke` only: the handful of cases marked
 #          in apps/e2e/pytest.ini as safe against a paying stage — one
 #          box at a time, no quota probing, no deliberate error storms.
 #          Nothing is swept there; prod holds customers' boxes.
 #
-# Both legs really create boxes on the stage they target, so a prod run
+# All stages really create boxes on the stage they target, so a prod run
 # costs prod capacity. That is the point — a smoke that mocks the thing
 # it is meant to verify verifies nothing — but it is why prod is a
 # deliberate, narrow subset rather than the full suite.
@@ -32,9 +34,11 @@
 #
 #   dev    BOXLITE_DEV_API_KEY
 #          BOXLITE_DEV_P2_API_KEY, BOXLITE_DEV_P2_READONLY_API_KEY
+#   stage  BOXLITE_STAGE_API_KEY
+#          BOXLITE_STAGE_P2_API_KEY, BOXLITE_STAGE_P2_READONLY_API_KEY
 #   prod   BOXLITE_PROD_API_KEY
 #
-# Both are named, not inherited, so a run can only ever hold the key for
+# All are named, not inherited, so a run can only ever hold the key for
 # the stage it targets. The repo also carries an older, unreferenced
 # BOXLITE_API_KEY — that one is a *dev* key, so it is no substitute for
 # BOXLITE_PROD_API_KEY: pointing the prod leg at it would authenticate
@@ -42,7 +46,7 @@
 # added before the prod leg can run at all; until then it resolves to empty
 # and the credential step says so by name.
 #
-# The main suite reads [profiles.p1]. Dev additionally tests private access
+# The main suite reads [profiles.p1]. Dev and stage additionally test private access
 # with p2 as owner, p2_readonly in the same org, and p1 in a different org.
 # Profiles are written to ~/.boxlite/credentials.toml and every request is
 # `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
@@ -51,6 +55,7 @@
 #
 # Optional repo variables (Settings → Variables → Actions):
 #   - BOXLITE_DEV_API_URL    dev target;  defaults to api.dev.boxlite.ai
+# Stage requires BOXLITE_STAGE_API_URL and refuses overrides to another target.
 #   - BOXLITE_PROD_API_URL   prod target; defaults to api.boxlite.ai
 #
 # Required repository variable for dev subdomain tests:
@@ -123,7 +128,7 @@ on:
         required: true
         type: string
       stage:
-        description: 'Stage to test. Only dev is deployed this way.'
+        description: 'Stage to test: dev, stage or prod.'
         required: false
         type: string
         default: dev
@@ -148,6 +153,15 @@ on:
       BOXLITE_DEV_P2_READONLY_API_KEY:
         description: 'Dev read-only key in p2 organization. Required at runtime on dev.'
         required: false
+      BOXLITE_STAGE_API_KEY:
+        description: 'Stage key for p1.'
+        required: false
+      BOXLITE_STAGE_P2_API_KEY:
+        description: 'Stage key for p2 in a different organization.'
+        required: false
+      BOXLITE_STAGE_P2_READONLY_API_KEY:
+        description: 'Stage read-only key in the p2 organization.'
+        required: false
       BOXLITE_PROD_API_KEY:
         # Declared, not required: the call path only ever targets dev. It is
         # here so the same expression resolves on both triggers.
@@ -162,6 +176,7 @@ on:
         type: choice
         options:
           - dev
+          - stage
           - prod
       api_url:
         description: 'API base URL (blank = the stage default)'
@@ -179,7 +194,7 @@ on:
         type: string
         required: false
       sweep:
-        description: 'Reclaim boxes earlier runs stranded (ignored for prod)'
+        description: 'Reclaim boxes earlier runs stranded (dev only)'
         type: boolean
         required: true
         default: true
@@ -224,7 +239,7 @@ jobs:
   # Both call and dispatch remain deliberate runs by repository writers.
   e2e:
     name: E2E suite (${{ inputs.stage || 'dev' }})
-    if: ${{ contains(fromJSON('["dev", "prod"]'), inputs.stage || 'dev') }}
+    if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -233,9 +248,11 @@ jobs:
       # default, so the workflow still runs with nothing configured.
       API_URL: >-
         ${{ inputs.api_url
-            || ((inputs.stage || 'dev') == 'prod'
-                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai')
-                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai')) }}
+            || (inputs.stage == 'stage' && vars.BOXLITE_STAGE_API_URL)
+            || (inputs.stage == 'prod' && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai'))
+            || ((inputs.stage || 'dev') == 'dev' && (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai'))
+            || '' }}
+      BOXLITE_STAGE_API_URL: ${{ vars.BOXLITE_STAGE_API_URL || '' }}
       # Blank keeps apps/e2e/lib/images.py deriving the ref from
       # apps/box-images/VERSION, which is right whenever the stage runs the
       # commit under test. A stage pinned to an older box image needs this.
@@ -256,6 +273,9 @@ jobs:
         run: test -n "$BOXLITE_E2E_DOMAIN" || { echo 'Set BOXLITE_E2E_DOMAIN in repository Actions Variables'; exit 1; }
 
       # ── Health check ──────────────────────────────────────────────
+      - name: Validate cloud target
+        run: python3 apps/e2e/configure_cloud_profiles.py --target-only
+
       - name: Probe API health
         run: |
           curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \
@@ -285,6 +305,9 @@ jobs:
           BOXLITE_DEV_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_API_KEY || '' }}
           BOXLITE_DEV_P2_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_API_KEY || '' }}
           BOXLITE_DEV_P2_READONLY_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_READONLY_API_KEY || '' }}
+          BOXLITE_STAGE_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_API_KEY || '' }}
+          BOXLITE_STAGE_P2_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_API_KEY || '' }}
+          BOXLITE_STAGE_P2_READONLY_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_READONLY_API_KEY || '' }}
           BOXLITE_PROD_API_KEY: ${{ inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY || '' }}
         run: python3 apps/e2e/configure_cloud_profiles.py
 
@@ -387,8 +410,8 @@ jobs:
       #
       # The identity lane reuses these builds but owns its boxes in p2's org.
       # A separate pytest process keeps the session runtime and auth cache scoped.
-      - name: Run identity E2E (dev)
-        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+      - name: Run identity E2E (dev and stage)
+        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
         timeout-minutes: 5
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'

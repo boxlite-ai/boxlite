@@ -26,13 +26,20 @@ const complete = {
 }
 
 const read = (environment: Record<string, string | undefined>) =>
-  readStackEnvironment({ environment, declaration, app: 'boxlite-app', stage: 'dev', region: 'ap-southeast-1', home: 'aws' })
+  readStackEnvironment({
+    environment,
+    declaration,
+    app: 'boxlite-app',
+    stage: 'dev',
+    region: 'ap-southeast-1',
+    home: 'aws',
+  })
 
 test('a complete environment resolves everything one deploy decides', () => {
   const resolved = read(complete)
   assert.equal(resolved.tag, SHA)
   assert.equal(resolved.domain, 'dev.boxlite.ai')
-  assert.equal(resolved.proxyProtocol, 'http', 'a default, because the hop is inside the network')
+  assert.equal(resolved.proxyProtocol, 'http', 'the retained compatibility default for an unset public URL scheme')
   assert.equal(resolved.senderDomain, null, 'a stage that names none sends no mail')
   assert.deepEqual(resolved.runnerFleet, [
     // `<app>-<stage>-runner`, the same shape every other resource carries: a
@@ -60,10 +67,7 @@ test('a stage names a user domain of its own, in its own zone, or offers named a
     { domain: 'apps.example', dnsZoneId: 'user-zone' },
   )
   // A different registrable domain sits in a different zone, so the stage names it.
-  assert.throws(
-    () => read({ ...complete, STACK_USER_DOMAIN: 'apps.example' }),
-    /CLOUDFLARE_USER_ZONE_ID is required/,
-  )
+  assert.throws(() => read({ ...complete, STACK_USER_DOMAIN: 'apps.example' }), /CLOUDFLARE_USER_ZONE_ID is required/)
 })
 
 test("a user domain under the stage's registrable domain is refused", () => {
@@ -127,14 +131,18 @@ test('the manifest fingerprints the optional flag without exposing credential co
   assert.ok(config.envOptional.deploy?.includes('OTEL_OPENAPI_ENABLED'))
   assert.ok(config.envSelectGroup[config.envDigest!.group]!.includes('OTEL_OPENAPI_ENABLED'))
   for (const group of Object.values(config.envSelectGroup)) {
-    assert.ok(!group.some(key => key.startsWith('CLICKHOUSE_OPENAPI_LOG_READER')))
+    assert.ok(!group.some((key) => key.startsWith('CLICKHOUSE_OPENAPI_LOG_READER')))
   }
   assert.doesNotThrow(() => assertAddressesAreNotSpent(config))
 })
 
 test('a key nothing supplies stops the deploy, named, before anything is built', () => {
   for (const key of ['BOXLITE_IMAGE_TAG', 'STACK_DOMAIN', 'PROXY_DOMAIN', 'CLOUDFLARE_ZONE_ID']) {
-    assert.throws(() => read({ ...complete, [key]: undefined }), new RegExp(`${key} is required`), `${key} is not required`)
+    assert.throws(
+      () => read({ ...complete, [key]: undefined }),
+      new RegExp(`${key} is required`),
+      `${key} is not required`,
+    )
   }
 })
 
@@ -149,7 +157,13 @@ test('a tag that is not one full commit sha is refused', () => {
   // copy of mbuild's tag pattern, so a release image would have published fine
   // and then been refused here; it reads mbuild's constant now.
   assert.equal(read({ ...complete, BOXLITE_IMAGE_TAG: `v1.2.3-${SHA}` }).tag, `v1.2.3-${SHA}`)
-  for (const rejected of [`v1.2.3-${SHA.slice(1)}`, `1.2.3-${SHA}`, `v1.2.3-v1.2.3-${SHA}`, `${SHA}-v1.2.3`, `release-${SHA}`]) {
+  for (const rejected of [
+    `v1.2.3-${SHA.slice(1)}`,
+    `1.2.3-${SHA}`,
+    `v1.2.3-v1.2.3-${SHA}`,
+    `${SHA}-v1.2.3`,
+    `release-${SHA}`,
+  ]) {
     assert.throws(() => read({ ...complete, BOXLITE_IMAGE_TAG: rejected }), StackEnvError, `${rejected} was accepted`)
   }
 })

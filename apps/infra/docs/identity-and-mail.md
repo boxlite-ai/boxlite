@@ -16,6 +16,15 @@ For a new OIDC setup, follow the selected cloud’s [GCP](gcp/identity-and-mail.
 Other compatible OIDC providers need equivalent manual setup.
 Application invitation mail and the identity provider's verification/reset mail are separate systems.
 
+The branding target catalog includes dev, stage, and prod. Stage resolves to
+`https://stage.boxlite.ai`, API `https://api.stage.boxlite.ai`, public issuer
+`https://auth.stage.boxlite.ai/`, and customer tenant `boxlite-stage.us.auth0.com`.
+Use `npm run auth0:universal-login -- preview --stage stage` after the stage API
+and branding assets are reachable and the CLI is authenticated to that tenant.
+Declaring a target does not create tenant resources or apply branding.
+Adding a target changes the catalog-wide source digest; create a fresh preview
+before applying, including when targeting an unchanged dev/prod entry.
+
 Invitation emails reuse the black BoxLite wordmark at
 `<DASHBOARD_URL>/auth0/boxlite-black-3f7875da.png`, served by the dashboard's public assets.
 It displays at 32 pixels high with proportional width, matching the Auth0 reset email.
@@ -79,6 +88,12 @@ returning-user authentication method. If the connection already has a separate
 email OTP login method, the reconciler leaves that operator-owned setting
 unchanged.
 
+Connections without an existing `email.identifier.default_method` keep that field
+absent: some Auth0 connections reject it even though they support verification OTP.
+If the selector already exists, the policy selects `password` while preserving the
+connection's other authentication methods. Enabling verification OTP does not require
+adding a passwordless login method.
+
 For an existing database connection, first open Auth0 Dashboard > Authentication
 > Database > the selected connection > Attributes, select **Activate**, confirm
 the development-environment impact acknowledgement, and save the default email
@@ -91,6 +106,15 @@ Authenticate with the Management API scopes used by preview, apply and rollback:
 ```bash
 npm run auth0:login-policy-login
 ```
+
+Use Auth0 CLI 1.38 or newer for the login-policy configurator (validated with 1.39.0).
+[These versions hide client secrets from raw API output by default](https://github.com/auth0/auth0-cli/releases/tag/v1.38.0). The configurator
+adds `--reveal-secrets` only for an explicit, single-client `client_id,client_secret`
+projection, used to configure the verification Vault and account-link Action.
+Ordinary discovery and writes retain the CLI's masking. Returned credentials stay
+in memory, secret-bearing writes use stdin, and rollback journals omit credentials.
+If a credential still is not returned, check `read:client_credentials` and the
+client's authentication method; rotating a secret does not resolve output masking.
 
 The policy requires an enabled email provider other than Auth0's built-in sender. Configure tenant mail
 through the [GCP identity/mail guide](gcp/identity-and-mail.md) or

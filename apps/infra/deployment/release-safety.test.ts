@@ -1719,9 +1719,9 @@ test('cloud E2E requires the dev identity lane and forwards its scoped credentia
   const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
   const caller = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
   const steps = workflow.jobs.e2e.steps
-  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev)')
+  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev and stage)')
   assert.ok(identity, 'dev must execute the cross-org and readonly identity cases')
-  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' }}")
+  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}")
   assert.equal(identity.env.BOXLITE_E2E_PROFILE, 'p2')
   assert.equal(identity.env.BOXLITE_E2E_READONLY_PROFILE, 'p2_readonly')
   assert.equal(identity.env.BOXLITE_E2E_FOREIGN_PROFILE, 'p1')
@@ -2040,7 +2040,7 @@ test('every reusable workflow is called with the inputs it declares', () => {
  * sentinel went with `mdeploy-all.yml`'s `auto_promote_from`: a promotion's
  * source is dev, and there is no longer a choice that binds a job to nothing.
  */
-const ENVIRONMENTS = ['dev', 'prod']
+const ENVIRONMENTS = ['dev', 'stage', 'prod']
 
 test('every workflow that selects a deployment Environment does so from an allowlist', () => {
   // The rule is stated once in .github/workflows/README.md and enforced here across every

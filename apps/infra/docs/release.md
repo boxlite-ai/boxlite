@@ -13,7 +13,7 @@ pre-release suffixes are not supported.
 - The release commit is merged into `main`, and the version numbers in the repository are already
   updated to this release.
 - All required checks on `main` have passed.
-- You can run GitHub Actions workflows and approve the `dev` and `prod` Environments.
+- You can run GitHub Actions workflows and approve the selected source (`dev` or `stage`) and `prod` Environments.
 
 ## 1. Tag the version and publish the GitHub Release
 
@@ -108,7 +108,7 @@ Open **Actions → mdeploy-all → Run workflow** and enter:
 Approve the `prod` Environment. `mdeploy-all` then:
 
 1. Checks the tag, the GitHub Release and the Runner artifacts.
-2. Calls `mbuild-release` to promote the images already published in `dev` to `prod`, without
+2. Calls `mbuild-release` to promote the images already published in the selected source (default `dev`) to `prod`, without
    rebuilding them.
 3. Verifies the images in `prod` and deploys the version to production.
 
@@ -126,6 +126,13 @@ gh workflow run mdeploy-all.yml \
   -f apply=true \
   -f confirm=true
 ```
+
+To promote from stage, first publish the same stable release with `mbuild-release` using
+`command=publish`, `stage=stage` and `tag=vX.Y.Z`, then deploy and validate those release images in stage.
+Set `source=stage` on the prod `mdeploy-all` dispatch; omitting it retains dev→prod.
+A stage PR deployment alone is not a production candidate: production still requires the stable release and its published Runner assets.
+Prepare prod's `promoteFrom: ["dev", "stage"]` declaration with the [configuration guide](configuration.md#declare-a-stage),
+updating its live GitHub variable only after compatible workflow/tooling code is on main.
 
 The release is live only once every `mdeploy-all` job has succeeded. Check that the version,
 commit, image tags and deployment results in the workflow summary match this release.

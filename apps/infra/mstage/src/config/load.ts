@@ -74,17 +74,11 @@ export type StageConfig = {
    */
   zone: string | null
   /**
-   * The stage a promotion into this one reads from, or null for a stage that is
-   * never promoted into.
-   *
-   * Declared because the reads a promotion makes are granted on the *source*
-   * and held by *this* stage's accounts, so `bootstrap` cannot make them
-   * without being told which stage the source is — and on GCP that is another
-   * project, which nothing else in this block names. A rollout makes no such
-   * choice: `mdeploy-all` promotes from dev. This is the declaration a
-   * bootstrap acts on, and the only place the source is named.
+   * Sources whose artifact reads bootstrap grants to this stage's accounts.
+   * A rollout selects one source; declaring several does not chain them.
+   * Legacy single-source strings remain valid. Null means no source declared.
    */
-  promoteFrom: string | null
+  promoteFrom: string | string[] | null
   roleArn: string | null
   protect: boolean
   /**
@@ -333,6 +327,17 @@ const parseLogin = (raw: unknown, where: string): Record<string, LoginRequiremen
   )
 }
 
+const parsePromotionSources = (raw: unknown, where: string): string | string[] | null => {
+  if (raw === undefined) return null
+  const sources = Array.isArray(raw) ? raw : [raw]
+  if (sources.length === 0) throw new ConfigError(`${where} must declare at least one promotion source`)
+  const names = sources.map((source) => assertNonEmptyString(source, where))
+  if (names.some((name) => !STAGE_NAME.test(name)) || new Set(names).size !== names.length) {
+    throw new ConfigError(`${where} must contain distinct valid stage names`)
+  }
+  return Array.isArray(raw) ? names : names[0]!
+}
+
 const parseStage = (name: string, raw: unknown, path: string): StageConfig => {
   // SST's own constraint (pkg/project/project.go:115). mstage reads and writes the
   // same S3 keys, so a name SST would reject must never reach the bucket.
@@ -340,7 +345,7 @@ const parseStage = (name: string, raw: unknown, path: string): StageConfig => {
     throw new ConfigError(`${path}: stage "${name}" may only contain letters, digits and "-"`)
   }
   const stage = assertObject(raw, `${path}: stage "${name}"`)
-  for (const key of ['region', 'project', 'zone', 'promoteFrom', 'roleArn'] as const) {
+  for (const key of ['region', 'project', 'zone', 'roleArn'] as const) {
     if (stage[key] !== undefined) assertNonEmptyString(stage[key], `${path}: stage "${name}" ${key}`)
   }
   if (stage.protect !== undefined && typeof stage.protect !== 'boolean') {
@@ -370,7 +375,7 @@ const parseStage = (name: string, raw: unknown, path: string): StageConfig => {
     zone: (stage.zone as string) ?? null,
     // Whether it names a stage that exists is not knowable here; `parseStages`
     // asks that once every declaration has been read.
-    promoteFrom: (stage.promoteFrom as string) ?? null,
+    promoteFrom: parsePromotionSources(stage.promoteFrom, `${path}: stage "${name}" promoteFrom`),
     roleArn: (stage.roleArn as string) ?? null,
     protect: (stage.protect as boolean) ?? false,
     // Checked for shape and nothing else: the keys are mdeploy's, and a list
@@ -437,13 +442,16 @@ const assertPromotionSources = (stages: Record<string, StageConfig>, path: strin
   for (const [name, stage] of Object.entries(stages)) {
     const from = stage.promoteFrom
     if (from === null) continue
-    if (from === name) throw new ConfigError(`${path}: stage "${name}" promotes from itself, which would do nothing`)
-    const source = stages[from]
-    if (source && source.home !== stage.home) {
-      throw new ConfigError(
-        `${path}: stage "${name}" lives in ${stage.home} and promotes from "${from}", which lives in ${source.home}. ` +
-          'A promotion copies within one cloud, using one identity.',
-      )
+    for (const sourceName of Array.isArray(from) ? from : [from]) {
+      if (sourceName === name)
+        throw new ConfigError(`${path}: stage "${name}" promotes from itself, which would do nothing`)
+      const source = Object.hasOwn(stages, sourceName) ? stages[sourceName] : undefined
+      if (source && source.home !== stage.home) {
+        throw new ConfigError(
+          `${path}: stage "${name}" lives in ${stage.home} and promotes from "${sourceName}", which lives in ${source.home}. ` +
+            'A promotion copies within one cloud, using one identity.',
+        )
+      }
     }
   }
 }

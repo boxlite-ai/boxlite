@@ -10,7 +10,7 @@
 #
 #   a commit SHA      the development path. Images are built for this stage
 #                     under `<sha>`, the runner binary is compiled and staged in
-#                     this stage's artifacts bucket. dev only.
+#                     this stage's artifacts bucket. dev or stage (main only).
 #
 #   #<number>         the same path, for a pull request that has not merged.
 #                     It resolves to the commit the request would merge to
@@ -18,14 +18,14 @@
 #                     that would land — the head is the same work missing
 #                     whatever its base gained since it was branched, and
 #                     shaking that out tells you about a tree nobody will
-#                     merge. dev only.
+#                     merge. dev or stage.
 #
 #   a release tag     the release path. Images are the `v<X.Y.Z>-<sha>` bytes
-#                     mbuild-release publishes into dev and promotes to prod;
+#                     mbuild-release publishes into dev/stage or promotes to prod;
 #                     the runner is the tarball already attached to the GitHub
 #                     Release, not a rebuild of it. prod takes nothing else.
 #
-# prod is promote-only on purpose. Promotion moves the bytes dev already scanned
+# prod is promote-only on purpose. Promotion moves the selected source's scanned
 # and served, and a rebuild of one commit is not byte-identical — gzip alone
 # stamps an mtime into the runner tarball, and everything downstream treats
 # version+commit as an identity and never looks inside. Two stages that built
@@ -68,7 +68,14 @@ on:
         type: choice
         options:
           - dev
+          - stage
           - prod
+      source:
+        description: Release image source when promoting to prod
+        required: true
+        default: dev
+        type: choice
+        options: [dev, stage]
       components:
         description: Which artifacts this ref needs before it is deployed
         required: true
@@ -80,8 +87,8 @@ on:
           - runner
       ref:
         description: >-
-          A release tag (v<X.Y.Z>); or, for dev, a commit SHA or a pull request
-          (#<number>). Empty uses this dispatch's own commit, a dev rollout.
+          A release tag (v<X.Y.Z>); a full commit SHA for dev/stage; or a pull
+          request (#<number>) for dev/stage. Empty uses this dispatch's own commit.
         required: false
       apply:
         description: Apply the change. Off previews it and stops.
@@ -163,6 +170,10 @@ jobs:
           candidate="${REF:-$FALLBACK}"
           version=''
           pr=''
+          case "$STAGE" in
+            dev|stage|prod) ;;
+            *) echo "::error title=stage::unknown deployment stage '$STAGE'"; exit 1 ;;
+          esac
           # Three shapes, told apart here and nowhere else, so every job below
           # reads a decision rather than re-parsing the input.
           #
@@ -180,10 +191,14 @@ jobs:
             echo "::error title=ref::'$candidate' is none of a release tag (v<X.Y.Z>), a pull request (#<number>), or a full lowercase commit SHA"
             exit 1
           fi
-          # prod takes released bytes and nothing else. Written as a refusal on
-          # the absence of a version rather than as a test on the stage list, so
-          # a stage added later has to say for itself that a commit may reach it.
-          if [ "$STAGE" != 'dev' ] && [ -z "$version" ]; then
+          # Candidate stages accept PR merge trees; prod remains release-only.
+          if [ "$STAGE" != 'dev' ] && [ "$STAGE" != 'stage' ] && [ -n "$pr" ]; then
+            echo "::error title=ref::pull requests deploy to dev or stage only"
+            exit 1
+          fi
+          # Explicit commit destinations keep prod release-only and fail closed
+          # if another stage is added without its own admission decision.
+          if [ "$STAGE" != 'dev' ] && [ "$STAGE" != 'stage' ] && [ -z "$version" ]; then
             echo "::error title=ref::$STAGE deploys released versions only; give a release tag (v<X.Y.Z>) rather than a commit or a pull request"
             exit 1
           fi
@@ -457,9 +472,9 @@ jobs:
                 echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
                 exit 1
               elif [ -n "$VERSION" ]; then
-                # The release line. dev cuts it; every other stage receives the
-                # bytes dev already serves.
-                api=$([ "$STAGE" = 'dev' ] && echo release-publish || echo release-promote)
+                # Candidate environments publish directly; prod keeps receiving
+                # the release bytes through its existing promotion path.
+                api=$([[ "$STAGE" = 'dev' || "$STAGE" = 'stage' ]] && echo release-publish || echo release-promote)
               else
                 api=build
               fi
@@ -504,7 +519,7 @@ jobs:
             echo "| components | \`$COMPONENTS\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The release line: cut into dev, received by everything else. Both call the
+  # The release line: publish into dev/stage, or promote into prod. Both call the
   # workflow that owns the refusals a release needs — a version already in the
   # target registry is an operator mistake, not something to skip over.
   release-publish:
@@ -516,6 +531,7 @@ jobs:
       command: publish
       tag: ${{ needs.resolve.outputs.version }}
       sha: ${{ needs.resolve.outputs.sha }}
+      stage: ${{ inputs.stage }}
     secrets: inherit
 
   release-promote:
@@ -527,9 +543,10 @@ jobs:
       command: promote
       tag: ${{ needs.resolve.outputs.version }}
       sha: ${{ needs.resolve.outputs.sha }}
+      source: ${{ inputs.source }}
     secrets: inherit
 
-  # The commit line, which only dev reaches. `mbuild.yml` is callee-only for
+  # The commit line, which dev and stage reach. `mbuild.yml` is callee-only for
   # exactly this: it is the development path's publish and nobody's release.
   build-images:
     name: build images

@@ -8,8 +8,7 @@
  * had nothing to do. Both are asserted here as ordering rather than presence.
  *
  * The third thing it owns is which line a run is on. A commit rollout builds
- * for dev; a release rollout moves the bytes a version was cut from, and is the
- * only thing prod accepts.
+ * for dev/stage; prod accepts only the release line and retains promotion.
  */
 
 import assert from 'node:assert/strict'
@@ -110,7 +109,11 @@ test('a registry that could not be read is not a stage holding nothing', () => {
   assert.ok(absent, 'the CLI declares no exit code of its own for absence')
 
   const plan = jobAt('plan')
-  assert.match(plan, /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/, 'the status is thrown away')
+  assert.match(
+    plan,
+    /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/,
+    'the status is thrown away',
+  )
   assert.match(plan, new RegExp(`elif \\[ "\\$held" -ne ${absent} \\]; then`), 'absence is not told apart')
   assert.match(plan, /::error title=registry::/, 'a read that never landed decides the plan silently')
 })
@@ -155,11 +158,7 @@ test('a pull request resolves to the commit it would merge, never its head', () 
   assert.match(resolve, /sha="\$\(jq -r '\.potentialMergeCommit\.oid \/\/ empty' <<<"\$pr_json"\)"/)
   assert.match(resolve, /head="\$\(jq -r '\.headRefOid'/, 'the head is not read, so this test guards nothing')
   // Three refusals, each naming what the operator has to do about it.
-  for (const refused of [
-    /is \$state, not open/,
-    /conflicts with its base/,
-    /has no merge commit this run can trust/,
-  ]) {
+  for (const refused of [/is \$state, not open/, /conflicts with its base/, /has no merge commit this run can trust/]) {
     assert.match(resolve, refused, `a pull request is accepted where it should be refused: ${refused}`)
   }
   // UNKNOWN is a "not yet", not a verdict: GitHub computes it lazily and there
@@ -214,13 +213,11 @@ test('the branch check is replaced for a pull request, not skipped', () => {
   assert.match(jobAt('resolve'), /sha: \$\{\{ steps\.tag\.outputs\.sha \}\}/, 'the job publishes a different commit')
 })
 
-test('a pull request reaches dev and no further', () => {
-  // prod's refusal is written on the absence of a version, so it catches a
-  // pull request for the same reason it catches a bare commit — one rule, not
-  // one per shape.
+test('a pull request reaches dev or stage but never prod', () => {
+  // Candidate stages accept PR merges; production still requires a release.
   const resolve = jobAt('resolve')
-  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ -z "\$version" \]; then/)
-  assert.match(resolve, /rather than a commit or a pull request/)
+  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -n "\$pr" \]; then/)
+  assert.match(resolve, /pull requests deploy to dev or stage only/)
 })
 
 test('reading a pull request is all the extra permission it takes', () => {
@@ -250,10 +247,13 @@ test('prod deploys released versions and refuses a bare commit', () => {
    * the choice list later has to say for itself that a commit may reach it.
    */
   const classify = jobAt('resolve')
-  assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ -z "\$version" \]; then/)
+  assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
   assert.doesNotMatch(classify, /"\$STAGE" = 'prod'/, 'a deny-list on prod admits the next stage silently')
-  // And the plan routes dev to the cut and everything else to the move.
-  assert.match(jobAt('plan'), /\[ "\$STAGE" = 'dev' \] && echo release-publish \|\| echo release-promote/)
+  // Only the two candidate environments publish; prod retains promotion.
+  assert.match(
+    jobAt('plan'),
+    /\[\[ "\$STAGE" = 'dev' \|\| "\$STAGE" = 'stage' \]\] && echo release-publish \|\| echo release-promote/,
+  )
 })
 
 test('an image address carries the version when there is one', () => {

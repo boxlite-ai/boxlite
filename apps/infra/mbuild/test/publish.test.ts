@@ -131,6 +131,14 @@ const registryDouble = ({
     calls.push([command, ...args])
     if (options?.echo) echoed.push([command, ...args])
     if (command === 'docker') {
+      if (args.slice(0, 3).join(' ') === 'buildx imagetools inspect') {
+        return published.has(args[3]!.split('/').at(-1)!)
+          ? ok(JSON.stringify({ digest: `sha256:${'b'.repeat(64)}` }))
+          : fail('manifest not found')
+      }
+      if (args.slice(0, 3).join(' ') === 'buildx imagetools create') {
+        published.add(args[args.indexOf('--tag') + 1]!.split('/').at(-1)!)
+      }
       // What docker really does with an unfed `--password-stdin`: it falls back
       // to prompting, and a runner has no terminal to prompt on. A double that
       // accepts the login anyway cannot tell a piped password from a lost one.
@@ -221,7 +229,7 @@ test('only the missing artifact is built, from the context its config names', as
   assert.ok(builds[0]!.includes(`REVISION=${SHA}`), 'the commit reaches the image as a build argument')
 })
 
-test('every image that moves names the architecture the runtimes actually run', async () => {
+test('every image build names the architecture the runtimes actually run', async () => {
   /*
    * `docker build` targets the host otherwise — amd64 on a CI runner, arm64 on
    * an Apple Silicon workstation — and neither runtime this publishes for
@@ -230,32 +238,16 @@ test('every image that moves names the architecture the runtimes actually run', 
    *
    * The failure it prevents is far from its cause: a revision built from an
    * arm64 image dies at `exec format error`, and because tags are immutable
-   * the wrong bytes hold that commit's tag for good. `promote` pins it too,
-   * and that is the worse one to miss — a multi-arch address resolves to the
-   * host's variant, so a promotion from an arm64 workstation would carry that
-   * variant into the receiving stage, which is the one thing promoting rather
-   * than rebuilding exists to prevent.
+   * the wrong bytes hold that commit's tag for good. Promotion separately
+   * copies the original manifest/index without platform selection.
    *
    * The flag and its value are asserted as an adjacent pair, so one cannot
    * drift away from the other.
    */
   const built = registryDouble()
   await publish({ config, stage: 'dev', registry: dev, tag: SHA, run: built.run, log })
-  const moved = registryDouble({ published: both('boxlite-backoffice-dev') })
-  await promote({
-    config,
-    tag: SHA,
-    from: { stage: 'dev', registry: dev },
-    to: { stage: 'prod', registry: prod },
-    run: moved.run,
-    log,
-  })
-
-  const commands = [
-    ...built.ran((call) => call[1] === 'build'),
-    ...moved.ran((call) => call[0] === 'docker' && call[1] === 'pull'),
-  ]
-  assert.ok(commands.length > 0, 'nothing was built or pulled, so this asserted nothing')
+  const commands = built.ran((call) => call[1] === 'build')
+  assert.ok(commands.length > 0, 'nothing was built, so this asserted nothing')
   for (const command of commands) {
     const at = command.indexOf('--platform')
     assert.notEqual(at, -1, `no --platform in: ${command.join(' ')}`)
@@ -569,10 +561,10 @@ test('promote moves the built bytes rather than building them again', async () =
   const api = outcomes.find((outcome) => outcome.artifact === 'api')!
   assert.ok(api.from.includes('.ecr.ap-southeast-1.') && api.from.includes('/boxlite-backoffice-dev:'))
   assert.ok(api.address.includes('.ecr.us-east-1.') && api.address.includes('/boxlite-backoffice-prod:'))
-  // Pull, re-tag, push: ECR shares no layers between repositories.
+  // Copy the original manifest/index and referenced layers across repositories.
   assert.deepEqual(
-    probe.ran((call) => call[0] === 'docker' && ['pull', 'tag', 'push'].includes(call[1]!)).map((call) => call[1]),
-    ['pull', 'tag', 'push', 'pull', 'tag', 'push'],
+    probe.ran((call) => call.slice(0, 4).join(' ') === 'docker buildx imagetools create').map((call) => call[4]),
+    ['--prefer-index=false', '--prefer-index=false'],
   )
 })
 
@@ -587,9 +579,9 @@ test('a promotion echoes its transfers, which are the part that moves whole imag
     log,
   })
   assert.deepEqual(
-    probe.echoed.map((call) => `${call[0]} ${call[1]}`),
-    ['docker pull', 'docker push', 'docker pull', 'docker push'],
-    'a re-tag is instant; the pull and the push are not',
+    probe.echoed.map((call) => call.slice(0, 4).join(' ')),
+    ['docker buildx imagetools create', 'docker buildx imagetools create'],
+    'manifest copies transfer the image content',
   )
 })
 
@@ -608,7 +600,7 @@ test('a source missing any artifact promotes nothing at all', async () => {
       }),
     /dev does not hold api at .*; nothing was promoted/,
   )
-  assert.equal(probe.ran((call) => call[1] === 'pull').length, 0)
+  assert.equal(probe.ran((call) => call.slice(0, 4).join(' ') === 'docker buildx imagetools create').length, 0)
 })
 
 test('an artifact already in the destination is not moved twice', async () => {
@@ -630,7 +622,7 @@ test('an artifact already in the destination is not moved twice', async () => {
       ['api', true],
     ],
   )
-  assert.equal(probe.ran((call) => call[1] === 'pull').length, 1)
+  assert.equal(probe.ran((call) => call.slice(0, 4).join(' ') === 'docker buildx imagetools create').length, 1)
 })
 
 test('promoting a stage to itself is refused rather than quietly doing nothing', async () => {

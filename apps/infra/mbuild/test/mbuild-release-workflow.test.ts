@@ -32,9 +32,7 @@ const shippedVersion = (
 
 // Hooks export repository selectors that override cwd. Fixture Git commands
 // and resolver shells must discover their temporary repository instead.
-const fixtureEnvironment = Object.fromEntries(
-  Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
-)
+const fixtureEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')))
 
 const git = (cwd: string, ...args: string[]): string => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: fixtureEnvironment })
@@ -43,8 +41,7 @@ const git = (cwd: string, ...args: string[]): string => {
 }
 
 /** An mbuild manifest declaring one version, as a released commit holds it. */
-const manifestFor = (version: string): string =>
-  `${JSON.stringify({ name: 'mbuild', version }, undefined, 2)}\n`
+const manifestFor = (version: string): string => `${JSON.stringify({ name: 'mbuild', version }, undefined, 2)}\n`
 
 /**
  * A commit as a release sees it: whatever mbuild manifest it carries, and one
@@ -151,7 +148,7 @@ test('the version is refused before a registry is asked about it', () => {
    */
   const resolve = workflow.jobs.resolve
   assert.equal(resolve.environment, undefined, 'a typo must not cost an approval to report')
-  const step = resolve.steps.find((one: any) => /^\s*set -Eeuo/.test(String(one.run ?? '')) && /TAG/.test(String(one.run)))
+  const step = resolve.steps.find((one: any) => one.id === 'version')
   assert.ok(step, 'resolve validates no version')
   assert.match(step.run, /looks like a commit/, 'a commit SHA is not refused by name')
   // `v` and a stable X.Y.Z — the shape this repository's tags actually carry,
@@ -165,14 +162,11 @@ test('the version is refused before a registry is asked about it', () => {
 test('every job that binds an Environment waits for resolve first', () => {
   // The refusals live in `resolve`, and a job that bound a stage beside it
   // would start that stage's reviewer wait on a tag about to be refused —
-  // spending the approval the checks above exist to save. `source` binds dev
+  // spending the approval the checks above exist to save. `source` binds the selected source
   // to read one variable and is the easy one to forget.
   for (const [name, job] of Object.entries(workflow.jobs as Record<string, any>)) {
     if (job.environment === undefined) continue
-    assert.ok(
-      (job.needs ?? []).includes('resolve'),
-      `${name} binds ${job.environment} without waiting for resolve`,
-    )
+    assert.ok((job.needs ?? []).includes('resolve'), `${name} binds ${job.environment} without waiting for resolve`)
   }
 })
 
@@ -295,7 +289,9 @@ test('a version already in the registry is refused rather than skipped', () => {
    * that landed instead of resolving to one answer about the set.
    */
   const gates = [
-    ...commands.matchAll(/mbuild verify -- ([^\n]+) \|\| held=\$\?\n\s*if \[ "\$held" -eq 0 \]; then\n(\s*echo[^\n]+)/g),
+    ...commands.matchAll(
+      /mbuild verify -- ([^\n]+) \|\| held=\$\?\n\s*if \[ "\$held" -eq 0 \]; then\n(\s*echo[^\n]+)/g,
+    ),
   ]
   assert.equal(gates.length, 2, 'one refusal per command, before it acts')
   for (const [, invocation, refusal] of gates) {
@@ -314,8 +310,8 @@ test('a promotion also proves the source holds what it is about to move', () => 
   const source = commands.match(
     /mbuild verify -- ([^\n]+) \|\| held=\$\?\n\s*if \[ "\$held" -eq 66 \]; then\n\s*echo "::error title=not published::/,
   )
-  assert.ok(source, 'nothing proves dev holds the artifact the promotion is about to move')
-  assert.match(source[1]!, /--tag "\$SHA" --stage dev --artifact "\$ARTIFACT" --version "\$TAG"/)
+  assert.ok(source, 'nothing proves the selected source holds the artifact the promotion is about to move')
+  assert.match(source[1]!, /--tag "\$SHA" --stage "\$SOURCE_STAGE" --artifact "\$ARTIFACT" --version "\$TAG"/)
 })
 
 test('a registry that could not be read is not a registry that is empty', () => {
@@ -412,11 +408,9 @@ test('the AWS role is composed from the account id, as every other workflow does
   assert.doesNotMatch(commands, /vars\.AWS_DEPLOY_ROLE_ARN/)
 
   /*
-   * And each job's literal stage is the Environment that job binds. The stage
-   * is written out rather than threaded from an input because these two jobs
-   * each serve one, which costs the expression's own guarantee that the two
-   * agree — a swapped pair passes every other assertion here and fails at STS,
-   * with a role name that reads correct.
+   * Each job's role uses the same selector as its Environment. Publication
+   * takes an allowlisted target; promotion retains its literal prod target.
+   * A swapped selector would pass the other checks and fail at STS.
    */
   for (const [name, job] of Object.entries<any>(workflow.jobs)) {
     const federation = job.steps?.find((step: any) => /configure-aws-credentials/.test(String(step.uses ?? '')))
@@ -430,10 +424,10 @@ test('the AWS role is composed from the account id, as every other workflow does
 })
 
 test('a promotion carries the source declaration from a job that bound its environment', () => {
-  // `vars` resolves in the environment a job binds to, so dev's block can only
+  // `vars` resolves in the environment a job binds to, so the source block can only
   // reach prod's job as an output. One job for it, not one per artifact: the
   // declaration belongs to the stage, not to the image.
-  assert.equal(workflow.jobs.source.environment, 'dev')
+  assert.equal(workflow.jobs.source.environment, "${{ inputs.source || 'dev' }}")
   assert.equal(workflow.jobs.source.strategy, undefined)
   assert.ok(workflow.jobs.promote.needs.includes('source'))
   assert.match(commands, /stage-config-from: \$\{\{ needs\.source\.outputs\.config \}\}/)
