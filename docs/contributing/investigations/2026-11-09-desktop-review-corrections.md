@@ -66,4 +66,4 @@ Registry credential guidance belongs to the relevant form fields, not a permanen
 
 ## Filter and keyboard boundaries
 
-Boxes displays the API’s filtered total beside its filter, independent of the current page size. Registry filtering uses the same Covers label shown in rows, including `every repository` and a scoped prefix’s trailing wildcard. Pending registry requests display a loading status and an unknown count rather than zero. Card keyboard navigation handles only events targeting the card itself; nested controls retain native Enter/Space activation.
+Boxes displays the API’s filtered total beside its filter, independent of the current page size. While a replacement request retains placeholder rows from the previous filter, the count shows `—` until the new total arrives. Registry filtering uses the same Covers label shown in rows, including `every repository` and a scoped prefix’s trailing wildcard. Pending registry requests display a loading status and an unknown count rather than zero. Card keyboard navigation handles only events targeting the card itself; nested controls retain native Enter/Space activation.

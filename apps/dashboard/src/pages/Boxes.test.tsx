@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   pending: false,
   // The two account-state queries do not resolve together.
   boxCountPending: false,
+  placeholder: false,
 }))
 
 // Stand-ins for the two dialogs, so the assertions can read what the page
@@ -73,7 +74,7 @@ vi.mock('@/hooks/useBoxes', async (importOriginal) => ({
   useBoxes: () => ({
     data: state.pending ? undefined : { items: state.items, total: state.total, totalPages: 1 },
     isLoading: false,
-    isPlaceholderData: false,
+    isPlaceholderData: state.placeholder,
     error: undefined,
   }),
 }))
@@ -147,6 +148,7 @@ describe('Boxes page, empty account', () => {
     state.role = OrganizationUserRoleEnum.OWNER
     state.pending = false
     state.boxCountPending = false
+    state.placeholder = false
     // Most cases are about the empty state itself, so start from a browser that
     // has already dismissed the guide; auto-open has its own case below.
     localStorage.setItem('SkipOnboarding_user-1', 'true')
@@ -174,6 +176,17 @@ describe('Boxes page, empty account', () => {
     state.total = 42
     render()
     expect(document.querySelector('.resource-filter')?.textContent).toBe('42')
+  })
+
+  it('hides the previous filter total while replacement results are pending', () => {
+    state.total = 42
+    state.placeholder = true
+    render()
+    expect(document.querySelector('.resource-filter')?.textContent).toBe('—')
+    state.placeholder = false
+    state.total = 3
+    act(() => root!.render(<Boxes />))
+    expect(document.querySelector('.resource-filter')?.textContent).toBe('3')
   })
 
   it('keeps the page and leads with the table empty state', () => {

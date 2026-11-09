@@ -737,7 +737,7 @@ const Boxes: React.FC = () => {
           label="Filter boxes"
           value={filters.idOrName ?? ''}
           onChange={(value) => handleFiltersChange({ ...filters, idOrName: value || undefined })}
-          count={boxesData?.total ?? '—'}
+          count={boxesDataIsPlaceholderData ? '—' : (boxesData?.total ?? '—')}
         />
         <div className="flex-1" />
         {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
