@@ -84,6 +84,75 @@ elif args[:2] == ["llvm-cov", "report"]:
 
 
 class NativeCoveragePathsTest(unittest.TestCase):
+    def test_native_go_coverage_works_without_an_ordinary_dev_archive(self):
+        import json
+
+        repo = COLLECTOR.parents[2]
+        boundary_tool = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+root = Path(os.environ["NATIVE_MAKE_ROOT"])
+args = sys.argv[1:]
+tool = Path(sys.argv[0]).name
+target = Path(os.environ["CARGO_TARGET_DIR"])
+if not target.is_absolute():
+    target = root / target
+library = target / "debug/libboxlite.a"
+entry = {"tool": tool, "args": args}
+if tool == "cargo":
+    library.parent.mkdir(parents=True, exist_ok=True)
+    library.write_text("native library produced by Cargo")
+elif tool == "bash":
+    selected = root / args[-1]
+    entry.update(library=str(selected), exists=selected.is_file())
+elif tool == "go" and args[0] == "test":
+    selected = Path(os.environ["CGO_LDFLAGS"])
+    entry.update(library=str(selected), exists=selected.is_file())
+    profile = next(value.split("=", 1)[1] for value in args if value.startswith("-coverprofile="))
+    Path(profile).write_text(selected.read_text())
+with (root / "calls.jsonl").open("a") as output:
+    output.write(json.dumps(entry) + "\\n")
+'''
+        for absolute in (False, True):
+            with self.subTest(absolute=absolute), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch).resolve() / "clean workspace"
+                (root / "sdks/go").mkdir(parents=True)
+                tools = root / "bin"
+                tools.mkdir()
+                for name in ("cargo", "go", "bash"):
+                    executable = tools / name
+                    executable.write_text(boundary_tool)
+                    executable.chmod(0o755)
+                target = Path(scratch).resolve() / "external target" if absolute else Path("instrumented target")
+                resolved_target = target if absolute else root / target
+                library = resolved_target / "debug/libboxlite.a"
+                (root / "Makefile").write_text(
+                    "SHELL := /bin/bash\n"
+                    f"PROJECT_ROOT := {root}\n"
+                    f"SCRIPT_DIR := {repo / 'scripts'}\n"
+                    f"include {repo / 'make/dev.mk'}\n"
+                    f"include {repo / 'make/coverage.mk'}\n"
+                )
+                result = subprocess.run(
+                    ["make", "coverage:go:checkpoint", "SETUP_DONE=1"],
+                    cwd=root,
+                    env={**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                         "NATIVE_MAKE_ROOT": str(root), "CARGO_TARGET_DIR": str(target),
+                         "CARGO_LLVM_COV": "1", "CGO_LDFLAGS": str(library)},
+                    capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+                self.assertFalse((root / "target/debug/libboxlite.a").exists())
+                rewrites = [call for call in calls if call["tool"] == "bash"]
+                self.assertTrue(all(call["exists"] for call in rewrites), rewrites)
+                native_tests = [call for call in calls if call["tool"] == "go" and call["args"][0] == "test"]
+                self.assertEqual(len(native_tests), 1)
+                self.assertTrue(native_tests[0]["exists"], native_tests[0])
+                self.assertIn("-tags=boxlite_dev,boxlite_integration,boxlite_coverage", native_tests[0]["args"])
+                self.assertEqual((root / "target/coverage/go-checkpoint-native.out").read_text(), library.read_text())
+
     def test_sdk_integration_keeps_native_go_archives_in_the_vm_workflow(self):
         import json
 
