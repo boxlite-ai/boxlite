@@ -288,14 +288,19 @@ describe('CreateBoxDto managed volumes', () => {
     }
   })
 
-  it('rejects a volume mount with no managed_volume', async () => {
+  // `managed_volume` became optional the day the filestore variant arrived, so
+  // "no managed_volume" is no longer itself the defect — a volume naming no
+  // source at all is, and that rule lives in the XOR constraint. (This case
+  // carries an explicit read_only; see the filestore block below for why that
+  // currently matters.)
+  it('rejects a volume mount naming no volume source at all', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         volumes: [{ guest_path: '/data', read_only: false }],
       }),
     )
 
-    expect(JSON.stringify(errors)).toContain('isString')
+    expect(JSON.stringify(errors)).toContain('isExactlyOneVolumeSource')
   })
 
   it('rejects an empty managed_volume', async () => {
@@ -354,6 +359,125 @@ describe('CreateBoxDto managed volumes', () => {
     )
 
     expect(getReadOnlyConstraints(errors)).toHaveProperty('isIn')
+  })
+})
+
+// A volume reference has exactly two mutually exclusive forms: a managed
+// volume (`managed_volume`) or a GCP Filestore instance (`filestore.instance`).
+// These pin the XOR between them, the instance-name grammar the runner
+// registry accepts, and the read-only refusal on the filestore variant.
+describe('CreateBoxDto filestore volume variant', () => {
+  function volumeFieldConstraints(errors: Awaited<ReturnType<typeof validate>>, field: string) {
+    return errors
+      .find((error) => error.property === 'volumes')
+      ?.children?.[0]?.children?.find((error) => error.property === field)?.constraints
+  }
+
+  function instanceConstraints(errors: Awaited<ReturnType<typeof validate>>) {
+    return errors
+      .find((error) => error.property === 'volumes')
+      ?.children?.[0]?.children?.find((error) => error.property === 'filestore')
+      ?.children?.find((error) => error.property === 'instance')?.constraints
+  }
+
+  it('accepts a volume referencing only a filestore instance', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ guest_path: '/data', filestore: { instance: 'ml-scratch' } }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  // Both references at once is ambiguous — there is no precedence between a
+  // managed volume and a filestore instance to fall back on.
+  it('rejects a volume naming both a managed volume and a filestore instance', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: 'volume-123', guest_path: '/data', filestore: { instance: 'ml-scratch' } }],
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isExactlyOneVolumeSource')
+  })
+
+  // Neither reference is a volume with no backend at all: the mapper would
+  // persist it with no volumeId and no filestore, and the runner would mount
+  // nothing while the box still claims the volume.
+  it('rejects a volume naming no volume source', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ guest_path: '/data' }],
+      }),
+    )
+
+    expect(JSON.stringify(errors)).toContain('isExactlyOneVolumeSource')
+  })
+
+  // The instance name reaches the host mount path the runner derives from it,
+  // so the grammar must keep out path separators and relative components —
+  // and stay within the DNS-like shape the runner registry accepts.
+  it.each(['ML', '-x', 'a/b'])('rejects the filestore instance name %s', async (instance) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ guest_path: '/data', filestore: { instance } }],
+      }),
+    )
+
+    expect(instanceConstraints(errors)).toHaveProperty('matches')
+  })
+
+  // Read-only mounts are as unimplemented for filestore volumes as they are
+  // for managed ones; accepting the flag would hand back a writable NFS mount
+  // the caller believes is protected.
+  it('rejects a read-only filestore volume mount', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ guest_path: '/data', filestore: { instance: 'ml-scratch' }, read_only: true }],
+      }),
+    )
+
+    expect(volumeFieldConstraints(errors, 'read_only')).toHaveProperty('isIn')
+  })
+
+  // An empty managed_volume is rejected by IsNotEmpty on its own — it is a
+  // present-but-empty selector that can never match a volume, not a missing
+  // reference that the XOR would judge.
+  it('rejects an empty managed_volume on the filestore variant too', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: '', guest_path: '/data' }],
+      }),
+    )
+
+    expect(volumeFieldConstraints(errors, 'managed_volume')).toHaveProperty('isNotEmpty')
+  })
+
+  // Null is not "absent" for either reference. Both properties use
+  // ValidateIf(value !== undefined) rather than IsOptional precisely so a
+  // null reaches the property validators: the spec types managed_volume as a
+  // string and filestore as an object, and an IsOptional here would silently
+  // accept `managed_volume: null` riding along with a real filestore
+  // reference (and vice versa) — a payload the XOR counts as satisfied.
+  it('rejects a null managed_volume riding along with a filestore reference', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: null, guest_path: '/data', filestore: { instance: 'ml-scratch' } }],
+      }),
+    )
+
+    expect(volumeFieldConstraints(errors, 'managed_volume')).toHaveProperty('isString')
+  })
+
+  it('rejects a null filestore riding along with a managed volume', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: 'volume-123', guest_path: '/data', filestore: null }],
+      }),
+    )
+
+    expect(volumeFieldConstraints(errors, 'filestore')).toHaveProperty('isObject')
   })
 })
 

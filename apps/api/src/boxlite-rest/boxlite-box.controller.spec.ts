@@ -242,7 +242,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
     const { controller, boxService } = makeController()
 
     await expect(controller.createBox(keyContext([WRITE_BOXES]), dtoWithVolume, Context.user())).rejects.toThrow(
-      /managed volume/,
+      /Attaching a volume requires/,
     )
     expect(boxService.create).not.toHaveBeenCalled()
   })
@@ -314,7 +314,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
 
     await expect(
       controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume, Context.user()),
-    ).rejects.toThrow(/managed volume/)
+    ).rejects.toThrow(/Attaching a volume requires/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
 
@@ -322,7 +322,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
     const { controller, boxService } = makeController()
 
     await expect(controller.createBox(memberContext(undefined), dtoWithVolume, Context.user())).rejects.toThrow(
-      /managed volume/,
+      /Attaching a volume requires/,
     )
     expect(boxService.create).not.toHaveBeenCalled()
   })

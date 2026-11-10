@@ -35,19 +35,45 @@ export class BoxProgressDto {
   retryAfterMs: number
 }
 
+/**
+ * The filestore reference of a box volume. It carries the logical name the
+ * instance has in the runner's FILESTORE_INSTANCES registry — never an
+ * address — so an instance that is recreated under the same name needs no
+ * change to historical boxes.
+ */
+@ApiSchema({ name: 'BoxVolumeFilestoreRef' })
+export class BoxVolumeFilestoreRef {
+  @ApiProperty({
+    description: 'Filestore instance logical name in the runner registry',
+    example: 'ml-scratch',
+  })
+  instance: string
+}
+
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
-  @ApiProperty({
-    description: 'The ID of the volume',
+  /**
+   * The managed volume's server-assigned id. Absent for filestore volumes,
+   * which reference an instance by name instead — exactly one of the two
+   * reference forms is present on any persisted volume.
+   */
+  @ApiPropertyOptional({
+    description: 'The ID of the managed volume; absent for filestore volumes',
     example: 'volume123',
   })
-  volumeId: string
+  volumeId?: string
 
   @ApiProperty({
     description: 'The mount path for the volume',
     example: '/data',
   })
   mountPath: string
+
+  @ApiPropertyOptional({
+    description: 'The Filestore instance reference; absent for managed volumes',
+    type: BoxVolumeFilestoreRef,
+  })
+  filestore?: BoxVolumeFilestoreRef
 
   @ApiPropertyOptional({
     description:

@@ -553,6 +553,67 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ---
 
+## GCP Filestore volumes
+
+A box can mount a GCP Filestore NFS instance by reference. The reference
+carries the instance's **logical name**; the address is resolved from the
+runner's registry at mount time, so recreating an instance under the same
+name requires no change to historical boxes.
+
+### Registry
+
+`FILESTORE_INSTANCES` (JSON array) declares what this runner may mount:
+
+```json
+[{"name": "ml-scratch", "server": "10.x.x.x", "export": "/vol1", "mountOptions": []}]
+```
+
+Validation runs at startup: malformed JSON, a duplicate name, a name outside
+`^[a-z0-9][a-z0-9-]{0,62}$`, an empty `server` or `export`, or a
+`mountOptions` entry carrying a pinned option (`vers`, `nfsvers`, `proto`,
+`soft`, `hard` — the protocol is NFSv4.1 and the retry posture is hard)
+refuses to start the runner.
+
+### How it mounts
+
+- One mount per instance, shared by every box referencing it; created on
+  demand (`mount -t nfs -o vers=4.1,hard ...`), and reclaimed when no box
+  record references it anymore. `mountOptions` entries are appended to the
+  same `-o` list.
+- The box binds to its own data directory inside the export
+  (`/mnt/boxlite-filestore-<instance>/<box_id>-<n>`), `chmod 0777` — NFS
+  permissions are real, unlike the FUSE backends' faked ones.
+- Destroy unbinds only: the data directory and its data survive, same as a
+  bucket survives a destroy.
+
+### Troubleshooting: box started but its filestore mountpoint is empty
+
+Start re-mounts lost mounts (e.g. after a host reboot) and logs failures
+without failing the start — the same policy as the object-storage backends.
+A box that started while its NFS instance was unreachable therefore shows an
+**empty directory** at the guest path: stop the box, fix connectivity or the
+registry, start again. NFS mounts are `hard`: with the network down, IO in
+the box hangs instead of erroring — by design, not a crash.
+
+Changing an instance's `server` in the registry does not touch an existing
+mount: the runner reuses whatever is already mounted at
+`/mnt/boxlite-filestore-<instance>`. A dead address therefore leaves a
+hard-mounted stale mount that times out every probe — unmount the old mount
+(`umount /mnt/boxlite-filestore-<instance>`) or reboot the host after editing
+the registry.
+
+### Ops prerequisites
+
+- Filestore instance: zonal, NFSv4.1, 1 TiB minimum, same VPC as the runner,
+  port 2049 open. Capacity exhaustion shows up in the box as ENOSPC.
+- Host: NFS client package (`nfs-utils` on RHEL-family, `nfs-common` on
+  Debian-family). No autofs; the runner mounts explicitly.
+- **Deploy order: runners before the API.** An API upgraded ahead of its
+  runners can dispatch filestore volumes to a runner that predates the
+  feature; the old binary treats the reference as a bucket id and fails the
+  create with a confusing mount error. Runners that already understand
+  `FILESTORE_INSTANCES` make the window harmless.
+
 ## Background services
 
 ### Box state sync
