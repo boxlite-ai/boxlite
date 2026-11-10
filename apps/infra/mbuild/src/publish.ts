@@ -24,7 +24,9 @@
  * testable without a registry, a daemon or credentials.
  */
 
-import { join, resolve } from 'node:path'
+import { join, resolve, isAbsolute } from 'node:path'
+import { createHash } from 'node:crypto'
+import { mkdir, rm } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { AuditConfig, BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
 import { addressFor, assertTag, type Registry } from './address.ts'
@@ -594,15 +596,7 @@ const assertNoHighSeverityAdvisories = async ({
   throw new AuditFailedError(`${config.audit.manager} audit did not pass, so no image was built.\n${said}`)
 }
 
-export const publish = async ({
-  config,
-  stage,
-  registry,
-  tag,
-  run,
-  log = console.log,
-  clock = systemClock,
-}: {
+type PublishOptions = {
   config: BuildConfig
   stage: string
   registry: Registry
@@ -610,9 +604,18 @@ export const publish = async ({
   run: Run
   log?: (line: string) => void
   clock?: Clock
-}): Promise<PublishOutcome[]> => {
+}
+
+const publishImages = async ({
+  config,
+  stage,
+  registry,
+  tag,
+  run,
+  log = console.log,
+  clock = systemClock,
+}: PublishOptions): Promise<PublishOutcome[]> => {
   assertTag(tag)
-  if (registry.kind === 'ghcr') throw new PublishError('GHCR publication is not supported by this tooling version')
   /*
    * Audited once, the first time a build is actually going to happen. Not up
    * front: a re-publish whose artifacts are all present builds nothing, and
@@ -647,20 +650,64 @@ export const publish = async ({
     log(`Building ${artifact} from ${dockerfile} as ${address}`)
     const built = await run(
       'docker',
-      ['build', '--platform', RUNTIME_PLATFORM, '--build-arg', `REVISION=${tag}`, '-f', dockerfile, '-t', address, context],
+      ['build', '--platform', RUNTIME_PLATFORM, '--build-arg', `REVISION=${tag}`,
+        ...(registry.kind === 'ghcr' ? ['--label', `org.opencontainers.image.source=https://github.com/${registry.repository}`] : []),
+        '-f', dockerfile, '-t', address, context],
       { echo: true },
     )
     // The exit code, not the output: docker already wrote the reason above.
     if (built.code !== 0) throw new PublishError(`Could not build ${artifact}: docker build exited ${built.code}`)
     log(`Pushing ${address}`)
-    const pushed = await run('docker', ['push', address], { echo: true })
+    const pushed = await run('docker', ['push', ...(registry.kind === 'ghcr' ? ['--platform', RUNTIME_PLATFORM] : []), address], { echo: true })
     if (pushed.code !== 0) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
     log(`Pushed ${address}`)
     outcomes.push({ artifact, address, built: true })
   }
 
-  await assertNoBlockingFindings({ registrar, scan: config.stages[stage]!.scan, outcomes, tag, clock, log })
+  if (registry.kind === 'ghcr') {
+    const reader = ghcrRegistrar({ run, config, registry })
+    for (const outcome of outcomes) {
+      const digest = await reader.digestOf(outcome.artifact, tag)
+      if (!digest) throw new NotPublishedError(`GHCR did not retain ${outcome.address}`)
+      log(`${outcome.address}@${digest}; image scanning runs after cloud import`)
+    }
+  } else {
+    await assertNoBlockingFindings({ registrar, scan: config.stages[stage]!.scan, outcomes, tag, clock, log })
+  }
   return outcomes
+}
+
+/** Workflow concurrency owns cross-run exclusion; atomic directories cover CLI processes inside one job. */
+export const publish = async (options: PublishOptions): Promise<PublishOutcome[]> => {
+  if (options.registry.kind !== 'ghcr') return publishImages(options)
+  for (const artifact of Object.keys(options.config.artifacts)) addressFor({ config: options.config, registry: options.registry, artifact, tag: options.tag })
+  const repository = process.env.GITHUB_REPOSITORY
+  const temporary = process.env.RUNNER_TEMP
+  const runId = process.env.GITHUB_RUN_ID ?? ''
+  const attempt = process.env.GITHUB_RUN_ATTEMPT ?? ''
+  if (process.env.GITHUB_ACTIONS !== 'true' || repository?.toLowerCase() !== options.registry.repository ||
+    process.env.GITHUB_WORKFLOW_REF !== `${repository}/.github/workflows/mbuild-release.yml@refs/heads/main` ||
+    process.env.GITHUB_JOB !== 'publish' || !/^[1-9][0-9]{0,19}$/.test(runId) || !/^[1-9][0-9]{0,19}$/.test(attempt) ||
+    !temporary || !isAbsolute(temporary)) {
+    throw new PublishError(`GHCR publication requires mbuild-release on main; run gh workflow run mbuild-release.yml --repo ${options.registry.repository} --ref main -f command=publish -f tag=${options.tag.slice(0, -41)}`)
+  }
+  const directory = join(temporary, 'mbuild-ghcr-publish', `${runId}-${attempt}`)
+  await mkdir(directory, { recursive: true })
+  const held: string[] = []
+  try {
+    for (const artifact of Object.keys(options.config.artifacts).sort()) {
+      const identity = createHash('sha256').update(JSON.stringify([options.registry.repository, options.tag, artifact])).digest('hex')
+      const lock = join(directory, identity)
+      try { await mkdir(lock) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PublishError(`GHCR ${artifact}:${options.tag} is already publishing in this job`)
+        throw error
+      }
+      held.push(lock)
+    }
+    return await publishImages(options)
+  } finally {
+    await Promise.all(held.map((lock) => rm(lock, { recursive: true })))
+  }
 }
 
 /** Where one artifact sits, for a commit the registry already holds. */

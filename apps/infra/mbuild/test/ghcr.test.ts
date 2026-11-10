@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { addressFor, ghcrRegistryFor, resolveRegistry } from '../src/address.ts'
 import { ghcrRegistrar } from '../src/ghcr.ts'
-import { NotPublishedError, promote, publish, verifyPublished, type Run, type RunOptions } from '../src/publish.ts'
+import { NotPublishedError, promote, verifyPublished, type Run, type RunOptions } from '../src/publish.ts'
 import { config, credentials, digest, ghcr, manifest, ok, response, sha, tag } from './ghcr-fixture.ts'
 
 const probe = ({ missing = false, status = 200, tokenStatus = 200, body = manifest, contentType = 'application/vnd.docker.distribution.manifest.v2+json', token = 'bearer-token' } = {}) => {
@@ -70,10 +70,9 @@ test('public GHCR verification is read-only and reports confirmed absence', asyn
   await assert.rejects(verifyPublished({ config, stage: 'ghcr', registry: ghcr, tag, run: probe({ missing: true }).run }), NotPublishedError)
 })
 
-test('this read-only layer refuses GHCR writes before any external command', async () => {
+test('unsupported GHCR import routes are refused before any external command', async () => {
   let effects = 0
   const run: Run = async () => { effects++; return ok() }
-  await assert.rejects(publish({ config, stage: 'ghcr', registry: ghcr, tag, run }), /not supported/)
   const cloud = resolveRegistry({ config, stage: 'dev', region: 'us-east1', project: 'project' })
   await assert.rejects(promote({ config, tag, from: { stage: 'ghcr', registry: ghcr }, to: { stage: 'dev', registry: cloud }, run }), /not supported/)
   await assert.rejects(promote({ config, tag, from: { stage: 'dev', registry: cloud }, to: { stage: 'ghcr', registry: ghcr }, run }), /not supported/)

@@ -51,7 +51,15 @@ Set `GHCR_USERNAME` and `GHCR_TOKEN`, or `GITHUB_ACTOR` and `GH_TOKEN` in Action
 HTTP Content-Type identifies single-platform OCI or Docker schema 2 manifests; an embedded media type may be omitted but must agree when present.
 Indexes are refused, and digests are computed from the original manifest bytes.
 Confirmed missing images exit `66`; authentication, transport and malformed responses fail separately.
-This tooling layer exposes GHCR verification only; GHCR publication and import are refused before external commands.
+GHCR publication is restricted to the `publish` job of `mbuild-release` on `main`, independently of cloud credentials.
+Local operators use the workflow; direct CLI writes outside its context fail before registry access.
+The GHCR release workflow integration is required for publication.
+Workflow concurrency serializes runs for one release; atomic locks in `RUNNER_TEMP` exclude competing CLI processes inside a job.
+Different artifacts remain parallel, and failed publications release their locks.
+Publication audits dependencies, builds only missing images, and verifies every uploaded digest.
+Images carry the source repository label and explicitly target `linux/amd64`; Docker API 1.46 or later is required.
+These guarantees cover the supported publisher; a package writer can still bypass it with a direct push.
+GHCR imports are not supported by this tooling version.
 
 Promotion copies existing image bytes within one registry kind. Cross-cloud promotion is refused.
 The caller needs source read and destination write access; `promoteFrom` lets bootstrap prepare
