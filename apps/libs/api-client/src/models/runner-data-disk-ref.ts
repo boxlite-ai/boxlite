@@ -13,6 +13,7 @@
  */
 
 
+
 /**
  * Cloud identity of the runner data disk. diskType names the backend so the API can tell expandable block disks from backends with a different resize path (e.g. Filestore); runners predating the field are treated as hyperdisk_balanced, the only type infra provisions today.
  */
@@ -38,3 +39,4 @@ export interface RunnerDataDiskRef {
      */
     'diskType'?: string;
 }
+

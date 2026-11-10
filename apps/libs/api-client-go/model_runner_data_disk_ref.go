@@ -30,7 +30,7 @@ type RunnerDataDiskRef struct {
 	// Name of the data disk, as the cloud API addresses it
 	DiskName string `json:"diskName"`
 	// Backend behind the identity (hyperdisk_balanced, filestore, ...). Omitted by runner binaries predating the field; the API then assumes hyperdisk_balanced, the only data disk infra provisions today.
-	DiskType             string `json:"diskType,omitempty"`
+	DiskType *string `json:"diskType,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -57,7 +57,6 @@ func NewRunnerDataDiskRefWithDefaults() *RunnerDataDiskRef {
 	return &this
 }
 
-// Cloud provider of the data disk
 // GetProvider returns the Provider field value
 func (o *RunnerDataDiskRef) GetProvider() string {
 	if o == nil {
@@ -82,7 +81,6 @@ func (o *RunnerDataDiskRef) SetProvider(v string) {
 	o.Provider = v
 }
 
-// Cloud project the data disk lives in
 // GetProject returns the Project field value
 func (o *RunnerDataDiskRef) GetProject() string {
 	if o == nil {
@@ -107,7 +105,6 @@ func (o *RunnerDataDiskRef) SetProject(v string) {
 	o.Project = v
 }
 
-// Cloud zone the data disk lives in
 // GetZone returns the Zone field value
 func (o *RunnerDataDiskRef) GetZone() string {
 	if o == nil {
@@ -132,7 +129,6 @@ func (o *RunnerDataDiskRef) SetZone(v string) {
 	o.Zone = v
 }
 
-// Name of the data disk, as the cloud API addresses it
 // GetDiskName returns the DiskName field value
 func (o *RunnerDataDiskRef) GetDiskName() string {
 	if o == nil {
@@ -157,24 +153,40 @@ func (o *RunnerDataDiskRef) SetDiskName(v string) {
 	o.DiskName = v
 }
 
-// Backend behind the identity (hyperdisk_balanced, filestore, ...). Omitted by runner binaries predating the field; the API then assumes hyperdisk_balanced, the only data disk infra provisions today.
-// GetDiskType returns the DiskType field value
+// GetDiskType returns the DiskType field value if set, zero value otherwise.
 func (o *RunnerDataDiskRef) GetDiskType() string {
-	if o == nil {
+	if o == nil || IsNil(o.DiskType) {
 		var ret string
 		return ret
 	}
-
-	return o.DiskType
+	return *o.DiskType
 }
 
-// SetDiskType sets field value
+// GetDiskTypeOk returns a tuple with the DiskType field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerDataDiskRef) GetDiskTypeOk() (*string, bool) {
+	if o == nil || IsNil(o.DiskType) {
+		return nil, false
+	}
+	return o.DiskType, true
+}
+
+// HasDiskType returns a boolean if a field has been set.
+func (o *RunnerDataDiskRef) HasDiskType() bool {
+	if o != nil && !IsNil(o.DiskType) {
+		return true
+	}
+
+	return false
+}
+
+// SetDiskType gets a reference to the given string and assigns it to the DiskType field.
 func (o *RunnerDataDiskRef) SetDiskType(v string) {
-	o.DiskType = v
+	o.DiskType = &v
 }
 
 func (o RunnerDataDiskRef) MarshalJSON() ([]byte, error) {
-	toSerialize, err := o.ToMap()
+	toSerialize,err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -187,7 +199,9 @@ func (o RunnerDataDiskRef) ToMap() (map[string]interface{}, error) {
 	toSerialize["project"] = o.Project
 	toSerialize["zone"] = o.Zone
 	toSerialize["diskName"] = o.DiskName
-	toSerialize["diskType"] = o.DiskType
+	if !IsNil(o.DiskType) {
+		toSerialize["diskType"] = o.DiskType
+	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -215,7 +229,7 @@ func (o *RunnerDataDiskRef) UnmarshalJSON(data []byte) (err error) {
 		return err;
 	}
 
-	for _, requiredProperty := range requiredProperties {
+	for _, requiredProperty := range(requiredProperties) {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -280,3 +294,5 @@ func (v *NullableRunnerDataDiskRef) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

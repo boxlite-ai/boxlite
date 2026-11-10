@@ -7443,12 +7443,10 @@ components:
       - serviceName
       type: object
     RunnerDataDiskRef:
-      description: 'Cloud identity of the runner data disk. diskType names the backend so the API can tell expandable block disks from backends with a different resize path (e.g. Filestore); runners predating the field are treated as hyperdisk_balanced, the only type infra provisions today.'
-      example:
-        provider: gcp
-        project: boxlite-prod-project
-        zone: us-central1-a
-        diskName: boxlite-runner-data-host-1
+      description: "Cloud identity of the runner data disk. diskType names the backend\
+        \ so the API can tell expandable block disks from backends with a different\
+        \ resize path (e.g. Filestore); runners predating the field are treated as\
+        \ hyperdisk_balanced, the only type infra provisions today."
       properties:
         provider:
           description: Cloud provider of the data disk
@@ -7463,11 +7461,13 @@ components:
           example: us-central1-a
           type: string
         diskName:
-          description: Name of the data disk, as the cloud API addresses it
+          description: "Name of the data disk, as the cloud API addresses it"
           example: boxlite-runner-data-host-1
           type: string
         diskType:
-          description: Backend behind the identity (hyperdisk_balanced, filestore, ...). Omitted by runner binaries predating the field; the API then assumes hyperdisk_balanced, the only data disk infra provisions today.
+          description: "Backend behind the identity (hyperdisk_balanced, filestore,\
+            \ ...). Omitted by runner binaries predating the field; the API then assumes\
+            \ hyperdisk_balanced, the only data disk infra provisions today."
           example: hyperdisk_balanced
           type: string
       required:
@@ -7508,7 +7508,8 @@ components:
         dataDiskRef:
           allOf:
           - $ref: "#/components/schemas/RunnerDataDiskRef"
-          description: Cloud identity of the runner data disk; absent when the runner has none (AWS or local)
+          description: Cloud identity of the runner data disk; absent when the runner
+            has none (AWS or local)
         domain:
           description: Runner domain
           example: runner-123.boxlite.example.com
