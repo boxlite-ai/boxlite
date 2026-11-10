@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -55,6 +56,7 @@ const shortHour = (value: string) => {
 
 const ROW = 'grid grid-cols-[1fr_110px_110px_110px] items-center gap-x-4'
 
+/** Displays daily or hourly usage costs, with totals calculated for the active time window. */
 export function CostOverTime() {
   const [view, setView] = useState<'chart' | 'list'>('chart')
   // Pinned once per mount: a window recomputed every render would churn the
@@ -121,15 +123,11 @@ export function CostOverTime() {
             <Spinner className="size-6" />
           </div>
         ) : view === 'chart' && total === 0 ? (
-          <Empty className="py-12">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <BarChart3 />
-              </EmptyMedia>
-              <EmptyTitle>No cost yet</EmptyTitle>
-              <EmptyDescription>Settled cost appears here once boxes run — quota-covered first.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <ResourceEmptyState
+            title="No cost yet"
+            icon={<BarChart3 className="size-6" />}
+            description="Settled cost appears here once boxes run — quota-covered first."
+          />
         ) : view === 'chart' ? (
           <div className="px-[22px] py-5">
             <div className="mb-3 flex flex-wrap items-center gap-4">

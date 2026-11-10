@@ -4,11 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
-import { BoxCube } from '@/components/BoxCube'
-import { boxCubeState, isInboundEnabled } from '@/lib/box-shape'
+import { getBoxDisplayName, getBoxPublicIdLabel, getBoxRouteId } from '@/lib/box-identity'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
@@ -23,7 +22,7 @@ import {
   Copy,
   Loader2,
   MoreHorizontal,
-  Pause,
+  Square,
   Play,
   RotateCcw,
   Trash2,
@@ -33,14 +32,13 @@ import { BoxTableProps } from './types'
 import { PAGE_SIZE_OPTIONS } from '@/constants/Pagination'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-// Exact design palette (Boxes page.dc.html statusColors) — used inline so the
-// status dots/labels render at the precise hue, not a token approximation.
+// Business states choose semantic colors; shared presentation owns geometry.
 const STATUS = {
-  running: '#5ad67d',
-  idle: '#e0b341',
-  stopped: '#8C919C',
-  error: '#e0564a',
-  dim: '#5b616e',
+  running: 'hsl(var(--success))',
+  stopped: 'hsl(var(--muted-foreground))',
+  error: 'hsl(var(--destructive))',
+  idle: 'hsl(var(--warning))',
+  dim: 'hsl(var(--muted-foreground))',
 } as const
 
 function statusOf(box: Box): { label: string; color: string } {
@@ -86,6 +84,7 @@ function isSelectingText(): boolean {
 }
 
 // One-click name copy that must not trigger the row's navigation click.
+/** Copies a box name without triggering navigation from its parent row. */
 function CopyNameButton({ name, className }: { name: string; className?: string }) {
   const [copied, setCopied] = useState(false)
 
@@ -103,7 +102,7 @@ function CopyNameButton({ name, className }: { name: string; className?: string 
         setCopied(true)
         setTimeout(() => setCopied(false), 1300)
       }}
-      className={`shrink-0 text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none ${className ?? ''}`}
+      className={`shrink-0 text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className ?? ''}`}
     >
       {copied ? <Check className="size-[13px]" style={{ color: STATUS.running }} /> : <Copy className="size-[13px]" />}
     </button>
@@ -214,7 +213,7 @@ export function BoxTable({
             onClick={() => handleStop(box.id)}
             className={buttonClassName}
           >
-            <Pause className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+            <Square className={iconClassName} strokeWidth={1.3} fill="currentColor" />
           </AsciiButton>
         )}
         {writePermitted && transitioning && !startable && !stoppable && !recoverable && (
@@ -254,9 +253,7 @@ export function BoxTable({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
-      <div
-        className={`hidden ${GRID} flex-none items-center border-b border-border px-[18px] pb-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground md:grid`}
-      >
+      <div className={`hidden ${GRID} resource-list-head flex-none items-center md:grid`}>
         <span>Name</span>
         <span>Box ID</span>
         <span>Status</span>
@@ -278,18 +275,17 @@ export function BoxTable({
             </div>
           ))
         ) : data.length === 0 ? (
-          <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
-            <BoxCube state="empty" size={56} className="mb-4 text-muted-foreground" />
-            <div className="font-display text-em font-semibold">No boxes yet.</div>
-            <div className="mt-2 max-w-sm text-body text-muted-foreground">
-              Your agent creates them through the SDK, or you can make one by hand.
-            </div>
+          <ResourceEmptyState
+            title="No boxes yet."
+            icon={<Container className="size-6" />}
+            description="Your agent creates them through the SDK, or you can make one by hand."
+          >
             {onOpenQuickstart && (
-              <AsciiButton type="button" onClick={onOpenQuickstart} className="mt-4">
+              <button type="button" onClick={onOpenQuickstart} className="resource-guide-link">
                 Open Quickstart →
-              </AsciiButton>
+              </button>
             )}
-          </div>
+          </ResourceEmptyState>
         ) : (
           data.map((box) => {
             const st = statusOf(box)
@@ -304,18 +300,27 @@ export function BoxTable({
                   if (isSelectingText()) return
                   onRowClick?.(box)
                 }}
-                className={`group grid ${GRID} items-center border-b border-border px-[18px] py-3 text-[13px] transition-colors hover:bg-card ${
+                className={`group grid ${GRID} resource-list-row items-center ${
                   onRowClick ? 'cursor-pointer' : ''
                 } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
               >
                 {/* the box: its shape drawn, then its name */}
                 <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
-                  <BoxCube
-                    state={boxCubeState(box)}
-                    size={28}
-                    className={cn(isInboundEnabled(box) ? 'text-foreground' : 'text-muted-foreground')}
-                  />
-                  <span className="truncate text-em">{name}</span>
+                  <Container className="size-6 shrink-0 text-muted-foreground" />
+                  <a
+                    className="resource-link"
+                    href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                      if (onRowClick) {
+                        event.preventDefault()
+                        if (!isSelectingText()) onRowClick(box)
+                      }
+                    }}
+                  >
+                    {name}
+                  </a>
                   <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />
                 </span>
 
@@ -323,10 +328,7 @@ export function BoxTable({
                 <span className="truncate font-mono text-[11px] text-muted-foreground">{getBoxPublicIdLabel(box)}</span>
 
                 {/* status */}
-                <span className="flex items-center gap-[7px] font-mono text-[11px] tracking-[0.5px]">
-                  <span className="size-[7px]" style={{ background: st.color, boxShadow: `0 0 6px ${st.color}` }} />
-                  <span style={{ color: st.color }}>{st.label}</span>
-                </span>
+                <StatusIndicator label={st.label} color={st.color} />
 
                 {/* actions */}
                 <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
@@ -383,11 +385,11 @@ export function BoxTable({
                   onRowClick?.(box)
                 }}
                 onKeyDown={(e) => {
-                  if (!onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
+                  if (e.target !== e.currentTarget || !onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
                   e.preventDefault()
                   onRowClick(box)
                 }}
-                className={`w-full border border-border bg-background p-4 text-left transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 ${
+                className={`w-full border border-border bg-background p-4 text-left transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:ring-2 focus-visible:ring-brand/35 ${
                   onRowClick ? 'cursor-pointer' : ''
                 } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
               >
@@ -404,10 +406,7 @@ export function BoxTable({
                       {getBoxPublicIdLabel(box)}
                     </span>
                   </span>
-                  <span className="flex shrink-0 items-center gap-[7px] font-mono text-[11px] tracking-[0.5px]">
-                    <span className="size-[7px]" style={{ background: st.color, boxShadow: `0 0 6px ${st.color}` }} />
-                    <span style={{ color: st.color }}>{st.label}</span>
-                  </span>
+                  <StatusIndicator label={st.label} color={st.color} />
                 </div>
 
                 <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">

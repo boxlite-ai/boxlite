@@ -42,6 +42,19 @@ describe('WalletTransactionsTable PR #829 surface', () => {
     document.body.innerHTML = ''
   })
 
+  it('shows an empty credit history only after loading finishes', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    act(() => root?.render(<WalletTransactionsTable data={[]} loading />))
+    expect(host.textContent).toContain('Loading...')
+    expect(host.textContent).not.toContain('No credit activity yet')
+    act(() => root?.render(<WalletTransactionsTable data={[]} loading={false} />))
+    expect(host.querySelector('h2')?.textContent).toBe('No credit activity yet')
+    expect(host.textContent).toContain('Credit purchases, grants and usage')
+    expect(host.querySelector('[data-transaction-header]')).toBeNull()
+  })
+
   it('keeps the exact transaction grid, date, amount, and status vocabulary', () => {
     const host = document.createElement('div')
     document.body.appendChild(host)

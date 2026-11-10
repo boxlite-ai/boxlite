@@ -83,6 +83,8 @@ const Keys: React.FC = () => {
             Connect your apps, scripts, and SDKs to BoxLite.
           </p>
         </div>
+      </div>
+      <div className="mb-[14px] flex min-h-9 justify-end">
         <CreateApiKeyDialog
           availablePermissions={availablePermissions}
           apiUrl={apiUrl}

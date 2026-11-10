@@ -62,7 +62,7 @@ export function ConsoleTemplatePicker() {
     }
   }
   return (
-    <div className="grid min-h-0 gap-6 md:grid-cols-[minmax(0,1fr)_300px] lg:gap-8">
+    <div className="grid min-h-0 items-start gap-6 md:grid-cols-[minmax(0,1fr)_300px] lg:gap-8">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="font-display text-sm font-semibold">Choose an environment</h3>
@@ -100,7 +100,7 @@ export function ConsoleTemplatePicker() {
             Custom image <span aria-hidden="true">↗</span>
           </a>
         </div>
-        <div className="scrollbar-elevated max-h-[260px] sm:max-h-[350px] overflow-y-auto pr-1">
+        <div className="template-catalog">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {visible.map((item) => (
               <button
@@ -115,8 +115,10 @@ export function ConsoleTemplatePicker() {
                   createBox.reset()
                 }}
                 className={cn(
-                  'group min-h-[104px] rounded-none p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-45',
-                  activeId === item.id ? 'bg-accent' : 'bg-card hover:bg-accent',
+                  'group flex min-h-24 flex-col justify-start rounded-none border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-45',
+                  activeId === item.id
+                    ? 'border-brand/70 bg-accent'
+                    : 'border-border bg-card hover:border-foreground/40 hover:bg-accent',
                 )}
               >
                 <div className="flex items-center gap-2.5">
@@ -135,7 +137,7 @@ export function ConsoleTemplatePicker() {
           )}
         </div>
       </div>
-      <div className="flex min-w-0 flex-col rounded-none bg-card px-5 py-5">
+      <div className="template-detail flex min-w-0 flex-col self-start rounded-none border border-border bg-card px-5 py-5">
         <div className="flex items-start justify-between gap-3">
           <h3 className="flex items-center gap-3 font-display text-base font-semibold">
             <TemplateIcon id={activeId} />
@@ -168,7 +170,7 @@ export function ConsoleTemplatePicker() {
         <p className="mt-4 font-display text-xs text-muted-foreground">
           {selected?.access ?? 'Bring your own runtime and startup configuration.'}
         </p>
-        <div className="mt-auto pt-6">
+        <div className="pt-6">
           <AsciiButton
             variant="primary"
             className="w-full justify-center py-2.5"

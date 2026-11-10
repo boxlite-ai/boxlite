@@ -112,27 +112,27 @@ body {
   }
 
   .dark {
-    /* dark theme — bg #13161B, card #1A1D24, term #0D0F13, fg #FFFFFF, dim #8C919C, border #2A2F3A */
-    --background: 218 17% 9%;
+    /* Neutral near-black surfaces; semantic state and brand colors retain their hues. */
+    --background: 0 0% 4%;
     --foreground: 0 0% 100%;
-    --card: 222 16% 12%;
+    --card: 0 0% 7%;
     --card-foreground: 0 0% 100%;
-    --popover: 222 16% 12%;
+    --popover: 0 0% 9%;
     --popover-foreground: 0 0% 100%;
     --primary: 0 0% 100%;
-    --primary-foreground: 218 17% 9%;
-    --secondary: 222 16% 12%;
+    --primary-foreground: 0 0% 4%;
+    --secondary: 0 0% 7%;
     --secondary-foreground: 0 0% 100%;
-    --muted: 222 16% 12%;
-    --muted-foreground: 221 7% 58%;
-    --accent: 222 14% 16%;
+    --muted: 0 0% 7%;
+    --muted-foreground: 0 0% 62%;
+    --accent: 0 0% 12%;
     --accent-foreground: 0 0% 100%;
 
     --brand: 196 100% 47%;
     --brand-foreground: 0 0% 100%;
 
-    --border: 221 16% 20%;
-    --input: 221 16% 20%;
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
     --ring: 196 100% 47%;
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px -8px rgba(0, 0, 0, 0.55);
@@ -166,19 +166,19 @@ body {
     --destructive-foreground: 5 85% 72%;
     --destructive-separator: 5 29% 18%;
 
-    --sidebar-background: 218 17% 9%;
+    --sidebar-background: 0 0% 4%;
     --sidebar-foreground: 0 0% 100%;
     --sidebar-primary: 0 0% 100%;
-    --sidebar-primary-foreground: 218 17% 9%;
-    --sidebar-accent: 222 14% 16%;
+    --sidebar-primary-foreground: 0 0% 4%;
+    --sidebar-accent: 0 0% 12%;
     --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 221 16% 20%;
+    --sidebar-border: 0 0% 16%;
     --sidebar-ring: 196 100% 47%;
 
-    --code-background: 220 19% 6%;
+    --code-background: 0 0% 3%;
 
-    --scrollbar-track: 220 19% 6%;
-    --scrollbar-thumb: 221 16% 28%;
+    --scrollbar-track: 0 0% 3%;
+    --scrollbar-thumb: 0 0% 24%;
     --scrollbar-thumb-hover: 196 100% 47%;
   }
 
@@ -505,4 +505,85 @@ body {
   letter-spacing: normal;
   font-variant-ligatures: none;
   tab-size: 4;
+}
+
+/* Shared desktop resource contracts. Consumers opt in; business layouts remain local. */
+@layer components {
+  .resource-page {
+    @apply flex min-h-0 flex-col gap-6 px-4 py-7 sm:px-6 lg:px-10;
+  }
+  .resource-header {
+    @apply flex flex-col gap-5;
+  }
+  .resource-title {
+    @apply font-display text-page font-semibold text-foreground;
+  }
+  .resource-page-header {
+    @apply mb-6 shrink-0;
+  }
+  .resource-toolbar {
+    @apply flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3;
+  }
+  .resource-filter {
+    @apply flex h-9 w-full min-w-0 items-center gap-3 border border-border bg-card px-3 transition-colors focus-within:border-foreground sm:w-[380px] sm:flex-none;
+  }
+  .resource-empty {
+    @apply flex min-h-[280px] flex-col items-center justify-start gap-3 px-6 py-12 text-center;
+  }
+  .resource-empty-icon {
+    @apply mb-2 flex size-12 items-center justify-center border border-border bg-card text-muted-foreground;
+  }
+  .resource-list-head {
+    @apply min-h-11 border-b border-border px-4 py-3 font-mono text-meta font-medium normal-case tracking-normal text-muted-foreground;
+  }
+  .resource-list-row {
+    @apply min-h-14 border-b border-border/60 px-4 py-3 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+  }
+  .resource-name {
+    @apply truncate text-sm font-semibold text-foreground;
+  }
+  .resource-link {
+    @apply resource-name outline-none underline-offset-4 hover:underline focus-visible:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground;
+  }
+  .resource-status {
+    @apply inline-flex items-center gap-2 whitespace-nowrap font-mono text-meta font-normal normal-case tracking-normal text-foreground;
+  }
+  .resource-footer {
+    @apply flex flex-wrap items-center justify-between gap-3 px-4 py-4 font-mono text-meta normal-case tracking-normal text-muted-foreground;
+  }
+  .form-dialog-body {
+    @apply min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-6;
+  }
+  .form-dialog [data-slot='dialog-title'] {
+    @apply font-display text-lg font-semibold tracking-normal;
+  }
+  .form-field-label {
+    @apply mb-2 block font-mono text-meta font-medium normal-case tracking-normal text-foreground;
+  }
+  .form-field-input {
+    @apply h-10 w-full border border-border bg-background px-3 text-body text-foreground outline-none transition-colors focus:border-foreground/50 focus:ring-2 focus:ring-foreground/10 aria-[invalid=true]:border-destructive;
+  }
+}
+
+.resource-guide-link {
+  @apply text-body text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand;
+}
+
+/* Quickstart code needs its own boundary on the near-black page. */
+.quickstart-code-surface {
+  --quickstart-code-border: 0 0% 72%;
+  border: 1px solid hsl(var(--quickstart-code-border));
+  background: hsl(0 0% 98%);
+}
+.dark .quickstart-code-surface {
+  --quickstart-code-border: 0 0% 30%;
+  background: hsl(0 0% 7%);
+}
+@media (min-width: 768px) and (min-height: 800px) {
+  .template-detail {
+    position: sticky;
+    top: 84px;
+    max-height: calc(100svh - 108px);
+    overflow-y: auto;
+  }
 }

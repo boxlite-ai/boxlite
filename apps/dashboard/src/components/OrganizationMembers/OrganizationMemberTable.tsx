@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { StatusIndicator } from '@/components/ResourceLayout'
 import { useMemo, useState } from 'react'
-import { MoreHorizontal } from '@/components/ui/icon'
+import { MoreHorizontal, Users } from '@/components/ui/icon'
 import {
   ColumnDef,
   flexRender,
@@ -40,6 +41,7 @@ interface DataTableProps {
 
 type MemberRow = (OrganizationUser & { kind: 'member' }) | (OrganizationInvitation & { kind: 'invitation' })
 
+/** Combines members and pending invitations while preserving permission-gated role and invitation actions. */
 export function OrganizationMemberTable({
   data,
   invitations,
@@ -99,7 +101,7 @@ export function OrganizationMemberTable({
   return (
     <>
       <div>
-        <div className="rounded-md border">
+        <div className="border-t border-border">
           <Table>
             <TableHeader>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -134,7 +136,12 @@ export function OrganizationMemberTable({
                   </TableRow>
                 ))
               ) : (
-                <TableEmptyState colSpan={columns.length} message="No members or invitations found." />
+                <TableEmptyState
+                  colSpan={columns.length}
+                  message="No members or invitations found."
+                  icon={<Users className="size-6" />}
+                  description="Organization members and pending invitations appear here."
+                />
               )}
             </TableBody>
           </Table>
@@ -184,7 +191,7 @@ const getColumns = ({
       header: 'Email',
       cell: ({ row }) => (
         <div>
-          <div>{row.original.email}</div>
+          <div className="resource-name">{row.original.email}</div>
           {row.original.kind === 'invitation' && (
             <div className="mt-1 text-xs text-muted-foreground">
               Invited by {row.original.invitedBy} · Expires {new Date(row.original.expiresAt).toLocaleString()}
@@ -198,14 +205,14 @@ const getColumns = ({
       header: 'Status',
       accessorFn: (row) =>
         row.kind === 'member' ? 'Member' : new Date(row.expiresAt) < new Date() ? 'Expired' : 'Invited',
-      cell: ({ getValue }) => <span className="border border-border px-2 py-1 text-xs">{getValue<string>()}</span>,
+      cell: ({ getValue }) => <StatusIndicator label={getValue<string>()} color="hsl(var(--muted-foreground))" />,
     },
     {
       accessorKey: 'role',
       header: () => {
-        return <div className="px-3 w-24">Role</div>
+        return <div className="w-24">Role</div>
       },
-      cell: ({ row }) => <div className="px-3 text-sm">{capitalize(row.original.role)}</div>,
+      cell: ({ row }) => <div className="text-sm">{capitalize(row.original.role)}</div>,
     },
   ]
 

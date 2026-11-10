@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Panel, SectionTitle } from '@/components/ascii'
 import { CostOverTime } from '@/components/billing/CostOverTime'
 import { ThisCycleCard } from '@/components/billing/ThisCycleCard'
@@ -166,17 +167,11 @@ export function UsageSection() {
                   </EmptyContent>
                 </Empty>
               ) : !boxesLoading && !boxesUsage?.length ? (
-                <Empty className="py-12">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <BarChart3 />
-                    </EmptyMedia>
-                    <EmptyTitle>No box usage yet</EmptyTitle>
-                    <EmptyDescription>
-                      Once you create and run a box, its resource consumption will appear here.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
+                <ResourceEmptyState
+                  title="No box usage yet"
+                  icon={<BarChart3 className="size-6" />}
+                  description="Once you create and run a box, its resource consumption will appear here."
+                />
               ) : (
                 <BoxUsageTable data={boxesUsage} isLoading={boxesLoading} />
               )}
