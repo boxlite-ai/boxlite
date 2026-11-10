@@ -63,3 +63,25 @@ Start the mock dashboard using the commands in [dashboard development](../../../
 - Audit regressions cover failed later-page recovery in both billing histories, stale image refresh errors, raw unknown invoice statuses, scrollable pricing, registry filter recovery.
 - Native keyboard activation was checked in Chromium at 760px and 1440px desktop widths (`mobile: false`). With only the clipboard write sink stubbed, Space produced no copy before keyup and one after release; Enter also copied the name, with the URL unchanged. This complements the jsdom event-isolation regression, which cannot synthesize native key-generated clicks.
 - Box destruction-event regressions cover both socket routes, unrelated IDs, visible IDs, duplicate events and active-query reconciliation. The filter-count test enters a real input value and checks the resulting query parameters and distinct total.
+
+### Signed-out landing
+
+![Signed-out desktop, dark](signed-out-dark.png)
+![Signed-out desktop, light](signed-out-light.png)
+
+Verified through the actual Mock profile-menu Sign out flow. Dark: 1440×900;
+light: 1280×720. The final layout is a centered, borderless 360px column. Keyboard Enter on
+Sign in returns to `/dashboard/boxes`. This verifies mock navigation, not a real
+OIDC session. Existing auth-session tests (3) and dashboard production build pass.
+
+### Thin-line resource icons
+
+These screenshots supersede the pixel icon styling shown in earlier captures.
+Boxes use a cube; Images use stacked layers. Shared icons render bundled Lucide
+SVGs with a 1.3px default stroke and preserve explicit SVG props and refs.
+
+![Boxes with thin cube icons](thin-icons-boxes.png)
+![Images with thin layer icons](thin-icons-images.png)
+
+The two SVG regression tests fail against the pixel adapter and pass with the
+thin-line adapter. Full dashboard suite: 100 files, 905 tests passed.

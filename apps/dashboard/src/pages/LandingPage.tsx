@@ -6,6 +6,8 @@
 
 import { LogoText } from '@/assets/Logo'
 import LoadingFallback from '@/components/LoadingFallback'
+import { AsciiButton } from '@/components/ascii'
+import { ArrowRightIcon } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { consumeJustLoggedOut } from '@/lib/auth-session'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -43,17 +45,26 @@ const LandingPage: React.FC = () => {
 
   if (loggedOut) {
     return (
-      <div className="flex min-h-svh flex-col items-center justify-center gap-6 px-6 text-center">
-        <LogoText className="h-9 w-auto" />
-        <p className="font-mono text-[13px] text-muted-foreground">You&apos;ve been signed out.</p>
-        <button
-          type="button"
-          onClick={signIn}
-          className="border border-border px-5 py-2.5 text-[13px] font-medium transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35"
-        >
-          Sign in
-        </button>
-      </div>
+      <main className="flex min-h-svh items-center justify-center bg-background px-6 py-12">
+        <section aria-labelledby="signed-out-title" className="w-full max-w-[360px] text-center">
+          <div className="mb-10 flex items-center justify-center">
+            <LogoText className="h-11 w-auto" />
+          </div>
+          <div className="text-center">
+            <h1
+              id="signed-out-title"
+              className="font-display text-[30px] font-semibold leading-tight tracking-tight text-foreground"
+            >
+              You’re signed out.
+            </h1>
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">Sign in to continue.</p>
+            <AsciiButton variant="primary" onClick={signIn} className="mt-8 h-11 w-full justify-center gap-2 px-4">
+              Sign in
+              <ArrowRightIcon className="size-4" aria-hidden="true" />
+            </AsciiButton>
+          </div>
+        </section>
+      </main>
     )
   }
 

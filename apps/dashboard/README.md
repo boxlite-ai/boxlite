@@ -160,7 +160,7 @@ Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
 outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
 
 Import operation icons from `components/ui/icon`, whose aliases all use the
-offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
+bundled Lucide outline collection with a default 1.3px stroke. Give icon-only actions an `aria-label`, retain helpful
 titles, and forward native props/ref through wrappers used by Radix triggers.
 Choose variants and sizes instead of copying hover, padding, or border classes.
 
@@ -602,7 +602,7 @@ and code whitespace remain unchanged. Console templates scroll with the page.
 The selected template panel keeps its content height, and sticky positioning is
 only enabled on desktop windows at least 800px high; shorter windows use normal flow.
 
-Resource lists share `ResourceEmptyState`: a 48px neutral pixel-icon tile, 18px
+Resource lists share `ResourceEmptyState`: a 48px neutral thin-line icon tile, 18px
 heading, body copy below it, then optional secondary guide links. Creation stays
 in the page toolbar under its existing permission guard. Images directs users to
 Boxes; billing records have no creation CTA. Search misses, loading and errors
@@ -619,7 +619,7 @@ Reset the two `desktop-review-empty*` values to `'0'` and reload for normal fixt
 
 The shared resource module provides consumed empty-state, status, and filter primitives. Regression checks cover optional guidance, accessible status labels, empty/loading credit history, both money-history retry paths, volume filter recovery, clipboard failures and the exact-name deletion guard.
 
-Resource lists use 24px pixel icons from `components/ui/icon`; status stays in its own indicator. Quickstart environment logos and payment brands keep their brand assets. The compact image summary alongside the filter shows `Custom images used / limit · Total image size bytes`. Both metrics cover organization-owned images, excluding curated images. Total image size is the sum of declared ready-version sizes, not deduplicated physical storage or a billing measurement. Only the count changes color near its quota; per-image Size cells and limit guidance remain.
+Boxes use a cube and Images use stacked layers to distinguish instance from image. Resource lists use 24px thin-line icons from `components/ui/icon`; status stays in its own indicator. Quickstart environment logos and payment brands keep their brand assets. The compact image summary alongside the filter shows `Custom images used / limit · Total image size bytes`. Both metrics cover organization-owned images, excluding curated images. Total image size is the sum of declared ready-version sizes, not deduplicated physical storage or a billing measurement. Only the count changes color near its quota; per-image Size cells and limit guidance remain.
 
 Box inbound state means the proxy tunnel gate, not organization scope: disabled rejects tunnel traffic; enabled applies the public/private tunnel policy. Private tunnels accept a valid access token or organization authentication. Do not describe disabled as organization-only. Detail switches reserve space for their expanded hit targets, and outbound values may wrap.
 
@@ -628,3 +628,8 @@ Desktop visual comparisons and reproduction steps: [screenshot gallery](../../do
 Resource headers leave 24px before the next section. Desktop filters share a 380×36px field, 13px input text, solid border and explicit accessible name. Toolbars precede list headers by 14px; Images and Domains usage wraps only when needed. Private registries supports local host, prefix and username filtering with clear-filter recovery. Boxes shows total, running and stopped counts for fleets of at least ten Boxes, independently of list filters or pagination. Its overview has 24px gaps above and below.
 
 Billing pagers retain Previous on a failed later page with unknown totals. Cached Images refresh failures identify the retained rows as previously loaded data. Unknown invoice statuses preserve the upstream text. Create Box pricing and validation scroll inside the body while header and action footer remain visible.
+
+The signed-out landing state uses a centered, borderless column, a semantic heading,
+and one primary Sign in action. Its presentation shares dashboard theme tokens;
+ordinary unauthenticated visits still redirect to the hosted identity provider,
+while an explicit logout retains the existing manual sign-in guard.

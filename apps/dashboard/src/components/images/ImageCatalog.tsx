@@ -16,7 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Container, Trash } from '@/components/ui/icon'
+import { Layers, Trash } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDeleteImageMutation } from '@/hooks/mutations/useDeleteImageMutation'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
@@ -202,7 +202,7 @@ export function ImageCatalog() {
                 className="flex min-w-0 items-center gap-3 text-left"
                 title={image.curatedRef ?? image.name}
               >
-                <Container className="size-6 shrink-0 text-muted-foreground" />
+                <Layers className="size-6 shrink-0 text-muted-foreground" />
                 <span className="block resource-name hover:underline">{image.name}</span>
               </button>
               <span className="truncate font-mono text-meta text-muted-foreground" title={image.aliases.join(', ')}>

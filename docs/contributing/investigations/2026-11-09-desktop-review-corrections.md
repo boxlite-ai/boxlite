@@ -16,7 +16,7 @@ Improve presentation in the existing dashboard without replacing page implementa
 | --- | --- |
 | Theme | Neutral near-black structural surfaces; retain semantic and brand hues and the light theme. |
 | Resources | Shared 28px page titles, 14px names, 12px status labels with semantic marks, consistent row hover and keyboard focus. |
-| Empty states | Shared 48px icon tile, 24px pixel glyph, title, description and supplementary guide; one primary action in the toolbar where creation applies. |
+| Empty states | Shared 48px icon tile, 24px thin-line glyph, title, description and supplementary guide; one primary action in the toolbar where creation applies. |
 | Forms | Shared header, scrollable body and footer; preserve existing fields, validation, submission and permissions. |
 | Icons | Pixel glyphs identify resource types; separate status labels convey state. Payment and Quickstart environment brands retain their own artwork. |
 | Quickstart | Explicit code-surface border; natural page scrolling for templates; content-sized detail form, sticky only where desktop height permits. |
@@ -37,7 +37,7 @@ Mock-only fixtures provide repeatable empty-resource previews. A separate member
 
 - [Carbon empty states](https://www.carbondesignsystem.com/building-blocks/core/patterns/empty-states) separates next-step guidance and secondary links. Adapt that distinction to the existing centered resource layout.
 - [Payment SVG assets](https://github.com/aaronfagan/svg-credit-card-payment-icons/tree/6dd023ae32415ed7b01bf809f15a25613a52098c) provide bundled brand artwork; retain their Apache-2.0 license and avoid runtime image lookups.
-- Reuse the existing pixel icon shim and dialog primitive. Preserve recognizable branding without mixing wireframe and pixel resource icons.
+- Reuse the shared icon entry point and dialog primitive. Render Lucide SVG outlines with a default 1.3px stroke; preserve explicit stroke overrides and native SVG props. Brand logos remain separate.
 - Keep surface levels and a stronger local code border rather than making every dark surface identical black.
 
 ## Validation and evidence
@@ -69,3 +69,19 @@ Registry credential guidance belongs to the relevant form fields, not a permanen
 Boxes displays the API’s filtered total beside its filter, independent of the current page size. While a replacement request retains placeholder rows from the previous filter, the count shows `—` until the new total arrives. Registry filtering uses the same Covers label shown in rows, including `every repository` and a scoped prefix’s trailing wildcard. Pending registry requests display a loading status and an unknown count rather than zero. Card keyboard navigation handles only events targeting the card itself; nested controls retain native Enter/Space activation.
 
 Destruction events decrement cached totals only when the Box is present in that cached page, preventing duplicate or unrelated events from subtracting again. Terminal destruction events also refetch active organization Box queries so off-page matches and pagination totals are reconciled by the server instead of guessing local filter membership.
+
+## Signed-out landing page
+
+The signed-out branch groups its logo, semantic 30px heading, one short supporting sentence and primary Sign in button into a centered 360px column. Use spacing and typography for hierarchy, without a panel background, outer border or divider. The logo, copy and button contents share the center axis. Reuse existing theme tokens and AsciiButton; retain the OIDC redirect callback and logout guard. No authentication fields, marketing copy, animation or new dependency.
+
+A borderless centered stack is preferred over a framed card because this single-action state does not need a container boundary. Clear, concise descriptive headings follow [WCAG 2.4.6](https://www.w3.org/WAI/WCAG22/Understanding/headings-and-labels.html#intent). Existing shared button and typography contracts are the visual precedent.
+
+Validate the actual mock logout branch on desktop, inspect both themes and keyboard Sign in navigation. Authentication semantics remain unchanged.
+
+## Thin-line icon contract
+
+The previous icon adapter converted all icons into filled pixel glyphs and discarded strokeWidth. This defeated the thin strokes already requested by callers. Keep the shared exports and switch their implementation to the installed Lucide components, with a 1.3px default stroke. All 137 current exported names exist in the installed package; the Container export uses Lucide Box to retain the resource’s cube silhouette. No dependency or consumer migration is needed. Native SVG props and accessibility attributes must survive the adapter. Reject patching just the Box row because search, resource and action icons share the same mismatch.
+
+Verify existing explicit 1.3px strokes remain honored, default SVG output uses a stroke instead of pixel fills, build all named exports, and inspect desktop Boxes and Images. Keep supplied fill props for semantic solid action shapes. This replaces the previous pixel-style decision.
+
+Resource identity uses different silhouettes: Boxes use a cube, Images use stacked layers. Their 24px size, 1.3px default stroke and neutral color are shared; the symbol itself communicates the object type.
