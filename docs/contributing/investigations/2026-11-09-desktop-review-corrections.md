@@ -18,7 +18,7 @@ Improve presentation in the existing dashboard without replacing page implementa
 | Resources | Shared 28px page titles, 14px names, 12px status labels with semantic marks, consistent row hover and keyboard focus. |
 | Empty states | Shared 48px icon tile, 24px thin-line glyph, title, description and supplementary guide; one primary action in the toolbar where creation applies. |
 | Forms | Shared header, scrollable body and footer; preserve existing fields, validation, submission and permissions. |
-| Icons | Pixel glyphs identify resource types; separate status labels convey state. Payment and Quickstart environment brands retain their own artwork. |
+| Icons | Thin-line Lucide glyphs identify resource types (cube for Boxes, layers for Images); separate status labels convey state. Payment and Quickstart environment brands retain their own artwork. |
 | Quickstart | Explicit code-surface border; natural page scrolling for templates; content-sized detail form, sticky only where desktop height permits. |
 | Image usage | `Custom images 3 / 20 · Total image size 456 MiB`: independent count quota and aggregate size labels, with quota warnings affecting only the count. |
 | Network | Three compact rows; accurate enabled/disabled values, wrapping outbound values and room for switch hit targets. Explain policy only in the enable confirmation. |
@@ -80,7 +80,7 @@ Validate the actual mock logout branch on desktop, inspect both themes and keybo
 
 ## Thin-line icon contract
 
-The previous icon adapter converted all icons into filled pixel glyphs and discarded strokeWidth. This defeated the thin strokes already requested by callers. Keep the shared exports and switch their implementation to the installed Lucide components, with a 1.3px default stroke. All 137 current exported names exist in the installed package; the Container export uses Lucide Box to retain the resource’s cube silhouette. No dependency or consumer migration is needed. Native SVG props and accessibility attributes must survive the adapter. Reject patching just the Box row because search, resource and action icons share the same mismatch.
+The previous icon adapter converted all icons into filled pixel glyphs and discarded strokeWidth. This defeated the thin strokes already requested by callers. Keep the shared exports and switch their implementation to the installed Lucide components, with a 1.3px default stroke. All imported icons exist in the installed package; the Container export uses Lucide Box to retain the resource’s cube silhouette. No dependency or consumer migration is needed. Native SVG props and accessibility attributes must survive the adapter. Reject patching just the Box row because search, resource and action icons share the same mismatch.
 
 Verify existing explicit 1.3px strokes remain honored, default SVG output uses a stroke instead of pixel fills, build all named exports, and inspect desktop Boxes and Images. Keep supplied fill props for semantic solid action shapes. This replaces the previous pixel-style decision.
 

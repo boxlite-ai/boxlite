@@ -589,7 +589,7 @@ Light theme values are independent and unchanged by the dark palette.
 For opt-in empty mock fixtures, see the desktop review section below.
 
 
-### Desktop review: code surfaces, payment identity and empty resources
+## Desktop review: code surfaces, payment identity and empty resources
 
 Saved payment methods use an explicit allowlist of locally bundled brand SVGs in
 `src/assets/payment-brands` (license and pinned source included); unknown brands
