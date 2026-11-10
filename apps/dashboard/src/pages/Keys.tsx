@@ -74,7 +74,7 @@ const Keys: React.FC = () => {
   )
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-[26px]">
       {/* header — same hierarchy as the Boxes page */}
       <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
         <div>

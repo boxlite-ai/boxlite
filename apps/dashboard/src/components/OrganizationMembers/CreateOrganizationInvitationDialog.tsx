@@ -54,7 +54,7 @@ export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvi
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="default" size="sm" className={className} title="Add Registry">
+        <Button variant="default" size="default" className={className} title="Invite Member">
           <Plus className="w-4 h-4" />
           Invite Member
         </Button>

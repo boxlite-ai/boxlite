@@ -633,3 +633,63 @@ The signed-out landing state uses a centered, borderless column, a semantic head
 and one primary Sign in action. Its presentation shares dashboard theme tokens;
 ordinary unauthenticated visits still redirect to the hosted identity provider,
 while an explicit logout retains the existing manual sign-in guard.
+
+## Expandable left navigation
+
+Desktop navigation uses a 64px icon rail by default. Expand navigation reveals
+labels in a 224px sidebar; the choice is saved as `boxlite-navigation-expanded`
+in localStorage, with an in-memory fallback when storage is unavailable.
+Images has an independent disclosure for its existing Images and Private
+registries routes. Navigation data accepts second-level children without adding
+speculative destinations. Entering a child route reveals its group; the active
+route remains highlighted when the whole sidebar collapses.
+
+The desktop sidebar spans the viewport height (minus any announcement). Its logo
+shows the full wordmark when expanded and the icon when compact. The right column
+contains a 48px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+Welcome keeps its simplified header.
+
+Management is a primary disclosure after Domains, with Billing and Organization
+children. Clicking it in compact mode expands the sidebar and reveals the group;
+entering a management route opens the group, while manual collapse remains possible.
+Organization switching, theme and logout remain in the account menu.
+
+Links retain accessible names in compact mode and show right-side tooltips on
+hover/focus. The middle navigation scrolls on short screens; the footer pins the
+expansion control and Quickstart as the last action. Selected navigation uses the
+accent surface, distinct from the quieter hover surface.
+
+Dashboard owns `--app-header-height`, `--app-banner-height` and
+`--app-content-height`. List/detail/fullscreen layouts consume these variables
+to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcement
+height consistently. Preserve `min-w-0` on the content region when adding routes.
+
+Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
+section label. Management remains a separate primary entry. Compact navigation
+keeps the group accessible name without squeezing in a visual label.
+
+Expanded navigation highlights only the current child, using the same full row
+width as primary items. Active parents retain foreground emphasis without a
+second selection rectangle. Child indentation comes from padding, with no tree line.
+
+Sidebar branding always renders the same 43.2px-high wordmark asset (20% above the original 36px). Compact mode
+clips the text area instead of substituting a differently padded icon image, so
+the visible symbol keeps the same size and position across expansion.
+
+Neutral outlines use border, border-hover and border-selected tokens. In dark mode
+these are 16%, 23% and 30% neutral lightness, avoiding foreground-alpha outlines
+whose brightness jumps against dark cards. Selection also retains its text, fill
+or current badge; keyboard-focus indicators are unchanged.
+
+## Resource screen visual rules
+
+True empty lists hide column headers and paging; filtered-empty lists retain context.
+Boxes and TanStack-backed tables share ResourcePagination. Totals and fetching stay
+with the caller; a later empty page always retains a Previous action, while a single
+page hides navigation arrows. Pagination follows the data rather than the viewport.
+Desktop image navigation lives in the expandable rail, with mobile-only page tabs.
+Clicking Images in a compact rail reveals its children. Quota metadata uses readable
+12px type. Template columns use a240px minimum in the available content width;
+short Quickstart code blocks expand naturally. Billing and box details retain all
+data and actions while removing excess whitespace and dotted leaders.

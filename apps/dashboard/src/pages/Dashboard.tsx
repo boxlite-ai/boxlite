@@ -13,7 +13,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { AnnouncementBanner } from '@/components/AnnouncementBanner'
 import { OnboardingDialogHost } from '@/components/OnboardingDialogHost'
 import { Sidebar } from '@/components/Sidebar'
-import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { VerifyEmailDialog } from '@/components/VerifyEmailDialog'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
@@ -72,49 +71,57 @@ const Dashboard: React.FC = () => {
     setIsBannerVisible(false)
   }
 
+  const content = (
+    <div className="min-h-0 min-w-0 flex-1">
+      <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
+        {/* Lazy route components (Admin/Billing/Settings/box-details) suspend
+                here so only the content area shows a fallback — the sidebar/shell
+                stays mounted across navigation. */}
+        <Suspense
+          fallback={
+            <div className="space-y-3 p-4 sm:p-5">
+              <Skeleton className="h-8 w-48" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
+      </div>
+    </div>
+  )
+
   return (
     <div
       className={cn(
-        'relative w-full [--app-content-height:calc(100svh_-_60px)]',
-        isBannerVisible &&
-          'pt-16 [--app-banner-height:4rem] [--app-content-height:calc(100svh_-_60px_-_var(--app-banner-height))] md:pt-12 md:[--app-banner-height:3rem]',
+        'relative w-full [--app-banner-height:0px] [--app-header-height:60px] [--app-content-height:calc(100svh_-_var(--app-header-height)_-_var(--app-banner-height))]',
+        !isWelcome && 'md:[--app-header-height:48px]',
+        isBannerVisible && 'pt-16 [--app-banner-height:4rem] md:pt-12 md:[--app-banner-height:3rem]',
       )}
     >
       {isBannerVisible && bannerText && (
         <AnnouncementBanner text={bannerText} onDismiss={handleDismissBanner} learnMoreUrl={bannerLearnMoreUrl} />
       )}
-      <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
+      <div className="flex min-h-[calc(100svh_-_var(--app-banner-height))] flex-col">
         <>
           {isWelcome ? (
-            <header className="flex h-[60px] items-center justify-between border-b border-border px-6 sm:px-10">
-              <LogoText className="h-[40px] w-auto" />
-              <span className="font-mono text-[10px] text-muted-foreground">GET STARTED WITH BOXLITE</span>
-            </header>
+            <>
+              <header className="flex h-[60px] items-center justify-between border-b border-border px-6 sm:px-10">
+                <LogoText className="h-[40px] w-auto" />
+                <span className="font-mono text-[10px] text-muted-foreground">GET STARTED WITH BOXLITE</span>
+              </header>
+              {content}
+            </>
           ) : (
-            <Sidebar isBannerVisible={isBannerVisible} version={config.version} />
+            <Sidebar isBannerVisible={isBannerVisible} version={config.version}>
+              {content}
+            </Sidebar>
           )}
         </>
-        <SidebarInset className="min-h-0 overflow-visible">
-          <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_60px))] overscroll-none">
-            {/* Lazy route components (Admin/Billing/Settings/box-details) suspend
-                here so only the content area shows a fallback — the sidebar/shell
-                stays mounted across navigation. */}
-            <Suspense
-              fallback={
-                <div className="space-y-3 p-4 sm:p-5">
-                  <Skeleton className="h-8 w-48" />
-                  <Skeleton className="h-32 w-full" />
-                </div>
-              }
-            >
-              <Outlet />
-            </Suspense>
-          </div>
-        </SidebarInset>
         {!isWelcome && <OnboardingDialogHost />}
         <Toaster />
         <VerifyEmailDialog open={showVerifyEmailDialog} onOpenChange={setShowVerifyEmailDialog} />
-      </SidebarProvider>
+      </div>
     </div>
   )
 }

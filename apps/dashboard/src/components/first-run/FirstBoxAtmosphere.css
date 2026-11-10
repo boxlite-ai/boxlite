@@ -2,7 +2,7 @@
 .first-box-atmosphere {
   position: relative;
   isolation: isolate;
-  min-height: calc(100svh - 60px);
+  min-height: var(--app-content-height, calc(100svh - 60px));
   overflow: hidden;
 }
 

@@ -269,7 +269,7 @@ function ScenarioHeader({
                   // so the chosen card lifts onto `card` and the others sit
                   // flat on the dialog's own ground.
                   sc.id === scenario
-                    ? 'border-foreground/45 bg-card opacity-100'
+                    ? 'border-border-selected bg-card opacity-100'
                     : 'bg-transparent text-muted-foreground',
                 )}
               >
@@ -403,7 +403,7 @@ function InterfacePicker({
                           ? 'rounded-none bg-foreground/[0.07] font-semibold text-foreground'
                           : 'rounded-none text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground'
                         : on
-                          ? 'border-foreground/45 bg-card font-semibold text-foreground'
+                          ? 'border-border-selected bg-card font-semibold text-foreground'
                           : 'border-border text-muted-foreground hover:text-foreground',
                       !quiet && 'border',
                     )}
@@ -440,7 +440,7 @@ function QuickstartCode({ code, language }: { code: string; language: string }) 
         language={language}
         showCopy={false}
         className="w-full rounded-none border-0 bg-transparent shadow-none"
-        codeAreaClassName="quickstart-code max-h-[420px] overflow-auto rounded-none px-4 pb-5 pt-4 pr-4"
+        codeAreaClassName={`quickstart-code overflow-x-auto rounded-none px-4 pb-5 pt-4 pr-4 ${code.split('\n').length > 35 ? 'max-h-[560px] overflow-y-auto' : ''}`}
       />
     </Suspense>
   )

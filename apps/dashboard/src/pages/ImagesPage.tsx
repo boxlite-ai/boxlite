@@ -25,10 +25,12 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
   const [showImageHelp, setShowImageHelp] = useState(false)
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <div className="resource-page-header flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-page font-semibold text-foreground">Images</h1>
+          <h1 className="font-display text-page font-semibold text-foreground">
+            {tab === 'registries' ? 'Private registries' : 'Images'}
+          </h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">
             {tab === 'images'
               ? 'Customize your Box environment with container images.'
@@ -47,6 +49,7 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
           </p>
         </div>
         <Tabs
+          className="md:hidden"
           value={tab}
           onValueChange={(value) =>
             navigate(value === 'registries' ? `${RoutePath.IMAGE_REGISTRIES}${search}` : RoutePath.IMAGES)
@@ -77,7 +80,7 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
               . Public images need no credentials.
             </li>
             <li>
-              On the Boxes page, choose New box and enter your container image reference. Box creation permission is
+              On the Boxes page, choose New Box and enter your container image reference. Box creation permission is
               required.
             </li>
             <li>The image appears here after the Box starts successfully.</li>

@@ -79,7 +79,7 @@ function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
     <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
       <span className="text-label leading-none text-brand">▸</span>
       <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
-      <span className="flex-1 border-t border-dashed border-border" />
+      <span className="flex-1" />
       {right}
     </div>
   )
@@ -89,7 +89,7 @@ function SpecRow({ label, children, title }: { label: string; children: ReactNod
   return (
     <div className="mb-[6px] flex items-baseline gap-2">
       <span className="whitespace-nowrap text-muted-foreground">{label}</span>
-      <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
+      <span className="flex-1" />
       {title ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -275,7 +275,7 @@ export default function BoxDetails() {
   }
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-[13px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-[13px]">
       {/* breadcrumb */}
       <div className="flex flex-none items-center gap-[9px] text-[12px] text-muted-foreground">
         <button type="button" onClick={() => navigate(RoutePath.BOXES)} className="hover:text-foreground">
@@ -317,7 +317,7 @@ export default function BoxDetails() {
       ) : (
         <>
           {/* identity strip */}
-          <div className="flex flex-none flex-col gap-4 border-b border-dashed border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
+          <div className="flex flex-none flex-col gap-4 border-b border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
               <span className="flex min-w-0 items-center gap-[12px]">
                 <Container className="size-6 shrink-0 text-muted-foreground" />

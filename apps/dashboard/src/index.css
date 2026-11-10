@@ -57,6 +57,8 @@ body {
     --brand-foreground: 0 0% 100%;
 
     --border: 218 16% 90%;
+    --border-hover: 218 10% 75%;
+    --border-selected: 218 8% 55%;
     --input: 218 16% 90%;
     --ring: 196 100% 47%;
 
@@ -132,6 +134,8 @@ body {
     --brand-foreground: 0 0% 100%;
 
     --border: 0 0% 16%;
+    --border-hover: 0 0% 23%;
+    --border-selected: 0 0% 30%;
     --input: 0 0% 16%;
     --ring: 196 100% 47%;
 

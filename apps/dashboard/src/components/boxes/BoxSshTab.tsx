@@ -365,7 +365,7 @@ function SshControls({
     <div className="mb-[6px]">
       <div className="flex items-baseline gap-2">
         <span className="text-muted-foreground">ssh</span>
-        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
+        <span className="min-w-[8px] flex-1" />
         <button
           type="button"
           title="Refresh SSH status"
