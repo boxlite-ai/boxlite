@@ -214,7 +214,7 @@ export class CreateBoxDto {
   volumes?: BoxVolume[]
 
   @ApiPropertyOptional({
-    description: 'Secret placeholder rules for outbound HTTPS requests',
+    description: 'Secrets injected into outbound HTTPS request headers',
     type: [BoxSecret],
     required: false,
   })

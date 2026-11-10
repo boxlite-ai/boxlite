@@ -83,7 +83,7 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
     }
   });
 
-  test("secrets are substituted at the network boundary", async () => {
+  test("secrets are injected into the configured header", async () => {
     const box = new SimpleBox({
       image: "python:slim",
       network: {
@@ -106,18 +106,23 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
       const result = await box.exec("python3", [
         "-c",
         [
-          "import os, urllib.request",
+          "import json, os, urllib.request",
           "req = urllib.request.Request(",
           "  'https://httpbingo.org/headers',",
-          "  headers={'Authorization': 'Bearer ' + os.environ['BOXLITE_SECRET_TESTKEY']},",
+          "  headers={'Authorization': 'Bearer dummy', 'X-Probe': os.environ['BOXLITE_SECRET_TESTKEY']},",
           ")",
-          "print(urllib.request.urlopen(req, timeout=20).read().decode())",
+          "headers = json.load(urllib.request.urlopen(req, timeout=20))['headers']",
+          "print('probe=' + headers['X-Probe'][0])",
+          "print('authorization=' + headers['Authorization'][0])",
         ].join("\n"),
       ]);
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("super-secret-value");
-      expect(result.stdout).not.toContain("<BOXLITE_SECRET:testkey>");
+      // This echo host returns the injected header, so the value is expected there.
+      expect(result.stdout).toContain(
+        "authorization=Bearer super-secret-value",
+      );
+      expect(result.stdout).toContain("probe=<BOXLITE_SECRET:testkey>");
     } finally {
       await box.stop();
     }

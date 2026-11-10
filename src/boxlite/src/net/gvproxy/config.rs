@@ -170,6 +170,7 @@ pub struct GvproxySecretConfig {
     pub hosts: Vec<String>,
     pub placeholder: String,
     pub value: String,
+    pub header: String,
 }
 
 impl std::fmt::Debug for GvproxyConfig {
@@ -212,6 +213,7 @@ impl std::fmt::Debug for GvproxySecretConfig {
             .field("name", &self.name)
             .field("hosts", &self.hosts)
             .field("placeholder", &self.placeholder)
+            .field("header", &self.header)
             .field("value", &"[REDACTED]")
             .finish()
     }
@@ -224,6 +226,7 @@ impl From<&crate::runtime::options::Secret> for GvproxySecretConfig {
             hosts: s.hosts.clone(),
             placeholder: s.placeholder.clone(),
             value: s.value.clone(),
+            header: s.effective_header().to_string(),
         }
     }
 }
@@ -503,6 +506,7 @@ mod tests {
             hosts: vec!["api.openai.com".to_string()],
             placeholder: "<BOXLITE_SECRET:openai>".to_string(),
             value: "sk-test-super-secret-key-12345".to_string(),
+            header: None,
         }
     }
 
@@ -514,6 +518,7 @@ mod tests {
         assert_eq!(config.hosts, vec!["api.openai.com"]);
         assert_eq!(config.placeholder, "<BOXLITE_SECRET:openai>");
         assert_eq!(config.value, "sk-test-super-secret-key-12345");
+        assert_eq!(config.header, "Authorization");
     }
 
     #[test]
@@ -566,6 +571,7 @@ mod tests {
         assert_eq!(deserialized.hosts, gvproxy_secret.hosts);
         assert_eq!(deserialized.placeholder, gvproxy_secret.placeholder);
         assert_eq!(deserialized.value, gvproxy_secret.value);
+        assert_eq!(deserialized.header, gvproxy_secret.header);
     }
 
     #[test]

@@ -223,7 +223,7 @@ func cPortProtocol(p PortProtocol) uint32 {
 	}
 }
 
-// Secret configures outbound HTTPS secret substitution.
+// Secret configures a secret injected into outbound HTTPS request headers.
 type Secret struct {
 	Name        string
 	Value       string
@@ -396,7 +396,7 @@ func WithNetwork(spec NetworkSpec) BoxOption {
 	}
 }
 
-// WithSecret adds an outbound HTTPS secret substitution rule.
+// WithSecret adds a secret injected into outbound HTTPS request headers.
 func WithSecret(secret Secret) BoxOption {
 	return func(c *boxConfig) {
 		c.secrets = append(c.secrets, secret)
