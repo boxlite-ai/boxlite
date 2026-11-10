@@ -50,6 +50,7 @@ import {
 import { RUNNER_HOME } from '../stack/runner-boot.ts'
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
 import { isMissingNeg } from '../stack/providers/gcp/edge.ts'
+import { runnerDataDiskPrefix, runnerDataDiskNameFor } from '../stack/runners.ts'
 import { instanceFor } from 'naming'
 import {
   REGISTRY_PROXY_CONTROL_PLANE_VARIABLE,
@@ -1946,5 +1947,115 @@ test('the proxy, the API and the runner read the same registries and the same ho
   assert.match(
     readFileSync(`${runner}cmd/runner/config/config.go`, 'utf8'),
     new RegExp(`envconfig:"${REGISTRY_PROXY_HOST_VARIABLE}"`),
+  )
+})
+
+/*
+ * The grant to grow a data disk and the disk it may grow are two spellings of
+ * one name, and the failure mode when they drift is the quiet one: a CEL
+ * prefix that matches nothing is no grant and no error — the first resize
+ * answers 403 hours after a deploy that looked green. So the condition and
+ * the env the runner reports from must both derive from the one function the
+ * disks were created under, and the test reads each out of its own block.
+ */
+test('the disk grant is derived from the names the disks are created under', () => {
+  const api = sourceOf('api')
+  const runners = sourceOf('runners')
+
+  // The resize binding is its own grant, matched inside its own block — the
+  // walk-out-of-the-block trap the volume grants' test records.
+  const grants = projectIamBlocks(api)
+  const grantNamed = (name: string): string => {
+    const found = grants.filter((block) => block.includes(name))
+    assert.equal(found.length, 1, `expected one ${name} grant, found ${found.length}`)
+    return found[0]
+  }
+  const resize = grantNamed('`ApiCapability${index}DiskResize`')
+  assert.match(
+    resize,
+    /expression: `resource\.type == "compute\.googleapis\.com\/Disk" && resource\.name\.startsWith\("projects\/\$\{project\}\/zones\/\$\{zone\}\/disks\/\$\{runnerDataDiskPrefix\(\{ app: \$app\.name, stage: \$app\.stage \}\)\}"\)`/,
+    'the CEL prefix must spell the one derivation, scoped to the disks the fleet creates',
+  )
+
+  // And the policy that tells each host its disk derives from the same
+  // identity — app, stage, project, zone — so a rename moves the grant and
+  // the report together, and neither spells the prefix a second time.
+  assert.match(
+    runners,
+    /dataDiskIdentity: \{\s*app: \$app\.name,\s*stage: \$app\.stage,/,
+    'the runner policy must carry the same app and stage identity the grant derives from',
+  )
+
+  // The role itself stays at the ceiling the design names: grow and read, and
+  // nothing that could delete, create or attach.
+  assert.match(api, /permissions: \['compute\.disks\.get', 'compute\.disks\.update'\]/)
+  assert.doesNotMatch(api, /'compute\.disks\.delete'/)
+  assert.doesNotMatch(api, /'compute\.disks\.create'/)
+  assert.doesNotMatch(api, /'compute\.disks\.setIamPolicy'/)
+
+  /*
+   * The functional half the design's test note spells (§12.1): a disk named by
+   * the one rule must be matched by the prefix the grant is written against.
+   * The source assertions above prove the grant spells that rule; this proves
+   * the rule it spells is the one the disks actually answer to.
+   */
+  const disk = runnerDataDiskNameFor({ app: 'boxlite', stage: 'dev', host: 'boxlite-dev-runner' })
+  assert.ok(
+    disk.startsWith(runnerDataDiskPrefix({ app: 'boxlite', stage: 'dev' })),
+    `${disk} must fall under the prefix the resize grant is bounded to`,
+  )
+})
+
+test('the expansion-failing alarm counts over a quarter-hour window on both clouds', () => {
+  /*
+   * The expansion loop is paced by the control plane's cron — at most one
+   * failure line per runner per round — so over the default one-minute window
+   * a single runner failing on every round never reaches the threshold. The
+   * design's own sentence is "≈15min 内 ≥3 次", which spells as one 900-second
+   * window and `{threshold: 3, periods: 1}`; the pressure alarm keeps the
+   * minute, because a critical heartbeat arrives every 30s and "any runner
+   * critical right now" is a now-question.
+   */
+  const expansion = (source: string, opener: string): string => {
+    const at = source.indexOf(opener)
+    assert.ok(at !== -1, `no ${opener} alarm found`)
+    // Wide enough to reach past the filter and the window comment to the call's tail.
+    return source.slice(at, at + 1400)
+  }
+  const gcp = expansion(sourceOf('alarms'), "resourceName: 'RunnerDiskExpansionFailingAlarm'")
+  assert.match(gcp, /windowSeconds: 900/, 'the GCP window must cover the stretch failures actually arrive in')
+
+  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/alarms.ts', import.meta.url)), 'utf8')
+  assert.match(
+    expansion(aws, "'RunnerDiskExpansionFailingAlarm'"),
+    /900/,
+    'the CloudWatch period must match the GCP window',
+  )
+})
+
+test('every host the policy names is a host the fleet created', () => {
+  // The fleet table is built from the same slots the instances are, so a
+  // policy naming a host outside the fleet would be a row no metadata name
+  // ever selects — and every runner would report no disk at all.
+  const runners = sourceOf('runners')
+  const policy = runners.slice(runners.indexOf('const unitEnvPolicy'), runners.indexOf('const scripts'))
+  assert.match(
+    policy,
+    /dataDiskIdentity: \{[^}]*hosts: assignments\.map\(\(\{ slot \}\) => slot\.nameTag\)/,
+    'the fleet table must be the fleet the instances were created from',
+  )
+
+  /*
+   * And the identity travels the same two channels the volume backend does:
+   * the boot script writes it for a new host, and the policy converges it
+   * onto a host whose boot script predates it. A stage-level key missing from
+   * the boot script would make every fresh host non-compliant forever, each
+   * deploy restarting its unit to the same missing line.
+   */
+  assert.match(runners, /GCP_PROJECT_ID: project,\s*GCP_ZONE: zone,/, 'the boot script must write the stage-level pair')
+  assert.match(
+    runners,
+    /RUNNER_DATA_DISK_NAME: runnerDataDiskNameFor\(\{ app: \$app\.name, stage: \$app\.stage, host: slot\.nameTag \}\)/,
+    'and the per-host name joins in the instance loop, derived from the one naming rule',
   )
 })

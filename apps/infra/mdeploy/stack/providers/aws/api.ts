@@ -97,6 +97,11 @@ const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
       // Checkpoint storage is reserved on this cloud, and the stack asks for
       // this only where a checkpoint bucket is active.
       throw new Error('AWS keeps no checkpoint bucket yet, but was asked to grant one')
+    case 'resize-runner-disks':
+      // This cloud's runners keep box state on the root disk; there is no
+      // per-host data disk to grow. Reaching here means the stack was composed
+      // for a capability whose cloud has nothing to bound it to.
+      throw new Error('AWS keeps no per-runner data disk, so there is nothing to resize')
   }
 }
 

@@ -84,6 +84,7 @@ test('both clouds answer every module the stack asks about', () => {
     'network',
     'registryCredentials',
     'registryProxy',
+    'resizeRunnerDisks',
     'runners',
     'servesUserDomain',
     'storage',

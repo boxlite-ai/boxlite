@@ -158,6 +158,14 @@ export type StackProviders = {
    */
   servesUserDomain: () => boolean
   /**
+   * Whether this cloud's runners keep box state on a data disk the control
+   * plane can grow online. Asked before the API is placed, because the API is
+   * granted the resize capability only where a disk exists to grow — a grant
+   * bounded to resources the cloud does not create would be a permission that
+   * silently matched nothing.
+   */
+  resizeRunnerDisks: () => boolean
+  /**
    * No host, like the runner: on the cloud that deploys it this is a managed
    * service rather than a cluster task, so it takes its placement from the
    * network directly. The other cloud answers with the inactive handle.
@@ -503,7 +511,7 @@ export const deployStack = ({
     domain: inputs.domain,
     environment: apiEnvironment,
     secrets: inputs.apiSecrets,
-    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials }),
+    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials, resizeRunnerDisks: providers.resizeRunnerDisks() }),
   })
 
   const proxyEnvironment = {
@@ -634,10 +642,13 @@ export const capabilitiesFor = ({
   storage,
   clickhouse,
   registryCredentials,
+  resizeRunnerDisks,
 }: {
   storage: Storage
   clickhouse: ClickHouse
   registryCredentials: RegistryCredentialStore
+  /** Whether this cloud's runners carry a data disk, asked of the provider bundle. */
+  resizeRunnerDisks: boolean
 }): ApiCapability[] => [
   { kind: 'list-own-bucket', storage },
   { kind: 'manage-volume-buckets', storage },
@@ -649,4 +660,5 @@ export const capabilitiesFor = ({
   ...(storage.checkpoints.active
     ? ([{ kind: 'manage-checkpoint-archives', checkpoints: storage.checkpoints }] as ApiCapability[])
     : []),
+  ...(resizeRunnerDisks ? ([{ kind: 'resize-runner-disks' }] as ApiCapability[]) : []),
 ]

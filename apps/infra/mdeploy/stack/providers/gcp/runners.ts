@@ -290,6 +290,16 @@ udevadm trigger --name-match=kvm || true`,
          * grants below are for.
          */
         VOLUME_STORAGE_BACKEND: VOLUME_BACKEND,
+        /*
+         * The identity of the disks the control plane grows online, written at
+         * boot beside the rest of the unit environment. The stage-level pair
+         * travels here; the per-host disk name joins in the instance loop
+         * below, because only the instance knows which host it is. The OS
+         * policy below converges the same three onto the hosts whose boot
+         * script predates them.
+         */
+        GCP_PROJECT_ID: project,
+        GCP_ZONE: zone,
       },
     }
 
@@ -435,6 +445,18 @@ udevadm trigger --name-match=kvm || true`,
               Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
             ),
             BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+            /*
+             * This host's own data disk, by the same rule the disk resource
+             * above creates it under. The control plane grows the disk the
+             * environment names; a host reading another row would hand it a
+             * different host's identity, which is why the name is derived
+             * here rather than spelled.
+             */
+            RUNNER_DATA_DISK_NAME: runnerDataDiskNameFor({ app: $app.name, stage: $app.stage, host: slot.nameTag }),
+            // Derived from the disk the stack provisions, never spelled: the
+            // API's expandable-type set keys on this exact value, so a rename
+            // here flows through instead of silently mismatching.
+            RUNNER_DATA_DISK_TYPE: DISK_TYPE.replace(/-/g, '_'),
             // Where this host presents its own key to pull a private image.
             // Converged below as well, for the hosts booted before it existed.
             ...(proxyHost ? { [REGISTRY_PROXY_HOST_VARIABLE]: proxyHost as string } : {}),
@@ -590,6 +612,17 @@ udevadm trigger --name-match=kvm || true`,
         volumeBackend: VOLUME_BACKEND,
         registryProxyHost: (proxyHost as string) || null,
         runnerEnv: runnerEnv as string,
+        // The disks the control plane grows online are named here and
+        // nowhere else: the policy derives each host's from the same
+        // function the disk resource below creates under, so a grant or a
+        // report spelling the name a second time cannot drift from it.
+        dataDiskIdentity: {
+          app: $app.name,
+          stage: $app.stage,
+          project,
+          zone,
+          hosts: assignments.map(({ slot }) => slot.nameTag),
+        },
       }),
     )
     const unitEnvScripts = {

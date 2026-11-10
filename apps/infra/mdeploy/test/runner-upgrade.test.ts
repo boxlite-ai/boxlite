@@ -12,7 +12,8 @@
  */
 
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
@@ -23,13 +24,16 @@ import {
   renderHostConvergence,
   renderUnitEnvironmentPolicyScripts,
   renderPolicyScripts,
+  unitEnvironmentBlock,
   upgradeResourceName,
   upgradeTrigger,
+  type RunnerDataDiskIdentity,
   type UpgradeTarget,
 } from '../stack/runner-upgrade.ts'
 import { upgradeRunner, type CommandResult } from '../src/upgrade-runners.ts'
 import { runnerApiUrl } from '../stack/runner-boot.ts'
 import { CLOUD_RUNNER_KERNEL } from '../stack/runner-kernel.ts'
+import { runnerDataDiskNameFor } from '../stack/runners.ts'
 
 const REF = 'f'.repeat(40)
 const RELEASE = 'https://github.com/boxlite-ai/boxlite/releases/download/v0.10.0'
@@ -674,4 +678,209 @@ test('a registry proxy host that is not a host is refused before it reaches a ro
     }).validate,
     /'REGISTRY_PROXY_HOST=127\.0\.0\.1:4100'/,
   )
+})
+
+/*
+ * The data disks the control plane grows online are named once, in the policy
+ * the host already runs. The pairing a host reports is the one the disks were
+ * created under — `runnerDataDiskNameFor` — so the test holds the rendered
+ * script against that same function, and against what each host actually
+ * resolves: a loop that crossed two hosts' rows would hand the control plane
+ * one host's identity for another's disk, which is the failure the fleet table
+ * exists to make unreachable.
+ */
+const dataDiskIdentity = (hosts: string[]): RunnerDataDiskIdentity => ({
+  app: 'boxlite',
+  stage: 'dev',
+  project: 'boxlite-gcp-dev',
+  zone: 'asia-southeast1-b',
+  hosts,
+})
+
+test('each host of the fleet resolves its own data disk, and no other host’s', () => {
+  const hosts = ['boxlite-dev-runner', 'boxlite-dev-runner-2']
+  const block = unitEnvironmentBlock({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    volumeBackend: 'gcs',
+    dataDiskIdentity: dataDiskIdentity(hosts),
+  })
+
+  // The whole fleet travels in one script, so per-host is a claim about what a
+  // host resolves, not about what was rendered for it. Run the block per host
+  // — BOXLITE_RUNNER_HOST_NAME replaces the metadata server, so nothing here
+  // reaches the network.
+  const directory = mkdtempSync('boxlite-unit-env-')
+  try {
+    const script = `${block}\nprintf 'RESOLVED=%s\\n' "$runner_data_disk"`
+    writeFileSync(`${directory}/block.sh`, script)
+    for (const host of hosts) {
+      const run = spawnSync('bash', [`${directory}/block.sh`], {
+        env: { ...process.env, BOXLITE_RUNNER_HOST_NAME: host, BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env` },
+        encoding: 'utf8',
+      })
+      assert.equal(run.status, 0, run.stderr)
+      assert.match(
+        run.stdout,
+        new RegExp(`RESOLVED=${runnerDataDiskNameFor({ app: 'boxlite', stage: 'dev', host })}\n`),
+        `${host} resolved another host's disk`,
+      )
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('a host the fleet table does not hold is refused rather than defaulted', () => {
+  const block = unitEnvironmentBlock({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    volumeBackend: 'gcs',
+    dataDiskIdentity: dataDiskIdentity(['boxlite-dev-runner']),
+  })
+  const directory = mkdtempSync('boxlite-unit-env-')
+  try {
+    writeFileSync(`${directory}/block.sh`, block)
+    const run = spawnSync('bash', [`${directory}/block.sh`], {
+      env: { ...process.env, BOXLITE_RUNNER_HOST_NAME: 'someone-elses-host', BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env` },
+      encoding: 'utf8',
+    })
+    assert.equal(run.status, 1, 'an unknown host must not resolve a disk name at all')
+    assert.match(run.stderr, /is not one of this stage's runner hosts/)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('a cloud with no data disk names none', () => {
+  // The transports carry no stage environment, so a host payload has nothing
+  // to select a row with; the identity is policy-only by construction.
+  const block = unitEnvironmentBlock({ apiUrl: 'https://api.dev.boxlite.ai', volumeBackend: 'gcs' })
+  assert.doesNotMatch(block, /RUNNER_DATA_DISK_NAME/)
+  assert.doesNotMatch(block, /GCP_PROJECT_ID/)
+  assert.doesNotMatch(block, /GCP_ZONE/)
+  assert.doesNotMatch(block, /metadata\.google\.internal/)
+
+  assert.doesNotMatch(renderHostConvergence(target({ apiUrl: 'https://api.dev.boxlite.ai' })), /RUNNER_DATA_DISK_NAME/)
+})
+
+test('a data-disk identity that reaches a root shell is checked wherever it is given', () => {
+  const bad = (overrides: Partial<RunnerDataDiskIdentity> = {}): RunnerDataDiskIdentity => ({
+    ...dataDiskIdentity(['boxlite-dev-runner']),
+    ...overrides,
+  })
+  for (const identity of [
+    bad({ project: "p'; rm -rf / #" }),
+    bad({ zone: 'asia-southeast1-b; rm -rf /' }),
+    bad({ hosts: [] }),
+    bad({ hosts: ['boxlite-dev-runner*'] }),
+    bad({ hosts: ['boxlite-dev-runner; rm -rf /'] }),
+    bad({ hosts: ['boxlite-dev-runner', 'boxlite-dev-runner'] }),
+  ]) {
+    assert.throws(
+      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs', dataDiskIdentity: identity }),
+      RunnerUpgradeError,
+      `accepted ${JSON.stringify(identity)}`,
+    )
+  }
+})
+
+/*
+ * The end of the quiet-failure chain the parse-level tests cannot see: the
+ * disk name must actually land in the unit environment file, and the host
+ * name must actually come from the metadata server. Both were proven live by
+ * the reviewer's mutation check (deleting the append line, or mistyping the
+ * metadata URL, left every test green); these two tests pin them.
+ */
+test('a legacy host is converged by enforce: three keys land in the file, the unit restarts', () => {
+  const { enforce } = renderUnitEnvironmentPolicyScripts({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    volumeBackend: 'gcs',
+    dataDiskIdentity: dataDiskIdentity(['boxlite-dev-runner']),
+  })
+  const directory = mkdtempSync('boxlite-unit-env-')
+  try {
+    // The host name comes from the metadata server on a real host — no
+    // BOXLITE_RUNNER_HOST_NAME here, so the curl branch is the one that runs.
+    // The stub logs its arguments, which pins the URL and header spelling.
+    writeFileSync(`${directory}/curl`, `#!/bin/bash\nprintf '%s\\n' "$@" >> ${directory}/curl.log\necho boxlite-dev-runner\n`)
+    // The convergence restarts the unit on success; a stub records it rather
+    // than talking to a real systemd.
+    writeFileSync(`${directory}/systemctl`, `#!/bin/bash\nprintf '%s\\n' "$@" >> ${directory}/systemctl.log\n`)
+    for (const name of ['curl', 'systemctl']) chmodSync(`${directory}/${name}`, 0o755)
+    // A host whose boot script predates the three keys: only the API address.
+    writeFileSync(`${directory}/runner.env`, 'BOXLITE_API_URL=https://api.dev.boxlite.ai/api\n')
+    writeFileSync(`${directory}/enforce.sh`, enforce)
+
+    const run = spawnSync(
+      'bash',
+      ['-c', `PATH=${directory}:\$PATH; bash ${directory}/enforce.sh; echo EXIT=\$?`],
+      {
+        env: { ...process.env, BOXLITE_RUNNER_ENV_FILE: `${directory}/runner.env` },
+        encoding: 'utf8',
+      },
+    )
+    assert.match(run.stdout, /EXIT=100/, `enforce must grade a successful convergence as 100:\n${run.stdout}${run.stderr}`)
+
+    const env = readFileSync(`${directory}/runner.env`, 'utf8')
+    assert.match(env, /GCP_PROJECT_ID=boxlite-gcp-dev\n/)
+    assert.match(env, /GCP_ZONE=asia-southeast1-b\n/)
+    assert.match(env, new RegExp(`RUNNER_DATA_DISK_NAME=${runnerDataDiskNameFor({ app: 'boxlite', stage: 'dev', host: 'boxlite-dev-runner' })}\n`))
+    assert.match(env, /BOXLITE_API_URL=https:\/\/api\.dev\.boxlite\.ai\/api\n/, 'the pre-existing lines must survive the rewrite')
+    assert.match(readFileSync(`${directory}/curl.log`, 'utf8'), /instance\/name/, 'the host name must come from the metadata server')
+    assert.match(
+      readFileSync(`${directory}/systemctl.log`, 'utf8'),
+      /restart\nboxlite-runner/,
+      'the unit must restart onto the new environment',
+    )
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('a metadata outage fails the policy loudly rather than converging onto nothing', () => {
+  // curl failing bubbles out of the assignment under `set -e` with curl's own
+  // exit code — outside the 100/101 vocabulary, so OS Config reports an
+  // execution error and retries. That is the intended error state: without a
+  // host name the policy can claim neither compliance nor a disk of its own,
+  // and defaulting to another row would hand the control plane another
+  // host's identity.
+  const { validate } = renderUnitEnvironmentPolicyScripts({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    volumeBackend: 'gcs',
+    dataDiskIdentity: dataDiskIdentity(['boxlite-dev-runner']),
+  })
+  const directory = mkdtempSync('boxlite-unit-env-')
+  try {
+    writeFileSync(`${directory}/curl`, '#!/bin/bash\nexit 7\n')
+    chmodSync(`${directory}/curl`, 0o755)
+    writeFileSync(`${directory}/validate.sh`, validate)
+    const run = spawnSync('bash', ['-c', `PATH=${directory}:\$PATH; bash ${directory}/validate.sh; echo EXIT=\$?`], {
+      encoding: 'utf8',
+    })
+    assert.match(run.stdout, /EXIT=7/, `a metadata outage must fail loudly, not quietly:\n${run.stdout}${run.stderr}`)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('an unknown host fails validate as an execution error, before any compliance verdict', () => {
+  // The fleet table selects before `unit_environment_settled` runs, so even a
+  // host with no env file yet is refused outright: exit 1, outside the
+  // 100/101 vocabulary. Loud, and not gradable as compliant.
+  const { validate } = renderUnitEnvironmentPolicyScripts({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    volumeBackend: 'gcs',
+    dataDiskIdentity: dataDiskIdentity(['boxlite-dev-runner']),
+  })
+  const directory = mkdtempSync('boxlite-unit-env-')
+  try {
+    writeFileSync(`${directory}/validate.sh`, validate)
+    const run = spawnSync('bash', [`${directory}/validate.sh`], {
+      env: { ...process.env, BOXLITE_RUNNER_HOST_NAME: 'someone-elses-host', BOXLITE_RUNNER_ENV_FILE: '/nonexistent/runner.env' },
+      encoding: 'utf8',
+    })
+    assert.equal(run.status, 1, `an unknown host must fail validate outright:\n${run.stdout}${run.stderr}`)
+    assert.match(run.stderr, /is not one of this stage's runner hosts/)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
