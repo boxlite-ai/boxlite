@@ -42,6 +42,14 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		} else if r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoints" {
 			response = map[string]any{"checkpoints": []any{info}}
 		}
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoints/checkpoint-1" {
+			failed := make(map[string]any, len(info)+1)
+			for key, value := range info {
+				failed[key] = value
+			}
+			failed["state"], failed["error_reason"] = "failed", "archive upload failed"
+			response = failed
+		}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("encode: %v", err)
 		}
@@ -66,10 +74,10 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		t.Fatalf("list: %+v %v", list, err)
 	}
 	detail, err := checkpoints.Get(ctx, "checkpoint-1")
-	if err != nil || !reflect.DeepEqual(detail, captured) {
+	if err != nil || detail.ID != captured.ID || detail.State != "failed" || detail.ErrorReason != "archive upload failed" {
 		t.Fatalf("get: %+v %v", detail, err)
 	}
-	created, err := checkpoints.CreateBox(ctx, "checkpoint-1", "worker")
+	created, err := checkpoints.ImportBox(ctx, "checkpoint-1", "worker", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +85,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	if created.ID() != "target-1" || created.Name() != "worker" {
 		t.Fatalf("created: %s %q", created.ID(), created.Name())
 	}
-	recovered, err := checkpoints.RecoverBox(ctx, "checkpoint-1", created.ID())
+	recovered, err := checkpoints.ImportBox(ctx, "checkpoint-1", "", created.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +98,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	unnamed, err := checkpoints.CreateBox(ctx, "checkpoint-1", "")
+	unnamed, err := checkpoints.ImportBox(ctx, "checkpoint-1", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +117,11 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		{"POST", "/v1/checkpoints", map[string]any{"source_box_id": "source-1", "name": "base"}},
 		{"GET", "/v1/checkpoints", nil},
 		{"GET", "/v1/checkpoints/checkpoint-1", nil},
-		{"POST", "/v1/boxes", map[string]any{"checkpoint_id": "checkpoint-1", "name": "worker"}},
-		{"POST", "/v1/boxes/target-1/recover", map[string]any{"checkpoint_id": "checkpoint-1"}},
+		{"POST", "/v1/boxes/import", map[string]any{"checkpoint_id": "checkpoint-1", "name": "worker"}},
+		{"POST", "/v1/boxes/import", map[string]any{"checkpoint_id": "checkpoint-1", "box_id": "target-1"}},
 		{"DELETE", "/v1/checkpoints/checkpoint-1", nil},
 		{"DELETE", "/v1/checkpoints/checkpoint-1?force=true", nil},
-		{"POST", "/v1/boxes", map[string]any{"checkpoint_id": "checkpoint-1"}},
+		{"POST", "/v1/boxes/import", map[string]any{"checkpoint_id": "checkpoint-1"}},
 		{"POST", "/v1/checkpoints", map[string]any{"source_box_id": "source-1"}},
 	}
 	if len(requests) != len(expected)+1 || !reflect.DeepEqual(requests[:len(expected)], expected) {
@@ -134,14 +142,16 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 		if _, err := checkpoints.Create(ctx, key, ""); !IsInvalidArgument(err) {
 			t.Fatalf("create %q: %v", key, err)
 		}
-		if _, err := checkpoints.CreateBox(ctx, key, ""); !IsInvalidArgument(err) {
+		if _, err := checkpoints.ImportBox(ctx, key, "", ""); !IsInvalidArgument(err) {
 			t.Fatalf("create box %q: %v", key, err)
-		}
-		if _, err := checkpoints.RecoverBox(ctx, "base", key); !IsInvalidArgument(err) {
-			t.Fatalf("recover %q: %v", key, err)
 		}
 		if err := checkpoints.Remove(ctx, key, true); !IsInvalidArgument(err) {
 			t.Fatalf("remove %q: %v", key, err)
+		}
+	}
+	for _, target := range []string{"target", "bad\x00suffix"} {
+		if _, err := checkpoints.ImportBox(ctx, "base", "conflicting-name", target); !IsInvalidArgument(err) {
+			t.Fatalf("conflicting import target %q: %v", target, err)
 		}
 	}
 	if _, err := checkpoints.List(ctx); !errors.Is(err, ErrRuntimeClosed) {
@@ -149,7 +159,7 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := checkpoints.CreateBox(cancelled, "base", "worker"); !errors.Is(err, context.Canceled) {
+	if _, err := checkpoints.ImportBox(cancelled, "base", "worker", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled: %v", err)
 	}
 	if _, err := NewRuntime(WithCheckpointDir("bad\x00directory")); !IsInvalidArgument(err) {

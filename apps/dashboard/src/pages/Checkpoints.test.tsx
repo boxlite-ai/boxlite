@@ -159,7 +159,7 @@ describe('Checkpoint inventory', () => {
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
   })
 
-  it('loads all candidate pages and excludes transitional or volume sources', async () => {
+  it('loads all candidate pages and excludes running, transitional or volume sources', async () => {
     state.api.boxApi.listBoxesPaginated.mockImplementation(async (_org, page, _size, id) => ({
       data: {
         items: id
@@ -176,10 +176,10 @@ describe('Checkpoint inventory', () => {
     await render()
     await click('New Checkpoint')
     const options = Array.from(document.querySelectorAll<HTMLOptionElement>('select[aria-label="Source box"] option'))
-    expect(options.map((option) => option.value)).toEqual(['', 'source-box', 'running'])
-    input('Source box', 'running')
+    expect(options.map((option) => option.value)).toEqual(['', 'source-box'])
+    input('Source box', 'source-box')
     await submit()
-    expect(state.api.createCheckpoint).toHaveBeenCalledWith('org-1', 'running', undefined)
+    expect(state.api.createCheckpoint).toHaveBeenCalledWith('org-1', 'source-box', undefined)
   })
 
   it('links exact sources and never mistakes a similar name for the source', async () => {
@@ -277,6 +277,22 @@ describe('Checkpoint inventory', () => {
     expect(state.api.createBoxFromCheckpoint).toHaveBeenCalledWith('org-1', 'checkpoint-1', 'worker')
     expect(state.navigate).not.toHaveBeenCalled()
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('new-box'))
+  })
+
+  it.each([408, 400])('locates an admitted Box after HTTP %s and blocks anonymous resubmission', async (status) => {
+    state.api.createBoxFromCheckpoint.mockRejectedValue(
+      Object.assign(new Error('Import did not finish'), {
+        isAxiosError: true,
+        response: { status, data: { boxId: 'accepted-box', message: 'Import did not finish' } },
+      }),
+    )
+    await render()
+    await click('Create Box from base')
+    await submit()
+    expect(document.querySelector('a[href="/dashboard/boxes/accepted-box"]')).not.toBeNull()
+    expect(document.querySelector<HTMLButtonElement>('form button[type="submit"]')!.disabled).toBe(true)
+    await submit()
+    expect(state.api.createBoxFromCheckpoint).toHaveBeenCalledTimes(1)
   })
 
   it('retains the row and confirmation when deletion is refused', async () => {

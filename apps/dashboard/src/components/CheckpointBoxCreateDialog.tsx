@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0 */
 
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { AsciiButton } from './ascii'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { toast } from 'sonner'
@@ -9,7 +10,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useCreateBoxFromCheckpointMutation } from '@/hooks/mutations/useCreateBoxFromCheckpointMutation'
 import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { Checkpoint } from '@/api/checkpoint-types'
-import { checkpointErrorMessage } from '@/lib/checkpoints'
+import { checkpointAdmittedBoxId, checkpointErrorMessage } from '@/lib/checkpoints'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
@@ -17,6 +18,7 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint: Checkpoint; onClose: () => void }) {
   const [name, setName] = useState('')
   const create = useCreateBoxFromCheckpointMutation()
+  const admittedBoxId = checkpointAdmittedBoxId(create.error)
   const capabilities = useCheckpointCapabilities()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const trimmedName = name.trim()
@@ -25,6 +27,7 @@ export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint:
     !!selectedOrganization &&
     checkpoint.state === 'ready' &&
     !create.isPending &&
+    !admittedBoxId &&
     nameValid &&
     capabilities.data?.checkpoints_enabled &&
     authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
@@ -67,7 +70,7 @@ export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint:
                 value={name}
                 placeholder="my-new-box"
                 onChange={(event) => setName(event.target.value)}
-                disabled={create.isPending}
+                disabled={create.isPending || !!admittedBoxId}
                 aria-invalid={!nameValid}
                 aria-describedby="checkpoint-box-name-hint"
                 className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
@@ -82,6 +85,14 @@ export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint:
             {create.error && (
               <p role="alert" className="font-mono text-[11px] text-destructive">
                 {checkpointErrorMessage(create.error)}
+              </p>
+            )}
+            {admittedBoxId && (
+              <p className="font-mono text-[12px]">
+                The import was accepted. Check this Box before starting another import.{' '}
+                <Link className="underline" to={`/dashboard/boxes/${encodeURIComponent(admittedBoxId)}`}>
+                  View Box
+                </Link>
               </p>
             )}
           </div>

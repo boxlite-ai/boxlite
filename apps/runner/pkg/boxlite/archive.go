@@ -23,6 +23,9 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (s
 	if err != nil {
 		return "", "", err
 	}
+	if info.State != boxlite.StateStopped {
+		return "", "", fmt.Errorf("checkpoint source must be stopped; stop the Box before creating a checkpoint")
+	}
 	digest := ""
 	if info.ResolvedImage != nil {
 		digest = info.ResolvedImage.ManifestDigest

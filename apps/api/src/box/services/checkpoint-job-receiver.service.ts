@@ -5,6 +5,8 @@ import { Injectable, Logger, Optional } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { DataSource } from 'typeorm'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import { Redis } from 'ioredis'
 import { Checkpoint, CheckpointArchive } from '../entities/checkpoint.entity'
 import { Job } from '../entities/job.entity'
 import { Box } from '../entities/box.entity'
@@ -18,6 +20,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
+import { runnerJobQueueKey } from '../constants/runner-job-queue'
 
 export function isCheckpointJobType(type: JobType): boolean {
   return type === JobType.EXPORT_CHECKPOINT || type === JobType.UPLOAD_CHECKPOINT || type === JobType.IMPORT_CHECKPOINT
@@ -30,7 +33,8 @@ export class CheckpointJobReceiver {
   constructor(
     private readonly dataSource: DataSource,
     private readonly cache: BoxLookupCacheInvalidationService,
-    @Optional() private readonly events?: EventEmitter2,
+    @Optional() private readonly events: EventEmitter2,
+    @InjectRedis() private readonly redis: Redis,
   ) {}
 
   async handleJobCompletion(notification: Job): Promise<void> {
@@ -39,6 +43,7 @@ export class CheckpointJobReceiver {
       return
     }
     let source: Box | null = null
+    let queuedUpload: Job | null = null
     await this.dataSource.transaction(async (manager) => {
       // The persisted job is authoritative. A delayed caller must not replace
       // current terminal metadata or advance a different checkpoint operation.
@@ -105,12 +110,21 @@ export class CheckpointJobReceiver {
         })
         await manager.insert(Job, upload)
         checkpoint.activeJobId = upload.id
+        queuedUpload = upload
       } else {
         checkpoint.state = 'ready'
         checkpoint.activeJobId = null
       }
       await manager.save(Checkpoint, checkpoint)
     })
+    if (queuedUpload) {
+      try {
+        await this.redis.lpush(runnerJobQueueKey(queuedUpload.runnerId), queuedUpload.id)
+      } catch (error) {
+        // The committed job remains discoverable by fallback polling.
+        this.logger.warn(`Failed to notify runner about checkpoint upload ${queuedUpload.id}: ${error.message}`)
+      }
+    }
     if (source) this.cache.invalidate(source)
   }
 

@@ -80,6 +80,14 @@ func (r *Runtime) PrepareCheckpointArchive(ctx context.Context, source Checkpoin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if r == nil || r.handle == nil {
+		return nil, ErrRuntimeClosed
+	}
+	select {
+	case <-r.closing:
+		return nil, ErrRuntimeClosed
+	default:
+	}
 	cPath, cSHA, cImage := toCString(source.Path), toCString(source.SHA256), toCString(source.PinnedImage)
 	defer C.free(unsafe.Pointer(cPath))
 	defer C.free(unsafe.Pointer(cSHA))

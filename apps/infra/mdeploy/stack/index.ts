@@ -464,6 +464,8 @@ export const deployStack = ({
     // full hostnames still use the stored ownership record.
     ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
     S3_DEFAULT_BUCKET: storage.name,
+    // Storage may precede runner rollout. Admission requires a separate opt-in.
+    CHECKPOINTS_ENABLED: inputs.apiEnvironment.CHECKPOINTS_ENABLED ?? 'false',
     // Supply the archive prefix wherever storage provides the dedicated bucket.
     ...(storage.checkpoints.active ? { CHECKPOINT_ARCHIVE_PREFIX: storage.checkpoints.archivePrefix } : {}),
   }

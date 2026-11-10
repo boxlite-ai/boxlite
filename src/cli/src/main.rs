@@ -121,7 +121,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Checkpoint(args) => commands::checkpoint::execute(args, &global)
             .await
             .map(|_| 0),
-        cli::Commands::Recover(args) => commands::recover::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Import(args) => commands::import::execute(args, &global).await.map(|_| 0),
         cli::Commands::List(args) => commands::list::execute(args, &global).await.map(|_| 0),
         cli::Commands::Rm(args) => commands::rm::execute(args, &global).await.map(|_| 0),
         cli::Commands::Start(args) => commands::start::execute(args, &global).await.map(|_| 0),

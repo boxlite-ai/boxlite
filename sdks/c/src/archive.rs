@@ -84,6 +84,13 @@ pub unsafe extern "C" fn boxlite_runtime_prepare_checkpoint_archive(
     };
     let cb = crate::unwrap_cb_or_return!(cb, out_error);
     let runtime = unsafe { &*runtime };
+    if let Err(error) =
+        crate::util::ensure_runtime_live(&runtime.liveness, "prepare checkpoint archive")
+    {
+        let code = error_to_code(&error);
+        unsafe { write_error(out_error, error) };
+        return code;
+    }
     let checkpoints = runtime.runtime.checkpoints();
     let task_runtime = runtime.tokio_rt.clone();
     let queue = runtime.queue.clone();
@@ -395,6 +402,38 @@ mod tests {
         _error: *mut CBoxliteError,
         _user_data: *mut c_void,
     ) {
+    }
+
+    #[test]
+    fn checkpoint_archive_preparation_refuses_a_closed_runtime_before_queueing() {
+        let core =
+            boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://127.0.0.1:1"))
+                .unwrap();
+        let mut runtime = RuntimeHandle {
+            runtime: core,
+            tokio_rt: crate::runtime::create_tokio_runtime().unwrap(),
+            liveness: Arc::new(crate::runtime::RuntimeLiveness::new()),
+            queue: Arc::new(crate::event_queue::EventQueue::new()),
+        };
+        runtime.liveness.mark_closed();
+        let archive = CString::new("/tmp/checkpoint.boxlite").unwrap();
+        let digest = CString::new("a".repeat(64)).unwrap();
+        let image = CString::new(format!("example/app@sha256:{}", "a".repeat(64))).unwrap();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_runtime_prepare_checkpoint_archive(
+                &mut runtime,
+                archive.as_ptr(),
+                digest.as_ptr(),
+                image.as_ptr(),
+                ptr::null(),
+                Some(noop_checkpoint_archive_cb),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        unsafe { crate::boxlite_error_free(&mut error) };
+        assert_eq!(code, BoxliteErrorCode::Stopped);
     }
 
     #[test]

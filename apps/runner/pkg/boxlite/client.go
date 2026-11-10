@@ -455,7 +455,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err := operation.Invalidate(); err != nil {
 		return "", "", err
 	}
-	ctx = context.WithoutCancel(ctx)
 
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
@@ -546,6 +545,19 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	opts = append(opts, boxlite.WithNetwork(network))
+	if err := ctx.Err(); err != nil {
+		if len(volumeMounts) > 0 {
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
+				c.logger.WarnContext(cleanupCtx, "failed to remove cancelled box volume mount record", "box", boxDto.Id, "error", cleanupErr)
+			}
+		}
+		return "", "", err
+	}
+	// Native creation cannot be cancelled after admission. Keep the target
+	// lease until it finishes; preparation above still obeys caller cancellation.
+	ctx = context.WithoutCancel(ctx)
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if

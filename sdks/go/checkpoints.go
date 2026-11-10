@@ -20,6 +20,7 @@ type CheckpointInfo struct {
 	CreatedAt   string
 	SizeBytes   uint64
 	State       string
+	ErrorReason string
 }
 
 // Checkpoints manages local or organization-scoped checkpoints. Its lifetime
@@ -157,14 +158,21 @@ func (c *Checkpoints) Remove(ctx context.Context, key string, force bool) error 
 	}
 }
 
-// CreateBox inherits all saved execution settings. Empty name leaves the local
-// box unnamed. It accepts no resource or environment overrides.
-func (c *Checkpoints) CreateBox(ctx context.Context, key, name string) (*Box, error) {
+// ImportBox inherits the saved execution settings. A nonempty boxID replaces
+// an idle target. Name and boxID are mutually exclusive; empty values create
+// an unnamed Box. REST replacement preserves the public Box ID.
+func (c *Checkpoints) ImportBox(ctx context.Context, key, name, boxID string) (*Box, error) {
 	if err := validateArchiveArgument(key, "checkpoint key", false); err != nil {
 		return nil, err
 	}
 	if err := validateArchiveArgument(name, "box name", true); err != nil {
 		return nil, err
+	}
+	if err := validateArchiveArgument(boxID, "import target", true); err != nil {
+		return nil, err
+	}
+	if name != "" && boxID != "" {
+		return nil, &Error{Code: ErrInvalidArgument, Message: "name and box_id are mutually exclusive"}
 	}
 	runtime, err := c.ready(ctx)
 	if err != nil {
@@ -174,42 +182,12 @@ func (c *Checkpoints) CreateBox(ctx context.Context, key, name string) (*Box, er
 	defer C.free(unsafe.Pointer(cKey))
 	cName, freeName := archiveNameCString(name)
 	defer freeName()
+	cTarget, freeTarget := archiveNameCString(boxID)
+	defer freeTarget()
 	result := make(chan handleResult[*C.CBoxHandle], 1)
 	handle := registerHandleForDispatch(cgo.NewHandle(result))
 	var nativeError C.CBoxliteError
-	code := C.boxlite_checkpoint_create_box(runtime.handle, cKey, cName, C.cbRuntimeImport(), handleToPtr(handle), &nativeError)
-	if code != C.Ok {
-		deleteHandleForDispatch(handle)
-		return nil, freeError(&nativeError)
-	}
-	native, err := waitCheckpointResult(ctx, runtime, result, handle, func(value *C.CBoxHandle) { C.boxlite_box_free(value) })
-	if err != nil {
-		return nil, err
-	}
-	return checkpointBoxFromHandle(runtime, native)
-}
-
-// RecoverBox replaces an idle stopped or failed target. Local recovery keeps
-// its name and returns a new native ID; REST recovery keeps the public Box ID.
-func (c *Checkpoints) RecoverBox(ctx context.Context, key, target string) (*Box, error) {
-	if err := validateArchiveArgument(key, "checkpoint key", false); err != nil {
-		return nil, err
-	}
-	if err := validateArchiveArgument(target, "recovery target", false); err != nil {
-		return nil, err
-	}
-	runtime, err := c.ready(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cKey := toCString(key)
-	defer C.free(unsafe.Pointer(cKey))
-	cTarget := toCString(target)
-	defer C.free(unsafe.Pointer(cTarget))
-	result := make(chan handleResult[*C.CBoxHandle], 1)
-	handle := registerHandleForDispatch(cgo.NewHandle(result))
-	var nativeError C.CBoxliteError
-	code := C.boxlite_checkpoint_recover_box(runtime.handle, cKey, cTarget, C.cbRuntimeImport(), handleToPtr(handle), &nativeError)
+	code := C.boxlite_checkpoint_import_box(runtime.handle, cKey, cName, cTarget, C.cbRuntimeImport(), handleToPtr(handle), &nativeError)
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return nil, freeError(&nativeError)
@@ -235,7 +213,7 @@ func checkpointBoxFromHandle(runtime *Runtime, native *C.CBoxHandle) (*Box, erro
 }
 
 func checkpointInfoFromC(info *C.CCheckpointInfo) CheckpointInfo {
-	return CheckpointInfo{ID: cString(info.id), Name: cString(info.name), SourceBoxID: cString(info.source_box_id), CreatedAt: cString(info.created_at), SizeBytes: uint64(info.size_bytes), State: cString(info.state)}
+	return CheckpointInfo{ID: cString(info.id), Name: cString(info.name), SourceBoxID: cString(info.source_box_id), CreatedAt: cString(info.created_at), SizeBytes: uint64(info.size_bytes), State: cString(info.state), ErrorReason: cString(info.error_reason)}
 }
 
 func checkpointInfoResult(ctx context.Context, runtime *Runtime, result <-chan handleResult[*C.CCheckpointInfo], handle cgo.Handle) (*CheckpointInfo, error) {

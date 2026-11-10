@@ -121,7 +121,7 @@ impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
         let response: BoxResponse = self
             .client
             .post(
-                "/boxes",
+                "/boxes/import",
                 &Create {
                     checkpoint_id: key,
                     name,
@@ -135,10 +135,12 @@ impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
     }
 
     async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox> {
-        let path = format!("/boxes/{}/recover", urlencoding::encode(target));
         let response: BoxResponse = self
             .client
-            .post(&path, &serde_json::json!({"checkpoint_id": key}))
+            .post(
+                "/boxes/import",
+                &serde_json::json!({"checkpoint_id": key, "box_id": target}),
+            )
             .await?;
         Ok(litebox_from_rest(Arc::new(RestBox::new(
             self.client.clone(),

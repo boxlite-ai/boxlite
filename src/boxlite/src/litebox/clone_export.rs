@@ -205,6 +205,30 @@ impl BoxImpl {
             .runtime
             .checkpoint_lifecycle
             .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;
+        self.export_owned(dest).await
+    }
+
+    pub(crate) async fn export_checkpoint(
+        &self,
+        dest: &std::path::Path,
+    ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        let _ownership = self
+            .runtime
+            .checkpoint_lifecycle
+            .capture(self.config.id.as_ref(), self.config.name.as_deref())?;
+        if self.state.read().status != crate::BoxStatus::Stopped {
+            return Err(BoxliteError::InvalidState(
+                "checkpoint source must be stopped; stop the Box before creating a checkpoint"
+                    .into(),
+            ));
+        }
+        self.export_owned(dest).await
+    }
+
+    async fn export_owned(
+        &self,
+        dest: &std::path::Path,
+    ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 

@@ -28,14 +28,10 @@ class SyncCheckpointHandle:
     def remove(self, key: str, force: bool = False) -> None:
         self._bridge._sync(self._handle.remove(key, force))
 
-    def create_box(self, key: str, name: str | None = None) -> "SyncBox":
+    def import_box(
+        self, key: str, name: str | None = None, *, box_id: str | None = None
+    ) -> "SyncBox":
         from ._box import SyncBox
 
-        handle = self._bridge._sync(self._handle.create_box(key, name))
-        return SyncBox(self._runtime, handle)
-
-    def recover_box(self, key: str, target: str) -> "SyncBox":
-        from ._box import SyncBox
-
-        handle = self._bridge._sync(self._handle.recover_box(key, target))
+        handle = self._bridge._sync(self._handle.import_box(key, name, box_id=box_id))
         return SyncBox(self._runtime, handle)

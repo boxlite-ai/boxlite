@@ -17,16 +17,20 @@ See the [policy and lifecycle guide](../../docs/guides/nested-virtualization.md)
 
 ## Managed checkpoints
 
-`boxlite_checkpoint_create`, `list`, `get`, `remove`, `create_box` and
-`recover_box` take a runtime and use its existing post-and-drain event queue.
+The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+`boxlite_checkpoint_create`, `list`, `get`, `remove` and `import_box` take a runtime and use its existing post-and-drain event queue.
+Import accepts optional name and box_id; they are mutually exclusive. A non-null
+box_id replaces the selected target; otherwise import creates a new Box.
 Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
 or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
-`boxlite_free_checkpoint_list`. List entries belong to the list. Create/recover
+`boxlite_free_checkpoint_list`. List entries belong to the list. Import
 callbacks own a Box handle, released with `boxlite_box_free`, which does not
 delete the native Box. Error pointers are borrowed during callback dispatch.
 
 Cloud capture may initially report `creating`; wait for `ready` before use.
-Creation and recovery inherit all saved execution settings. Local recovery
+New imports and replacements inherit all saved execution settings. Local recovery
 preserves the name and returns a new native ID; cloud recovery preserves the
 public Box ID. Force removal ignores absence and never bypasses active use.
 

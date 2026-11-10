@@ -134,16 +134,17 @@ new boxes. It is separate from a box's snapshots and does not capture memory or
 running processes.
 
 ```bash
-# Capture an initialized box; the runtime also supports a running source.
+# Stop the source and wait for stopped before capture.
+boxlite stop source
 boxlite checkpoint create source --name dev-base
 boxlite checkpoint list
 boxlite checkpoint get dev-base
 
 # Execution settings are inherited; overrides such as --cpus or -e are refused.
-boxlite create --checkpoint dev-base --name worker
+boxlite import --checkpoint dev-base --name worker
 
 # Replace an existing stopped or failed box, preserving its name.
-boxlite recover worker --checkpoint dev-base
+boxlite import --checkpoint dev-base --box worker
 boxlite checkpoint delete dev-base
 ```
 
@@ -154,7 +155,7 @@ per-command `--checkpoints-dir PATH`:
 
 ```bash
 boxlite checkpoint --checkpoints-dir /data/checkpoints list
-boxlite create --checkpoint dev-base --checkpoints-dir /data/checkpoints --name worker
+boxlite import --checkpoint dev-base --checkpoints-dir /data/checkpoints --name worker
 ```
 
 For the CLI, the explicit storage flag overrides the environment, which overrides
@@ -162,7 +163,7 @@ the JSON configuration, followed by the directory under the selected home. For
 SDK options, an explicitly supplied directory overrides the environment. Remote
 contexts use the server's storage; a client-side `--checkpoints-dir` is refused.
 
-Local recover returns a **new box ID**; the original name stays available and old
+Local replacement returns a **new box ID**; the original name stays available and old
 handles/IDs no longer address that box. Recover validates the archive and pinned
 image configuration before removing the old box, but replacement is not atomic.
 An import failure after removal retains the checkpoint and recovery record for
@@ -187,7 +188,11 @@ The source must have a recorded image build or an explicitly digest-pinned image
 A mutable tag without build metadata is refused. Startup uses that fixed digest;
 the corresponding OCI configuration must remain available in the cache or
 registry. Volumes, typed mounts, secrets and host-rootfs sources are unsupported
-for checkpoint capture in this version.
+for checkpoint capture in this version. Local `serve` also refuses capture when
+the source has a nonzero `auto_stop` or `auto_delete`: those deadlines live only
+in the server and cannot be preserved in the disk archive. Disable them before
+capture. Named replacements serialize target lookup, import and cache cleanup,
+so each replacement invalidates the handle it actually supersedes.
 
 ## Connecting to a remote server
 

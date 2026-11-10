@@ -304,6 +304,8 @@ typedef struct CCheckpointInfo {
   uint64_t size_bytes;
   // Lowercase creating, ready, failed, or deleting.
   char *state;
+  // Null unless the server reports a failure reason.
+  char *error_reason;
 } CCheckpointInfo;
 
 // Entries belong to this list; release once with boxlite_free_checkpoint_list.
@@ -1214,21 +1216,15 @@ enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteRuntime *runtime,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
 
-// Queue creation with inherited settings. Name may be null; callback owns Box.
-enum BoxliteErrorCode boxlite_checkpoint_create_box(CBoxliteRuntime *runtime,
+// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
+// A non-null box_id replaces an idle target; the callback owns the Box handle.
+enum BoxliteErrorCode boxlite_checkpoint_import_box(CBoxliteRuntime *runtime,
                                                     const char *key,
                                                     const char *name,
+                                                    const char *box_id,
                                                     CRuntimeImportCb cb,
                                                     void *user_data,
                                                     CBoxliteError *out_error);
-
-// Queue recovery. Target must be idle; local result has a new native ID.
-enum BoxliteErrorCode boxlite_checkpoint_recover_box(CBoxliteRuntime *runtime,
-                                                     const char *key,
-                                                     const char *target,
-                                                     CRuntimeImportCb cb,
-                                                     void *user_data,
-                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,

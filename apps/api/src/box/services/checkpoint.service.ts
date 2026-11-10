@@ -39,12 +39,19 @@ export class CheckpointService {
     private readonly archives: CheckpointArchiveStore,
   ) {}
 
+  assertEnabled(): ReturnType<typeof checkpointConfig> {
+    const settings = this.config.get<ReturnType<typeof checkpointConfig>>('checkpoint')
+    if (!settings?.enabled || !settings.archivePrefix) {
+      throw new ServiceUnavailableException('Checkpoint storage is not configured or admission is disabled')
+    }
+    return settings
+  }
+
   async create(organizationId: string, source: string, name?: string): Promise<Checkpoint> {
     if (!source || source.includes('\0') || source.length > 128) throw new BadRequestException('Invalid source box')
     if (name !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name))
       throw new BadRequestException('Invalid checkpoint name')
-    const settings = this.config.get<ReturnType<typeof checkpointConfig>>('checkpoint')
-    if (!settings?.archivePrefix) throw new ServiceUnavailableException('Checkpoint storage is not configured')
+    const settings = this.assertEnabled()
     let sourceBox: Box | undefined
     try {
       const checkpoint = await this.dataSource.transaction(async (manager) => {
@@ -67,9 +74,11 @@ export class CheckpointService {
           box.pending ||
           checkpointState.activeJobId ||
           String(box.state) !== String(box.desiredState) ||
-          ![BoxState.STARTED, BoxState.STOPPED].includes(box.state)
+          box.state !== BoxState.STOPPED
         ) {
-          throw new ConflictException('Checkpoint source must be idle and started or stopped')
+          throw new ConflictException(
+            'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
+          )
         }
         if (box.volumes?.length || box.secrets?.length)
           throw new BadRequestException('Checkpoints with volumes or secrets are not supported')

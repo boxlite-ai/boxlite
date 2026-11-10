@@ -130,7 +130,7 @@ This bucket is separate from application storage, per-volume buckets and the
 infrastructure engine's state/checkpoint bucket. AWS does not enable this archive
 capability. Deploy the checkpoint database migration and compatible API/runners
 with this storage configuration before enabling capture. The REST API and
-create/recover orchestration use this archive path; see the
+capture/import orchestration use this archive path; see the
 [API checkpoint contract](../../api/README.md#checkpoint-capture).
 
 ## Implementation and validation

@@ -12,6 +12,7 @@ import { BoxConflictError } from '../errors/box-conflict.error'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
 import { RunnerService } from '../services/runner.service'
 import { BoxActivityService } from '../services/box-activity.service'
 
@@ -249,9 +250,17 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         .createQueryBuilder('box')
         .select(['box.id'])
         .leftJoin('box_last_activity', 'activity', 'activity."boxId" = box.id')
-        .where('box.state NOT IN (:...excludedStates)', {
-          excludedStates: [BoxState.DESTROYED, BoxState.ERROR, BoxState.RESIZING],
-        })
+        .where(
+          `(box.state NOT IN (:...excludedStates) OR (
+          box.state = :errorState AND box."desiredState" = :destroyedState
+          AND ${CANCELLED_CHECKPOINT_TARGET_SQL}
+        ))`,
+          {
+            excludedStates: [BoxState.DESTROYED, BoxState.ERROR, BoxState.RESIZING],
+            errorState: BoxState.ERROR,
+            destroyedState: BoxDesiredState.DESTROYED,
+          },
+        )
         .andWhere('box."desiredState"::text != box.state::text')
         .andWhere('box."desiredState"::text IN (:...supportedDesiredStates)', {
           supportedDesiredStates: [BoxDesiredState.STARTED, BoxDesiredState.STOPPED, BoxDesiredState.DESTROYED],

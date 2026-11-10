@@ -204,6 +204,7 @@ export class CheckpointRecoverService {
   }
 
   private async admit(organization: Organization, key: string): Promise<Checkpoint> {
+    this.checkpoints.assertEnabled()
     this.organizations.assertOrganizationIsNotSuspended(organization)
     const checkpoint = await this.checkpoints.get(organization.id, key)
     if (checkpoint.state !== 'ready' || !checkpoint.archive) throw new ConflictException('Checkpoint is not ready')

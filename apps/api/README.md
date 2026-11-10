@@ -115,8 +115,10 @@ internal object locations.
 Checkpoint operations stay outside the MCP OAuth allowlist, like export/import.
 The `checkpoints` collection name is reserved and cannot be claimed as an application subdomain.
 
-A source must be idle on a ready v2 runner, either started or stopped, without
-volumes or secrets. Creating a checkpoint takes the source's `BOX` job slot
+A source must be stopped and idle on a ready v2 runner, without volumes or secrets.
+Stop the Box and wait for `stopped` before capture; other states return `409`.
+Checkpoint capture never stops the source automatically or uses hot export.
+Creating a checkpoint takes the source's `BOX` job slot
 until native export completes. The completion transaction clears its checkpoint
 ownership marker and creates an `UPLOAD_CHECKPOINT` job under `CHECKPOINT`;
 the source can then start while upload runs. Only a matching successful upload
@@ -129,7 +131,7 @@ does not delete the checkpoint. Duplicate or stale callbacks cannot advance a
 newer operation. A reconciliation task replays durable terminal jobs after a
 lost callback or API restart.
 
-`POST /api/v1/boxes` accepts `checkpoint_id` and an optional `name` to create a
+`POST /api/v1/boxes/import` accepts JSON `checkpoint_id` and optional `name` to create a
 new public Box from a ready checkpoint. Configuration overrides are rejected.
 The existing scheduler selects a compatible ready v2 runner; creation skips the
 warm pool. Box admission, the import operation and its job commit together, so
@@ -142,8 +144,9 @@ runs outside the database transaction after persisting `deleting`; failures
 retain that state and quota for retry. Checkpoints also protect their referenced
 organization image and matching registry credential after source deletion.
 
-`POST /api/v1/boxes/{id-or-name}/recover` accepts only `checkpoint_id` and
-requires Box write permission. Recovery rechecks organization admission,
+`POST /api/v1/boxes/import` with JSON `checkpoint_id` and `box_id` replaces an
+existing idle target and requires Box write permission. `name` and `box_id` are
+mutually exclusive; ordinary `POST /boxes` no longer accepts checkpoint selectors. Recovery rechecks organization admission,
 per-Box limits and the existing runner's compatibility before creating an
 `IMPORT_CHECKPOINT` job. The public Box ID remains unchanged. The Box reports
 `restoring` internally while its committed resource/configuration fields remain
@@ -163,13 +166,21 @@ configuration and current ownership; reconciliation replays the durable success
 receipt without scheduling another import.
 Recovery is a remove/import sequence, so an import failure can leave the old
 native Box absent. The HTTP state wait is bounded to 30 seconds and does not
-cancel accepted runner work.
+cancel accepted runner work. Every post-admission wait failure includes the
+existing `boxId` error field, even when a terminal failure occurs before timeout.
+Clients must query that identity before submitting another anonymous import.
+Binary archive import/export semantics remain unchanged; cloud binary upload
+is still unavailable and separate from checkpoint admission.
 
 Explicit target deletion cancels its import operation and advances the target
 sequence before scheduling native destruction. Late callbacks cannot commit
 configuration; the runner also durably retires that public target before native
 destruction, preventing delayed imports from recreating it. An already absent
 native target counts as successful destruction.
+Cancelled checkpoint targets remain eligible for destruction retries even in
+`error`; retention cleanup keeps their rows until native deletion is confirmed.
+Export completion commits the upload job before notifying the runner's Redis
+queue. If notification fails, the durable job remains available to polling.
 
 | Boundary | Job owner | Source busy | Archive ownership and retry |
 | --- | --- | --- | --- |
@@ -203,8 +214,11 @@ adding columns to `box`; unrelated Box-only fixtures do not need that migration.
 The transaction tests inject a failure after the Box write and before operation
 completion; they verify rollback and concurrent replay against PostgreSQL.
 
-Set `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` to enable capture and
-grant the configured API/runner identities object access. The optional
+Provision `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` and grant the
+API/runner identities object access. Storage alone does not enable admission.
+After compatible runners are deployed, set `CHECKPOINTS_ENABLED=true` to allow
+capture and checkpoint import; it defaults to false, including mdeploy stacks.
+Disabling admission keeps existing records readable and lets accepted jobs finish. The optional
 `CHECKPOINT_MAX_PER_ORGANIZATION` defaults to 10; creating, ready, failed and
 deleting records all count. Quota and name checks run in the transaction that
 creates the export job. An unset prefix returns 503 before source mutation.

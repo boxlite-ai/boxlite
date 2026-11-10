@@ -18,6 +18,83 @@ fn archive_source(archive: &BoxArchive) -> super::CheckpointArchiveSource {
 }
 
 #[tokio::test]
+async fn checkpoint_capture_requires_stopped_source() {
+    for status in [
+        BoxStatus::Configured,
+        BoxStatus::Running,
+        BoxStatus::Paused,
+        BoxStatus::Failed,
+    ] {
+        let (runtime, checkpoints, temporary) = setup();
+        let bx = runtime
+            .import_box(
+                source_archive(temporary.path(), &source_options()),
+                Some("source".into()),
+            )
+            .await
+            .unwrap();
+        let id = bx.id().clone();
+        drop(bx);
+        let (_, mut state) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        state.force_status(status);
+        runtime.box_manager.save_box(&id, &state).unwrap();
+        assert!(
+            matches!(checkpoints.create("source", Some("base".into())).await,
+            Err(BoxliteError::InvalidState(message)) if message.contains("stopped")),
+            "accepted or misclassified {status:?}"
+        );
+        assert!(checkpoints.list().await.unwrap().is_empty());
+        assert_eq!(
+            runtime.get_info("source").await.unwrap().unwrap().status,
+            status
+        );
+    }
+}
+
+#[tokio::test]
+async fn checkpoint_capture_blocks_start_until_export_finishes() {
+    let (runtime, checkpoints, temporary) = setup();
+    let bx = runtime
+        .import_box(
+            source_archive(temporary.path(), &source_options()),
+            Some("source".into()),
+        )
+        .await
+        .unwrap();
+    let (config, state) = runtime.box_manager.box_by_id(bx.id()).unwrap().unwrap();
+    let (implementation, _) = runtime.get_or_create_box_impl(config, state);
+    let disk = implementation.disk_ops.lock().await;
+    let capture = tokio::spawn({
+        let checkpoints = checkpoints.clone();
+        async move { checkpoints.create("source", Some("base".into())).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while runtime
+            .checkpoint_lifecycle
+            .read(Some(bx.id().as_ref()), Some("source"))
+            .is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("capture did not reserve its stopped source");
+    assert!(matches!(
+        bx.start().await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    assert_eq!(bx.info().await.unwrap().status, BoxStatus::Stopped);
+    drop(disk);
+    capture.await.unwrap().unwrap();
+    assert!(
+        runtime
+            .checkpoint_lifecycle
+            .read(Some(bx.id().as_ref()), Some("source"))
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn downloaded_checkpoint_preparation_rebinds_only_platform_identity_before_native_import() {
     let (runtime, checkpoints, temporary) = setup();
     let mut options = source_options();
@@ -350,6 +427,58 @@ fn setup() -> (SharedRuntimeImpl, CheckpointHandle, tempfile::TempDir) {
 }
 
 #[tokio::test]
+async fn checkpoint_preparation_rejects_a_shutdown_runtime_before_archive_work() {
+    let (runtime, checkpoints, temporary) = setup();
+    let archive = source_archive(temporary.path(), &source_options());
+    crate::images::test_support::seed_cached_build(
+        &runtime.image_manager,
+        IMAGE,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await;
+    runtime.shutdown(None).await.unwrap();
+    assert!(matches!(
+        checkpoints
+            .prepare_archive(archive_source(&archive), None)
+            .await,
+        Err(BoxliteError::Stopped(_))
+    ));
+}
+
+#[tokio::test]
+async fn checkpoint_replacement_after_shutdown_preserves_the_original_box() {
+    let (runtime, checkpoints, temporary) = setup();
+    let original = runtime
+        .import_box(
+            source_archive(temporary.path(), &source_options()),
+            Some("target".into()),
+        )
+        .await
+        .unwrap();
+    let checkpoint = checkpoints
+        .create("target", Some("base".into()))
+        .await
+        .unwrap();
+    crate::images::test_support::seed_cached_build(
+        &runtime.image_manager,
+        IMAGE,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .await;
+    runtime.shutdown(None).await.unwrap();
+    assert!(matches!(
+        checkpoints
+            .import_box(&checkpoint.id, None, Some("target"))
+            .await,
+        Err(BoxliteError::Stopped(_))
+    ));
+    assert_eq!(
+        runtime.get_info("target").await.unwrap().unwrap().id,
+        *original.id()
+    );
+}
+
+#[tokio::test]
 async fn checkpoint_deletion_metadata_remains_visible_without_allowing_archive_use() {
     let (runtime, checkpoints, temporary) = setup();
     runtime
@@ -376,7 +505,7 @@ async fn checkpoint_deletion_metadata_remains_visible_without_allowing_archive_u
         CheckpointState::Deleting
     );
     assert!(matches!(
-        checkpoints.create_box(&checkpoint.id, None).await,
+        checkpoints.import_box(&checkpoint.id, None, None).await,
         Err(BoxliteError::InvalidState(_))
     ));
     checkpoints.remove(&checkpoint.name, false).await.unwrap();
@@ -423,7 +552,7 @@ async fn checkpoint_survives_source_deletion_and_import_preserves_captured_optio
     )
     .await;
     let restored = checkpoints
-        .create_box(&checkpoint.id, Some("restored".into()))
+        .import_box(&checkpoint.id, Some("restored".into()), None)
         .await
         .unwrap();
     assert_ne!(restored.id(), &original_id);
@@ -479,7 +608,9 @@ async fn missing_sources_and_archives_do_not_create_or_destroy_boxes() {
         Err(BoxliteError::NotFound(_))
     ));
     assert!(matches!(
-        checkpoints.create_box("missing", Some("new".into())).await,
+        checkpoints
+            .import_box("missing", Some("new".into()), None)
+            .await,
         Err(BoxliteError::NotFound(_))
     ));
     assert!(runtime.list_info().await.unwrap().is_empty());
@@ -566,7 +697,7 @@ async fn recover_preserves_the_target_name_and_replays_the_accepted_native_resul
     .await;
 
     let recovered = checkpoints
-        .recover_box(&checkpoint.id, "target")
+        .import_box(&checkpoint.id, None, Some("target"))
         .await
         .unwrap();
     assert_ne!(recovered.id().as_ref(), old_id);
@@ -589,7 +720,7 @@ async fn recover_preserves_the_target_name_and_replays_the_accepted_native_resul
     // A retry using the superseded ID must adopt the result, never delete it
     // and import a second box. This exercises the public recover entry point.
     let replay = checkpoints
-        .recover_box(&checkpoint.id, &old_id)
+        .import_box(&checkpoint.id, None, Some(&old_id))
         .await
         .unwrap();
     assert_eq!(replay.id(), recovered.id());
@@ -628,7 +759,7 @@ async fn checkpoint_recovery_adopts_import_when_completion_receipt_is_missing() 
         )
         .await;
         let imported = checkpoints
-            .recover_box(&checkpoint.id, &original_id)
+            .import_box(&checkpoint.id, None, Some(&original_id))
             .await
             .unwrap();
         let imported_id = imported.id().clone();
@@ -660,7 +791,7 @@ async fn checkpoint_recovery_adopts_import_when_completion_receipt_is_missing() 
         ));
         drop(pending_box);
         let replay = checkpoints
-            .recover_box(&checkpoint.id, &original_id)
+            .import_box(&checkpoint.id, None, Some(&original_id))
             .await
             .expect("a committed import must remain recoverable without its final receipt");
         assert_eq!(
@@ -715,7 +846,9 @@ async fn damaged_checkpoint_does_not_remove_the_recovery_target() {
     bytes[0] ^= 1;
     std::fs::write(&path, bytes).unwrap();
     assert!(matches!(
-        checkpoints.recover_box(&checkpoint.id, "target").await,
+        checkpoints
+            .import_box(&checkpoint.id, None, Some("target"))
+            .await,
         Err(BoxliteError::Storage(_))
     ));
     assert_eq!(
@@ -768,7 +901,7 @@ async fn recovery_resumes_from_its_persisted_target_after_old_native_was_removed
     )
     .await;
     let recovered = checkpoints
-        .recover_box(&checkpoint.id, &old_id)
+        .import_box(&checkpoint.id, None, Some(&old_id))
         .await
         .unwrap();
     assert_eq!(recovered.name(), Some("target"));
@@ -819,7 +952,9 @@ async fn recovery_never_removes_a_different_box_reusing_the_target_name() {
         })
         .unwrap();
     assert!(matches!(
-        checkpoints.recover_box(&checkpoint.id, &old_id).await,
+        checkpoints
+            .import_box(&checkpoint.id, None, Some(&old_id))
+            .await,
         Err(BoxliteError::InvalidState(_))
     ));
     assert_eq!(
@@ -894,7 +1029,9 @@ async fn checkpoint_pending_recovery_protects_name_old_handle_and_archive_until_
     runtime.remove("target", false).unwrap();
     assert!(catalog.recovery(&old_id).unwrap().is_none());
     assert!(matches!(
-        checkpoints.recover_box(&checkpoint.id, &old_id).await,
+        checkpoints
+            .import_box(&checkpoint.id, None, Some(&old_id))
+            .await,
         Err(BoxliteError::NotFound(_))
     ));
     checkpoints.remove(&checkpoint.id, false).await.unwrap();
@@ -972,7 +1109,9 @@ async fn checkpoint_recovery_reservation_excludes_all_target_mutation_entry_poin
         Err(BoxliteError::InvalidState(_))
     ));
     assert!(matches!(
-        checkpoints.recover_box(&checkpoint.id, "target").await,
+        checkpoints
+            .import_box(&checkpoint.id, None, Some("target"))
+            .await,
         Err(BoxliteError::InvalidState(_))
     ));
     assert!(matches!(

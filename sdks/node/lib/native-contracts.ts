@@ -178,6 +178,7 @@ export interface CheckpointInfo {
   createdAt: string;
   sizeBytes: number;
   state: "creating" | "ready" | "failed" | "deleting";
+  errorReason?: string;
 }
 
 export interface CheckpointHandle {
@@ -185,8 +186,11 @@ export interface CheckpointHandle {
   list(): Promise<CheckpointInfo[]>;
   get(key: string): Promise<CheckpointInfo>;
   remove(key: string, force?: boolean | null): Promise<void>;
-  createBox(key: string, name?: string | null): Promise<JsBox>;
-  recoverBox(key: string, target: string): Promise<JsBox>;
+  importBox(
+    key: string,
+    name?: string | null,
+    boxId?: string | null,
+  ): Promise<JsBox>;
 }
 
 /** A registry login the server pulls private images with. Has no password. */

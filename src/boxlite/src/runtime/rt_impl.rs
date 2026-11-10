@@ -1350,7 +1350,14 @@ impl RuntimeImpl {
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
 
-        let lock_id = self.lock_manager.allocate()?;
+        let lock_id = match self.lock_manager.allocate() {
+            Ok(id) => id,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&config.box_home);
+                config.sockets().remove();
+                return Err(error);
+            }
+        };
         state.set_lock_id(lock_id);
 
         if let Err(e) = self.box_manager.add_box(&config, &state) {
@@ -1711,7 +1718,7 @@ impl RuntimeImpl {
     ///
     /// Checks both by name (if provided) and by ID. This prevents duplicate names
     /// even for boxes not yet persisted to database.
-    fn get_or_create_box_impl(
+    pub(super) fn get_or_create_box_impl(
         self: &Arc<Self>,
         config: BoxConfig,
         state: BoxState,
@@ -2613,6 +2620,53 @@ mod tests {
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
+    #[tokio::test]
+    async fn checkpoint_provision_removes_moved_disk_if_lock_allocation_fails() {
+        let (runtime, temporary) = create_test_runtime();
+        let id = BoxIDMint::mint();
+        let staging = temporary.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::write(staging.join("marker"), b"archive disk").unwrap();
+        let saved_locks = temporary.path().join("saved-locks");
+        std::fs::rename(runtime.layout.locks_dir(), &saved_locks).unwrap();
+        let result = runtime
+            .provision_box_unlocked(
+                id.clone(),
+                staging,
+                Some("retry-target".into()),
+                BoxOptions::default(),
+                BoxStatus::Stopped,
+                None,
+            )
+            .await;
+        std::fs::rename(saved_locks, runtime.layout.locks_dir()).unwrap();
+        assert!(
+            result
+                .err()
+                .expect("lock allocation must fail")
+                .to_string()
+                .contains("failed to create lock file")
+        );
+        assert!(
+            !runtime.layout.boxes_dir().join(id.as_str()).exists(),
+            "failed import must release its canonical disk directory"
+        );
+        let retry = temporary.path().join("retry");
+        std::fs::create_dir(&retry).unwrap();
+        let imported = runtime
+            .provision_box_unlocked(
+                id.clone(),
+                retry,
+                Some("retry-target".into()),
+                BoxOptions::default(),
+                BoxStatus::Stopped,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(imported.id(), &id);
+    }
+
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
         let options = BoxliteOptions {

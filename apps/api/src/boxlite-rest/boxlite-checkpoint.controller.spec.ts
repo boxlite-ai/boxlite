@@ -1,7 +1,13 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
-import { RequestTimeoutException, UnauthorizedException, type INestApplication } from '@nestjs/common'
+import {
+  BadRequestException,
+  RequestTimeoutException,
+  UnauthorizedException,
+  type INestApplication,
+} from '@nestjs/common'
+import { AllExceptionsFilter } from '../filters/all-exceptions.filter'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { PassportModule } from '@nestjs/passport'
 import { Test } from '@nestjs/testing'
@@ -19,7 +25,7 @@ import { OrganizationService } from '../organization/services/organization.servi
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { SystemRole } from '../user/enums/system-role.enum'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
-import { BoxliteCheckpointRecoverController } from './boxlite-checkpoint-recover.controller'
+import { BoxliteCheckpointImportController } from './boxlite-checkpoint-import.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxService } from '../box/services/box.service'
@@ -97,7 +103,7 @@ describe('Checkpoint REST authentication and request admission', () => {
     }
     const module = await Test.createTestingModule({
       imports: [PassportModule.register({ session: false })],
-      controllers: [BoxliteCheckpointController, BoxliteCheckpointRecoverController, BoxliteBoxController],
+      controllers: [BoxliteCheckpointController, BoxliteCheckpointImportController, BoxliteBoxController],
       providers: [
         { provide: CheckpointService, useValue: checkpoints },
         { provide: CheckpointRecoverService, useValue: recovery },
@@ -139,6 +145,7 @@ describe('Checkpoint REST authentication and request admission', () => {
     }).compile()
     app = module.createNestApplication()
     app.setGlobalPrefix('api')
+    app.useGlobalFilters(new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never))
     await app.listen(0, '127.0.0.1')
   })
 
@@ -164,6 +171,12 @@ describe('Checkpoint REST authentication and request admission', () => {
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   }
+
+  it.each(['pageToken', 'page_token'])('passes the %s pagination cursor to checkpoint storage', async (parameter) => {
+    const response = await request(`/v1/checkpoints?${parameter}=next-page`, 'checkpoint-write-key')
+    expect(response.status).toBe(200)
+    expect(checkpoints.list).toHaveBeenCalledWith(organizationId, 'next-page')
+  })
 
   it('admits scoped capture on canonical, explicit-org and legacy default paths', async () => {
     for (const prefix of ['', `/${organizationId}`, '/default']) {
@@ -238,10 +251,11 @@ describe('Checkpoint REST authentication and request admission', () => {
     expect(checkpoints.create).not.toHaveBeenCalled()
   })
 
-  it('recovers on all organization paths and waits for the committed stopped configuration', async () => {
+  it('imports into an existing Box on all organization paths and waits for the committed stopped configuration', async () => {
     for (const prefix of ['', `/${organizationId}`, '/default']) {
-      const result = await request(`/v1${prefix}/boxes/target/recover`, 'checkpoint-write-key', {
+      const result = await request(`/v1${prefix}/boxes/import`, 'checkpoint-write-key', {
         checkpoint_id: 'base',
+        box_id: 'target',
       })
       expect(result.status).toBe(200)
       expect(await result.json()).toMatchObject({ box_id: 'target-id', status: 'stopped', cpus: 4, memory_mib: 8192 })
@@ -255,7 +269,10 @@ describe('Checkpoint REST authentication and request admission', () => {
 
   it('waits for startup when recovery preserves a started desired state', async () => {
     recovery.recover.mockResolvedValue({ id: 'target-id', desiredState: BoxDesiredState.STARTED })
-    const result = await request('/v1/boxes/target/recover', 'checkpoint-write-key', { checkpoint_id: 'base' })
+    const result = await request('/v1/boxes/import', 'checkpoint-write-key', {
+      checkpoint_id: 'base',
+      box_id: 'target',
+    })
     expect(result.status).toBe(200)
     expect(await result.json()).toMatchObject({ box_id: 'target-id', status: 'running' })
     expect(waiter.waitForStarted).toHaveBeenCalledWith('target-id', organizationId, 30)
@@ -266,9 +283,29 @@ describe('Checkpoint REST authentication and request admission', () => {
     waiter.waitForStopped.mockRejectedValue(
       new RequestTimeoutException({ message: 'Recovery still running', boxId: 'target-id' }),
     )
-    const result = await request('/v1/boxes/target/recover', 'checkpoint-write-key', { checkpoint_id: 'base' })
+    const result = await request('/v1/boxes/import', 'checkpoint-write-key', {
+      checkpoint_id: 'base',
+      box_id: 'target',
+    })
     expect(result.status).toBe(408)
     expect(await result.json()).toMatchObject({ boxId: 'target-id' })
+    expect(recovery.recover).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the admitted identity and error contract when import fails before timeout', async () => {
+    waiter.waitForStopped.mockRejectedValue(
+      new BadRequestException({ message: 'Archive import failed', code: 'checkpoint_import_failed' }),
+    )
+    const result = await request('/v1/boxes/import', 'checkpoint-write-key', {
+      checkpoint_id: 'base',
+      box_id: 'target',
+    })
+    expect(result.status).toBe(400)
+    expect(await result.json()).toMatchObject({
+      boxId: 'target-id',
+      message: 'Archive import failed',
+      code: 'checkpoint_import_failed',
+    })
     expect(recovery.recover).toHaveBeenCalledTimes(1)
   })
 
@@ -280,10 +317,13 @@ describe('Checkpoint REST authentication and request admission', () => {
       ['checkpoint-read-key', 403],
       ['checkpoint-proxy-key', 403],
     ] as const) {
-      expect((await request('/v1/boxes/target/recover', token, { checkpoint_id: 'base' })).status).toBe(status)
+      expect((await request('/v1/boxes/import', token, { checkpoint_id: 'base', box_id: 'target' })).status).toBe(
+        status,
+      )
     }
     expect(
-      (await request('/v1/other-org/boxes/target/recover', 'checkpoint-write-key', { checkpoint_id: 'base' })).status,
+      (await request('/v1/other-org/boxes/import', 'checkpoint-write-key', { checkpoint_id: 'base', box_id: 'target' }))
+        .status,
     ).toBe(403)
     expect(limits.resolveMaxCreatedBoxes).not.toHaveBeenCalled()
     expect(recovery.recover).not.toHaveBeenCalled()
@@ -298,17 +338,64 @@ describe('Checkpoint REST authentication and request admission', () => {
       { checkpoint_id: 'base', env: { OVERRIDE: 'denied' } },
       { checkpoint_id: 'base', image: 'other:latest' },
     ]) {
-      expect((await request('/v1/boxes/target/recover', 'checkpoint-write-key', body)).status).toBe(400)
+      expect((await request('/v1/boxes/import', 'checkpoint-write-key', body)).status).toBe(400)
     }
     expect(recovery.recover).not.toHaveBeenCalled()
   })
 
-  it('creates from a checkpoint through the standard Box endpoint and waits for startup', async () => {
-    const result = await request('/v1/boxes', 'checkpoint-write-key', { checkpoint_id: 'base', name: 'new-target' })
+  it('creates from a checkpoint through import and waits for startup', async () => {
+    const result = await request('/v1/boxes/import', 'checkpoint-write-key', {
+      checkpoint_id: 'base',
+      name: 'new-target',
+    })
     expect(result.status).toBe(201)
     expect(await result.json()).toMatchObject({ box_id: 'target-id', status: 'running', cpus: 4, memory_mib: 8192 })
     expect(recovery.createBox).toHaveBeenCalledWith({ id: organizationId }, 'base', 'new-target', 2)
     expect(boxes.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects ambiguous and invalid import selectors before admission', async () => {
+    for (const body of [
+      { checkpoint_id: 'base', name: 'new', box_id: 'target' },
+      { checkpoint_id: 'base', box_id: '' },
+      { checkpoint_id: 'base', box_id: null },
+      { checkpoint_id: 'base', box_id: 'target\u0000other' },
+      { checkpoint_id: 'base', name: '../outside' },
+      { checkpoint_id: 'base', name: null },
+    ]) {
+      expect((await request('/v1/boxes/import', 'checkpoint-write-key', body)).status).toBe(400)
+    }
+    expect(recovery.createBox).not.toHaveBeenCalled()
+    expect(recovery.recover).not.toHaveBeenCalled()
+  })
+
+  it('removes checkpoint creation from create and the separate recovery route', async () => {
+    expect((await request('/v1/boxes', 'checkpoint-write-key', { checkpoint_id: 'base' })).status).toBe(400)
+    expect((await request('/v1/boxes/target/recover', 'checkpoint-write-key', { checkpoint_id: 'base' })).status).toBe(
+      404,
+    )
+    expect(recovery.createBox).not.toHaveBeenCalled()
+    expect(recovery.recover).not.toHaveBeenCalled()
+    expect(boxes.create).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    new RequestTimeoutException({ message: 'Still importing', code: 'import_pending' }),
+    new BadRequestException({ message: 'Archive import failed', code: 'checkpoint_import_failed' }),
+  ])('preserves a newly admitted Box identity on wait failure: %s', async (error) => {
+    waiter.waitForStarted.mockRejectedValue(error)
+    const result = await request('/v1/boxes/import', 'checkpoint-write-key', { checkpoint_id: 'base' })
+    expect(result.status).toBe(error.getStatus())
+    expect(await result.json()).toMatchObject({ ...(error.getResponse() as object), boxId: 'target-id' })
+    expect(recovery.createBox).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not attach an identity when admission itself fails', async () => {
+    recovery.createBox.mockRejectedValue(new BadRequestException('Checkpoint is not ready'))
+    const result = await request('/v1/boxes/import', 'checkpoint-write-key', { checkpoint_id: 'base' })
+    expect(result.status).toBe(400)
+    expect(await result.json()).not.toHaveProperty('boxId')
+    expect(waiter.waitForStarted).not.toHaveBeenCalled()
   })
 
   it('rejects checkpoint creation overrides and unauthorized or foreign-tenant requests', async () => {
@@ -319,13 +406,20 @@ describe('Checkpoint REST authentication and request admission', () => {
       { advanced: { privileged: false } },
       { detach: true },
     ]) {
-      expect((await request('/v1/boxes', 'checkpoint-write-key', { checkpoint_id: 'base', ...extra })).status).toBe(400)
+      expect(
+        (await request('/v1/boxes/import', 'checkpoint-write-key', { checkpoint_id: 'base', ...extra })).status,
+      ).toBe(400)
     }
     for (const checkpoint_id of ['', null]) {
-      expect((await request('/v1/boxes', 'checkpoint-write-key', { checkpoint_id })).status).toBe(400)
+      expect((await request('/v1/boxes/import', 'checkpoint-write-key', { checkpoint_id })).status).toBe(400)
     }
-    expect((await request('/v1/boxes', 'checkpoint-read-key', { checkpoint_id: 'base' })).status).toBe(403)
-    expect((await request('/v1/other-org/boxes', 'checkpoint-write-key', { checkpoint_id: 'base' })).status).toBe(403)
+    expect(
+      (await request('/v1/boxes/import', 'checkpoint-read-key', { checkpoint_id: 'base', box_id: 'target' })).status,
+    ).toBe(403)
+    expect(
+      (await request('/v1/other-org/boxes/import', 'checkpoint-write-key', { checkpoint_id: 'base', box_id: 'target' }))
+        .status,
+    ).toBe(403)
     expect(recovery.createBox).not.toHaveBeenCalled()
   })
 

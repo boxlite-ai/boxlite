@@ -20,6 +20,8 @@ pub struct JsCheckpointInfo {
     #[napi(js_name = "sizeBytes")]
     pub size_bytes: i64,
     pub state: String,
+    #[napi(js_name = "errorReason")]
+    pub error_reason: Option<String>,
 }
 
 impl From<CheckpointInfo> for JsCheckpointInfo {
@@ -31,6 +33,7 @@ impl From<CheckpointInfo> for JsCheckpointInfo {
             created_at: info.created_at.to_rfc3339(),
             size_bytes: i64::try_from(info.size_bytes).unwrap_or(i64::MAX),
             state: format!("{:?}", info.state).to_lowercase(),
+            error_reason: info.error_reason,
         }
     }
 }
@@ -78,20 +81,18 @@ impl JsCheckpointHandle {
             .map_err(map_err)
     }
 
+    /// Import a new box, or replace boxId while preserving its name.
     #[napi]
-    pub async fn create_box(&self, key: String, name: Option<String>) -> Result<JsBox> {
-        Ok(JsBox {
-            handle: Arc::new(self.handle.create_box(&key, name).await.map_err(map_err)?),
-        })
-    }
-
-    /// Local recovery preserves the name and returns a new native box ID.
-    #[napi]
-    pub async fn recover_box(&self, key: String, target: String) -> Result<JsBox> {
+    pub async fn import_box(
+        &self,
+        key: String,
+        name: Option<String>,
+        box_id: Option<String>,
+    ) -> Result<JsBox> {
         Ok(JsBox {
             handle: Arc::new(
                 self.handle
-                    .recover_box(&key, &target)
+                    .import_box(&key, name, box_id.as_deref())
                     .await
                     .map_err(map_err)?,
             ),

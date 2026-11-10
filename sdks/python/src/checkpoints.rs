@@ -23,6 +23,8 @@ pub(crate) struct PyCheckpointInfo {
     size_bytes: u64,
     #[pyo3(get)]
     state: String,
+    #[pyo3(get)]
+    error_reason: Option<String>,
 }
 
 impl From<CheckpointInfo> for PyCheckpointInfo {
@@ -34,6 +36,7 @@ impl From<CheckpointInfo> for PyCheckpointInfo {
             created_at: info.created_at.to_rfc3339(),
             size_bytes: info.size_bytes,
             state: format!("{:?}", info.state).to_lowercase(),
+            error_reason: info.error_reason,
         }
     }
 }
@@ -97,33 +100,24 @@ impl PyCheckpointHandle {
         })
     }
 
-    /// Create a box inheriting all checkpoint execution settings.
-    #[pyo3(signature = (key, name=None))]
-    fn create_box<'py>(
+    /// Import a new box or replace box_id; name and box_id are exclusive.
+    #[pyo3(signature = (key, name=None, *, box_id=None))]
+    fn import_box<'py>(
         &self,
         py: Python<'py>,
         key: String,
         name: Option<String>,
+        box_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             Ok(PyBox {
-                handle: Arc::new(handle.create_box(&key, name).await.map_err(map_err)?),
-            })
-        })
-    }
-
-    /// Replace a stopped target; local recovery returns a new native ID.
-    fn recover_box<'py>(
-        &self,
-        py: Python<'py>,
-        key: String,
-        target: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = Arc::clone(&self.handle);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            Ok(PyBox {
-                handle: Arc::new(handle.recover_box(&key, &target).await.map_err(map_err)?),
+                handle: Arc::new(
+                    handle
+                        .import_box(&key, name, box_id.as_deref())
+                        .await
+                        .map_err(map_err)?,
+                ),
             })
         })
     }
