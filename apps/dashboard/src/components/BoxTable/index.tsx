@@ -13,8 +13,19 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
-import { Check, Container, Copy, Loader2, MoreHorizontal, Square, Plus, Play, RotateCcw, Trash2 } from '@/components/ui/icon'
-import { type ReactNode, useState } from 'react'
+import {
+  Check,
+  Container,
+  Copy,
+  Loader2,
+  MoreHorizontal,
+  Square,
+  Plus,
+  Play,
+  RotateCcw,
+  Trash2,
+} from '@/components/ui/icon'
+import { useState } from 'react'
 import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
 

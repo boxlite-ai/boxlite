@@ -59,6 +59,52 @@ elif args[:2] == ["llvm-cov", "report"]:
 
 
 class NativeCoveragePathsTest(unittest.TestCase):
+    def test_core_coverage_runs_the_no_vm_checkpoint_cli_binary(self):
+        import json
+
+        coverage = COLLECTOR.parents[2] / "make/coverage.mk"
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            tools = root / "bin"
+            tools.mkdir()
+            cargo = tools / "cargo"
+            cargo.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                'with open(os.environ["CARGO_ARGV_LOG"], "a") as log:\n'
+                '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+            )
+            cargo.chmod(0o755)
+            (root / "Makefile").write_text(f"include {coverage}\n")
+            log = root / "cargo.jsonl"
+            env = {
+                **os.environ,
+                "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                "CARGO_ARGV_LOG": str(log),
+            }
+            result = subprocess.run(
+                ["make", "coverage:lcov"],
+                check=False,
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            cli_calls = [args for args in calls if "boxlite-cli" in args]
+            self.assertTrue(cli_calls, "no CLI coverage invocation")
+            self.assertTrue(
+                any(
+                    args[index : index + 2] == ["--test", "checkpoint"]
+                    for args in cli_calls
+                    for index in range(len(args) - 1)
+                ),
+                "the existing checkpoint CLI HTTP tests must contribute coverage",
+            )
+            self.assertTrue(all("--tests" not in args for args in cli_calls))
+
     def run_collector(self, override, gate_required=False):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch).resolve() / "repository with spaces"
@@ -121,7 +167,9 @@ class NativeCoveragePathsTest(unittest.TestCase):
                     node_runs.append(argv)
                 if "test:unit:ffi" in argv:
                     ffi_runs.append(argv)
-            self.assertTrue(ffi_runs, "Rust C ABI tests must contribute native coverage")
+            self.assertTrue(
+                ffi_runs, "Rust C ABI tests must contribute native coverage"
+            )
             self.assertTrue(node_runs, str(invocations_path))
             for argv in node_runs:
                 filters = [a for a in argv if a.startswith("FILTER=")]

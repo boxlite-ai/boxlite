@@ -21,6 +21,8 @@ struct Recorded {
     query: String,
     body: Value,
     bearer: String,
+    content_type: String,
+    bytes: Vec<u8>,
 }
 
 struct Server {
@@ -51,11 +53,19 @@ impl Server {
                         .and_then(|value| value.to_str().ok())
                         .unwrap_or_default()
                         .into(),
+                    content_type: request
+                        .headers()
+                        .get("content-type")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .into(),
+                    bytes: Vec::new(),
                 };
                 let body = to_bytes(request.into_body(), 65536).await.unwrap();
-                if !body.is_empty() {
+                if !body.is_empty() && recorded.content_type == "application/json" {
                     recorded.body = serde_json::from_slice(&body).unwrap();
                 }
+                recorded.bytes = body.to_vec();
                 let response = handler(&recorded);
                 captured.lock().unwrap().push(recorded);
                 (response.0, Json(response.1)).into_response()
@@ -203,6 +213,68 @@ async fn checkpoint_import_inherits_config_and_replacement_keeps_the_public_box_
         requests[1].body,
         json!({"checkpoint_id":"checkpoint-1","box_id":"cloudBox1234"})
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_list_and_get_render_captured_metadata_as_tables() {
+    let home = TempDir::new().unwrap();
+    let server = Server::start(|request| {
+        let body = if request.path.ends_with("/checkpoints") {
+            json!({"checkpoints":[info("checkpoint-1")]})
+        } else {
+            info("checkpoint-1")
+        };
+        (StatusCode::OK, body)
+    })
+    .await;
+    for arguments in [
+        vec!["checkpoint", "list"],
+        vec!["checkpoint", "get", "checkpoint-1", "--format", "table"],
+    ] {
+        cli(&home, &server)
+            .args(arguments)
+            .assert()
+            .success()
+            .stdout(contains("ID"))
+            .stdout(contains("SOURCE"))
+            .stdout(contains("checkpoint-1"))
+            .stdout(contains("source-box"))
+            .stdout(contains("ready"));
+    }
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_import_entry_keeps_ordinary_binary_archive_uploads() {
+    let home = TempDir::new().unwrap();
+    let server = Server::start(|request| {
+        let body = if request.path.ends_with("/config") {
+            json!({"capabilities":{"import_enabled":true}})
+        } else {
+            box_info()
+        };
+        (StatusCode::OK, body)
+    })
+    .await;
+    let bytes = b"archive\x00\xffbytes";
+    let archive = home.path().join("saved.boxlite");
+    std::fs::write(&archive, bytes).unwrap();
+    cli(&home, &server)
+        .arg("import")
+        .arg(&archive)
+        .args(["--name", "worker"])
+        .assert()
+        .success()
+        .stdout("cloudBox1234\n");
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/v1/config");
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, "/v1/tenant/boxes/import");
+    assert_eq!(requests[1].query, "name=worker");
+    assert_eq!(requests[1].content_type, "application/octet-stream");
+    assert_eq!(requests[1].bytes, bytes);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
