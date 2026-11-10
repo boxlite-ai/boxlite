@@ -23,6 +23,7 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { AccountLinkService, ADOPT_AUDIENCE } from '../auth/account-link.service'
+import { Context } from '../common/context/context'
 
 // Use Node's loader for the published ESM proxy, preserving real HTTP behavior.
 jest.mock('http-proxy-middleware', () =>
@@ -167,7 +168,7 @@ describe('audit refinement contracts', () => {
     async (path) => {
       const res = await fetch(base + path, { method: 'DELETE' })
       expect(res.status).toBe(204)
-      expect(volume.delete).toHaveBeenCalledWith('volume-id', false)
+      expect(volume.delete).toHaveBeenCalledWith('volume-id', Context.user({ userId: 'user', authMethod: 'jwt' }), false)
       expect(audit.createLog).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'delete', targetId: 'volume-id', organizationId: 'org' }),
       )
