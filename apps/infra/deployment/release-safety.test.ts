@@ -1977,8 +1977,8 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The same fourteen the input sweep below counts: five `config.yml` loads,
-  // deploy-infra's four, mdeploy-all's three, and two manual SDK builds. The exact count, not a
+  // The same twelve the input sweep below counts: five `config.yml` loads,
+  // deploy-infra's four, mdeploy-all's one, and two manual SDK builds. The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
   assert.equal(checked, 12, `expected every local reusable call to be swept, saw ${checked}`)

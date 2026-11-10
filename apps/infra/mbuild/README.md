@@ -42,7 +42,6 @@ Use the deployment workflow to resolve a ref and prepare the matching source tre
 
 GHCR publication runs in the `publish` job of `mbuild-release` on `main`, independently of dev/prod cloud credentials.
 Local operators dispatch the workflow; direct GHCR CLI writes outside that context are refused before registry access.
-This publication path requires the dependent release-workflow integration.
 
 ```bash
 gh workflow run mbuild-release.yml --repo boxlite-ai/boxlite --ref main -f command=publish -f tag=vX.Y.Z
