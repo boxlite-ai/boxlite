@@ -124,8 +124,8 @@ Go information/list calls obtain CPUs from the existing callback without supplem
 
 Persistence stores numeric `cpus`; calculations normalize it to integer millicpu.
 Main-branch integer data remains readable, but experimental non-null `cpu_limit` or `cpu_limit_millicpu` records are rejected rather than silently converted.
-Fractional archives use version 7; integer exports retain the existing version 3/4/5 selection.
-Import still supports legacy versions 1–5 and explicitly rejects experimental version 6.
+Fractional archives use version 6; integer exports retain the existing version 3/4/5 selection.
+Import supports versions 1–6 and rejects newer archive versions.
 Downgrading a local database containing fractional CPUs is unsupported.
 
 Monitor consumption with `box.metrics().cpu_time_ms`.

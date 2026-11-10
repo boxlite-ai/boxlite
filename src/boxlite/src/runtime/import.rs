@@ -173,11 +173,6 @@ fn extract_and_validate(
     let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
         .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
 
-    if manifest.version == 6 {
-        return Err(BoxliteError::Storage(
-            "Unsupported experimental archive version 6; recreate the box with cpus".into(),
-        ));
-    }
     if manifest.version > MAX_SUPPORTED_VERSION {
         return Err(BoxliteError::Storage(format!(
             "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
@@ -642,14 +637,14 @@ mod tests {
         let archive_path = dir.path().join("box.boxlite");
         for version in [1, 2, 3, 4, 5, 6, 7, 8] {
             let mut manifest = v3_manifest(BoxOptions {
-                cpus: Some(if version == 7 { 1.5 } else { 2.0 }),
+                cpus: Some(if version == 6 { 1.5 } else { 2.0 }),
                 ..Default::default()
             });
             manifest.version = version;
             std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
             build_zstd_tar_archive(&archive_path, &manifest_path, &container_path, 1).unwrap();
             let result = extract_and_validate(&archive_path, &layout);
-            if version == 6 || version == 8 {
+            if version > 6 {
                 let error = result.unwrap_err();
                 assert!(error.to_string().contains(&format!("version {version}")));
             } else {
