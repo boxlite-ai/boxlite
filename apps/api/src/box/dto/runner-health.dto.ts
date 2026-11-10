@@ -113,6 +113,50 @@ export class RunnerServiceHealthDto {
   errorReason?: string
 }
 
+@ApiSchema({
+  name: 'RunnerDataDiskRef',
+  description:
+    'Cloud identity of the runner data disk. diskType names the backend so the API can tell expandable block disks from backends with a different resize path (e.g. Filestore); runners predating the field are treated as hyperdisk_balanced, the only type infra provisions today.',
+})
+export class RunnerDataDiskRefDto {
+  @ApiProperty({
+    description: 'Cloud provider of the data disk',
+    example: 'gcp',
+  })
+  @IsString()
+  provider: string
+
+  @ApiProperty({
+    description: 'Cloud project the data disk lives in',
+    example: 'boxlite-prod-project',
+  })
+  @IsString()
+  project: string
+
+  @ApiProperty({
+    description: 'Cloud zone the data disk lives in',
+    example: 'us-central1-a',
+  })
+  @IsString()
+  zone: string
+
+  @ApiProperty({
+    description: 'Name of the data disk, as the cloud API addresses it',
+    example: 'boxlite-runner-data-host-1',
+  })
+  @IsString()
+  diskName: string
+
+  @ApiPropertyOptional({
+    description:
+      'Backend behind the identity (hyperdisk_balanced, filestore, ...). Omitted by runner binaries predating the field; the API then assumes hyperdisk_balanced, the only data disk infra provisions today.',
+    example: 'hyperdisk_balanced',
+  })
+  @IsOptional()
+  @IsString()
+  diskType?: string
+}
+
 @ApiSchema({ name: 'RunnerHealthcheck' })
 export class RunnerHealthcheckDto {
   @ApiPropertyOptional({ description: 'Runner preserves the guest privileged creation option' })
@@ -136,6 +180,15 @@ export class RunnerHealthcheckDto {
   @ValidateNested({ each: true })
   @Type(() => RunnerServiceHealthDto)
   serviceHealth?: RunnerServiceHealthDto[]
+
+  @ApiPropertyOptional({
+    description: 'Cloud identity of the runner data disk; absent when the runner has none (AWS or local)',
+    type: RunnerDataDiskRefDto,
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RunnerDataDiskRefDto)
+  dataDiskRef?: RunnerDataDiskRefDto
 
   @ApiPropertyOptional({
     description: 'Runner domain',

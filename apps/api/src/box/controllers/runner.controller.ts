@@ -338,6 +338,8 @@ export class RunnerController {
       healthcheck.metrics,
       healthcheck.appVersion,
       healthcheck.supportsPrivileged,
+      undefined,
+      healthcheck.dataDiskRef,
     )
   }
 }

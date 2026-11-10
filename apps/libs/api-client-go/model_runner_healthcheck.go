@@ -27,6 +27,8 @@ type RunnerHealthcheck struct {
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
 	ServiceHealth []RunnerServiceHealth `json:"serviceHealth,omitempty"`
+	// Cloud identity of the runner data disk; absent when the runner has none (AWS or local)
+	DataDiskRef *RunnerDataDiskRef `json:"dataDiskRef,omitempty"`
 	// Runner domain
 	Domain *string `json:"domain,omitempty"`
 	// Runner proxy URL
@@ -152,6 +154,38 @@ func (o *RunnerHealthcheck) HasServiceHealth() bool {
 // SetServiceHealth gets a reference to the given []RunnerServiceHealth and assigns it to the ServiceHealth field.
 func (o *RunnerHealthcheck) SetServiceHealth(v []RunnerServiceHealth) {
 	o.ServiceHealth = v
+}
+
+// GetDataDiskRef returns the DataDiskRef field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetDataDiskRef() RunnerDataDiskRef {
+	if o == nil || IsNil(o.DataDiskRef) {
+		var ret RunnerDataDiskRef
+		return ret
+	}
+	return *o.DataDiskRef
+}
+
+// GetDataDiskRefOk returns a tuple with the DataDiskRef field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetDataDiskRefOk() (*RunnerDataDiskRef, bool) {
+	if o == nil || IsNil(o.DataDiskRef) {
+		return nil, false
+	}
+	return o.DataDiskRef, true
+}
+
+// HasDataDiskRef returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasDataDiskRef() bool {
+	if o != nil && !IsNil(o.DataDiskRef) {
+		return true
+	}
+
+	return false
+}
+
+// SetDataDiskRef gets a reference to the given RunnerDataDiskRef and assigns it to the DataDiskRef field.
+func (o *RunnerHealthcheck) SetDataDiskRef(v RunnerDataDiskRef) {
+	o.DataDiskRef = &v
 }
 
 // GetDomain returns the Domain field value if set, zero value otherwise.
@@ -293,6 +327,9 @@ func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.ServiceHealth) {
 		toSerialize["serviceHealth"] = o.ServiceHealth
 	}
+	if !IsNil(o.DataDiskRef) {
+		toSerialize["dataDiskRef"] = o.DataDiskRef
+	}
 	if !IsNil(o.Domain) {
 		toSerialize["domain"] = o.Domain
 	}
@@ -349,6 +386,7 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "supportsPrivileged")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
+		delete(additionalProperties, "dataDiskRef")
 		delete(additionalProperties, "domain")
 		delete(additionalProperties, "proxyUrl")
 		delete(additionalProperties, "apiUrl")

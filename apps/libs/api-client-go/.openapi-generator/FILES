@@ -136,6 +136,7 @@ model_registry_credential.go
 model_registry_credential_kind.go
 model_runner.go
 model_runner_cpu_incident.go
+model_runner_data_disk_ref.go
 model_runner_full.go
 model_runner_health_metrics.go
 model_runner_healthcheck.go

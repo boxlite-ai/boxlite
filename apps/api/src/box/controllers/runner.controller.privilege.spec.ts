@@ -26,6 +26,8 @@ describe('RunnerController privilege heartbeat', () => {
         undefined,
         'dev',
         supportsPrivileged,
+        undefined,
+        undefined,
       )
     },
   )

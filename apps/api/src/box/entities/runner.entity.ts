@@ -7,7 +7,9 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
 import { BoxClass } from '../enums/box-class.enum'
 import { RunnerState } from '../enums/runner-state.enum'
+import { RunnerUnschedulableReason } from '../enums/runner-unschedulable-reason.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
 @Entity()
 @Unique(['region', 'name'])
@@ -160,6 +162,13 @@ export class Runner {
   unschedulable: boolean
 
   @Column({
+    type: 'enum',
+    enum: RunnerUnschedulableReason,
+    nullable: true,
+  })
+  unschedulableReason: RunnerUnschedulableReason | null
+
+  @Column({
     default: false,
   })
   draining: boolean
@@ -170,6 +179,19 @@ export class Runner {
     default: null,
   })
   serviceHealth: RunnerServiceInfo[] | null
+
+  /**
+   * The cloud data disk behind this runner's `BOXLITE_HOME`, reported by the
+   * runner in each healthcheck. Refreshed whenever a heartbeat carries it and
+   * never written to null: an older runner binary reporting no disk must not
+   * erase the identity a newer one reported.
+   */
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+    default: null,
+  })
+  dataDiskRef: RunnerDataDiskRef | null
 
   @CreateDateColumn({
     type: 'timestamp with time zone',

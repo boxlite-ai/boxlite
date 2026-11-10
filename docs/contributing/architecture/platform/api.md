@@ -314,7 +314,7 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 | `DELETE` | `/runners/{id}`                    | Deletes a runner.                                              |
 | `PATCH`  | `/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
 | `PATCH`  | `/runners/{id}/draining`           | Enables or disables runner draining.                           |
-| `POST`   | `/runners/healthcheck`             | Records or checks runner health.                               |
+| `POST`   | `/runners/healthcheck`             | Records or checks runner health; the optional `dataDiskRef` field refreshes the runner's data-disk identity (never cleared when omitted). |
 | `GET`    | `/jobs`                            | Lists jobs assigned to the authenticated runner.               |
 | `GET`    | `/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
 | `GET`    | `/jobs/{jobId}`                    | Gets a job by ID.                                              |

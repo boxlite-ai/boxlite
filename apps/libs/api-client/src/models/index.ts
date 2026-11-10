@@ -112,6 +112,7 @@ export * from './registry-credential';
 export * from './registry-credential-kind';
 export * from './runner';
 export * from './runner-cpu-incident';
+export * from './runner-data-disk-ref';
 export * from './runner-full';
 export * from './runner-health-metrics';
 export * from './runner-healthcheck';

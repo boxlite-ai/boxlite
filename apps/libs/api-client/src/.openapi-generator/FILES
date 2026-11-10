@@ -152,6 +152,7 @@ docs/RegistryCredential.md
 docs/RegistryCredentialKind.md
 docs/Runner.md
 docs/RunnerCpuIncident.md
+docs/RunnerDataDiskRef.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
@@ -305,6 +306,7 @@ models/region.ts
 models/registry-credential-kind.ts
 models/registry-credential.ts
 models/runner-cpu-incident.ts
+models/runner-data-disk-ref.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts

@@ -8,6 +8,7 @@ Name | Type | Description | Notes
 **supportsPrivileged** | **boolean** | Runner preserves the guest privileged creation option | [optional] [default to undefined]
 **metrics** | [**RunnerHealthMetrics**](RunnerHealthMetrics.md) | Runner metrics | [optional] [default to undefined]
 **serviceHealth** | [**Array&lt;RunnerServiceHealth&gt;**](RunnerServiceHealth.md) | Health status of individual services on the runner | [optional] [default to undefined]
+**dataDiskRef** | [**RunnerDataDiskRef**](RunnerDataDiskRef.md) | Cloud identity of the runner data disk; absent when the runner has none (AWS or local) | [optional] [default to undefined]
 **domain** | **string** | Runner domain | [optional] [default to undefined]
 **proxyUrl** | **string** | Runner proxy URL | [optional] [default to undefined]
 **apiUrl** | **string** | Runner API URL | [optional] [default to undefined]
@@ -22,6 +23,7 @@ const instance: RunnerHealthcheck = {
     supportsPrivileged,
     metrics,
     serviceHealth,
+    dataDiskRef,
     domain,
     proxyUrl,
     apiUrl,
