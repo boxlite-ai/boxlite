@@ -1020,6 +1020,12 @@ guest sends SIGTERM and then SIGKILL when the deadline passes. `run()` does not
 raise on a timeout: it returns whatever the snippet wrote to stdout before it
 was terminated.
 
+The deadline applies to the process the guest started. A child that keeps the
+stdout pipe open after it is killed -- a grandchild that inherited the
+descriptor, for example -- can still hold the read side open, so the call may
+wait for that pipe to close. The timeout bounds the workload, not every
+reader of its output.
+
 ```python
 with SyncCodeBox() as cb:
     # A runaway snippet is killed after half a second; whatever it printed

@@ -75,7 +75,9 @@ class SyncCodeBox(SyncSimpleBox):
         Args:
             code: Python code to execute
             timeout: Execution timeout in seconds. A timed-out run returns the
-                output written before termination rather than raising.
+                output written before termination rather than raising. The
+                deadline applies to the process the guest started; a child
+                that keeps the stdout pipe open can still delay the return.
 
         Returns:
             Execution stdout as a string. Use exec() directly if you need
