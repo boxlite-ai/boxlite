@@ -1052,6 +1052,11 @@ make test:unit:python
 make test:integration:python
 ```
 
+Checkpoint REST boundary tests need the native extension but do not boot a VM.
+Unit jobs omit them when the extension is absent. The native coverage job builds
+the extension and requires it with `BOXLITE_REQUIRE_NATIVE=1`, so missing or broken
+native builds fail instead of silently skipping these checks.
+
 ### Building Wheels
 
 ```bash

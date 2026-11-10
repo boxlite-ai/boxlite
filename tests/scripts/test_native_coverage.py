@@ -131,6 +131,8 @@ class NativeCoveragePathsTest(unittest.TestCase):
                     "native box privilege metadata",
                     "box.ssh over a REST transport",
                     "SimpleBox.ssh over a REST transport",
+                    "checkpoint native methods reject an unwrapped receiver",
+                    "checkpoint native REST calls preserve configuration inheritance and result identity",
                 ):
                     self.assertRegex(suite, pattern)
                 for vm_suite in (
