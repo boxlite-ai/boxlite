@@ -135,9 +135,13 @@ describe('SSH connection instructions', () => {
     }
   })
 
-  it.each([undefined, 'https://override.example.test'])(
-    'pins login and proxy to the Dashboard context with URL override %s',
-    async (override) => {
+  it.each(
+    [undefined, 'https://override.example.test'].flatMap((override) =>
+      [undefined, '', 'unrelated-test-key'].map((apiKey) => ({ override, apiKey })),
+    ),
+  )(
+    'pins login and proxy to the Dashboard context with URL $override and API key $apiKey',
+    async ({ override, apiKey }) => {
       vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
       const commands = sshConnectionInstructions('https://api.example.test', 'org-1', 'box-1')
       const credentials = await generateSshCredentials()
@@ -151,6 +155,7 @@ describe('SSH connection instructions', () => {
 const fs = require('node:fs');
 fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
   url: process.env.BOXLITE_REST_URL ?? null,
+  apiKey: process.env.BOXLITE_API_KEY ?? null,
   context: process.env.BOXLITE_CONTEXT,
   args: process.argv.slice(2),
 }) + '\\n');
@@ -165,7 +170,9 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
           SSH_PROXY_RECORD: record,
         }
         delete env.BOXLITE_REST_URL
+        delete env.BOXLITE_API_KEY
         if (override) env.BOXLITE_REST_URL = override
+        if (apiKey !== undefined) env.BOXLITE_API_KEY = apiKey
         const result = spawnSync(
           '/bin/sh',
           [
@@ -188,6 +195,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
         ).toEqual([
           {
             url: null,
+            apiKey: null,
             context: 'selected-context',
             args: [
               '--context',
@@ -202,6 +210,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
           },
           {
             url: null,
+            apiKey: null,
             context: 'selected-context',
             args: [
               '--context',
@@ -254,7 +263,7 @@ fs.appendFileSync(process.env.SSH_PROXY_RECORD, JSON.stringify({
     const commands = sshConnectionInstructions('https://api.example.test', 'mock-org-00000000', 'mock-box-running')
     expect(commands.connect).toBe(
       'chmod 600 boxlite-mock-box-running-key\n' +
-        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=env -u BOXLITE_REST_URL boxlite --context '\"'\"'dashboard:https://api.example.test'\"'\"' --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
+        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context '\"'\"'dashboard:https://api.example.test'\"'\"' --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
     )
   })
 

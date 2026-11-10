@@ -88,7 +88,9 @@ The first connection requires running the displayed login command to create that
 context. Login supplies the Dashboard endpoint; the proxy supplies the organization
 with `--path-prefix` and uses `ssh --proxy -- BOX`, matching
 [the cloud CLI syntax](https://github.com/boxlite-ai/boxlite/pull/2327).
-Both commands remove `BOXLITE_REST_URL` from their child environment. Their explicit
+Both commands remove `BOXLITE_REST_URL` and `BOXLITE_API_KEY` from their child
+environment, so an unrelated exported API key cannot override the credential saved
+by the displayed login command. This leaves the parent shell unchanged. Their explicit
 `--context` takes precedence over `BOXLITE_CONTEXT`, legacy `BOXLITE_PROFILE`, and
 the saved current context. Login updates only the dedicated profile; it does not
 change the current context or overwrite other profiles. Switching contexts in
@@ -97,16 +99,18 @@ to a different endpoint under the same dedicated context name can still redirect
 it; rerun the displayed login command to restore that context.
 
 To troubleshoot the generated context, run
-`env -u BOXLITE_REST_URL boxlite --context 'dashboard:<endpoint>' context show`
-and `env -u BOXLITE_REST_URL boxlite --context 'dashboard:<endpoint>' context ls`,
+`env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context 'dashboard:<endpoint>' context show`
+and `env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context 'dashboard:<endpoint>' context ls`,
 substituting the exact name from the generated command. Check that its endpoint
 matches the Dashboard. For manually written CLI commands, `BOXLITE_CONTEXT`,
 `BOXLITE_PROFILE`, `BOXLITE_REST_URL`, and the saved current context still affect
 selection; `env -u BOXLITE_REST_URL boxlite context show` shows the effective
 context without the URL override. `boxlite context use NAME` changes the saved
 current context for manual commands; explicit flags and environment context
-selectors take precedence over that saved choice. `BOXLITE_API_KEY` still overrides stored bearer
-credentials, including for generated commands; check it if authentication fails.
+selectors take precedence over that saved choice. For manually written commands,
+`BOXLITE_API_KEY` still overrides stored bearer credentials. If login succeeds but
+a manual command returns HTTP 401, check for that override; the generated SSH
+commands explicitly remove it.
 
 Empty/invalid paths hide the command. `~/`, spaces, quotes,
 backslashes and literal percent signs are supported; control characters and
