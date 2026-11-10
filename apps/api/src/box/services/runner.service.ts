@@ -44,6 +44,7 @@ import Redis from 'ioredis'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
 @Injectable()
 export class RunnerService {
@@ -372,6 +373,7 @@ export class RunnerService {
       infoFailed?: boolean
       nestedVirtualizationEnabled?: boolean
     },
+    dataDiskRef?: RunnerDataDiskRef,
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     // A timed-out attempt can resume here after its retry has committed.
@@ -410,6 +412,14 @@ export class RunnerService {
 
     if (appVersion) {
       updateData.appVersion = appVersion
+    }
+
+    // Refreshed whenever a heartbeat carries it, never nulled when it does
+    // not: an older runner binary reporting no disk must not erase the
+    // identity a newer one reported (the expansion controller skips runners
+    // without one, so a wiped identity would silently stop expansion).
+    if (dataDiskRef !== undefined) {
+      updateData.dataDiskRef = dataDiskRef
     }
 
     if (serviceHealth !== undefined) {

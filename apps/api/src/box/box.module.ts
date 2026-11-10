@@ -69,6 +69,10 @@ import { CheckpointOperation } from './entities/checkpoint-operation.entity'
 import { BoxCheckpointState } from './entities/box-checkpoint-state.entity'
 import { CheckpointRecoverService } from './services/checkpoint-recover.service'
 import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
+import { RunnerDiskExpansion } from './entities/runner-disk-expansion.entity'
+import { RunnerDiskUsageSample } from './entities/runner-disk-usage-sample.entity'
+import { RunnerDiskExpansionService } from './services/runner-disk-expansion.service'
+import { GcpDiskClient } from './services/gcp-disk-client'
 
 @Module({
   imports: [
@@ -92,6 +96,8 @@ import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
       Checkpoint,
       CheckpointOperation,
       BoxCheckpointState,
+      RunnerDiskExpansion,
+      RunnerDiskUsageSample,
     ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
@@ -127,6 +133,8 @@ import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
     TunnelService,
     DomainService,
     AttachTicketService,
+    RunnerDiskExpansionService,
+    GcpDiskClient,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,

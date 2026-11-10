@@ -4662,6 +4662,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@google-cloud/compute@npm:^7.9.0":
+  version: 7.9.0
+  resolution: "@google-cloud/compute@npm:7.9.0"
+  dependencies:
+    google-gax: "npm:^6.0.0"
+  checksum: 10c0/c83071bdd5c0e6066807ba32f4390c2c729b33c038a5d8a665a9665ba22b8fb02035314e47c2cbb2b3a9f91390c451d077ae6980173112f6b764fee5c93933a1
+  languageName: node
+  linkType: hard
+
 "@google-cloud/paginator@npm:^7.0.1":
   version: 7.0.1
   resolution: "@google-cloud/paginator@npm:7.0.1"
@@ -17059,6 +17068,7 @@ __metadata:
     "@esbuild-plugins/node-modules-polyfill": "npm:^0.2.2"
     "@eslint/js": "npm:^9.8.0"
     "@esm2cjs/cacheable-lookup": "npm:^7.0.0"
+    "@google-cloud/compute": "npm:^7.9.0"
     "@google-cloud/secret-manager": "npm:^7.1.0"
     "@google-cloud/storage": "npm:^8.0.1"
     "@iarna/toml": "npm:^2.2.5"

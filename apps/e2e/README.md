@@ -243,6 +243,16 @@ export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 
+# The live disk-expansion case (test_disk_expansion.py) runs only with both
+# set, after an operator has already grown the runner's data disk in GCP —
+# the test polls admin REST until the healthcheck-reported size catches up,
+# and never calls the GCP API itself. Needs an admin-role API key, and the
+# target must be strictly larger than the pre-resize size. Mind the per-test
+# pytest timeout: propagation takes minutes (hyperdisk allows 2 resizes per
+# disk per 4h window):
+export BOXLITE_E2E_EXPANDED_DISK_RUNNER_ID=<runner-id>
+export BOXLITE_E2E_EXPANDED_DISK_TARGET_GIB=<new-size-in-gib>
+
 # The private image case runs only with a real private image and its login,
 # written with its host and a tag or digest. The prefix defaults to the
 # image's namespace. It adds its own login and refuses to start while the
