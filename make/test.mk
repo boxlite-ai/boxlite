@@ -455,7 +455,7 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 			$(CARGOTEST_FILTER); \
 	fi
 
-# OpenCode agent adapter tests (requires VM environment). Ignored by the suite above:
+# OpenCode agent adapter and `boxlite agent` CLI tests (requires VM). Ignored by the suites above:
 # each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
 test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
@@ -466,6 +466,13 @@ test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite --features krun,gvproxy,test-support,native --test agents_opencode --no-fail-fast -- \
+			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
+	fi && \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli --test agents --run-ignored only \
+			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-cli --test agents --no-fail-fast -- \
 			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 

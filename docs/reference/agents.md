@@ -24,13 +24,15 @@ operation availability.
 | Interaction | `turn.steer/interrupt`, `agent.requests/respond` | Same | Same | `Steer/Interrupt`, `Requests/Respond` |
 | Read-only state | `agent.state/config/capabilities()`, `turn.state()` | Properties | Properties | `State/Config/Capabilities()` |
 
+Rust also has `agent.id()`; the other SDKs do not yet.
+
 Python exposes both async and synchronous handles, including `SimpleBox`,
 `SyncBox` and `SyncSimpleBox`. Node exposes the namespace on native `JsBox`
 and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust on a local runtime runs the operations listed in
+Rust and the CLI on a local runtime run the operations listed in
 [OpenCode on a local runtime](#opencode-on-a-local-runtime). Everywhere else, agent
 operations return an unsupported error before agent execution: namespace access and
 data construction work, but execution, queues, event delivery, configuration
@@ -43,7 +45,7 @@ validation, retry deduplication and timeout handling are unavailable.
 | Node.js | Rejected operation promises; synchronous getter/event errors |
 | Go | `*Error` with `Code: ErrUnsupported` and no result |
 | C | Synchronous `Unsupported` return and optional `CBoxliteError`; no callback is invoked |
-| CLI | `boxlite agent …` reports the unavailable operation on stderr and exits with code 1 |
+| CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
 Event opening never returns an empty successful stream. Python/Node fail when
 `events()` is called; Rust fails when its future is awaited; Go returns a nil
@@ -55,13 +57,14 @@ subscription or JSON result object is allocated.
 
 ### OpenCode on a local runtime
 
-Rust on a local runtime forwards agents to OpenCode 2.2 inside the Box
+Rust and the CLI on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
 answers, or with `Execution` when it lacks the `opencode service` commands. Remote
-runtimes and the other SDKs return `Unsupported`.
+runtimes and the other SDKs return `Unsupported`. `agent.id()` returns the `ses_…`
+session ID that `agents.get` accepts, including from another process.
 
 ```text
 agents.create("opencode") ──exec───► check OpenCode's service registration; set the
@@ -270,5 +273,7 @@ BOX is positional. Creation uses `--agent IMPLEMENTATION`; other commands use
 `--agent ID` to select an instance, with `--turn` and `--request` selecting its work.
 `inspect` combines state and agent views, and `events` selects either scope.
 SDKs expose `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
+`create` prints the new agent's ID, and every command prints JSON records in the
+[C JSON shapes](#c-api-and-ownership).
 CLI options reuse the five groups above and add `AgentInspectOptions` for view
 selection.
