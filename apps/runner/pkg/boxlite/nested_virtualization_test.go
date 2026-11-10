@@ -27,7 +27,9 @@ func TestNestedVirtualizationRunnerCreateAndReplay(t *testing.T) {
 		skipOrFailRuntimeStart(t, err)
 	}
 	box, err := plain.Create(t.Context(), "alpine:latest", sdk.WithName("plain"), sdk.WithAutoRemove(false), sdk.WithDetach(true))
+	var plainID string
 	if box != nil {
+		plainID = box.ID()
 		box.Close()
 	}
 	plain.Close()
@@ -41,8 +43,8 @@ func TestNestedVirtualizationRunnerCreateAndReplay(t *testing.T) {
 	}
 	defer client.Close()
 	request := dto.CreateBoxDTO{Id: "plain", Image: "alpine:latest", SkipStart: boolPtr(true), OutboundEnabled: boolPtr(false), NestedVirtualization: true}
-	if _, _, err := client.Create(t.Context(), request); err == nil || !strings.Contains(err.Error(), "created without nested virtualization") {
-		t.Fatalf("plain-box replay must reject the nested requirement: %v", err)
+	if reusedID, _, err := client.Create(t.Context(), request); err != nil || reusedID != plainID {
+		t.Fatalf("plain-box replay must reuse %q, got %q: %v", plainID, reusedID, err)
 	}
 	request.Id = "nested"
 	for i := 0; i < 2; i++ {

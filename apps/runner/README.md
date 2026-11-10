@@ -57,9 +57,9 @@ Unauthorized requests return HTTP 400 before volume mounts. Guest environment va
 cannot authorize nesting, and enabling nesting does not grant guest privilege.
 
 Comma-separated features are validated at startup. Existing boxes and archive
-imports keep their saved options; requesting nesting when replaying a plain box
-fails, so create a new box instead. Host and guest kernels must support nesting;
-the flag alone does not establish hardware availability or a performance guarantee.
+imports keep their saved options. Replaying a plain box reuses that box; the new
+nesting decision applies only when a box is created. Host and guest kernels must
+support nesting; the flag alone does not establish hardware availability or a performance guarantee.
 
 Cloud stages deliver process settings through
 [`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).

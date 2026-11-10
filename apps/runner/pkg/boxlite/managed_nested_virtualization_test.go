@@ -33,7 +33,7 @@ func TestNestedVirtualizationManagedPolicy(t *testing.T) {
 				if err := json.Unmarshal([]byte(request+`}`), &dto); err != nil {
 					t.Fatal(err)
 				}
-				_, _, createErr := client.Create(t.Context(), dto)
+				createdID, _, createErr := client.Create(t.Context(), dto)
 				client.Close()
 				if choice == "true" && !authorized {
 					if createErr == nil || !strings.Contains(createErr.Error(), "BOXLITE_EXPERIMENTAL") {
@@ -45,8 +45,7 @@ func TestNestedVirtualizationManagedPolicy(t *testing.T) {
 					t.Fatal(createErr)
 				}
 
-				// Reopen the saved native box and ask for nesting. Native replay
-				// must reject it exactly when Runner persisted the option off.
+				// Reopening with a different nesting request must reuse the saved box.
 				rt, err := sdk.NewRuntime(sdk.WithHomeDir(cfg.HomeDir), sdk.WithRunnerManagedPolicy("nested-virtualization"))
 				if err != nil {
 					t.Fatal(err)
@@ -60,16 +59,13 @@ func TestNestedVirtualizationManagedPolicy(t *testing.T) {
 				if err := advanced.SetRunnerNestedVirtualization(true); err != nil {
 					t.Fatal(err)
 				}
-				box, _, err := rt.GetOrCreate(t.Context(), dto.Image, sdk.WithName(dto.Id), sdk.WithAdvancedOptions(advanced))
-				if box != nil {
-					box.Close()
+				box, created, err := rt.GetOrCreate(t.Context(), dto.Image, sdk.WithName(dto.Id), sdk.WithAdvancedOptions(advanced))
+				if err != nil {
+					t.Fatal(err)
 				}
-				if choice == "true" {
-					if err != nil {
-						t.Fatalf("enabled choice was not saved: %v", err)
-					}
-				} else if err == nil || !strings.Contains(err.Error(), "created without nested virtualization") {
-					t.Fatalf("%s choice must persist nesting off: %v", choice, err)
+				defer box.Close()
+				if created || box.ID() != createdID {
+					t.Fatalf("replay must reuse %q, got %q (created=%t)", createdID, box.ID(), created)
 				}
 			})
 		}
