@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/boxlite-ai/runner/cmd/runner/config"
@@ -83,8 +84,10 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	docs.SwaggerInfo.BasePath = "/"
 	docs.SwaggerInfo.Version = internal.Version
 
-	_, err := net.Dial("tcp", fmt.Sprintf(":%d", a.apiPort))
+	address := net.JoinHostPort(os.Getenv("BOXLITE_LISTEN_HOST"), fmt.Sprint(a.apiPort))
+	connection, err := net.Dial("tcp", address)
 	if err == nil {
+		connection.Close()
 		return fmt.Errorf("cannot start API server, port %d is already in use", a.apiPort)
 	}
 
@@ -163,7 +166,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	}
 
 	a.httpServer = &http.Server{
-		Addr:    fmt.Sprintf(":%d", a.apiPort),
+		Addr:    address,
 		Handler: a.router,
 	}
 
