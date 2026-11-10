@@ -59,8 +59,9 @@ class CodeBox(SimpleBox):
         Args:
             code: Python code to execute
             timeout: Execution timeout in seconds (default: no timeout). When it
-                expires the process is terminated and the stdout written so far is
-                returned.
+                expires the process is terminated and the stdout it flushed so far
+                is returned. Buffered print() output may be lost, so pass
+                flush=True when partial output matters.
 
         Returns:
             Execution stdout as a string. Use exec() directly if you need
