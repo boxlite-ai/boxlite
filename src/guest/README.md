@@ -42,6 +42,15 @@ make test:integration:vmm:native
 make test:unit:guest
 ```
 
+The native target finishes runtime preparation before building the probe, including with `make -j`, so their libseccomp cache preparation cannot overlap.
+`SETUP_DONE=1` reuses a runtime that has already been prepared.
+
+Guest and probe paths default to `x86_64-unknown-linux-musl/debug/` under `CARGO_TARGET_DIR` (or `target/`); the probe lives in `examples/`.
+Relative output directories resolve from the repository root; `VMM_GUEST` and `VMM_GUEST_PROBE` can override the individual paths.
+
+Runtime preparation still uses its default layout.
+For custom output directories, prepare that runtime first, supply the guest at its selected path, and run with `SETUP_DONE=1`.
+
 The native suite boots the actual agent from a read-only ext4 root, without an initramfs.
 A test-only launcher runs from that disk and execs the agent as PID 1.
 Its child checks the ext4 root and rejected writes, mount reuse, writable paths, hostname, limits, zygote inheritance, localhost TCP and Unix RPC.

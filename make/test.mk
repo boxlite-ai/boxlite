@@ -339,11 +339,11 @@ test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-
 # Boot the real kernel through the native engine inside boxlite-shim: the M1 initramfs to its marker,
 # a typed Unsupported failure into the exit file, and an alpine box through the runtime up to
 # boxlite-guest as PID 1 on the ext4 root (the first-box progress test).
-VMM_GUEST ?= $(PROJECT_ROOT)/target/x86_64-unknown-linux-musl/debug/boxlite-guest
-VMM_GUEST_PROBE ?= $(PROJECT_ROOT)/target/x86_64-unknown-linux-musl/debug/examples/guest-boot-probe
+VMM_GUEST ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/boxlite-guest
+VMM_GUEST_PROBE ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/examples/guest-boot-probe
 export VMM_GUEST VMM_GUEST_PROBE
 
-_guest-boot-probe:
+_guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
 	@bash "$(SCRIPT_DIR)/test/build-guest-boot-probe.sh"
 
 test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe
