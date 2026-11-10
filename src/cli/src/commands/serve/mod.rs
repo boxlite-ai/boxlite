@@ -7,7 +7,7 @@ mod handlers;
 mod types;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use axum::extract::{Request, State};
@@ -106,9 +106,9 @@ struct AppState {
     /// In memory only: a restart forgets every deadline, and a box created
     /// before it is never swept.
     lifecycle: RwLock<HashMap<String, LifecyclePolicy>>,
-    /// Coordinate checkpoint capture/replacement and deadline publication while
-    /// leaving the lifecycle map available to metadata readers and the sweeper.
-    checkpoint_operations: tokio::sync::Mutex<()>,
+    /// Names and native IDs alias the same operation lock. Replacement publishes
+    /// its new ID before releasing that lock; unrelated boxes never share it.
+    checkpoint_operations: tokio::sync::Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
     /// Last observed user activity per box, for AutoStop.
     ///
     /// `serve` holds the `$BOXLITE_HOME` lock for its whole life, so nothing
@@ -151,6 +151,42 @@ impl LifecyclePolicy {
 }
 
 impl AppState {
+    async fn checkpoint_operation(
+        &self,
+        id: &str,
+        name: Option<&str>,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        let keys: Vec<_> = std::iter::once(format!("id:{id}"))
+            .chain(name.map(|name| format!("name:{name}")))
+            .collect();
+        let operation = {
+            let mut operations = self.checkpoint_operations.lock().await;
+            operations.retain(|_, operation| operation.strong_count() > 0);
+            let operation = keys
+                .iter()
+                .find_map(|key| operations.get(key).and_then(Weak::upgrade))
+                .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(())));
+            for key in keys {
+                operations.insert(key, Arc::downgrade(&operation));
+            }
+            operation
+        };
+        operation.lock_owned().await
+    }
+
+    async fn bind_checkpoint_operation(
+        &self,
+        operation: &tokio::sync::OwnedMutexGuard<()>,
+        info: &BoxInfo,
+    ) {
+        let lock = tokio::sync::OwnedMutexGuard::mutex(operation);
+        let mut operations = self.checkpoint_operations.lock().await;
+        operations.insert(format!("id:{}", info.id), Arc::downgrade(lock));
+        if let Some(name) = &info.name {
+            operations.insert(format!("name:{name}"), Arc::downgrade(lock));
+        }
+    }
+
     /// Start one wait observer without claiming an output reader.
     pub(in crate::commands::serve) async fn watch_recovered(
         &self,
@@ -219,7 +255,7 @@ impl AppState {
         if policy.is_empty() {
             return;
         }
-        let _checkpoint_operation = self.checkpoint_operations.lock().await;
+        let _checkpoint_operation = self.checkpoint_operation(box_id, None).await;
         self.lifecycle
             .write()
             .await
@@ -2078,7 +2114,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
         api_key: args.api_key.clone(),
-        checkpoint_operations: tokio::sync::Mutex::new(()),
+        checkpoint_operations: Default::default(),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
@@ -2448,7 +2484,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3280,7 +3316,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3683,7 +3719,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3752,7 +3788,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3819,7 +3855,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3878,7 +3914,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3924,7 +3960,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3979,7 +4015,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4043,7 +4079,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4155,7 +4191,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4202,7 +4238,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4246,7 +4282,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4290,7 +4326,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4342,7 +4378,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4402,7 +4438,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: Some("expected-key".to_string()),
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4451,7 +4487,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4737,7 +4773,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_operations: tokio::sync::Mutex::new(()),
+            checkpoint_operations: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),

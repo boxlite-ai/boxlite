@@ -218,9 +218,11 @@ the source has a nonzero `auto_stop` or `auto_delete`: those deadlines live only
 in the server and cannot be preserved in the disk archive. Disable them before
 capture. Named replacements serialize target lookup, import and cache cleanup,
 so each replacement invalidates the handle it actually supersedes.
-Capture and lifecycle deadline publication share that checkpoint operation lock;
-the global policy map is held only briefly, so a waiting policy writer does not
-block unrelated Box metadata reads during capture.
+Capture, replacement and lifecycle deadline publication coordinate per Box.
+Names and native IDs share a lock, and replacement binds its resulting native ID
+before releasing it. Waiting operations resolve the target again before acting.
+The policy map is held only briefly; another Box's capture, replacement, creation
+and metadata reads can proceed during a disk capture.
 
 ## Connecting to a remote server
 

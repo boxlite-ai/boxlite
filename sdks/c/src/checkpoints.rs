@@ -444,25 +444,47 @@ mod tests {
     }
 
     extern "C" fn metadata_received(
-        _: *mut CCheckpointInfo,
+        info: *mut CCheckpointInfo,
         _: *mut CBoxliteError,
-        _: *mut c_void,
+        data: *mut c_void,
     ) {
+        let sender = unsafe { &*(data as *const mpsc::Sender<()>) };
+        let _ = sender.send(());
+        unsafe { boxlite_free_checkpoint_info(info) };
     }
 
     #[test]
     fn checkpoint_c_boundary_refuses_null_and_non_utf8_strings_before_queueing() {
+        let home = std::env::temp_dir().join(format!(
+            "boxlite-checkpoint-c-strings-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut runtime = RuntimeHandle {
+            runtime: BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
+                home_dir: home.clone(),
+                ..Default::default()
+            })
+            .unwrap(),
+            tokio_rt: create_tokio_runtime().unwrap(),
+            liveness: Arc::new(RuntimeLiveness::new()),
+            queue: Arc::new(EventQueue::new()),
+        };
+        let (sender, receiver) = mpsc::channel::<()>();
+        let data = &sender as *const _ as *mut c_void;
         let mut error = crate::error::FFIError::default();
         let invalid = [255u8, 0];
         for source in [ptr::null(), invalid.as_ptr().cast()] {
             unsafe {
                 assert_eq!(
                     boxlite_checkpoint_create(
-                        ptr::null_mut(),
+                        &mut runtime,
                         source,
                         ptr::null(),
                         Some(metadata_received),
-                        ptr::null_mut(),
+                        data,
                         &mut error
                     ),
                     BoxliteErrorCode::InvalidArgument
@@ -470,10 +492,10 @@ mod tests {
                 crate::boxlite_error_free(&mut error);
                 assert_eq!(
                     boxlite_checkpoint_get(
-                        ptr::null_mut(),
+                        &mut runtime,
                         source,
                         Some(metadata_received),
-                        ptr::null_mut(),
+                        data,
                         &mut error
                     ),
                     BoxliteErrorCode::InvalidArgument
@@ -481,6 +503,15 @@ mod tests {
                 crate::boxlite_error_free(&mut error);
             }
         }
+        unsafe {
+            assert_eq!(crate::boxlite_runtime_drain(&mut runtime, 0, &mut error), 0);
+        }
+        assert!(
+            receiver.try_recv().is_err(),
+            "invalid input queued a callback"
+        );
+        drop(runtime);
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     type Reply = (BoxliteErrorCode, String);

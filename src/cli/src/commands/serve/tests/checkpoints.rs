@@ -19,6 +19,169 @@ async fn backend(router: Router) -> (String, tokio::task::JoinHandle<()>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_operation_identity_survives_name_and_native_id_aliases() {
+    let (backend_url, backend_server) = backend(Router::new().route(
+        "/v1/boxes/{key}",
+        get(|Path(key): Path<String>| async move { Json(remote_box(&key)) }),
+    ))
+    .await;
+    let temporary = tempfile::tempdir().unwrap();
+    let mut state = state(&temporary);
+    Arc::get_mut(&mut state).unwrap().runtime =
+        BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(backend_url)).unwrap();
+    let operation = state.checkpoint_operation("original", Some("target")).await;
+    let replacement = state
+        .runtime
+        .get_info("replacement")
+        .await
+        .unwrap()
+        .unwrap();
+    state
+        .bind_checkpoint_operation(&operation, &replacement)
+        .await;
+    for (id, name) in [
+        ("original", None),
+        ("target", Some("target")),
+        ("replacement", None),
+    ] {
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                state.checkpoint_operation(id, name),
+            )
+            .await
+            .is_err(),
+            "alias {id} escaped the active replacement operation"
+        );
+    }
+    let unrelated = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        state.checkpoint_operation("unrelated", Some("unrelated")),
+    )
+    .await
+    .expect("an unrelated box shared the operation lock");
+    drop(unrelated);
+    drop(operation);
+    let _released = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        state.checkpoint_operation("replacement", Some("target")),
+    )
+    .await
+    .expect("replacement identity remained locked after completion");
+    backend_server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_capture_does_not_block_other_boxes_or_their_deadlines() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let capture_started = started.clone();
+    let capture_release = release.clone();
+    let (backend_url, backend_server) = backend(
+        Router::new()
+            .route(
+                "/v1/boxes/{key}",
+                get(|Path(key): Path<String>| async move {
+                    let mut info = remote_box(&key);
+                    info["name"] = json!(key);
+                    Json(info)
+                }),
+            )
+            .route(
+                "/v1/boxes",
+                post(|| async {
+                    let mut info = remote_box("created");
+                    info["name"] = json!("created");
+                    Json(info)
+                }),
+            )
+            .route(
+                "/v1/boxes/import",
+                post(|| async {
+                    let mut info = remote_box("imported");
+                    info["name"] = json!("unrelated-import");
+                    Json(info)
+                }),
+            )
+            .route(
+                "/v1/checkpoints",
+                post(move |Json(request): Json<serde_json::Value>| {
+                    let started = capture_started.clone();
+                    let release = capture_release.clone();
+                    async move {
+                        if request["source_box_id"] == "original" {
+                            started.notify_one();
+                            release.notified().await;
+                        }
+                        Json(json!({"id":"checkpoint-1","name":"base",
+                            "source_box_id":request["source_box_id"],
+                            "created_at":"2026-01-01T00:00:00Z","size_bytes":4096,"state":"ready"}))
+                    }
+                }),
+            ),
+    )
+    .await;
+    let temporary = tempfile::tempdir().unwrap();
+    let mut state = state(&temporary);
+    Arc::get_mut(&mut state).unwrap().runtime =
+        BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(backend_url)).unwrap();
+    let (url, server) = serve_router(state.clone()).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let capture_client = client.clone();
+    let capture_url = url.clone();
+    let capture = tokio::spawn(async move {
+        capture_client
+            .post(format!("{capture_url}/v1/checkpoints"))
+            .bearer_auth("checkpoint-key")
+            .json(&json!({"source_box_id":"original"}))
+            .send()
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .expect("capture must reach the blocked backend");
+    let independent = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(
+            client
+                .post(format!("{url}/v1/checkpoints"))
+                .bearer_auth("checkpoint-key")
+                .json(&json!({"source_box_id":"unrelated-capture"}))
+                .send(),
+            client
+                .post(format!("{url}/v1/boxes/import"))
+                .bearer_auth("checkpoint-key")
+                .json(&json!({"checkpoint_id":"base","box_id":"unrelated-import"}))
+                .send(),
+            client
+                .post(format!("{url}/v1/boxes"))
+                .bearer_auth("checkpoint-key")
+                .json(&json!({"image":"alpine:latest","name":"created","auto_stop":60}))
+                .send(),
+        )
+    })
+    .await;
+    release.notify_one();
+    let captured = tokio::time::timeout(std::time::Duration::from_secs(5), capture)
+        .await
+        .unwrap()
+        .unwrap();
+    server.abort();
+    backend_server.abort();
+    assert_eq!(captured.status(), StatusCode::CREATED);
+    let (capture, import, create) = independent
+        .expect("capturing one box blocked unrelated capture, import or deadline publication");
+    assert_eq!(capture.unwrap().status(), StatusCode::CREATED);
+    assert_eq!(import.unwrap().status(), StatusCode::OK);
+    let create = create.unwrap();
+    let status = create.status();
+    let body: serde_json::Value = create.json().await.unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["auto_stop"], 60);
+    assert_eq!(state.lifecycle_of("created").await.auto_stop, 60);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkpoint_capture_keeps_box_reads_live_while_policy_publication_waits() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
@@ -183,7 +346,6 @@ async fn checkpoint_capture_refuses_volatile_lifecycle_deadlines() {
 #[derive(Default)]
 struct ReplacementBackend {
     current: tokio::sync::Mutex<String>,
-    lookups: std::sync::atomic::AtomicUsize,
     imports: std::sync::atomic::AtomicUsize,
     first_started: tokio::sync::Notify,
     second_snapshot: tokio::sync::Notify,
@@ -223,7 +385,7 @@ async fn checkpoint_concurrent_named_replacements_evict_every_superseded_handle(
                 async move {
                     let snapshot = read.current.lock().await.clone();
                     if key == "target" {
-                        if read.lookups.fetch_add(1, Ordering::SeqCst) == 1 {
+                        if read.imports.load(Ordering::SeqCst) == 1 && snapshot == "original" {
                             read.second_snapshot.notify_one();
                             read.first_finished.notified().await;
                         }
@@ -320,7 +482,7 @@ fn state(temporary: &tempfile::TempDir) -> Arc<AppState> {
         executions: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
         api_key: Some("checkpoint-key".into()),
-        checkpoint_operations: tokio::sync::Mutex::new(()),
+        checkpoint_operations: Default::default(),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
     })

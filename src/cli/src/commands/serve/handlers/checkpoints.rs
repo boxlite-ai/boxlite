@@ -34,15 +34,28 @@ pub(in crate::commands::serve) async fn create(
         Err(error) => return error,
     };
     let source = match state.runtime.get_info(&request.source_box_id).await {
-        Ok(Some(info)) => info.id.to_string(),
+        Ok(Some(info)) => info,
         Ok(None) => {
             return error_from_boxlite(&boxlite::BoxliteError::NotFound(request.source_box_id));
         }
         Err(error) => return error_from_boxlite(&error),
     };
-    // Deadline publication uses the same operation lock. The lifecycle map is
-    // read only for admission, so a pending writer cannot block metadata reads.
-    let _checkpoint_operation = state.checkpoint_operations.lock().await;
+    let checkpoint_operation = state
+        .checkpoint_operation(source.id.as_ref(), source.name.as_deref())
+        .await;
+    // A named source may have been replaced while its operation lock was busy.
+    let source = match state.runtime.get_info(&request.source_box_id).await {
+        Ok(Some(info)) => {
+            state
+                .bind_checkpoint_operation(&checkpoint_operation, &info)
+                .await;
+            info.id.to_string()
+        }
+        Ok(None) => {
+            return error_from_boxlite(&boxlite::BoxliteError::NotFound(request.source_box_id));
+        }
+        Err(error) => return error_from_boxlite(&error),
+    };
     if !state.lifecycle_of(&source).await.is_empty() {
         return invalid_request("Disable auto_stop and auto_delete before capturing a local checkpoint; their deadlines cannot be preserved in the archive".into());
     }
@@ -129,15 +142,32 @@ pub(in crate::commands::serve) async fn import_box(
             .import_box(&request.checkpoint_id, request.name, None)
             .await
         {
-            Ok(bx) => box_response(&state, bx, StatusCode::CREATED).await,
+            Ok(bx) => box_response(&state, bx, StatusCode::CREATED, None).await,
             Err(error) => error_from_boxlite(&error),
         };
     };
     // A second named replacement must resolve the result of the first one,
     // otherwise it evicts the original ID while leaving the intermediate handle.
-    let _replacement = state.checkpoint_operations.lock().await;
+    let info = match state.runtime.get_info(&target).await {
+        Ok(info) => info,
+        Err(error) => return error_from_boxlite(&error),
+    };
+    // Missing targets may still have a durable failed import to resume. Keep
+    // their supplied ID/name serialized and let the runtime decide existence.
+    let replacement = state
+        .checkpoint_operation(
+            info.as_ref()
+                .map_or(target.as_str(), |info| info.id.as_ref()),
+            info.as_ref()
+                .map_or(Some(target.as_str()), |info| info.name.as_deref()),
+        )
+        .await;
     let old_id = match state.runtime.get_info(&target).await {
-        Ok(info) => info.map(|info| info.id.to_string()),
+        Ok(Some(info)) => {
+            state.bind_checkpoint_operation(&replacement, &info).await;
+            Some(info.id.to_string())
+        }
+        Ok(None) => None,
         Err(error) => return error_from_boxlite(&error),
     };
     let result = state
@@ -159,14 +189,22 @@ pub(in crate::commands::serve) async fn import_box(
         state.forget_box(&target).await;
     }
     match result {
-        Ok(bx) => box_response(&state, bx, StatusCode::OK).await,
+        Ok(bx) => box_response(&state, bx, StatusCode::OK, Some(&replacement)).await,
         Err(error) => error_from_boxlite(&error),
     }
 }
 
-async fn box_response(state: &AppState, bx: boxlite::LiteBox, status: StatusCode) -> Response {
+async fn box_response(
+    state: &AppState,
+    bx: boxlite::LiteBox,
+    status: StatusCode,
+    operation: Option<&tokio::sync::OwnedMutexGuard<()>>,
+) -> Response {
     match bx.info().await {
         Ok(info) => {
+            if let Some(operation) = operation {
+                state.bind_checkpoint_operation(operation, &info).await;
+            }
             let response = state.box_response(&info).await;
             state
                 .boxes
