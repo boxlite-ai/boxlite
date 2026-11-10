@@ -20,6 +20,7 @@ cargo llvm-cov clean --workspace
 
 make dev:python dev:node
 make test:unit:c
+make test:unit:ffi
 # The suite must exercise the extension just built: the gate turns an
 # absent or broken module into a collection failure, not a silent skip.
 BOXLITE_REQUIRE_NATIVE=1 make coverage:python
