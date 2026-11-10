@@ -11,12 +11,13 @@ import { TypeOrmModule } from '@nestjs/typeorm'
 import { TYPEORM_MODULE_OPTIONS } from '@nestjs/typeorm/dist/typeorm.constants'
 import { randomUUID } from 'node:crypto'
 import { globSync } from 'glob'
-import { DataSource, MigrationInterface } from 'typeorm'
+import { DataSource, MigrationInterface, QueryRunner } from 'typeorm'
 import { AppModule } from '../app.module'
-import { AuditLog } from '../audit/entities/audit-log.entity'
+import { Region } from '../region/entities/region.entity'
+import { Migration1741087887225 } from './1741087887225-migration'
 
 const databaseSuite = process.env.DB_HOST ? describe : describe.skip
-databaseSuite('Toolbox column during rolling API deployment', () => {
+databaseSuite('Toolbox column after the compatibility release', () => {
   let db: DataSource
   let schema: string
   afterEach(async () => {
@@ -26,7 +27,7 @@ databaseSuite('Toolbox column during rolling API deployment', () => {
     }
   })
 
-  it('keeps the old Region query and value after all pending startup migrations', async () => {
+  it('removes only the retired column through startup discovery and restores only its schema on rollback', async () => {
     const imports = Reflect.getMetadata(MODULE_METADATA.IMPORTS, AppModule) as any[]
     const core = imports.find((entry) => entry.module === TypeOrmModule).imports[0]
     const factory = core.providers.find((entry: any) => entry.provide === TYPEORM_MODULE_OPTIONS)
@@ -45,33 +46,53 @@ databaseSuite('Toolbox column during rolling API deployment', () => {
       schema,
       cache: false,
       migrationsRun: false,
-      entities: [AuditLog],
+      entities: [Region],
       migrations,
       extra: { options: `-c search_path=${schema},public` },
       entitySkipConstructor: true,
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}"`)
-    await db.synchronize()
-    // Model the pre-release schema rather than the current entity's lease column.
-    await db.query('ALTER TABLE audit_log DROP COLUMN "leaseExpiresAt"')
-    await db.query('DROP INDEX idx_audit_log_pending_created_at')
-    await db.query('CREATE TABLE region (id text PRIMARY KEY, "proxyUrl" text, "toolboxProxyUrl" character varying)')
-    // Pending startup migrations require the existing CPU and memory columns.
-    await db.query('CREATE TABLE box (cpu integer NOT NULL DEFAULT 2, mem integer NOT NULL DEFAULT 4)')
-    await db.query('CREATE TABLE warm_pool (cpu integer NOT NULL)')
-    await db.query('CREATE TABLE runner (id uuid PRIMARY KEY)')
-    await db.query("INSERT INTO region VALUES ('us', 'https://proxy.test', 'https://legacy.test')")
+    // Use the baseline's emitted Region DDL, isolating its public enum in this test schema.
+    const statements: string[] = []
+    await new Migration1741087887225().up({
+      query: async (sql: string) => {
+        statements.push(sql)
+      },
+    } as QueryRunner)
+    for (const sql of statements.filter(
+      (sql) =>
+        sql.startsWith('CREATE TYPE "public"."region_regiontype_enum"') || sql.startsWith('CREATE TABLE "region"'),
+    ))
+      await db.query(sql.replaceAll('"public".', `"${schema}".`))
+    await db.query(`INSERT INTO region (id, name, "regionType", "proxyUrl", "toolboxProxyUrl")
+      VALUES ('us', 'United States', 'shared', 'https://proxy.test', 'https://legacy.test')`)
     await db.query('CREATE TABLE migrations (id serial PRIMARY KEY, timestamp bigint NOT NULL, name varchar NOT NULL)')
-    // Model an existing installation: earlier migrations ran before this release.
+    // Other migrations have already run before the removal release.
     for (const migration of db.migrations) {
       const name = migration.name || migration.constructor.name
       const timestamp = Number(name.slice(-13))
-      if (timestamp < 1794196800000)
+      if (name !== 'RemoveToolboxUrl1794400000000')
         await db.query('INSERT INTO migrations (timestamp, name) VALUES ($1, $2)', [timestamp, name])
     }
     await db.runMigrations()
-    expect(await db.query('SELECT id, "toolboxProxyUrl" FROM region')).toEqual([
-      { id: 'us', toolboxProxyUrl: 'https://legacy.test' },
+    const columns = () =>
+      db.query(
+        `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = $1 AND table_name = 'region' AND column_name = 'toolboxProxyUrl'`,
+        [schema],
+      )
+    expect(await columns()).toEqual([])
+    expect(await db.getRepository(Region).findOneBy({ id: 'us' })).toMatchObject({
+      id: 'us',
+      proxyUrl: 'https://proxy.test',
+    })
+    expect(await db.runMigrations()).toEqual([])
+    await db.undoLastMigration()
+    expect(await columns()).toEqual([{ column_name: 'toolboxProxyUrl' }])
+    expect(await db.query('SELECT id, "proxyUrl", "toolboxProxyUrl" FROM region')).toEqual([
+      { id: 'us', proxyUrl: 'https://proxy.test', toolboxProxyUrl: null },
     ])
+    await db.runMigrations()
+    expect(await columns()).toEqual([])
   }, 30000)
 })

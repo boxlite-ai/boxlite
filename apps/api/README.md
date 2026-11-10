@@ -1099,17 +1099,23 @@ No additional event or issuer-claim configuration is required. Redis/log failure
 
 ## Toolbox rollout compatibility
 
-Box responses retain deprecated `toolboxProxyUrl: ""` for old Runner decoders;
-the field no longer supplies a URL or performs Region/cache lookups. New Go clients
-accept its absence. The nullable `region.toolboxProxyUrl` column and existing values
-remain, although the new API no longer maps it. This release has no column-drop migration.
-Remove the response field and column in a later release only after all dependent
-Runners/API instances have upgraded and the rollback window is resolved.
+This removal release omits `toolboxProxyUrl` from Box responses and generated clients,
+and drops the unused `region.toolboxProxyUrl` column. Before deploying it, every
+dependent Runner/API instance must run the compatibility release containing
+[#2470](https://github.com/boxlite-ai/boxlite/pull/2470) or newer, and the rollback
+window for earlier readers must be closed. Upgrading only the API is insufficient.
 Startup loads migrations recursively: naming a directory `post-deploy` does not defer execution.
 
-Run `make test:apps:api TEST_FILES='box-toolbox-compat|toolbox-retention'` with `DB_*`
-set for PostgreSQL coverage. To include actual old/new Go decoder checks, install Go 1.23+
-and set `LEGACY_API_CLIENT_ROOT` to an exported pre-change `apps/libs/api-client-go` directory.
+The compatibility-release Go client accepts the omitted field; older required-field
+decoders do not. Consumers of removed generated SDK members must update their source.
+The historical baseline remains unchanged; the new contract migration removes the
+column on both fresh and existing installations. Its down migration restores a nullable
+column with NULL values, not the deleted URLs or support for pre-compatibility binaries.
+
+Run `make test:apps:api TEST_FILES='toolbox-removal'` with `DB_*` set for PostgreSQL
+coverage. To test real compatible/new Go decoders, install Go 1.23+ and set
+`COMPAT_API_CLIENT_ROOT` to an exported compatibility-release `apps/libs/api-client-go`
+directory. Decoder tests consume unmodified responses from the current Box producer.
 
 ## Mutation auditing
 

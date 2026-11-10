@@ -27,31 +27,28 @@ function producer() {
   return { service, box, redis, regionService }
 }
 
-describe('Toolbox response compatibility', () => {
-  it.each(['single', 'list', 'detail'])(
-    'keeps an empty compatibility field in a %s response without lookups',
-    async (kind) => {
-      const { service, box, redis, regionService } = producer()
-      const result =
-        kind === 'list'
-          ? (await service.toBoxDtos([box]))[0]
-          : kind === 'detail'
-            ? await service.toBoxDtoWithExitCode(box)
-            : await service.toBoxDto(box)
-      expect(JSON.parse(JSON.stringify(result)).toolboxProxyUrl).toBe('')
-      expect(redis.get).not.toHaveBeenCalled()
-      expect(redis.pipeline).not.toHaveBeenCalled()
-      expect(regionService.findOne).not.toHaveBeenCalled()
-      expect(regionService.findByIds).not.toHaveBeenCalled()
-    },
-  )
+describe('Toolbox response removal', () => {
+  it.each(['single', 'list', 'detail'])('omits the retired field in a %s response without lookups', async (kind) => {
+    const { service, box, redis, regionService } = producer()
+    const result =
+      kind === 'list'
+        ? (await service.toBoxDtos([box]))[0]
+        : kind === 'detail'
+          ? await service.toBoxDtoWithExitCode(box)
+          : await service.toBoxDto(box)
+    expect(JSON.parse(JSON.stringify(result))).not.toHaveProperty('toolboxProxyUrl')
+    expect(redis.get).not.toHaveBeenCalled()
+    expect(redis.pipeline).not.toHaveBeenCalled()
+    expect(regionService.findOne).not.toHaveBeenCalled()
+    expect(regionService.findByIds).not.toHaveBeenCalled()
+  })
 })
 
-// Supply an exported pre-change client to exercise the real decoder without
+// Supply an exported compatibility-release client to exercise the real decoder without
 // depending on Git history or downloading packages during ordinary API tests.
-const legacyClient = process.env.LEGACY_API_CLIENT_ROOT
-const clientSuite = legacyClient ? describe : describe.skip
-clientSuite('old Go client against the current Box producer', () => {
+const compatibleClient = process.env.COMPAT_API_CLIENT_ROOT
+const clientSuite = compatibleClient ? describe : describe.skip
+clientSuite('upgraded Go clients against the current Box producer', () => {
   let temp: string
   const binaries: Record<string, string> = {}
   beforeAll(() => {
@@ -68,7 +65,7 @@ func main() {
 `,
     )
     for (const [version, source] of Object.entries({
-      old: legacyClient!,
+      compatible: compatibleClient!,
       current: resolve(__dirname, '../../../../libs/api-client-go'),
     })) {
       writeFileSync(
@@ -87,22 +84,14 @@ func main() {
     if (temp) rmSync(temp, { recursive: true, force: true })
   })
 
-  it.each(['old', 'current'])('%s client decodes a nonempty API-produced list', async (version) => {
+  it.each(['compatible', 'current'])('%s client decodes a nonempty API-produced list', async (version) => {
     const { service, box } = producer()
     const result = spawnSync(binaries[version], [], {
       input: JSON.stringify(await service.toBoxDtos([box])),
       encoding: 'utf8',
     })
     expect({ status: result.status, error: result.stderr }).toEqual({ status: 0, error: '' })
-    expect(JSON.parse(result.stdout)[0].toolboxProxyUrl).toBe('')
-  })
-
-  it('current client also accepts the future response without the field', async () => {
-    const { service, box } = producer()
-    const payload = JSON.parse(JSON.stringify(await service.toBoxDtos([box])))
-    delete payload[0].toolboxProxyUrl
-    const result = spawnSync(binaries.current, [], { input: JSON.stringify(payload), encoding: 'utf8' })
-    expect({ status: result.status, error: result.stderr }).toEqual({ status: 0, error: '' })
     expect(JSON.parse(result.stdout)[0].id).toBe(box.id)
+    expect(JSON.parse(result.stdout)[0]).not.toHaveProperty('toolboxProxyUrl')
   })
 })
