@@ -48,7 +48,7 @@ describe('CI shared execution authority', () => {
       organization: 'tenant',
       actor: 'actor',
       installation: { id: 1, account: { id: 7, login: 'owner', type: 'User' } },
-      runners: { kind: 'repository', repository: structuredClone(repository), allowPublic: false },
+      runners: { kind: 'repository', repository: structuredClone(repository), allowPrivate: true, allowPublic: false },
     }
     await journal.define(lease, scope)
     const installation: GitHubInstallation = {
@@ -178,6 +178,18 @@ describe('CI shared execution authority', () => {
     rmSync(directory, { recursive: true, force: true })
   })
   const launch = () => ({ name, image: 'runner', cpus: 2, memoryMiB: 2048, entrypoint: ['bash', '-c', 'run'] })
+  it('denies Private repository work before Box creation and JIT delivery when Private is disabled', async () => {
+    await backend.close()
+    scope.runners.allowPrivate = false
+    scope.runners.allowPublic = true
+    await new ExecutionJournal(state).define(lease, scope)
+    backend = makeBackend()
+    await expect(backend.job(notice)).rejects.toThrow('visibility is disabled')
+    await expect(backend.workers.create(launch())).rejects.toThrow('visibility is disabled')
+    await expect(backend.workers.deliverJit(name, 'c2VjcmV0')).rejects.toThrow('visibility is disabled')
+    expect(host.workers.create).not.toHaveBeenCalled()
+    expect(host.workers.deliverJit).not.toHaveBeenCalled()
+  })
   it.each(['valid', 'revoked', 'missing', 'invalid-name'])(
     'fences undispatched creation by its persisted intent: %s',
     async (scenario) => {
@@ -224,6 +236,7 @@ describe('CI shared execution authority', () => {
       account: { id: 7, login: 'owner' },
       group: 5,
       repositories: [21, 22],
+      allowPrivate: true,
       allowPublic: false,
     }
     await new ExecutionJournal(state).define(lease, scope)

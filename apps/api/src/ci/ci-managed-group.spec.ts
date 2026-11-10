@@ -42,7 +42,7 @@ integration('CI managed organization group (real Postgres)', () => {
     await db.query(`CREATE SCHEMA "${schema}";
       CREATE TABLE ci_installation_binding(id uuid PRIMARY KEY,generation bigint,github_host text,app_client_id text,
       installation_id bigint,account_id bigint,account_login text,account_type text,organization_id uuid,
-      actor_id text,allow_public boolean,follow_installation boolean,state text);
+      actor_id text,allow_private boolean,follow_installation boolean,state text);
       CREATE TABLE "user"(id text PRIMARY KEY,role text);
       CREATE TABLE organization_user("organizationId" uuid,"userId" text,role text)`)
     const runner = db.createQueryRunner()
@@ -94,7 +94,7 @@ integration('CI managed organization group (real Postgres)', () => {
       inherited: false,
       visibility: 'selected',
       restricted_to_workflows: false,
-      allows_public_repositories: true,
+      allows_public_repositories: false,
     }
     selected = [21, 22]
     mutations = []
@@ -174,12 +174,12 @@ integration('CI managed organization group (real Postgres)', () => {
     const view = await discover((value) => value.ready || reports.mock.calls.length > 0)
     expect(view.scopes).toHaveLength(1)
     expect(reports).not.toHaveBeenCalled()
-    expect(view.scopes[0].runners).toMatchObject({ repositories: [21], allowPublic: false })
-    expect(mutations).toEqual(['PATCH', 'PUT'])
+    expect(view.scopes[0].runners).toMatchObject({ repositories: [22], allowPublic: true, allowPrivate: false })
+    expect(mutations).toEqual(['PUT', 'PATCH'])
     expect((await db.query('SELECT state FROM ci_installation_binding'))[0].state).toBe('ready')
-    await db.query("UPDATE ci_installation_binding SET allow_public=true,generation=2,state='provisioning'")
+    await db.query("UPDATE ci_installation_binding SET allow_private=true,generation=2,state='provisioning'")
     const expanded = await discover()
-    expect(expanded.scopes[0].runners).toMatchObject({ repositories: [21, 22], allowPublic: true })
+    expect(expanded.scopes[0].runners).toMatchObject({ repositories: [21, 22], allowPublic: true, allowPrivate: true })
     expect(selected).toEqual([21, 22])
     expect(group.allows_public_repositories).toBe(true)
     expect(await db.query('SELECT id FROM ci_installation_binding')).toEqual([{ id: binding }])

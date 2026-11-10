@@ -10,6 +10,7 @@ import { ConnectsPanel } from './ConnectsPanel'
 
 const mocks = vi.hoisted(() => ({
   api: {
+    getCiRepositories: vi.fn(),
     getCiSettings: vi.fn(),
     setCiCapacity: vi.fn(),
     getCiConnectConfiguration: vi.fn(),
@@ -30,7 +31,14 @@ describe('CI connects panel', () => {
     commerce_limit: 5,
     effective_limit: 5,
     connections: [
-      { binding_id: 'binding', github_account: 'alice', listener_status: 'ready', allow_public_repositories: true },
+      {
+        installation_id: 11,
+        installation_settings_url: 'https://github.com/settings/installations/11',
+        binding_id: 'binding',
+        github_account: 'alice',
+        listener_status: 'ready',
+        allow_private_repositories: true,
+      },
     ],
   }
   beforeAll(() => {
@@ -38,6 +46,13 @@ describe('CI connects panel', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.api.getCiRepositories.mockResolvedValue({
+      repositories: [],
+      total: 0,
+      page: 1,
+      next_page: null,
+      repository_selection: 'selected',
+    })
     sessionStorage.clear()
     mocks.api.cancelCiConnect.mockReset().mockResolvedValue(undefined)
     mocks.api.deleteCiConnection.mockReset().mockResolvedValue(undefined)
@@ -143,6 +158,14 @@ describe('CI connects panel', () => {
     expect(button('Capacity')).toBeUndefined()
     expect(button('Edit')).toBeUndefined()
   })
+  it('offers repository access repair from an existing connection Update', async () => {
+    await render()
+    await act(async () => button('Update').click())
+    const link = document.querySelector('[role="dialog"] a')
+    expect(link).not.toBeNull()
+    expect(link?.textContent).toContain('Install app for repos')
+    expect(mocks.api.deleteCiConnection).not.toHaveBeenCalled()
+  })
   it('confirms deletion, keeps cancellation local and suppresses duplicate requests', async () => {
     let finish!: () => void
     mocks.api.deleteCiConnection.mockImplementation(
@@ -183,7 +206,7 @@ describe('CI connects panel', () => {
     await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click())
     mocks.api.getCiSettings.mockResolvedValue({
       ...settings,
-      connections: [{ ...settings.connections[0], allow_public_repositories: false }],
+      connections: [{ ...settings.connections[0], allow_private_repositories: false }],
     })
     await act(async () => button('Update connection').click())
     await act(async () => {

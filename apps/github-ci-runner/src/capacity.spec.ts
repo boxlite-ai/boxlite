@@ -25,6 +25,7 @@ describe('CI standalone ENV capacity provider', () => {
         installation: { id, account: { id, login: 'owner-' + id, type: 'User' } },
         runners: {
           kind: 'repository',
+          allowPrivate: true,
           allowPublic: false,
           repository: { id, name: 'repo', owner: { id, login: 'owner-' + id }, private: true },
         },

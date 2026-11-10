@@ -455,19 +455,20 @@ Registered by `apps/api/src/ci/ci-connect.controller.ts`; excluded from generate
 clients while the scheduler integration is in development. The same handlers are
 also registered without `{prefix}`, using the authenticated organization.
 
-| Method      | Path                                        | Behavior                                                                                          |
-| ----------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `POST`      | `/api/v1/{prefix}/ci/connect`               | Starts GitHub device authorization for an installation binding.                                   |
-| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/poll`     | Polls authorization and atomically establishes verified installation ownership.                   |
-| `DELETE`    | `/api/v1/{prefix}/ci/connect/{id}`          | Cancels pending authorization; preserves an already completed binding.                            |
-| `GET`       | `/api/v1/{prefix}/ci/connect/configuration` | Returns the public App installation link and browser-connect availability.                        |
-| `POST`      | `/api/v1/{prefix}/ci/connect/web`           | Starts five-minute browser authorization with independent state and S256 PKCE.                    |
-| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/complete` | Validates original actor/state, claims one code exchange and uses the shared binding transaction. |
-| `GET`       | `/api/v1/{prefix}/ci/connect/{id}`              | Resumes an authenticated browser grant without exchanging its code again.                         |
-| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/accounts`     | Selects a verified owned account; connects or returns the matching CI App install URL.            |
-| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/select` | Legacy installation selection under an authenticated browser grant; rechecks current ownership. |
-| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/installation` | Verifies installation state, original target/App and current ownership before binding.            |
-| `GET/PATCH` | `/api/v1/{prefix}/ci/settings`              | Reads/updates the account-wide CI maximum; null inherits Commerce and zero pauses new workers.    |
+| Method      | Path                                                               | Behavior                                                                                          |
+| ----------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `POST`      | `/api/v1/{prefix}/ci/connect`                                      | Starts GitHub device authorization for an installation binding.                                   |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/poll`                            | Polls authorization and atomically establishes verified installation ownership.                   |
+| `DELETE`    | `/api/v1/{prefix}/ci/connect/{id}`                                 | Cancels pending authorization; preserves an already completed binding.                            |
+| `GET`       | `/api/v1/{prefix}/ci/connect/configuration`                        | Returns the public App installation link and browser-connect availability.                        |
+| `POST`      | `/api/v1/{prefix}/ci/connect/web`                                  | Starts five-minute browser authorization with independent state and S256 PKCE.                    |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/complete`                        | Validates original actor/state, claims one code exchange and uses the shared binding transaction. |
+| `GET`       | `/api/v1/{prefix}/ci/connect/{id}`                                 | Resumes an authenticated browser grant without exchanging its code again.                         |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/accounts`                        | Selects a verified owned account; connects or returns the matching CI App install URL.            |
+| `GET`       | `/api/v1/{prefix}/ci/connect/{id}/accounts/{account}/repositories` | Reads one authorized installation repository page under the original active owned-account grant.  |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/select`                          | Legacy installation selection under an authenticated browser grant; rechecks current ownership.   |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/installation`                    | Verifies installation state, original target/App and current ownership before binding.            |
+| `GET/PATCH` | `/api/v1/{prefix}/ci/settings`                                     | Reads/updates the account-wide CI maximum; null inherits Commerce and zero pauses new workers.    |
 
 Every operation requires an organization owner or the explicit platform-admin exception;
 API keys also need `write:boxes` and `delete:boxes`. A connected binding reports
@@ -478,16 +479,21 @@ its durable `listener_status`; authorization success can precede runner setup. S
 Registered by `ci-management.controller.ts`; these routes also accept the
 authenticated-organization form without `{prefix}` and are excluded from generated clients.
 
-| Method | Path | Behavior |
-| --- | --- | --- |
-| `GET` | `/api/v1/{prefix}/ci/runners` | Lists original JIT Boxes with name filtering, pagination and organization-wide capacity. |
-| `PATCH` | `/api/v1/{prefix}/ci/connections/{id}` | Updates the existing connection's public-repository policy. |
-| `DELETE` | `/api/v1/{prefix}/ci/connections/{id}` | Disables a connection while retaining original worker cleanup identities. |
+| Method   | Path                                                | Behavior                                                                                    |
+| -------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1/{prefix}/ci/runners`                       | Lists original JIT Boxes with name filtering, pagination and organization-wide capacity.    |
+| `PATCH`  | `/api/v1/{prefix}/ci/connections/{id}`              | Updates explicit Private-repository consent; installed Public repositories remain eligible. |
+| `GET`    | `/api/v1/{prefix}/ci/connections/{id}/repositories` | Reads one authorized installation repository page under the original connected binding.     |
+| `DELETE` | `/api/v1/{prefix}/ci/connections/{id}`              | Disables a connection while retaining original worker cleanup identities.                   |
 
-Runner reads use existing organization Box access. Connection writes require the
+Runner reads use existing organization Box access. Connection operations, including repository metadata reads, require the
 current owner and both Box write/delete key scopes. Policy updates retain delivered
 jobs; workers awaiting JIT may retire under the new policy. Connection deletion is
-separate from cancelling a pending authorization attempt above. See
+separate from cancelling a pending authorization attempt above. Repository reads
+default to 25 entries and reject limits above 100. They recheck current ownership
+and captured binding generation or grant validity after GitHub responds, before
+returning Private metadata. Results include selection mode and the matching existing
+GitHub installation settings URL. See
 [management contracts](../../../../apps/api/README.md#hosted-ci-management).
 
 ## Hosted BoxLite-compatible API

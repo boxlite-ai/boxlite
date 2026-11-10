@@ -22,11 +22,11 @@ export interface InstallationBinding {
 /** Complete inventories only; a failed snapshot never becomes an empty installation. */
 export class InstallationCatalog {
   private readonly binding: InstallationBinding
-  private readonly policy: { allowPublic: boolean; group: string }
+  private readonly policy: { allowPublic: boolean; allowPrivate: boolean; group: string }
   constructor(
     private readonly credentials: ListenerCredentials,
     binding: InstallationBinding,
-    policy: { allowPublic: boolean; group: string },
+    policy: { allowPublic: boolean; allowPrivate: boolean; group: string },
     private readonly beforeMutation?: (effect: RunnerGroupMutation) => Promise<void>,
   ) {
     this.binding = {
@@ -37,7 +37,11 @@ export class InstallationCatalog {
         permissions: { ...binding.installation.permissions },
       },
     }
-    if (typeof policy.allowPublic !== 'boolean' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(policy.group))
+    if (
+      typeof policy.allowPublic !== 'boolean' ||
+      typeof policy.allowPrivate !== 'boolean' ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(policy.group)
+    )
       throw new Error('Invalid CI repository/group policy')
     this.policy = { ...policy }
   }
@@ -52,7 +56,9 @@ export class InstallationCatalog {
     } finally {
       await catalog.close()
     }
-    const eligible = installed.filter((repository) => repository.private || this.policy.allowPublic)
+    const eligible = installed.filter((repository) =>
+      repository.private ? this.policy.allowPrivate : this.policy.allowPublic,
+    )
     const original = this.binding
     const base = {
       binding: original.binding,
@@ -63,7 +69,15 @@ export class InstallationCatalog {
     }
     if (original.installation.account.type === 'User')
       return eligible.map((repository) =>
-        decodeScope({ ...base, runners: { kind: 'repository', repository, allowPublic: this.policy.allowPublic } }),
+        decodeScope({
+          ...base,
+          runners: {
+            kind: 'repository',
+            repository,
+            allowPrivate: this.policy.allowPrivate,
+            allowPublic: this.policy.allowPublic,
+          },
+        }),
       )
     const borrow = await this.credentials.open({ kind: 'organization-runners' }, signal)
     try {
@@ -77,6 +91,7 @@ export class InstallationCatalog {
             account: original.installation.account,
             group,
             repositories: eligible.map((repository) => repository.id),
+            allowPrivate: this.policy.allowPrivate,
             allowPublic: this.policy.allowPublic,
           },
         }),

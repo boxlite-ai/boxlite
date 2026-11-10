@@ -4,13 +4,14 @@ import { decodeRepository, GitHubRepository } from './jobs'
 import { WorkerExecutor } from './worker'
 
 export type RunnerScope =
-  | { kind: 'repository'; repository: GitHubRepository; allowPublic: boolean }
+  | { kind: 'repository'; repository: GitHubRepository; allowPublic: boolean; allowPrivate: boolean }
   | {
       kind: 'organization'
       account: { id: number; login: string }
       group: number
       repositories: number[]
       allowPublic: boolean
+      allowPrivate: boolean
     }
 export interface RunnerIdentity {
   id: number
@@ -74,7 +75,8 @@ export class GitHubRunners {
     )
       throw new Error('Invalid GitHub runner labels')
     this.labels = [...labels]
-    if (typeof scope.allowPublic !== 'boolean') throw new Error('Explicit repository visibility policy required')
+    if (typeof scope.allowPublic !== 'boolean' || typeof scope.allowPrivate !== 'boolean')
+      throw new Error('Explicit repository visibility policy required')
     if (scope.kind === 'repository') this.scope = { ...scope, repository: decodeRepository(scope.repository) }
     else {
       if (
@@ -111,6 +113,8 @@ export class GitHubRunners {
         (admission && current.private !== original.private)
       )
         throw new Error('Original runner repository authority changed')
+      if (admission && current.private && !scope.allowPrivate)
+        throw new Error('Private repository runners are disabled')
       if (admission && !current.private && !scope.allowPublic) throw new Error('Public repository runners are disabled')
       return
     }
@@ -145,7 +149,7 @@ export class GitHubRunners {
       if (
         !expected.delete(repository.id) ||
         repository.owner.id !== scope.account.id ||
-        (!repository.private && !scope.allowPublic)
+        (repository.private ? !scope.allowPrivate : !scope.allowPublic)
       )
         throw new Error('Runner group repository authorization changed')
     }

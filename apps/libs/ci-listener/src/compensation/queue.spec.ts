@@ -29,6 +29,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         account: { id: installation + 6, login: 'owner' },
         group: 5,
         repositories: repos,
+        allowPrivate: true,
         allowPublic: false,
       },
     })

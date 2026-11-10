@@ -39,6 +39,7 @@ describe('CI independent compensation lanes', () => {
         runners: {
           kind: 'repository',
           repository: { id, owner: { id, login: 'owner' }, name: 'repo', private: true },
+          allowPrivate: true,
           allowPublic: false,
         },
       }

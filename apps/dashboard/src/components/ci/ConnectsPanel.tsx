@@ -1,10 +1,10 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { useRef, useState } from 'react'
+import { Fragment, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import type { CiSettings } from '@/api/ci-types'
 import { AsciiButton } from '@/components/ascii'
-import { Trash } from '@/components/ui/icon'
+import { ChevronDown, Trash } from '@/components/ui/icon'
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { CiRepositoryDetails } from './CiRepositoryDetails'
 import { CiConnectionFlow } from './CiConnectionFlow'
 
 export function ConnectsPanel() {
@@ -49,7 +50,8 @@ export function ConnectsPanel() {
     [message, setMessage] = useState('')
   const [pendingDelete, setPendingDelete] = useState<CiSettings['connections'][number] | null>(null)
   const [editing, setEditing] = useState<CiSettings['connections'][number] | null>(null)
-  const [editAllowPublic, setEditAllowPublic] = useState(false)
+  const [editAllowPrivate, setEditAllowPrivate] = useState(false)
+  const [expanded, setExpanded] = useState<string[]>([])
   const submitting = useRef(false)
   if (!owner) return <p>Only account owners can manage GitHub connections.</p>
   if (settings.isPending) return <p role="status">Loading CI settings…</p>
@@ -69,7 +71,7 @@ export function ConnectsPanel() {
     setBusy(true)
     setMessage('')
     try {
-      await api.updateCiConnection(organization, binding, editAllowPublic)
+      await api.updateCiConnection(organization, binding, editAllowPrivate)
       await cache.invalidateQueries({ queryKey: ['ci-settings', organization] })
       setEditing(null)
       setMessage('Connection updated.')
@@ -120,7 +122,7 @@ export function ConnectsPanel() {
         <table className="w-full min-w-[680px] text-left text-body">
           <thead className="border-b border-border font-mono text-label uppercase text-muted-foreground">
             <tr>
-              {['GitHub account', 'Type', 'Listener', 'Public repositories', 'Actions'].map((title) => (
+              {['GitHub account', 'Type', 'Listener', 'Private repositories', 'Actions'].map((title) => (
                 <th key={title} className="px-2 pb-2 font-normal last:text-right">
                   {title}
                 </th>
@@ -129,49 +131,84 @@ export function ConnectsPanel() {
           </thead>
           <tbody>
             {value.connections.map((connection) => (
-              <tr key={connection.binding_id} className="border-b border-border/60">
-                <td className="px-2 py-[13px] font-mono font-medium text-foreground">{connection.github_account}</td>
-                <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
-                  {connection.account_type === 'Organization' ? 'Organization' : 'Personal'}
-                </td>
-                <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
-                  {connection.listener_status}
-                </td>
-                <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
-                  {connection.allow_public_repositories ? 'Allowed' : 'Excluded'}
-                </td>
-                <td className="px-2 py-[13px] text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    <AsciiButton
-                      size="sm"
+              <Fragment key={connection.binding_id}>
+                <tr className="border-b border-border/60">
+                  <td className="px-2 py-[13px] font-mono font-medium text-foreground">
+                    <button
                       type="button"
-                      className="uppercase"
-                      disabled={busy}
-                      title={`Update connection to ${connection.github_account}`}
-                      onClick={() => {
-                        setMessage('')
-                        setEditAllowPublic(connection.allow_public_repositories)
-                        setEditing(connection)
-                      }}
+                      aria-label={`Repositories for ${connection.github_account}`}
+                      aria-expanded={expanded.includes(connection.binding_id)}
+                      className="inline-flex items-center gap-2 hover:text-muted-foreground"
+                      onClick={() =>
+                        setExpanded((ids) =>
+                          ids.includes(connection.binding_id)
+                            ? ids.filter((id) => id !== connection.binding_id)
+                            : [...ids, connection.binding_id],
+                        )
+                      }
                     >
-                      Update
-                    </AsciiButton>
-                    <AsciiButton
-                      variant="danger"
-                      size="icon"
-                      disabled={busy}
-                      onClick={() => {
-                        setMessage('')
-                        setPendingDelete(connection)
-                      }}
-                      aria-label={`Delete connection to ${connection.github_account}`}
-                      title={`Delete connection to ${connection.github_account}`}
-                    >
-                      <Trash className="size-[15px]" />
-                    </AsciiButton>
-                  </div>
-                </td>
-              </tr>
+                      <ChevronDown
+                        className={`size-3.5 ${expanded.includes(connection.binding_id) ? '' : '-rotate-90'}`}
+                      />
+                      {connection.github_account}
+                    </button>
+                  </td>
+                  <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
+                    {connection.account_type === 'Organization' ? 'Organization' : 'Personal'}
+                  </td>
+                  <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
+                    {connection.listener_status}
+                  </td>
+                  <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
+                    {connection.allow_private_repositories ? 'Allowed' : 'Excluded'}
+                  </td>
+                  <td className="px-2 py-[13px] text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <AsciiButton
+                        size="sm"
+                        type="button"
+                        className="uppercase"
+                        disabled={busy}
+                        title={`Update connection to ${connection.github_account}`}
+                        onClick={() => {
+                          setMessage('')
+                          setEditAllowPrivate(connection.allow_private_repositories)
+                          setEditing(connection)
+                        }}
+                      >
+                        Update
+                      </AsciiButton>
+                      <AsciiButton
+                        variant="danger"
+                        size="icon"
+                        disabled={busy}
+                        onClick={() => {
+                          setMessage('')
+                          setPendingDelete(connection)
+                        }}
+                        aria-label={`Delete connection to ${connection.github_account}`}
+                        title={`Delete connection to ${connection.github_account}`}
+                      >
+                        <Trash className="size-[15px]" />
+                      </AsciiButton>
+                    </div>
+                  </td>
+                </tr>
+                {expanded.includes(connection.binding_id) && (
+                  <tr>
+                    <td colSpan={5} className="px-2 pb-3">
+                      <CiRepositoryDetails
+                        api={api}
+                        organization={organization}
+                        context={{ kind: 'binding', id: connection.binding_id }}
+                        installation={connection.installation_id}
+                        account={connection.github_account}
+                        managementUrl={connection.installation_settings_url}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -203,16 +240,27 @@ export function ConnectsPanel() {
               <label className="flex items-center gap-2 text-body">
                 <input
                   type="checkbox"
-                  checked={editAllowPublic}
+                  checked={editAllowPrivate}
                   disabled={busy}
-                  onChange={(event) => setEditAllowPublic(event.target.checked)}
+                  onChange={(event) => setEditAllowPrivate(event.target.checked)}
                 />
-                Allow installed public repositories to run CI
+                Allow private repositories
               </label>
               <p className="text-body text-muted-foreground">
-                Private repositories are included. Enable this option to also include public repositories authorized for
+                Public repositories are enabled. Enable this option to also allow private repositories authorized for
                 the App.
               </p>
+              {editing && (
+                <CiRepositoryDetails
+                  key={editing.binding_id}
+                  api={api}
+                  organization={organization}
+                  context={{ kind: 'binding', id: editing.binding_id }}
+                  installation={editing.installation_id}
+                  account={editing.github_account}
+                  managementUrl={editing.installation_settings_url}
+                />
+              )}
               {message && (
                 <p role="alert" className="text-body text-muted-foreground">
                   {message}

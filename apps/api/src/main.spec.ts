@@ -72,6 +72,7 @@ describe('API bootstrap listener', () => {
     }
     const app = {
       get: jest.fn(() => service),
+      use: jest.fn(),
       useLogger: jest.fn(),
       flushLogs: jest.fn(),
       enableCors: jest.fn(),

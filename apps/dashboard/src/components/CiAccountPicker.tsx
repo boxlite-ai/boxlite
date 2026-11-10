@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CiConnectResult } from '@/api/ci-types'
 import type { ApiClient } from '@/api/apiClient'
+import { CiRepositoryDetails } from './ci/CiRepositoryDetails'
 import { AsciiButton } from '@/components/ascii'
-import { Building2, Check, ExternalLink, Github, Loader2 } from '@/components/ui/icon'
+import { Building2, Check, ChevronDown, ExternalLink, Github, Loader2 } from '@/components/ui/icon'
 import { githubAuthorizationSettingsUrl, prepareCiInstallationRedirect } from '@/lib/ci-connect'
 
 export function CiAccountPicker({
@@ -13,15 +14,16 @@ export function CiAccountPicker({
   onResult,
   onSwitch,
 }: {
-  api: Pick<ApiClient, 'selectCiAccount'>
+  api: Pick<ApiClient, 'selectCiAccount' | 'getCiRepositories'>
   organization: string
   result: CiConnectResult
   onResult(result: CiConnectResult): void
   onSwitch(selectAccount: boolean): void
 }) {
   const [busy, setBusy] = useState<number>(),
-    [allowPublic, setAllowPublic] = useState(false),
+    [allowPrivate, setAllowPrivate] = useState(false),
     [error, setError] = useState('')
+  const [expanded, setExpanded] = useState<number[]>([])
   const generation = useRef(0),
     submitting = useRef(false)
   useEffect(
@@ -38,7 +40,7 @@ export function CiAccountPicker({
     setBusy(account)
     setError('')
     try {
-      const value = await api.selectCiAccount(organization, result.id, account, allowPublic)
+      const value = await api.selectCiAccount(organization, result.id, account, allowPrivate)
       if (request !== generation.current) return
       if (value.status === 'installation_required' && value.installation_url)
         window.location.assign(prepareCiInstallationRedirect(result.id, value.installation_url))
@@ -76,7 +78,11 @@ export function CiAccountPicker({
       </div>
       <div className="divide-y divide-border border-y border-border">
         {(result.accounts ?? []).map((account) => (
-          <div key={account.account_id} data-account-id={account.account_id} className="flex items-center gap-3 py-3">
+          <div
+            key={account.account_id}
+            data-account-id={account.account_id}
+            className="flex flex-wrap items-center gap-3 py-3"
+          >
             <div className="flex size-9 shrink-0 items-center justify-center border border-border bg-card text-muted-foreground">
               {account.account_type === 'User' ? <Github className="size-4" /> : <Building2 className="size-4" />}
             </div>
@@ -93,6 +99,23 @@ export function CiAccountPicker({
                 )}
               </div>
             </div>
+            {account.installed && account.installation_id && (
+              <button
+                type="button"
+                aria-label={`Repositories for ${account.github_account}`}
+                aria-expanded={expanded.includes(account.account_id)}
+                onClick={() =>
+                  setExpanded((rows) =>
+                    rows.includes(account.account_id)
+                      ? rows.filter((id) => id !== account.account_id)
+                      : [...rows, account.account_id],
+                  )
+                }
+                className="mr-3 text-muted-foreground hover:text-foreground"
+              >
+                <ChevronDown className={`size-4 ${expanded.includes(account.account_id) ? '' : '-rotate-90'}`} />
+              </button>
+            )}
             <div className="flex min-w-[96px] shrink-0 justify-end">
               {account.connected ? (
                 <span className="inline-flex items-center gap-1.5 font-mono text-meta text-success">
@@ -117,6 +140,18 @@ export function CiAccountPicker({
                 </AsciiButton>
               )}
             </div>
+            {expanded.includes(account.account_id) && account.installation_id && result.id && (
+              <div className="w-full basis-full pt-2">
+                <CiRepositoryDetails
+                  api={api}
+                  organization={organization}
+                  context={{ kind: 'grant', id: result.id, account: account.account_id }}
+                  installation={account.installation_id}
+                  account={account.github_account}
+                  managementUrl={account.installation_settings_url}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -124,11 +159,11 @@ export function CiAccountPicker({
       <label className="flex items-center gap-2 text-body">
         <input
           type="checkbox"
-          checked={allowPublic}
+          checked={allowPrivate}
           disabled={busy !== undefined}
-          onChange={(event) => setAllowPublic(event.target.checked)}
+          onChange={(event) => setAllowPrivate(event.target.checked)}
         />
-        Allow public repositories for new connections
+        Allow private repositories
       </label>
       {error && (
         <p role="alert" className="text-body text-destructive">

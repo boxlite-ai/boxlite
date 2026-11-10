@@ -52,6 +52,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       runners: {
         kind: 'repository',
         allowPublic: true,
+        allowPrivate: true,
         repository: { id: 30, name: 'repo', private: false, owner: { id: 20, login: 'owner' } },
       },
     })
@@ -84,7 +85,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await db.synchronize()
     await db.query(`CREATE TABLE ci_installation_binding(id uuid PRIMARY KEY,generation bigint,github_host text,
       app_client_id text,installation_id bigint,account_id bigint,account_login text,account_type text,
-      organization_id uuid,actor_id text,allow_public boolean,follow_installation boolean,state text);
+      organization_id uuid,actor_id text,allow_private boolean,follow_installation boolean,state text);
       CREATE TABLE "user"(id text PRIMARY KEY,role text);
       CREATE TABLE organization_user("organizationId" uuid,"userId" text,role text);
       CREATE TABLE organization_activation_facts("organizationId" uuid PRIMARY KEY,"lastBoxCreatedAt" timestamptz,"lastBoxModifiedAt" timestamptz)`)
@@ -122,9 +123,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       return { ...box } as any
     })
     jest.spyOn(platform, 'toBoxDtoWithExitCode').mockImplementation(async (box) => ({ ...box }) as any)
-    jest
-      .spyOn(platform, 'toBoxDtos')
-      .mockImplementation(async (boxes) => boxes.map((box) => BoxDto.fromBox(box, 'https://toolbox.test')))
+    jest.spyOn(platform, 'toBoxDtos').mockImplementation(async (boxes) => boxes.map((box) => BoxDto.fromBox(box)))
     jest.spyOn(platform, 'stop').mockResolvedValue(undefined)
     jest.spyOn(platform, 'destroy').mockResolvedValue(undefined)
     store = new CiNativeState(db, { get: (key: string) => (key === 'ci.githubClientId' ? app : undefined) } as any)
@@ -545,7 +544,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     ['actor', "UPDATE ci_installation_binding SET actor_id='another'"],
     ['app', "UPDATE ci_installation_binding SET app_client_id='another'"],
     ['account', 'UPDATE ci_installation_binding SET account_id=21'],
-    ['policy', 'UPDATE ci_installation_binding SET allow_public=false'],
+    ['policy', 'UPDATE ci_installation_binding SET allow_private=false'],
     ['owner', 'DELETE FROM organization_user'],
   ])('rolls back the actual Box when %s changes before persistence', async (_kind, sql) => {
     const { host, config } = await prepared()

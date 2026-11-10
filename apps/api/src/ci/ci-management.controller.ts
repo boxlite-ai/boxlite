@@ -14,7 +14,8 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
-import { IsBoolean, IsOptional, IsString, Max, MaxLength } from 'class-validator'
+import { IsBoolean, IsOptional, IsString, IsInt, Min, Max, MaxLength } from 'class-validator'
+import { Type } from 'class-transformer'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { PageLimit } from '../common/decorators/page-limit.decorator'
@@ -44,7 +45,18 @@ export class CiRunnersQuery {
 
 export class CiConnectionUpdate {
   @IsBoolean()
-  allow_public_repositories!: boolean
+  allow_private_repositories!: boolean
+}
+export class CiRepositoryQuery {
+  @PageNumber(1)
+  @Max(Math.floor(Number.MAX_SAFE_INTEGER / 100))
+  page = 1
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 25
 }
 
 @Controller(['v1/ci', 'v1/:prefix/ci'])
@@ -80,7 +92,22 @@ export class CiManagementController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() input: CiConnectionUpdate,
   ) {
-    return this.settings.updateConnection(actor, id, input.allow_public_repositories)
+    return this.settings.updateConnection(actor, id, input.allow_private_repositories)
+  }
+
+  @Get('connections/:id/repositories')
+  @UseGuards(OrganizationActionGuard)
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  @RequiredOrganizationResourcePermissions([
+    OrganizationResourcePermission.WRITE_BOXES,
+    OrganizationResourcePermission.DELETE_BOXES,
+  ])
+  repositories(
+    @AuthContext() actor: OrganizationAuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: CiRepositoryQuery,
+  ) {
+    return this.settings.repositories(actor, id, query.page, query.limit)
   }
 
   @Delete('connections/:id')

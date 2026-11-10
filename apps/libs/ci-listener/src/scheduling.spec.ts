@@ -12,6 +12,7 @@ describe('CI shared fair selection', () => {
     runners: {
       kind: 'repository',
       repository: { id: account, owner: { id: account, login: 'owner' }, name: 'repo', private: true },
+      allowPrivate: true,
       allowPublic: false,
     },
   })

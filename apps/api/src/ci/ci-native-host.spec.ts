@@ -48,7 +48,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     await db.query(`CREATE SCHEMA "${schema}";
       CREATE TABLE ci_installation_binding(id uuid PRIMARY KEY,generation bigint,github_host text,
       app_client_id text,installation_id bigint,account_id bigint,account_login text,account_type text,
-      organization_id uuid,actor_id text,allow_public boolean,follow_installation boolean,state text);
+      organization_id uuid,actor_id text,allow_private boolean,follow_installation boolean,state text);
       CREATE TABLE "user"(id text PRIMARY KEY,role text);
       CREATE TABLE organization_user("organizationId" uuid,"userId" text,role text)`)
     const query = db.createQueryRunner()

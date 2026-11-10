@@ -32,10 +32,21 @@ The SQL-owned tables below are created by
 [`1793664000000-add-ci-connect-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1793664000000-add-ci-connect-migration.ts)
 and accessed by `CiConnectService`; they have no TypeORM entity mapping.
 
-| Table                     | Stored state                                                                                                                                                | Enforced boundaries                                                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `ci_installation_binding` | Stable GitHub host/App/installation/account IDs, BoxLite organization, actor, public/follow policy, provisioning state and generation                       | UUID primary key; unique host/App/installation; positive GitHub IDs; account/state checks; organization FK with cascade                   |
+| Table                     | Stored state                                                                                                                                                                                                                                   | Enforced boundaries                                                                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci_installation_binding` | Stable GitHub host/App/installation/account IDs, BoxLite organization, actor, explicit Private/follow policy, provisioning state and generation                                                                                                | UUID primary key; unique host/App/installation; positive GitHub IDs; account/state checks; organization FK with cascade                   |
 | `ci_connect_attempt`      | Initiating user/org, account and policy, grant flow, encrypted device code or web PKCE verifier/token, original OAuth client, encrypted selected CI App/account/installation state, OAuth state hash, expiry, poll/claim lease, result binding | UUID primary key; state/positive interval checks; organization FK with cascade; binding FK; partial expiry index for remaining ciphertext |
+
+Migration [`1794312000000-add-ci-private-policy-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1794312000000-add-ci-private-policy-migration.ts)
+renames `allow_public` to `allow_private` in both tables, defaulting Private access
+to false. Hosted Public access is always eligible within App authorization and is
+not a stored opt-in. The guarded development cutover rejects nonempty bindings,
+attempts or `ci_listener_state`; it never reinterprets an old Public choice as
+Private consent. Finish resource cleanup with the old version, stop its Listeners,
+then reset CI state before the rename. Shared scope hashes now include both Public
+and Private decisions, so standalone operators also need old-resource cleanup and
+a fresh journal; their Public configuration remains independent and Private stays
+allowed. This is not a historical-state migration or automatic dev reset.
 
 Device ciphertext uses AES-256-GCM with transaction/user/organization AAD. Completion,
 cancellation and terminal failure clear it. Expired ciphertext is removed when another

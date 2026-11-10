@@ -23,7 +23,7 @@ export interface DiscoverySnapshot {
   ready: boolean
 }
 export interface DirectoryBinding extends InstallationBinding {
-  policy: { allowPublic: boolean; group: string }
+  policy: { allowPublic: boolean; allowPrivate: boolean; group: string }
 }
 export interface DirectorySource {
   index(lease: ExecutionLease, signal: AbortSignal): Promise<DirectoryBinding[]>
@@ -156,7 +156,8 @@ export class InstallationDirectory {
       !binding.organization ||
       !binding.actor ||
       !['User', 'Organization'].includes(account.type) ||
-      typeof binding.policy.allowPublic !== 'boolean'
+      typeof binding.policy.allowPublic !== 'boolean' ||
+      typeof binding.policy.allowPrivate !== 'boolean'
     )
       throw new StateCorrupt()
     return JSON.stringify([
@@ -171,6 +172,7 @@ export class InstallationDirectory {
       account.type,
       binding.installation.suspended,
       binding.policy.allowPublic,
+      binding.policy.allowPrivate,
       binding.policy.group,
     ])
   }
@@ -218,7 +220,8 @@ export class InstallationDirectory {
               scope.installation.account.id !== binding.installation.account.id ||
               scope.installation.account.login !== binding.installation.account.login.toLowerCase() ||
               scope.installation.account.type !== binding.installation.account.type ||
-              scope.runners.allowPublic !== binding.policy.allowPublic
+              scope.runners.allowPublic !== binding.policy.allowPublic ||
+              scope.runners.allowPrivate !== binding.policy.allowPrivate
             )
               throw new StateCorrupt()
           const repositoryCount = (values: ExecutionScope[]) =>

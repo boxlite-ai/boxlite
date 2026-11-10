@@ -67,7 +67,7 @@ describe('CI page', () => {
           github_account: organization === 'account-a' ? 'alice' : 'bob',
           account_type: 'User',
           listener_status: 'ready',
-          allow_public_repositories: false,
+          allow_private_repositories: false,
         },
       ],
     }))
@@ -133,7 +133,7 @@ describe('CI page', () => {
   })
   it('shows JIT Boxes and navigates between independently addressable table views', async () => {
     await render()
-    expect(document.querySelector('h1')?.textContent).toBe('CI')
+    expect(document.querySelector('h1')?.textContent).toBe('Runners')
     expect(document.querySelector('tbody a')?.getAttribute('href')).toBe('/dashboard/boxes/runner-original')
     expect(document.querySelector('tbody')?.textContent).toContain('JIT')
     expect(document.querySelector('tbody td svg')?.getAttribute('width')).toBe('28')

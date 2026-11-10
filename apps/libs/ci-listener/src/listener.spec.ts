@@ -108,6 +108,7 @@ describe('CI shared Listener orchestration', () => {
       runners: {
         kind: 'repository',
         repository: { id: 21, owner: { id: 7, login: 'owner' }, name: 'repo', private: true },
+        allowPrivate: true,
         allowPublic: false,
       },
     }
@@ -559,6 +560,7 @@ describe('CI shared Listener orchestration', () => {
           name: 'repo',
           private: true,
         },
+        allowPrivate: true,
         allowPublic: false,
       }
       const journal = new ExecutionJournal(state)
@@ -617,6 +619,7 @@ describe('CI shared Listener orchestration', () => {
     other.runners = {
       kind: 'repository',
       repository: { id: 22, owner: { id: 8, login: 'other' }, name: 'repo', private: true },
+      allowPrivate: true,
       allowPublic: false,
     }
     const journal = new ExecutionJournal(state)

@@ -1,3 +1,4 @@
+import { AddCiPrivatePolicy1794312000000 } from '../migrations/pre-deploy/1794312000000-add-ci-private-policy-migration'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
@@ -32,7 +33,8 @@ integration('CI account settings (real Postgres)', () => {
     installation: { id: 10, account: { id: 20, login: 'owner', type: 'User' } },
     runners: {
       kind: 'repository',
-      allowPublic: false,
+      allowPublic: true,
+      allowPrivate: false,
       repository: { id: 30, name: 'repo', private: true, owner: { id: 20, login: 'owner' } },
     },
   })
@@ -58,6 +60,7 @@ integration('CI account settings (real Postgres)', () => {
       await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiWebTarget1794000000000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
+      await new AddCiPrivatePolicy1794312000000().up(runner)
     } finally {
       await runner.release()
     }
@@ -94,7 +97,7 @@ integration('CI account settings (real Postgres)', () => {
       await settings.ensure(tx, id)
       await tx.query(
         `INSERT INTO ci_installation_binding
-        (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_public,state)
+        (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_private,state)
         VALUES($1,'github.com','test-app',$2,$3,$4,'User',$5,$6,true,false,'ready')`,
         [
           installation === 10 ? binding : randomUUID(),
@@ -126,6 +129,42 @@ integration('CI account settings (real Postgres)', () => {
     expect(await settings.get(actor)).toMatchObject({ max_concurrent_jobs: 2, effective_limit: 2 })
     expect(await settings.update(actor, null)).toMatchObject({ max_concurrent_jobs: null, effective_limit: 5 })
   })
+  it.each(['current', 'owner-revoked', 'generation-changed', 'disconnected', 'foreign-binding'])(
+    'scopes repository reads to a current owner and original binding: %s',
+    async (scenario) => {
+      await connect()
+      const read = jest.spyOn(native.registry, 'repositoryPage').mockImplementation(async () => {
+        if (scenario === 'owner-revoked')
+          await db.query('DELETE FROM organization_user WHERE "userId"=$1', [actor.userId])
+        if (scenario === 'generation-changed')
+          await db.query('UPDATE ci_installation_binding SET generation=generation+1')
+        if (scenario === 'disconnected') await db.query("UPDATE ci_installation_binding SET state='disabled'")
+        return {
+          repositories: [],
+          total: 0,
+          page: 1,
+          next_page: null,
+          repository_selection: 'selected',
+          installation_settings_url: 'https://github.com/settings/installations/10',
+        }
+      })
+      try {
+        const result = settings.repositories(actor, scenario === 'foreign-binding' ? randomUUID() : binding, 1, 25)
+        if (scenario === 'current') {
+          await expect(result).resolves.toMatchObject({ total: 0 })
+          expect(read).toHaveBeenCalledWith(
+            'test-app',
+            { installationId: 10, accountId: 20, accountLogin: 'owner', accountType: 'User' },
+            1,
+            25,
+          )
+        } else await expect(result).rejects.toThrow()
+        if (scenario === 'foreign-binding') expect(read).not.toHaveBeenCalled()
+      } finally {
+        read.mockRestore()
+      }
+    },
+  )
   it('rejects values above Commerce, negative values and unsafe numbers without saving them', async () => {
     for (const value of [6, -1, Infinity, Number.MAX_SAFE_INTEGER + 1])
       await expect(settings.update(actor, value)).rejects.toBeInstanceOf(BadRequestException)
@@ -206,7 +245,8 @@ integration('CI account settings (real Postgres)', () => {
       installation: { id: 11, account: { id: 21, login: 'other', type: 'User' } },
       runners: {
         kind: 'repository',
-        allowPublic: false,
+        allowPublic: true,
+        allowPrivate: false,
         repository: { id: 31, name: 'other-repo', private: true, owner: { id: 21, login: 'other' } },
       },
     }
@@ -310,7 +350,7 @@ integration('CI account settings (real Postgres)', () => {
     const [before] = await db.query('SELECT * FROM ci_installation_binding WHERE id=$1', [binding])
     const attempt = randomUUID()
     await db.query(
-      `INSERT INTO ci_connect_attempt(id,organization_id,user_id,github_account,allow_public,app_client_id,device_ciphertext,expires_at,next_poll_at,interval_seconds)
+      `INSERT INTO ci_connect_attempt(id,organization_id,user_id,github_account,allow_private,app_client_id,device_ciphertext,expires_at,next_poll_at,interval_seconds)
       VALUES($1,$2,'owner','owner',false,'test-app','encrypted-fixture',clock_timestamp()+interval '5 minutes',clock_timestamp(),5)`,
       [attempt, org],
     )
@@ -337,21 +377,21 @@ integration('CI account settings (real Postgres)', () => {
     expect(await native.state.read(['wake/10/0'])).toEqual(wake)
     expect((await db.query('SELECT * FROM ci_installation_binding WHERE id=$1', [binding]))[0]).toEqual({
       ...before,
-      allow_public: true,
+      allow_private: true,
       generation: '2',
       state: 'provisioning',
     })
     expect(await db.query('SELECT * FROM ci_connect_attempt')).toEqual(attempts)
     expect(await native.state.read(keys)).toEqual(records)
     expect((await settings.get({ organizationId: otherOrg, userId: 'other-owner' })).connections[0]).toMatchObject({
-      allow_public_repositories: false,
+      allow_private_repositories: false,
       listener_status: 'ready',
     })
     await expect(native.transaction((tx) => native.admit(tx, scope(), 'test-app'))).rejects.toBeInstanceOf(
       ForbiddenException,
     )
     await native.transaction((tx) =>
-      native.admit(tx, { ...scope(), generation: 2, runners: { ...scope().runners, allowPublic: true } }, 'test-app'),
+      native.admit(tx, { ...scope(), generation: 2, runners: { ...scope().runners, allowPrivate: true } }, 'test-app'),
     )
   })
   it('rejects foreign, unknown, non-owner and disabled connection updates', async () => {
@@ -366,8 +406,8 @@ integration('CI account settings (real Postgres)', () => {
     await settings.deleteConnection(actor, binding)
     await expect(settings.updateConnection(actor, binding, true)).rejects.toBeInstanceOf(ConflictException)
     expect(
-      (await db.query('SELECT state,allow_public,generation FROM ci_installation_binding WHERE id=$1', [binding]))[0],
-    ).toEqual({ state: 'disabled', allow_public: false, generation: '2' })
+      (await db.query('SELECT state,allow_private,generation FROM ci_installation_binding WHERE id=$1', [binding]))[0],
+    ).toEqual({ state: 'disabled', allow_private: false, generation: '2' })
   })
   it('rechecks delegated scopes and rolls back a policy update when its key expires before commit', async () => {
     await connect()
@@ -392,8 +432,8 @@ integration('CI account settings (real Postgres)', () => {
       await db.query('DROP TRIGGER delay_ci_binding ON ci_installation_binding; DROP FUNCTION delay_ci_binding()')
     }
     expect(
-      (await db.query('SELECT state,allow_public,generation FROM ci_installation_binding WHERE id=$1', [binding]))[0],
-    ).toEqual({ state: 'ready', allow_public: false, generation: '1' })
+      (await db.query('SELECT state,allow_private,generation FROM ci_installation_binding WHERE id=$1', [binding]))[0],
+    ).toEqual({ state: 'ready', allow_private: false, generation: '1' })
   })
   it('deletes only the owned connection, keeps quota and advances generation once', async () => {
     await connect()
@@ -652,7 +692,8 @@ integration('CI account settings (real Postgres)', () => {
         installation: { id: installation, account: { id: account, login, type: 'User' } },
         runners: {
           kind: 'repository',
-          allowPublic: false,
+          allowPublic: true,
+          allowPrivate: false,
           repository: { id: installation + 30, name: 'repo', owner: { id: account, login }, private: true },
         },
       }
@@ -687,7 +728,8 @@ integration('CI account settings (real Postgres)', () => {
         account: { id: 21, login: 'team' },
         group: 9,
         repositories: [31],
-        allowPublic: false,
+        allowPublic: true,
+        allowPrivate: false,
       },
     }
     const first = await native.applications().define(lease, scope(), 'test-app')

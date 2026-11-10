@@ -321,6 +321,14 @@ describe('Sidebar primary navigation', () => {
     ])
     expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()
   })
+  it('shows Applications CI navigation with Runners and Connects for a direct route', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/ci/connects')
+    const applications = document.querySelector('[role="group"][aria-label="Applications"]')
+    expect(applications).not.toBeNull()
+    expect(applications?.querySelector('a[href="/dashboard/ci/connects"]')?.getAttribute('aria-current')).toBe('page')
+    expect(applications?.textContent).toContain('Runners')
+  })
 
   it('keeps Volumes in primary navigation', () => {
     const host = document.createElement('div')

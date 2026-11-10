@@ -11,7 +11,7 @@ export default function CiPage({ tab }: { tab: 'runners' | 'connects' }) {
   const { selectedOrganization } = useSelectedOrganization()
   if (!selectedOrganization) return null
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <Tabs
         value={tab}
         className="flex min-h-0 flex-1 flex-col"
@@ -19,14 +19,16 @@ export default function CiPage({ tab }: { tab: 'runners' | 'connects' }) {
       >
         <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3 lg:mb-[22px]">
           <div>
-            <h1 className="font-display text-page font-semibold text-foreground">CI</h1>
+            <h1 className="font-display text-page font-semibold text-foreground">
+              {tab === 'runners' ? 'Runners' : 'Connects'}
+            </h1>
             <p className="mt-2 text-body leading-relaxed text-muted-foreground">
               {tab === 'runners'
                 ? 'Ephemeral Boxes running your GitHub Actions jobs.'
                 : 'GitHub accounts connected to this organization.'}
             </p>
           </div>
-          <TabsList variant="segmented" aria-label="CI views">
+          <TabsList variant="segmented" aria-label="CI views" className="md:hidden">
             <TabsTrigger value="runners">Runners</TabsTrigger>
             <TabsTrigger value="connects">Connects</TabsTrigger>
           </TabsList>

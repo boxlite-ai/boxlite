@@ -62,11 +62,11 @@ The API's registration email policy requires an email address for a new local us
 then rejects disposable domains before generating keys, persisting the user or creating a default organization.
 This covers database, social and enterprise OIDC identities, CLI authentication and administrator-created users.
 
-| Rejection | HTTP status | Error code |
-| --- | --- | --- |
-| New OIDC identity has no email | 403 | `email_required` |
-| Provided email has invalid syntax | 400 | `invalid_email` |
-| Disposable domain or its subdomain | 403 | `disposable_email` |
+| Rejection                          | HTTP status | Error code         |
+| ---------------------------------- | ----------- | ------------------ |
+| New OIDC identity has no email     | 403         | `email_required`   |
+| Provided email has invalid syntax  | 400         | `invalid_email`    |
+| Disposable domain or its subdomain | 403         | `disposable_email` |
 
 Existing users can still log in, update their email and link identities; the email-free bootstrap administrator is preserved.
 Auth0 signup and verification emails are unchanged: this policy rejects local BoxLite account creation after authentication.
@@ -250,7 +250,7 @@ The CI controller implements `POST /api/v1/{prefix}/ci/connect`,
 authenticated organization. These experimental routes are excluded from generated clients.
 
 Start accepts `github_account`, `follow_installation: true`, and
-`allow_public_repositories`. Existing platform authentication and organization guards
+`allow_private_repositories`. Existing platform authentication and organization guards
 require an owner or the explicit platform-admin exception; API keys additionally need
 `write:boxes` and `delete:boxes`. Transactions remain scoped to the initiating user and
 organization. GitHub device authorization proves personal-account ownership or active
@@ -261,7 +261,7 @@ requests exactly `read:user read:org` with independent state and S256 PKCE; it
 rejects missing or excess granted scopes. The two **CI GitHub Apps** supply runner
 permissions separately. CLI Device Flow keeps its existing App-specific contract.
 New browser starts accept `follow_installation: true`,
-`allow_public_repositories: false`, and optional `select_account: true` to force
+`allow_private_repositories: false`, and optional `select_account: true` to force
 GitHub's account picker. The optional legacy `account_type` field does not choose
 the identity client. The original OAuth client remains pinned to each attempt.
 
@@ -291,7 +291,7 @@ choice using the corresponding CI App JWT, independently of the OAuth client's
 installation inventory. A verified installation offers **Connect**; an actual
 installation lookup 404 offers **Install**. Other upstream errors remain failures.
 `POST /api/v1/{prefix}/ci/connect/{id}/accounts` accepts only numeric `account_id`
-and boolean `allow_public_repositories`. Existing connection policy is preserved;
+and boolean `allow_private_repositories`. Existing connection policy is preserved;
 use Update to change it. Legacy `/select` still accepts installation IDs and
 consumes its original App-specific grant once.
 
@@ -338,7 +338,7 @@ sequenceDiagram
     UI->>API: Complete original grant after scrubbing URL
     API-->>UI: Personal and OAuth-visible owned accounts
     User->>UI: Choose account
-    UI->>API: Account ID and public repository policy
+    UI->>API: Account ID and explicit Private repository consent
     API->>CI: Verify installation with target App JWT
     alt Already installed
         API-->>UI: Bind and show green check
@@ -1044,16 +1044,16 @@ Connect fixes the BoxLite organization/actor and GitHub installation. Jobs canno
 select another tenant. Discovery publishes catalog scopes before marking that binding
 ready; readiness describes initialization, not available execution capacity.
 Reconnecting the same verified installation refreshes a renamed GitHub account
-without changing its binding ID or public-repository policy. A rename advances
+without changing its binding ID or private-repository policy. A rename advances
 the generation and schedules catalog initialization again. Connect serializes
 admission across tenants and refuses a new or reactivated binding beyond the
 hosted Apps' 10,000 active-binding discovery limit; an existing active reconnect
 does not consume another slot.
 Personal accounts use one runner pool per repository; organizations use the configured
 selected, non-inherited runner group with the exact eligible repository inventory.
-BoxLite creates or synchronizes its dedicated group automatically. The public
-option includes installed private and public repositories when enabled, and only
-installed private repositories when disabled. Each write requires a current
+BoxLite creates or synchronizes its dedicated group automatically. Public repositories authorized for the App are always eligible. The Private
+option additionally permits installed private repositories when enabled; by default
+private repositories are excluded. Each write requires a current
 binding generation, owner and execution lease, with a durable intent recorded
 before the GitHub request. Policy and repository membership are read back before
 readiness. Default and inherited groups cannot be adopted; other groups are not
@@ -1131,20 +1131,20 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 
 ### Hosted configuration and deployment
 
-| Setting                                                          | Hosted API behavior                                                                                                                |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Setting                                                          | Hosted API behavior                                                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `CI_GITHUB_OAUTH_CLIENT_ID`                                      | Separate OAuth App identity for new Dashboard connect; plain API setting                                                       |
 | `CI_GITHUB_OAUTH_CLIENT_SECRET`                                  | OAuth App client secret reference; required with the identity client ID                                                        |
-| `CI_GITHUB_APP_CLIENT_ID` / `CI_GITHUB_APP_SLUG`                 | Personal App identity; required storage anchor when hosted CI is enabled                                                           |
+| `CI_GITHUB_APP_CLIENT_ID` / `CI_GITHUB_APP_SLUG`                 | Personal App identity; required storage anchor when hosted CI is enabled                                                       |
 | `CI_GITHUB_APP_CLIENT_SECRET`                                    | Optional secret reference for legacy browser grants; opaque single-line OAuth client secret, distinct from the RSA private key |
-| `CI_GITHUB_APP_PRIVATE_KEY`                                      | Secret reference resolving to a private RSA PEM, at most 64 KiB; held in API memory                                                |
-| `CI_GITHUB_WEBHOOK_SECRET`                                       | Secret reference resolving to the HMAC value described above; also enables delivery recovery                                       |
-| `CI_GITHUB_ORG_APP_CLIENT_ID` / `CI_GITHUB_ORG_APP_SLUG`         | Optional Organization App identity, distinct from the Personal App                                                                 |
-| `CI_GITHUB_ORG_APP_PRIVATE_KEY` / `CI_GITHUB_ORG_WEBHOOK_SECRET` | Organization App private-key and HMAC secret references; required together when that App is configured                             |
+| `CI_GITHUB_APP_PRIVATE_KEY`                                      | Secret reference resolving to a private RSA PEM, at most 64 KiB; held in API memory                                            |
+| `CI_GITHUB_WEBHOOK_SECRET`                                       | Secret reference resolving to the HMAC value described above; also enables delivery recovery                                   |
+| `CI_GITHUB_ORG_APP_CLIENT_ID` / `CI_GITHUB_ORG_APP_SLUG`         | Optional Organization App identity, distinct from the Personal App                                                             |
+| `CI_GITHUB_ORG_APP_PRIVATE_KEY` / `CI_GITHUB_ORG_WEBHOOK_SECRET` | Organization App private-key and HMAC secret references; required together when that App is configured                         |
 | `CI_GITHUB_ORG_APP_CLIENT_SECRET`                                | Optional Organization App OAuth secret reference for legacy browser grants                                                     |
-| `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                                  |
-| `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                            |
-| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                             |
+| `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
+| `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
+| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. The worker
 label is fixed to `boxlite-ci-runner`; existing BoxLite authentication remains on
@@ -1230,7 +1230,7 @@ broken references or provider failures return errors rather than a zero/unlimite
 Owner writes retain the existing PATCH settings endpoint and authority checks.
 
 `PATCH /api/v1/{organization-prefix}/ci/connections/{bindingId}` accepts only
-`{ "allow_public_repositories": boolean }`, with the same owner and Box write/delete
+`{ "allow_private_repositories": boolean }`, with the same owner and Box write/delete
 key authorization as settings. It returns 204; a changed policy advances generation,
 sets provisioning and writes the existing durable inventory wake in one transaction.
 An identical value preserves state and generation but still rechecks key expiry.
@@ -1239,7 +1239,7 @@ verified GitHub identity, original actor, quota, authorization attempts and work
 remain intact. Delivered jobs continue through original-resource recovery and
 cleanup; workers not yet given JIT may retire when old admission is rejected.
 The inventory wake asynchronously synchronizes BoxLite's dedicated Organization
-runner group with the saved public-repository policy. The connection remains
+runner group with the saved private-repository policy. The connection remains
 provisioning until GitHub policy and repository membership pass readback; remote
 failures retry without discarding the desired policy.
 See the [update design](../../docs/contributing/investigations/2026-11-06-ci-connection-update.md).
@@ -1258,3 +1258,29 @@ Later admissions fail; original workers retain cleanup authority and the shared
 quota remains unchanged. Deletion does not uninstall the GitHub App or cancel a
 GitHub workflow. These management routes also support `/api/v1/ci/...` with the
 authenticated organization. Design: [CI Dashboard navigation and connection lifecycle](https://linear.app/polygala/issue/BUI-1471/ci-dashboard-navigation-and-connection-lifecycle).
+
+### CI repository metadata and visibility cutover
+
+Owner-authorized `GET /v1/{org}/ci/connections/{id}/repositories` and
+`GET /v1/{org}/ci/connect/{id}/accounts/{account}/repositories` return one page
+(default 25, maximum 100) of the original installation's authorized repositories.
+The browser supplies a binding or active grant/account, never an App or arbitrary
+installation identity. Both routes recheck current BoxLite ownership and captured
+authority after GitHub returns, before disclosing metadata. Results include
+visibility, total, selection mode, next page and the installation settings URL.
+
+Hosted Public eligibility is always enabled; `allow_private_repositories` explicitly
+opts into Private jobs. Catalog filtering, job reads, pre-Box creation and JIT
+delivery enforce the same decision. Managed runner groups permit Public and
+select only eligible authorized repositories. A policy update advances generation;
+already delivered workers keep their original cleanup identities.
+
+This development-only schema/scope change requires a clean CI state. Use the old
+version to finish worker/runner cleanup, stop its Listeners, then reset CI bindings,
+attempts and journal state before applying the guarded column rename. Nonempty
+legacy state is rejected; old Public consent is never converted into Private
+consent. Reconnect the existing GitHub installations afterward. Standalone users
+also need old-resource cleanup followed by a fresh journal because scope hashes
+now include Private eligibility; their existing Public environment setting retains
+its meaning and Private remains allowed. No cleanup across a discarded journal is
+promised. Deployment and dev data reset remain operator actions.

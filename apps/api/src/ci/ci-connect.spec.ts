@@ -1,3 +1,4 @@
+import { AddCiPrivatePolicy1794312000000 } from '../migrations/pre-deploy/1794312000000-add-ci-private-policy-migration'
 import { BadGatewayException } from '@nestjs/common'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
@@ -22,7 +23,7 @@ integration('CI connect persistence (real Postgres)', () => {
   const org = randomUUID(),
     otherOrg = randomUUID()
   const actor = { organizationId: org, userId: 'owner' }
-  const input = { github_account: 'alice', follow_installation: true as const, allow_public_repositories: false }
+  const input = { github_account: 'alice', follow_installation: true as const, allow_private_repositories: false }
   const encryptionKey = randomBytes(32).toString('base64')
   const secrets = new CiSecretsService({ get: () => encryptionKey } as any)
   let db: DataSource, service: CiConnectService, native: CiNativeState, settings: CiSettingsService
@@ -38,6 +39,7 @@ integration('CI connect persistence (real Postgres)', () => {
     configured: () => [github],
     availableInstallations: jest.fn(),
     availableAccounts: jest.fn(),
+    repositoryPage: jest.fn(),
     ownedAccounts: jest.fn(),
     installationFor: jest.fn(),
     isIdentityClient: jest.fn(() => false),
@@ -82,6 +84,7 @@ integration('CI connect persistence (real Postgres)', () => {
       await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiWebTarget1794000000000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
+      await new AddCiPrivatePolicy1794312000000().up(runner)
     } finally {
       await runner.release()
     }
@@ -175,7 +178,7 @@ integration('CI connect persistence (real Postgres)', () => {
     async (account_id) => {
       const { attempt } = await accountSession()
       await expect(
-        service.selectAccount(actor, attempt.id, { account_id, allow_public_repositories: false }),
+        service.selectAccount(actor, attempt.id, { account_id, allow_private_repositories: false }),
       ).rejects.toThrow('Invalid GitHub account selection')
       expect((await service.getWeb(actor, attempt.id)).status).toBe('selection_required')
     },
@@ -184,11 +187,11 @@ integration('CI connect persistence (real Postgres)', () => {
     const attempt = await web()
     github.isIdentityClient.mockReturnValue(true)
     await expect(
-      service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: false }),
+      service.selectAccount(actor, attempt.id, { account_id: 456, allow_private_repositories: false }),
     ).rejects.toThrow('login required')
     const { attempt: loggedIn } = await accountSession()
     await expect(
-      service.selectAccount(actor, loggedIn.id, { account_id: 999, allow_public_repositories: false }),
+      service.selectAccount(actor, loggedIn.id, { account_id: 999, allow_private_repositories: false }),
     ).rejects.toThrow('Current GitHub account owner')
     expect((await service.getWeb(actor, loggedIn.id)).status).toBe('failed')
   })
@@ -203,7 +206,7 @@ integration('CI connect persistence (real Postgres)', () => {
       throw new BadGatewayException('GitHub unavailable')
     })
     await expect(
-      service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }),
+      service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false }),
     ).rejects.toThrow('GitHub unavailable')
     expect((await service.getWeb(actor, attempt.id)).status).toBe(scenario)
     const [row] = await db.query('SELECT oauth_token_ciphertext FROM ci_connect_attempt WHERE id=$1', [attempt.id])
@@ -221,19 +224,19 @@ integration('CI connect persistence (real Postgres)', () => {
       if (scenario === 'cancelled') {
         await service.cancel(actor, attempt.id)
         expect(
-          (await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }))
+          (await service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false }))
             .status,
         ).toBe('cancelled')
       } else if (scenario === 'identity-changed') {
         github.isIdentityClient.mockReturnValue(false)
         await expect(
-          service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }),
+          service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false }),
         ).rejects.toThrow('identity OAuth App changed')
       } else {
         installed.delete(789)
         const selected = await service.selectAccount(actor, attempt.id, {
           account_id: 789,
-          allow_public_repositories: false,
+          allow_private_repositories: false,
         })
         const state = new URL(selected.installation_url).searchParams.get('state')!
         await expect(service.completeInstallation(actor, attempt.id, 321, state)).rejects.toThrow(
@@ -275,7 +278,7 @@ integration('CI connect persistence (real Postgres)', () => {
     const attempt = await service.startWeb(who, {
       account_type: 'User',
       follow_installation: true,
-      allow_public_repositories: false,
+      allow_private_repositories: false,
     })
     const url = new URL(attempt.authorization_url)
     return { ...attempt, state: url.searchParams.get('state')!, challenge: url.searchParams.get('code_challenge')! }
@@ -640,16 +643,16 @@ integration('CI connect persistence (real Postgres)', () => {
     await db.query('UPDATE ci_installation_binding SET account_login=$1,state=$2,generation=2', ['old-alice', state])
     const second = await begin()
     expect(await service.poll(actor, second.id)).toMatchObject({ status: 'connected' })
-    const rows = await db.query('SELECT id,account_login,state,generation,allow_public FROM ci_installation_binding')
+    const rows = await db.query('SELECT id,account_login,state,generation,allow_private FROM ci_installation_binding')
     expect(rows).toEqual([
-      { id: original.id, account_login: 'alice', state: 'provisioning', generation: '3', allow_public: false },
+      { id: original.id, account_login: 'alice', state: 'provisioning', generation: '3', allow_private: false },
     ])
   })
   async function fillBindings(count: number) {
     await settings.ensure(db.manager, org)
     await db.query(
       `INSERT INTO ci_installation_binding
-      (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_public,state)
+      (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_private,state)
       SELECT gen_random_uuid(),'github.com','app-client',1000+n,2000+n,'account-'||n,'User',$1,'owner',true,false,'ready'
       FROM generate_series(1,$2::int) n`,
       [org, count],
@@ -735,6 +738,35 @@ integration('CI connect persistence (real Postgres)', () => {
     await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
     return { attempt, installed }
   }
+  it.each(['current', 'cancelled', 'owner-revoked', 'foreign-account', 'foreign-owner'])(
+    'bounds grant repository reads to the owned account and rechecks the live grant: %s',
+    async (scenario) => {
+      const { attempt } = await accountSession()
+      github.repositoryPage.mockReset().mockImplementation(async () => {
+        if (scenario === 'cancelled') await service.cancel(actor, attempt.id)
+        if (scenario === 'owner-revoked')
+          await db.query('DELETE FROM organization_user WHERE "userId"=$1', [actor.userId])
+        return { repositories: [], total: 0, page: 1 }
+      })
+      const result = service.repositories(
+        scenario === 'foreign-owner' ? { ...actor, userId: 'other-owner' } : actor,
+        attempt.id,
+        scenario === 'foreign-account' ? 999 : 789,
+        1,
+        25,
+      )
+      if (scenario === 'current') {
+        await expect(result).resolves.toMatchObject({ total: 0 })
+        expect(github.repositoryPage).toHaveBeenCalledWith(
+          'org-client',
+          { installationId: 321, accountId: 789, accountLogin: 'team', accountType: 'Organization' },
+          1,
+          25,
+        )
+      } else await expect(result).rejects.toThrow()
+      if (scenario.startsWith('foreign')) expect(github.repositoryPage).not.toHaveBeenCalled()
+    },
+  )
   it.each(['ownedAccounts', 'installationFor'])(
     'retains a bounded selection grant after transient %s failure',
     async (method) => {
@@ -742,7 +774,7 @@ integration('CI connect persistence (real Postgres)', () => {
       const [before] = await db.query('SELECT expires_at FROM ci_connect_attempt WHERE id=$1', [attempt.id])
       github[method].mockRejectedValueOnce(new BadGatewayException('GitHub unavailable'))
       await expect(
-        service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }),
+        service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false }),
       ).rejects.toThrow('GitHub unavailable')
       const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
       expect(row.state).toBe('selecting')
@@ -751,7 +783,7 @@ integration('CI connect persistence (real Postgres)', () => {
       expect(row.lease_id).toBeNull()
       const result = await service.selectAccount(actor, attempt.id, {
         account_id: 789,
-        allow_public_repositories: false,
+        allow_private_repositories: false,
       })
       expect(result.accounts.find((account) => account.account_id === 789).connected).toBe(true)
     },
@@ -759,16 +791,16 @@ integration('CI connect persistence (real Postgres)', () => {
   it('connects two owned accounts under one bounded OAuth session with separate CI App bindings', async () => {
     const { attempt } = await accountSession()
     const [before] = await db.query('SELECT expires_at FROM ci_connect_attempt WHERE id=$1', [attempt.id])
-    const first = await service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: false })
+    const first = await service.selectAccount(actor, attempt.id, { account_id: 456, allow_private_repositories: false })
     expect(first.accounts.find((account) => account.account_id === 456).connected).toBe(true)
-    const second = await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: true })
+    const second = await service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: true })
     expect(second.accounts.every((account) => account.connected)).toBe(true)
     const bindings = await db.query(
-      'SELECT app_client_id,account_type,allow_public FROM ci_installation_binding ORDER BY app_client_id',
+      'SELECT app_client_id,account_type,allow_private FROM ci_installation_binding ORDER BY app_client_id',
     )
     expect(bindings).toEqual([
-      { app_client_id: 'app-client', account_type: 'User', allow_public: false },
-      { app_client_id: 'org-client', account_type: 'Organization', allow_public: true },
+      { app_client_id: 'app-client', account_type: 'User', allow_private: false },
+      { app_client_id: 'org-client', account_type: 'Organization', allow_private: true },
     ])
     const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
     expect(row.app_client_id).toBe('identity-client')
@@ -786,7 +818,10 @@ integration('CI connect persistence (real Postgres)', () => {
   it('resumes a missing installation with fresh target state and auto-binds only its matching Org App', async () => {
     const { attempt, installed } = await accountSession()
     installed.delete(789)
-    const result = await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    const result = await service.selectAccount(actor, attempt.id, {
+      account_id: 789,
+      allow_private_repositories: false,
+    })
     expect(result.status).toBe('installation_required')
     const url = new URL(result.installation_url),
       state = url.searchParams.get('state')!
@@ -805,7 +840,7 @@ integration('CI connect persistence (real Postgres)', () => {
   it('targets the selected personal account on the installation permissions page', async () => {
     const { attempt, installed } = await accountSession()
     installed.delete(456)
-    const result = await service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: true })
+    const result = await service.selectAccount(actor, attempt.id, { account_id: 456, allow_private_repositories: true })
     const url = new URL(result.installation_url)
     expect(url.pathname).toBe('/apps/example/installations/new/permissions')
     expect(url.searchParams.get('target_id')).toBe('456')
@@ -826,7 +861,7 @@ integration('CI connect persistence (real Postgres)', () => {
       }
       const { attempt, installed } = await accountSession()
       installed.delete(789)
-      await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+      await service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false })
       const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
       const aad = JSON.stringify([row.id, row.user_id, row.organization_id])
       const ciphertext =
@@ -846,7 +881,7 @@ integration('CI connect persistence (real Postgres)', () => {
       installed.delete(789)
       const selected = await service.selectAccount(actor, attempt.id, {
         account_id: 789,
-        allow_public_repositories: false,
+        allow_private_repositories: false,
       })
       const state = new URL(selected.installation_url).searchParams.get('state')!
       installed.set(789, 321)
@@ -878,8 +913,8 @@ integration('CI connect persistence (real Postgres)', () => {
   )
   it('fences a cross-App Delete while account verification is paused and preserves independent bindings', async () => {
     const { attempt } = await accountSession()
-    await service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: false })
-    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    await service.selectAccount(actor, attempt.id, { account_id: 456, allow_private_repositories: false })
+    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false })
     const [binding] = await db.query("SELECT id FROM ci_installation_binding WHERE account_type='Organization'")
     const [wake] = await native.state.read(['wake/321/0'])
     const next = await web()
@@ -896,7 +931,7 @@ integration('CI connect persistence (real Postgres)', () => {
       await paused
       return { ...account, installationId: 321 }
     })
-    const choosing = service.selectAccount(actor, next.id, { account_id: 789, allow_public_repositories: false })
+    const choosing = service.selectAccount(actor, next.id, { account_id: 789, allow_private_repositories: false })
     await reached
     try {
       await settings.deleteConnection(actor, binding.id)
@@ -931,7 +966,7 @@ integration('CI connect persistence (real Postgres)', () => {
     await service.completeWeb(actor, fresh.id, { code: 'web-code', state: fresh.state })
     expect(
       (
-        await service.selectAccount(actor, fresh.id, { account_id: 789, allow_public_repositories: false })
+        await service.selectAccount(actor, fresh.id, { account_id: 789, allow_private_repositories: false })
       ).accounts.find((account) => account.account_id === 789).connected,
     ).toBe(true)
   })
@@ -939,7 +974,7 @@ integration('CI connect persistence (real Postgres)', () => {
     const device = await begin()
     const { attempt, installed } = await accountSession()
     installed.delete(789)
-    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false })
     const runner = db.createQueryRunner()
     try {
       await new AddCiWebTarget1794000000000().down(runner)
@@ -960,7 +995,7 @@ integration('CI connect persistence (real Postgres)', () => {
   it('expires abandoned installation context and clears it on the next start', async () => {
     const { attempt, installed } = await accountSession()
     installed.delete(789)
-    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false })
     await db.query(
       "UPDATE ci_connect_attempt SET state='polling',oauth_token_ciphertext=NULL,lease_id=$2,lease_until=now()+interval '1 minute',expires_at=now()-interval '1 second' WHERE id=$1",
       [attempt.id, randomUUID()],
@@ -1125,9 +1160,9 @@ integration('CI connect persistence (real Postgres)', () => {
       status: 'connected',
       binding_id: (bound as any).binding_id,
     })
-    const expanded = await begin(actor, { ...input, allow_public_repositories: true })
+    const expanded = await begin(actor, { ...input, allow_private_repositories: true })
     expect(await service.poll(actor, expanded.id)).toMatchObject({ status: 'failed' })
-    expect((await db.query('SELECT allow_public FROM ci_installation_binding'))[0].allow_public).toBe(false)
+    expect((await db.query('SELECT allow_private FROM ci_installation_binding'))[0].allow_private).toBe(false)
   })
   it('cancellation wins against an already exchanged token before binding commits', async () => {
     let entered!: () => void, release!: () => void
