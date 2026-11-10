@@ -121,6 +121,13 @@ export async function requestSsh(
   return status
 }
 
+/**
+ * Build shell-safe login and SSH commands for the Dashboard's endpoint context.
+ * Both commands discard inherited REST URL and API key overrides; the proxy
+ * selects the supplied organization without changing the parent shell or CLI defaults.
+ * Uses keyPath when provided, otherwise the generated key filename in the current directory.
+ * Rejects unsafe endpoints, identifiers, and ambiguous private-key paths.
+ */
 export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string, keyPath?: string) {
   if (!/^[a-zA-Z0-9_-]+$/.test(boxId)) throw new Error('Invalid box ID')
   const quote = (value: string) => {
