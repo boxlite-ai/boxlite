@@ -182,7 +182,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `string` | - | OCI image URI |
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
-| `cpus` | `number` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require Linux; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
+| `cpus` | `number` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
 | `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |

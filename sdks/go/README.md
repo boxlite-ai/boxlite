@@ -282,9 +282,10 @@ OCI `EXPOSE` metadata does not publish ports.
 
 ### Fractional CPUs
 
-Use `WithCPUs(0.5)` for half a CPU of aggregate time on Linux, or `WithCPUs(1.5)` for two guest vCPUs sharing 1.5 CPUs.
+Use `WithCPUs(0.5)` for half a CPU of aggregate time on a Linux execution host, or `WithCPUs(1.5)` for two guest vCPUs sharing 1.5 CPUs.
 `BoxInfo.CPUs` is a `float64`, reported through the initial native callback without extra information requests.
-Integer inputs retain existing behavior; fractional values are immutable and macOS rejects them.
+Integer inputs retain existing behavior; fractional values are immutable and local macOS execution rejects them.
+A macOS REST client can request fractional CPUs from a supporting Linux server.
 Rebuild against the matching C header/library because CPU fields and parameters now use `double`.
 See [fractional CPUs](../../docs/guides/resource-limits.md#fractional-cpus-linux) for validation, cgroup delegation, and REST support.
 

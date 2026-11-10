@@ -237,7 +237,8 @@ cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
 cpus=2    # 2 guest vCPUs, no additional bandwidth quota
 ```
 
-Fractional values require Linux, the jailer, and writable cgroup v2 CPU quotas; macOS rejects them.
+Fractional values require a Linux execution host, the jailer, and writable cgroup v2 CPU quotas.
+Local macOS execution rejects them; macOS REST clients can request them from a supporting Linux server.
 Quota-write failures prevent startup; cgroup membership remains best-effort and can leave a running Box without enforcement.
 Information queries return the configured allocation.
 Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.

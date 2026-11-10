@@ -382,7 +382,7 @@ The Simple API provides a streamlined interface for common use cases with automa
 // Create and auto-start a box
 BoxliteErrorCode boxlite_simple_new(
     const char* image,          // "python:slim", "alpine:3.19", etc.
-    double cpus,                // 0 = default; fractions require Linux
+    double cpus,                // 0 = default; fractions require a Linux execution host
     int memory_mib,             // 0 = default (512)
     CBoxliteSimple** out_box,
     CBoxliteError* out_error

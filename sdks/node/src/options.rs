@@ -174,7 +174,7 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
-    /// CPU allocation (default: 1, range: 0.01-16); fractional values require Linux
+    /// CPU allocation (default: 1, range: 0.01-16); fractional values require a Linux execution host
     pub cpus: Option<f64>,
 
     /// Memory limit in MiB (default: 512)

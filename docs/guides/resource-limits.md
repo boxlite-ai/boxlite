@@ -88,10 +88,11 @@ Boot and device I/O also consume this budget; very small allocations can hit exi
 
 | Condition | Behavior |
 | --- | --- |
-| Host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; rootless operation needs CPU delegation |
+| Execution host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; REST applies these requirements to the server; rootless operation needs CPU delegation |
 | Quota write failure | Startup fails before guest execution |
 | Membership failure | Existing best-effort joining remains; a Box can start without the requested quota taking effect |
-| macOS | Fractional values return `Unsupported`, including through the public REST runtime API |
+| Local macOS execution | Fractional values return `Unsupported` |
+| macOS REST client | Can request fractional CPUs from a supporting Linux server; the client needs no local cgroup support |
 | Existing host limits | A tighter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` behavior is unchanged |
 | Information queries | Return configured `cpus`, not CPU usage, reserved capacity, or proof of enforcement |
 
@@ -99,7 +100,8 @@ CPU configuration is immutable after creation.
 Restart, reconnect, disk snapshot restore, clone, and archive import retain it.
 Disk-only `restore_from_archive` retains the destination Box's CPU configuration.
 
-After option, platform, and security compatibility checks, `get_or_create` keeps an existing named Box's saved `cpus` for integer, fractional, and omitted requests.
+After option and security compatibility checks, `get_or_create` keeps an existing named Box's saved `cpus` for integer, fractional, and omitted requests.
+Local runtimes also check CPU support on their execution host.
 For example, an existing `cpus=2` Box stays at `2` when requested with `cpus=0.5`, and returns `created=false`.
 The requested allocation applies only when creating a new Box; `create` still rejects duplicate names.
 
@@ -113,7 +115,8 @@ The requested allocation applies only when creating a new Box; `create` still re
 | CLI | `boxlite create --cpus 0.5 alpine` | `boxlite inspect` → `Cpus` |
 | REST/serve | `{"image":"alpine","cpus":0.5}` | Box response `cpus` |
 
-REST clients send `cpus` directly in `POST /boxes`, without a CPU-specific `/config` request.
+REST clients validate CPU values independently of the client OS and send `cpus` directly in `POST /boxes`, without a CPU-specific `/config` request.
+The server checks its execution host before running the Box.
 Integer values serialize as integer JSON for compatibility with strict older servers.
 A successful fractional create must return exactly the requested allocation.
 Missing, rounded, or changed values produce an `Unsupported` error containing the created Box ID; inspect or remove that Box before retrying.

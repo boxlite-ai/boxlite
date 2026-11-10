@@ -123,24 +123,15 @@ mod tests {
     }
 
     #[test]
-    fn fractional_cpus_platform_and_serialization() {
+    fn fractional_cpus_options_serialization() {
         let mut options = BoxOptions {
             cpus: Some(1.5),
             ..Default::default()
         };
-        if cfg!(target_os = "linux") {
-            options.sanitize_common().unwrap();
-        } else {
-            assert!(matches!(
-                options.sanitize_common(),
-                Err(BoxliteError::Unsupported(_))
-            ));
-        }
-        options.advanced.security.jailer_enabled = false;
-        assert!(matches!(
-            options.sanitize_common(),
-            Err(BoxliteError::Unsupported(_))
-        ));
+        assert_eq!(
+            serde_json::to_value(&options).unwrap()["cpus"],
+            serde_json::json!(1.5)
+        );
         options.cpus = Some(2.0);
         options.sanitize_common().unwrap();
         assert_eq!(

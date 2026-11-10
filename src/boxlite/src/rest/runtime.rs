@@ -222,11 +222,8 @@ impl BoxOptions {
     /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
     /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
     fn sanitize_remote(&self) -> BoxliteResult<()> {
-        if self.cpu_count()?.is_some_and(|cpu| cpu.is_fractional()) && !cfg!(target_os = "linux") {
-            return Err(BoxliteError::Unsupported(
-                "fractional cpus requires a Linux host".into(),
-            ));
-        }
+        // The server validates CPU quota support on its execution host.
+        self.cpu_count()?;
         self.advanced.validate_privileged_capability_conflict()?;
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
@@ -1108,21 +1105,28 @@ mod tests {
     #[tokio::test]
     async fn create_rejects_client_supplied_sandbox_security() {
         let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.security = crate::runtime::advanced_options::SecurityOptions::disabled();
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
+        let runtime = crate::BoxliteRuntime::rest(options).expect("failed to create REST runtime");
+        for cpus in [None, Some(2.0), Some(0.125)] {
+            let mut box_options = BoxOptions {
+                cpus,
+                ..Default::default()
+            };
+            box_options.advanced.security = SecurityOptions::disabled();
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("a client must not choose the remote server's sandbox policy");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
+            for result in [
+                runtime.create(box_options.clone(), None).await,
+                runtime
+                    .get_or_create(box_options, Some("named".into()))
+                    .await
+                    .map(|(litebox, _)| litebox),
+            ] {
+                let error = result
+                    .err()
+                    .expect("a client must not choose the remote server's sandbox policy");
+                assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+                assert!(error.to_string().contains("sandbox security"), "{error}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -1990,6 +1994,6 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 #[path = "tests/fractional_cpus.rs"]
 mod fractional_cpus_tests;

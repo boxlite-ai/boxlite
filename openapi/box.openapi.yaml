@@ -2390,7 +2390,8 @@ components:
           multipleOf: 0.001
           description: |
             Configured CPU allocation. Fractional values use ceil(cpus) guest vCPUs
-            and a Linux aggregate bandwidth quota; integers retain existing topology behavior.
+            and an aggregate bandwidth quota on the Linux execution host;
+            integers retain existing topology behavior.
             This reports configuration, not a reservation or proof of enforcement.
           example: 1.5
         memory_mib:
@@ -2530,8 +2531,10 @@ components:
           description: |
             Creation-only CPU allocation; omitted values retain the server default.
             Integers (including 2.0) configure vCPU topology without an additional bandwidth quota.
-            Fractional values use ceil(cpus) guest vCPUs and require Linux, the jailer,
-            and a writable cgroup v2 CPU quota with a 100 ms period.
+            Fractional values use ceil(cpus) guest vCPUs and require a Linux execution host,
+            the jailer, and a writable cgroup v2 CPU quota with a 100 ms period.
+            These host requirements apply to the server; a macOS REST client can request
+            fractional CPUs from a supporting Linux server.
             Quota-write errors prevent startup; cgroup joining remains best-effort,
             so membership failure can leave a running Box without enforcement.
             Clients POST directly without a CPU capability probe and verify that successful

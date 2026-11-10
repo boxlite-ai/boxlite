@@ -1,4 +1,5 @@
 use super::*;
+use crate::BoxliteRuntime;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -75,22 +76,21 @@ async fn create_response(
         requests
     });
     let runtime =
-        RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
     let options = BoxOptions {
         cpus,
         ..Default::default()
     };
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         if lookup {
-            let (b, created) =
-                RuntimeBackend::get_or_create(&runtime, options, Some("named".into())).await?;
+            let (b, created) = runtime.get_or_create(options, Some("named".into())).await?;
             assert_eq!(created, expect_created);
             if let Some(cpus) = saved_cpus {
                 assert_eq!(b.info().await?.cpus, cpus);
             }
             Ok(b)
         } else {
-            RuntimeBackend::create(&runtime, options, None).await
+            runtime.create(options, None).await
         }
     })
     .await;
@@ -104,7 +104,7 @@ async fn create_response(
 
 #[tokio::test]
 async fn fractional_cpus_posts_once_and_preserves_wire_numbers() {
-    for cpus in [None, Some(2.0), Some(0.125), Some(1.5)] {
+    for cpus in [None, Some(2.0), Some(0.01), Some(0.125), Some(1.5)] {
         let body = BOX_RESPONSE.replace("0.125", &cpus.unwrap_or(1.0).to_string());
         let (result, requests) = create_response(201, &body, cpus, None).await;
         assert!(result.is_ok(), "{:?}", result.as_ref().err());
@@ -179,6 +179,30 @@ async fn fractional_cpus_named_reuse_preserves_saved_allocation() {
             assert_eq!(requests.len(), 2);
             assert_eq!(requests[0].0, "GET /v1/boxes/named HTTP/1.1");
             assert_eq!(requests[1].0, "GET /v1/boxes/fractional-box HTTP/1.1");
+        }
+    }
+}
+
+#[tokio::test]
+async fn fractional_cpus_invalid_inputs_never_reach_the_server() {
+    for cpus in [
+        0.0,
+        -0.5,
+        0.009,
+        0.0101,
+        255.001,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        for lookup in [None, Some("")] {
+            let (result, requests) = create_response(201, BOX_RESPONSE, Some(cpus), lookup).await;
+            let error = result.err().expect("invalid CPUs must fail before HTTP");
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{cpus}: {error}"
+            );
+            assert!(requests.is_empty(), "{cpus}: {requests:?}");
         }
     }
 }

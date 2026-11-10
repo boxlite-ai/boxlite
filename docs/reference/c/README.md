@@ -312,7 +312,7 @@ BoxliteErrorCode boxlite_simple_new(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `image` | `const char*` | OCI image reference (e.g., `"python:slim"`, `"alpine:3.19"`) |
-| `cpus` | `double` | CPU allocation; fractional values require Linux, 0 selects the default in the Simple API |
+| `cpus` | `double` | CPU allocation; fractional values require a Linux execution host, 0 selects the default in the Simple API |
 | `memory_mib` | `int` | Memory in MiB (0 = default: 512) |
 | `out_box` | `CBoxliteSimple**` | Output: created box handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
@@ -1681,5 +1681,5 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 ### CPU ABI compatibility
 
 CPU arguments and `CBoxInfo.cpus` use `double`; rebuild callers with the matching header and library.
-Integer allocations preserve existing behavior; fractional allocations require Linux and round guest vCPUs upward.
+Integer allocations preserve existing behavior; fractional allocations require a Linux execution host and round guest vCPUs upward.
 See [fractional CPUs](../../guides/resource-limits.md#fractional-cpus-linux) for enforcement and error semantics.

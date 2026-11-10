@@ -791,7 +791,7 @@ Options for constructing a box.
 
 ```rust
 pub struct BoxOptions {
-    /// CPU allocation (default: 1); fractions require Linux
+    /// CPU allocation (default: 1); fractions require a Linux execution host
     pub cpus: Option<f64>,
 
     /// Memory in MiB (default: 512)
