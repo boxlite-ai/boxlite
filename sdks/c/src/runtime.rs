@@ -985,6 +985,30 @@ mod tests {
     use std::ffi::CString;
     use std::ptr;
 
+    #[test]
+    fn checkpoint_directory_constructor_rejects_non_utf8_before_creating_runtime() {
+        let invalid = [255u8, 0];
+        let mut runtime = ptr::null_mut();
+        let mut error = FFIError::default();
+        let result = unsafe {
+            boxlite_runtime_new_with_checkpoint_directory(
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                invalid.as_ptr().cast(),
+                &mut runtime,
+                &mut error,
+            )
+        };
+        assert_eq!(result, BoxliteErrorCode::InvalidArgument);
+        assert!(runtime.is_null());
+        assert!(!error.message.is_null());
+        let message = unsafe { std::ffi::CStr::from_ptr(error.message) }.to_string_lossy();
+        assert!(message.contains("checkpoint directory"), "{message}");
+        unsafe { crate::boxlite_error_free(&mut error) };
+    }
+
     fn registry(host: *const c_char) -> BoxliteImageRegistry {
         BoxliteImageRegistry {
             host,

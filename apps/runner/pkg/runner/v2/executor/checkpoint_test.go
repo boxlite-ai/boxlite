@@ -336,3 +336,86 @@ func TestCheckpointImportJobReportsItsOwnedNativeResult(t *testing.T) {
 		t.Fatal("mismatched target reached native recovery")
 	}
 }
+
+func TestCheckpointJobsRejectInvalidPayloadOwnershipAndConfiguration(t *testing.T) {
+	for _, kind := range []apiclient.JobType{apiclient.JOBTYPE_EXPORT_CHECKPOINT, apiclient.JOBTYPE_UPLOAD_CHECKPOINT, apiclient.JOBTYPE_IMPORT_CHECKPOINT} {
+		for _, damage := range []string{"payload", "resource", "work-directory", "store", "backend"} {
+			if kind == apiclient.JOBTYPE_UPLOAD_CHECKPOINT && damage == "backend" {
+				continue
+			}
+			t.Run(string(kind)+"/"+damage, func(t *testing.T) {
+				h, backend, export := checkpointHarness(t)
+				h.executor.Execute(t.Context(), export)
+				artifact := capturedArtifact(t, h, export)
+				job := export
+				if kind == apiclient.JOBTYPE_UPLOAD_CHECKPOINT {
+					job = uploadJob(t, artifact)
+				}
+				if kind == apiclient.JOBTYPE_IMPORT_CHECKPOINT {
+					job = apiclient.NewJob(uuid.NewString(), kind, apiclient.JOBSTATUS_IN_PROGRESS, "BOX", testBoxId, "2026-11-06T00:00:00Z")
+					payload, err := json.Marshal(checkpoint.RestoreRequest{OperationID: uuid.NewString(), Sequence: 1, Target: testBoxId, Mode: "create", Archive: artifact, PlatformEnv: map[string]string{"BOXLITE_BOX_ID": testBoxId}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					job.SetPayload(string(payload))
+				}
+				backend.restore = func(context.Context, checkpoint.RestoreRequest, string, checkpoint.Artifacts, storage.ArchiveStore) (checkpoint.RestoreResult, error) {
+					t.Error("rejected job reached native restore")
+					return checkpoint.RestoreResult{}, nil
+				}
+				before := len(h.calls.snapshot())
+				switch damage {
+				case "payload":
+					job.SetPayload("{")
+				case "resource":
+					job.ResourceType = "UNRELATED"
+				case "work-directory":
+					h.executor.checkpointWorkDir = ""
+				case "store":
+					h.executor.archiveStore = nil
+				case "backend":
+					h.executor.backend = h.backend
+				}
+				if _, err := h.executor.executeJob(t.Context(), job); err == nil {
+					t.Fatal("invalid checkpoint job was accepted")
+				}
+				if len(h.calls.snapshot()) != before {
+					t.Fatal("rejected job performed a native operation")
+				}
+			})
+		}
+	}
+}
+
+func TestCheckpointUploadAcknowledgmentRetainsArchiveOnInvalidCleanup(t *testing.T) {
+	for _, damage := range []string{"type", "payload", "resource", "work-directory", "store", "unsupported-scheme", "metadata"} {
+		t.Run(damage, func(t *testing.T) {
+			h, _, export := checkpointHarness(t)
+			h.executor.Execute(t.Context(), export)
+			artifact := capturedArtifact(t, h, export)
+			path := artifactPath(h, artifact)
+			job := uploadJob(t, artifact)
+			switch damage {
+			case "type":
+				job.Type = apiclient.JOBTYPE_EXPORT_CHECKPOINT
+			case "payload":
+				job.SetPayload("{")
+			case "resource":
+				job.ResourceId = "other-checkpoint"
+			case "work-directory":
+				h.executor.checkpointWorkDir = ""
+			case "store":
+				h.executor.archiveStore = nil
+			case "unsupported-scheme":
+				h.executor.archiveStore = &storage.SchemeArchiveStore{}
+			case "metadata":
+				artifact.SizeBytes++
+				job = uploadJob(t, artifact)
+			}
+			h.executor.acknowledgeCheckpointUpload(t.Context(), job)
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("invalid acknowledgment removed archive: %v", err)
+			}
+		})
+	}
+}

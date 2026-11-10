@@ -578,7 +578,16 @@ mod tests {
         let value = if handle.is_null() {
             String::new()
         } else {
-            unsafe { (*handle).box_id.to_string() }
+            let name = unsafe { crate::box_handle::boxlite_box_name(handle) };
+            let name_value = if name.is_null() {
+                "<unnamed>".into()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(name) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            unsafe { crate::boxlite_free_string(name) };
+            format!("{}:{name_value}", unsafe { &(*handle).box_id })
         };
         unsafe { crate::box_handle::boxlite_box_free(handle) };
         send_reply(data, error, value);
@@ -745,7 +754,7 @@ mod tests {
                     );
                     assert_eq!(
                         drain(&mut runtime),
-                        (BoxliteErrorCode::Ok, "target-1".into())
+                        (BoxliteErrorCode::Ok, "target-1:worker".into())
                     );
                 }
                 assert_eq!(

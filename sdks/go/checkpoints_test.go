@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
@@ -164,5 +165,122 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 	}
 	if _, err := NewRuntime(WithCheckpointDir("bad\x00directory")); !IsInvalidArgument(err) {
 		t.Fatalf("directory: %v", err)
+	}
+}
+
+func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
+	operations := []struct {
+		name string
+		call func(context.Context, *Checkpoints, string) error
+	}{
+		{"create", func(ctx context.Context, c *Checkpoints, key string) error {
+			_, err := c.Create(ctx, key, "")
+			return err
+		}},
+		{"get", func(ctx context.Context, c *Checkpoints, key string) error { _, err := c.Get(ctx, key); return err }},
+		{"list", func(ctx context.Context, c *Checkpoints, _ string) error { _, err := c.List(ctx); return err }},
+		{"remove", func(ctx context.Context, c *Checkpoints, key string) error { return c.Remove(ctx, key, false) }},
+		{"import", func(ctx context.Context, c *Checkpoints, key string) error {
+			_, err := c.ImportBox(ctx, key, "", "")
+			return err
+		}},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":{"code":"invalid_state","message":"checkpoint unavailable"}}`))
+			}))
+			defer server.Close()
+			runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := operation.call(ctx, runtime.Checkpoints(), "base"); err == nil || !strings.Contains(err.Error(), "checkpoint unavailable") {
+				t.Fatalf("backend failure was lost: %v", err)
+			}
+			if operation.name != "list" {
+				if err := operation.call(ctx, runtime.Checkpoints(), "\xff"); !IsInvalidArgument(err) {
+					t.Fatalf("native UTF-8 rejection was lost: %v", err)
+				}
+			}
+			cancelled, stop := context.WithCancel(context.Background())
+			stop()
+			if err := operation.call(cancelled, runtime.Checkpoints(), "base"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled admission: %v", err)
+			}
+			if err := operation.call(context.Background(), nil, "base"); !errors.Is(err, ErrRuntimeClosed) {
+				t.Fatalf("nil manager: %v", err)
+			}
+			runtime.closingOnce.Do(func() { close(runtime.closing) })
+			if err := operation.call(context.Background(), runtime.Checkpoints(), "base"); !errors.Is(err, ErrRuntimeClosed) {
+				t.Fatalf("closing runtime: %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckpointManagementCancellationAfterNativeAdmission(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		for _, closing := range []bool{false, true} {
+			t.Run(map[bool]string{false: "metadata", true: "remove"}[remove]+map[bool]string{false: "/cancel", true: "/close"}[closing], func(t *testing.T) {
+				started, release := make(chan struct{}), make(chan struct{})
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					close(started)
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_, _ = w.Write([]byte(`{"error":{"code":"invalid_state","message":"late failure"}}`))
+				}))
+				defer server.Close()
+				runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer runtime.Close()
+				defer close(release)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					if remove {
+						done <- runtime.Checkpoints().Remove(ctx, "base", false)
+					} else {
+						_, err := runtime.Checkpoints().Get(ctx, "base")
+						done <- err
+					}
+				}()
+				select {
+				case <-started:
+				case err := <-done:
+					t.Fatalf("finished before admission: %v", err)
+				case <-time.After(5 * time.Second):
+					t.Fatal("native request was not admitted")
+				}
+				expected := error(context.Canceled)
+				if closing {
+					runtime.closingOnce.Do(func() { close(runtime.closing) })
+					expected = ErrRuntimeClosed
+				} else {
+					cancel()
+				}
+				select {
+				case err := <-done:
+					if !errors.Is(err, expected) {
+						t.Fatalf("cancellation: %v", err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("cancellation waited for native completion")
+				}
+			})
+		}
 	}
 }

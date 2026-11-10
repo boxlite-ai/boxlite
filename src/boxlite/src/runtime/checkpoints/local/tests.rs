@@ -285,7 +285,7 @@ async fn downloaded_checkpoint_preparation_reuses_native_disk_validation() {
 fn source_options() -> BoxOptions {
     BoxOptions {
         rootfs: RootfsSpec::Image(IMAGE.into()),
-        cpus: Some(3),
+        cpus: Some(3.0),
         memory_mib: Some(768),
         disk_size_gb: Some(2),
         env: vec![
@@ -679,7 +679,7 @@ async fn recover_preserves_the_target_name_and_replays_the_accepted_native_resul
         .await
         .unwrap();
     let mut target_options = options.clone();
-    target_options.cpus = Some(1);
+    target_options.cpus = Some(1.0);
     target_options.env = vec![("APP_MODE".into(), "old-target".into())];
     let target = runtime
         .import_box(

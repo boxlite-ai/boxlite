@@ -157,6 +157,7 @@ jobs:
               # suite drives these bindings through a built extension.
               - 'sdks/python/boxlite/**/!(*.md)'
               - 'sdks/python/tests/**/!(*.md)'
+              - 'sdks/go/**/!(*.md)'
               - 'scripts/test/coverage-bindings.sh'
               - 'tests/scripts/**/!(*.md)'
               - 'sdks/node/src/**/!(*.md)'
@@ -459,6 +460,9 @@ jobs:
         with:
           node-version: '22'
 
+      - uses: ./.github/actions/setup-go
+        if: matrix.platform.target == 'linux-x64-gnu'
+
       - name: Measure native bindings through SDK callers
         if: matrix.platform.target == 'linux-x64-gnu'
         env:
@@ -488,7 +492,7 @@ jobs:
         if: matrix.platform.target == 'linux-x64-gnu'
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/native-sdk/lcov.info,target/coverage/python/coverage.xml
+          files: target/coverage/native-sdk/lcov.info,target/coverage/native-sdk/go-lcov.info,target/coverage/python/coverage.xml,target/coverage/go-checkpoint-native.out
           flags: rust-unit
           use_oidc: true
           disable_search: true

@@ -48,12 +48,148 @@ fn absent_catalog_is_empty_without_creating_a_directory() {
     let (catalog, _temporary) = catalog();
     assert!(catalog.list().unwrap().is_empty());
     assert!(!catalog.root.exists());
+    assert!(catalog.recovery("target").unwrap().is_none());
+    assert!(catalog.cancel_recoveries("target").unwrap().is_empty());
     assert!(matches!(
         catalog.get("absent"),
         Err(BoxliteError::NotFound(_))
     ));
     catalog.remove("absent", true).unwrap();
     assert!(!catalog.root.exists());
+}
+
+#[test]
+fn checkpoint_catalog_refuses_invalid_published_members() {
+    for scenario in [
+        "oversized",
+        "version",
+        "id",
+        "record-directory",
+        "entry-file",
+        "short-archive",
+    ] {
+        let (catalog, _temporary) = catalog();
+        let info = publish(&catalog, "base");
+        let directory = catalog.directory(&info.id).unwrap();
+        let metadata = directory.join(RECORD);
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+        match scenario {
+            "oversized" => fs::write(&metadata, vec![b' '; RECORD_LIMIT as usize + 1]).unwrap(),
+            "version" | "id" => {
+                if scenario == "version" {
+                    record["version"] = 2.into();
+                } else {
+                    record["info"]["id"] = uuid::Uuid::new_v4().to_string().into();
+                }
+                fs::write(&metadata, serde_json::to_vec(&record).unwrap()).unwrap();
+            }
+            "record-directory" => {
+                fs::remove_file(&metadata).unwrap();
+                fs::create_dir(&metadata).unwrap();
+            }
+            "entry-file" => {
+                fs::remove_dir_all(&directory).unwrap();
+                fs::write(&directory, b"invalid").unwrap();
+            }
+            "short-archive" => {
+                let archive = directory.join(ARCHIVE);
+                fs::set_permissions(&archive, fs::Permissions::from_mode(0o600)).unwrap();
+                fs::write(archive, b"short").unwrap();
+                assert!(matches!(
+                    catalog.get(&info.id),
+                    Err(BoxliteError::Storage(_))
+                ));
+                continue;
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(catalog.list(), Err(BoxliteError::Storage(_))),
+            "{scenario}"
+        );
+    }
+    let (catalog, _temporary) = catalog();
+    let stage = staged(&catalog);
+    fs::write(Catalog::archive_path(&stage), b"").unwrap();
+    assert!(matches!(
+        catalog.publish(stage, None, "source".into(), "image".into()),
+        Err(BoxliteError::Storage(_))
+    ));
+    assert!(catalog.list().unwrap().is_empty());
+    assert!(
+        catalog
+            .directory("AAAAAAAA-AAAA-4AAA-AAAA-AAAAAAAAAAAA")
+            .is_err()
+    );
+}
+
+#[test]
+fn checkpoint_recovery_refuses_damaged_receipts_and_conflicting_owners() {
+    for scenario in ["oversized", "filename", "reused-id", "different-receipt"] {
+        let (catalog, _temporary) = catalog();
+        let info = publish(&catalog, "base");
+        let recovery = Recovery {
+            original_id: "target".into(),
+            name: Some("worker".into()),
+            checkpoint_id: info.id,
+            import_id: None,
+            accepted_id: None,
+        };
+        catalog.save_recovery(&recovery).unwrap();
+        let path = catalog.root.join(".recover-target.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        match scenario {
+            "oversized" => {
+                fs::write(&path, vec![b' '; RECORD_LIMIT as usize + 1]).unwrap();
+            }
+            "filename" => {
+                fs::rename(&path, catalog.root.join(".recover-other.json")).unwrap();
+            }
+            _ => {
+                value["import_id"] = if scenario == "reused-id" {
+                    "target".into()
+                } else {
+                    "replacement".into()
+                };
+                value["accepted_id"] = "different".into();
+                fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            }
+        }
+        assert!(
+            matches!(catalog.recovery("target"), Err(BoxliteError::Storage(_))),
+            "{scenario}"
+        );
+        assert!(
+            matches!(
+                catalog.cancel_recoveries("target"),
+                Err(BoxliteError::Storage(_))
+            ),
+            "{scenario}"
+        );
+    }
+    let (catalog, _temporary) = catalog();
+    let first = publish(&catalog, "first");
+    let second = publish(&catalog, "second");
+    let mut recovery = Recovery {
+        original_id: "target".into(),
+        name: None,
+        checkpoint_id: first.id.clone(),
+        import_id: None,
+        accepted_id: None,
+    };
+    catalog.save_recovery(&recovery).unwrap();
+    recovery.checkpoint_id = second.id;
+    assert!(matches!(
+        catalog.save_recovery(&recovery),
+        Err(BoxliteError::InvalidState(_))
+    ));
+    assert_eq!(
+        catalog.recovery("target").unwrap().unwrap().checkpoint_id,
+        first.id
+    );
+    assert_eq!(catalog.list().unwrap().len(), 2);
 }
 
 #[test]
