@@ -57,7 +57,8 @@ test('a stage may pin the zone its machines are created in', () => {
  *
  * The reads a promotion makes are granted on the *source* and held by the
  * destination's accounts, so `bootstrap` has to be told which stage that is.
- * A rollout selects one allowed source; bootstrap prepares all declared reads.
+ * A rollout cannot answer it: `mdeploy-all` promotes from dev and reaches
+ * nothing that runs on a workstation.
  */
 test('a stage names the stage it is promoted from', () => {
   const config = parse({

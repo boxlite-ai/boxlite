@@ -148,7 +148,6 @@ test('release publish target is allowlisted before an Environment and defaults t
   }
   assert.equal(release.jobs.publish.environment, "${{ inputs.stage || 'dev' }}")
   assert.equal(release.jobs.publish.env.PUBLISH_STAGE, "${{ inputs.stage || 'dev' }}")
-  assert.equal(release.jobs.source.environment, "${{ inputs.source || 'dev' }}")
   assert.equal(release.jobs.promote.environment, 'prod')
 })
 
@@ -182,78 +181,6 @@ test('stage PR resolution requires an open, mergeable request and uses its merge
       })
       assert.equal(result.status === 0, allowed, `${state}/${mergeable}: ${result.stdout}${result.stderr}`)
       assert.equal(readFileSync(output, 'utf8'), allowed ? `sha=${merge}\n` : '')
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
-  }
-})
-
-test('release promotion explicitly selects dev or stage before binding its Environment', () => {
-  assert.ok(deployment.on.workflow_dispatch.inputs.source, 'deployment source selector is missing')
-  assert.deepEqual(deployment.on.workflow_dispatch.inputs.source.options, ['dev', 'stage'])
-  assert.equal(deployment.on.workflow_dispatch.inputs.source.default, 'dev')
-  assert.equal(deployment.jobs['release-promote'].with.source, '${{ inputs.source }}')
-  assert.ok(release.on.workflow_call.inputs.source, 'release source selector is missing')
-  assert.equal(release.on.workflow_call.inputs.source.default, 'dev')
-  assert.deepEqual(release.on.workflow_dispatch.inputs.source.options, ['dev', 'stage'])
-  const guard = step(release.jobs.resolve, 'Validate promotion source')
-  assert.equal(release.jobs.resolve.environment, undefined)
-  assert.deepEqual(release.jobs.source.needs, ['resolve'])
-  for (const [source, allowed] of [
-    ['dev', true],
-    ['stage', true],
-    ['prod', false],
-    ['typo', false],
-  ] as const) {
-    const result = run(guard.run, { SOURCE_STAGE: source })
-    assert.equal(result.status === 0, allowed, `${source}: ${result.stdout}${result.stderr}`)
-  }
-  assert.equal(release.jobs.promote.env.SOURCE_STAGE, "${{ inputs.source || 'dev' }}")
-  const setup = release.jobs.promote.steps.find((candidate: any) => candidate.uses === './.github/actions/setup-infra')
-  assert.equal(setup.with.stages, "${{ format('{0} prod', inputs.source || 'dev') }}")
-})
-
-test('promotion verifies and copies only the selected source, with no fallback', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'stage-promotion-workflow-'))
-  try {
-    writeFileSync(
-      join(directory, 'npm'),
-      `#!${process.execPath}\nrequire('node:fs').appendFileSync(process.env.NPM_CALLS,JSON.stringify(process.argv.slice(2))+'\\n');process.exit(Number(process.env.NPM_STATUS || 0));\n`,
-      { mode: 0o755 },
-    )
-    writeFileSync(join(directory, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    const job = release.jobs.promote
-    const verify = job.steps.find((candidate: any) => candidate.run?.includes('::error title=not published::'))
-    assert.ok(verify, 'missing promotion source verification boundary')
-    for (const source of ['dev', 'stage']) {
-      const calls = join(directory, 'calls')
-      writeFileSync(calls, '')
-      const env = {
-        PATH: `${directory}:${process.env.PATH}`,
-        NPM_CALLS: calls,
-        SOURCE_STAGE: source,
-        SHA: 'a'.repeat(40),
-        TAG: 'v1.2.3',
-        ARTIFACT: 'api',
-      }
-      for (const boundary of [verify, step(job, 'Download and upload')]) {
-        const result = run(boundary.run, env)
-        assert.equal(result.status, 0, result.stdout + result.stderr)
-      }
-      const recorded = readFileSync(calls, 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as string[])
-      assert.equal(recorded.length, 2)
-      assert.equal(recorded[0]![recorded[0]!.indexOf('--stage') + 1], source)
-      assert.equal(recorded[1]![recorded[1]!.indexOf('--from') + 1], source)
-      assert.equal(recorded[1]![recorded[1]!.indexOf('--to') + 1], 'prod')
-      for (const status of ['66', '1']) {
-        writeFileSync(calls, '')
-        const refused = run(verify.run, { ...env, NPM_STATUS: status })
-        assert.notEqual(refused.status, 0)
-        assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 1, 'source read must not fall back')
-      }
     }
   } finally {
     rmSync(directory, { recursive: true, force: true })

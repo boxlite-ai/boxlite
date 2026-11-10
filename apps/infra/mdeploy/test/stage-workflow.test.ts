@@ -40,9 +40,7 @@ test('stage accepts SHA candidates while prod keeps its existing release-only ad
     }
     const gate = workflow.jobs.resolve.if
     assert.match(gate, /github.ref == 'refs\/heads\/main' \|\| inputs.stage == 'dev' \|\| inputs.stage == 'stage'/)
-    assert.deepEqual(workflow.on.workflow_dispatch.inputs.source.options, ['dev', 'stage'])
     assert.equal(workflow.jobs['release-publish'].with.stage, '${{ inputs.stage }}')
-    assert.equal(workflow.jobs['release-promote'].with.source, '${{ inputs.source }}')
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }

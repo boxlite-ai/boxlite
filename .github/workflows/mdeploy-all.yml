@@ -25,7 +25,7 @@
 #                     the runner is the tarball already attached to the GitHub
 #                     Release, not a rebuild of it. prod takes nothing else.
 #
-# prod is promote-only on purpose. Promotion moves the selected source's scanned
+# prod is promote-only on purpose. Promotion moves the bytes dev already scanned
 # and served, and a rebuild of one commit is not byte-identical — gzip alone
 # stamps an mtime into the runner tarball, and everything downstream treats
 # version+commit as an identity and never looks inside. Two stages that built
@@ -70,12 +70,6 @@ on:
           - dev
           - stage
           - prod
-      source:
-        description: Release image source when promoting to prod
-        required: true
-        default: dev
-        type: choice
-        options: [dev, stage]
       components:
         description: Which artifacts this ref needs before it is deployed
         required: true
@@ -536,7 +530,6 @@ jobs:
       command: promote
       tag: ${{ needs.resolve.outputs.version }}
       sha: ${{ needs.resolve.outputs.sha }}
-      source: ${{ inputs.source }}
     secrets: inherit
 
   # The commit line, which dev and stage reach. `mbuild.yml` is callee-only for

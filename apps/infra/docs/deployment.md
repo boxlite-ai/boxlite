@@ -52,14 +52,13 @@ gh workflow run mdeploy-all.yml --ref main   -f stage=prod -f ref=vX.Y.Z -f comp
 
 Stage follows dev: candidate dispatches may use a workflow branch and accept its full SHAs or open PR merge candidates. Published stable releases still run from `main`; RC inputs remain refused.
 Its release images publish directly into stage; the release publisher's optional `stage` input defaults to dev for existing callers.
-Production promotion selects `source=dev` (the default) or `source=stage`; no missing-source fallback occurs.
+Production promotion continues to read release images from dev; stage is an independent deployment target.
 Production still requires a stable release on main, its published Runner assets and protected apply confirmation.
 Example stage preview after its prerequisites and artifacts are prepared:
 
 ```bash
 gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='<full-main-sha>' -f components=api+runner -f apply=false
 gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f components=api+runner -f apply=false
-gh workflow run mdeploy-all.yml --ref main -f stage=prod -f source=stage -f ref=vX.Y.Z -f components=api+runner -f apply=false
 ```
 
 Run a preview of that release first. `components=api` or `runner` narrows artifact preparation,

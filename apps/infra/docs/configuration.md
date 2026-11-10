@@ -24,7 +24,7 @@ Use the [checked-in example](../.mstage.config.example.json) as a starting point
 
 Copy `.mstage.config.example.json` to `.mstage.config.json` and edit the intended stage.
 The example includes AWS `dev`/`prod` and GCP `dev2`; stage names do not select a cloud by themselves.
-The main deployment workflow accepts `dev`, `stage` and `prod`; each has its own ref admission and Environment protection.
+The manual GitHub workflow accepts `dev` and `prod`, so use one of those names for a stage deployed through it.
 
 | Field | Meaning |
 | --- | --- |
@@ -35,17 +35,13 @@ The main deployment workflow accepts `dev`, `stage` and `prod`; each has its own
 | `registry` | `artifact-registry` on GCP or `ecr` on AWS, repository and tag policy |
 | `scan` | Blocking severities and timeout for the registry's post-push image scan; `blockOn: "DISABLED"` explicitly disables that gate. mbuild's pre-build `yarn npm audit --severity high` of production dependencies still runs, so a high advisory blocks the build on every stage |
 | `protect` | Requires confirmation for protected operations; mdeploy refuses removal |
-| `promoteFrom` | Source name or nonempty array of distinct source names whose artifacts bootstrap grants this stage access to |
+| `promoteFrom` | Source stage whose artifacts bootstrap grants this stage access to |
 | `roleArn` | Optional AWS role to assume after resolving ambient credentials |
 | `deploy` | Database, cache, storage, ClickHouse, runner and alarm settings consumed by mdeploy |
 
 Do not store passwords or API keys in this declaration: CI carries it as a variable, not a secret.
 AWS account identity comes from resolved credentials. GCP project identity is declared explicitly.
 `promoteFrom` does not copy configuration or promote artifacts during an ordinary deploy.
-For independent dev→prod and stage→prod routes, declare `"promoteFrom": ["dev", "stage"]` on prod.
-Legacy `"promoteFrom": "dev"` remains valid; a CI job may restore only its selected source and destination declarations.
-GCP bootstrap resolves all declared sources, grants registry reads once per source project and object reads on each source Runner bucket.
-Publish an array declaration only after compatible tooling reaches main; an older single-string parser would reject existing production jobs.
 
 ## First account registration
 

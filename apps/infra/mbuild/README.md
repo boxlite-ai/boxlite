@@ -17,7 +17,6 @@ npm run mbuild inspect -- --stage dev
 npm run mbuild publish -- --tag <full-commit-sha> --stage dev
 npm run mbuild verify -- --tag <full-commit-sha> --stage dev
 npm run mbuild promote -- --tag <full-commit-sha> --from dev --to prod
-npm run mbuild promote -- --tag <full-commit-sha> --from stage --to prod --version vX.Y.Z
 ```
 
 | Option | Effect |
@@ -42,10 +41,6 @@ Use the deployment workflow to resolve a ref and prepare the matching source tre
 Promotion copies existing image bytes within one registry kind. Cross-cloud promotion is refused.
 The caller needs source read and destination write access; `promoteFrom` lets bootstrap prepare
 those permissions. On AWS, the current CLI uses one resolved account for both registry addresses.
-
-Release workflows select `source=dev` (default) or `source=stage`, bind that source's Environment declaration and use prod's identity for copying.
-They retain the stricter existing refusal when the destination already holds a requested release artifact.
-The deployment planner retains its existing skip when all destination images already exist; that no-op does not revalidate the chosen source.
 
 Image publication and the stage's scan policy are separate checks. Already-published artifacts
 are verified instead of blindly overwritten. Release images carry a version-qualified address,

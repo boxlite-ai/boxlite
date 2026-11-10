@@ -169,8 +169,8 @@ selects artifact preparation; it is not a promise that the resource graph target
 
 A commit or open PR merge commit is accepted for `dev` and `stage`; both may use candidate workflow branches.
 `prod` requires a published release; release dispatches run from `main`.
-Stage release images publish into stage; prod selects release images from `source=dev` (default) or `source=stage`.
-PR/commit builds cannot promote to prod; prepare and validate the version-qualified stable release images in the chosen source first.
+Stage release images publish into stage; prod continues to promote release images from dev.
+PR/commit builds cannot promote to prod; prepare and validate the version-qualified stable release images in dev first.
 The reusable image workflow and runner build job bind the stage's
 GitHub Environment. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
