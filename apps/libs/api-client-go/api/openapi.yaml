@@ -6551,6 +6551,7 @@ components:
         class: small
         daemonVersion: 1.0.0
         runnerId: runner123
+        toolboxProxyUrl: ""
         progress: ""
       properties:
         id:
@@ -6690,6 +6691,12 @@ components:
           description: The runner ID of the box
           example: runner123
           type: string
+        toolboxProxyUrl:
+          deprecated: true
+          description: Deprecated compatibility field; always empty. Clients must
+            tolerate its absence in a future release.
+          example: ""
+          type: string
         progress:
           allOf:
           - $ref: "#/components/schemas/BoxProgress"
@@ -6749,6 +6756,7 @@ components:
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
+          toolboxProxyUrl: ""
           progress: ""
         - id: aB3cD4eF5gH6
           organizationId: organization123
@@ -6787,6 +6795,7 @@ components:
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
+          toolboxProxyUrl: ""
           progress: ""
         total: 0.8008281904610115
         page: 6.027456183070403

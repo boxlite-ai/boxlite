@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { AuditLog } from '../../audit/entities/audit-log.entity'
 import { AddPendingAuditIndex1794196800000 } from './1794196800000-add-pending-audit-index-migration'
-import { RemoveToolboxUrl1794196800001 } from '../post-deploy/1794196800001-remove-toolbox-url-migration'
 
 const databaseSuite = process.env.DB_HOST ? describe : describe.skip
 databaseSuite('audit refinement migrations', () => {
@@ -83,21 +82,6 @@ databaseSuite('audit refinement migrations', () => {
       await migration.down(runner)
       await runner.query('CREATE INDEX idx_audit_log_pending_created_at ON audit_log ("actorId")')
       await expect(migration.up(runner)).rejects.toThrow('unexpected definition')
-    } finally {
-      await runner.release()
-    }
-  })
-
-  it('removes only the retired region column and restores its nullable structure', async () => {
-    await db.query('CREATE TABLE region (id text PRIMARY KEY, "proxyUrl" text, "toolboxProxyUrl" character varying)')
-    await db.query("INSERT INTO region VALUES ('region', 'https://proxy.test', 'https://old.test')")
-    const runner = db.createQueryRunner()
-    try {
-      const removal = new RemoveToolboxUrl1794196800001()
-      await removal.up(runner)
-      expect(await runner.query('SELECT * FROM region')).toEqual([{ id: 'region', proxyUrl: 'https://proxy.test' }])
-      await removal.down(runner)
-      expect(await runner.query('SELECT "toolboxProxyUrl" FROM region')).toEqual([{ toolboxProxyUrl: null }])
     } finally {
       await runner.release()
     }

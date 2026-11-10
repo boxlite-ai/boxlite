@@ -470,6 +470,20 @@ first API use of each newly issued token, including refreshed tokens. R2 therefo
 qualifying token-use record as return activity; it does not require a new interactive login.
 No additional event or issuer-claim configuration is required. Redis/log failures can omit records.
 
+## Toolbox rollout compatibility
+
+Box responses retain deprecated `toolboxProxyUrl: ""` for old Runner decoders;
+the field no longer supplies a URL or performs Region/cache lookups. New Go clients
+accept its absence. The nullable `region.toolboxProxyUrl` column and existing values
+remain, although the new API no longer maps it. This release has no column-drop migration.
+Remove the response field and column in a later release only after all dependent
+Runners/API instances have upgraded and the rollback window is resolved.
+Startup loads migrations recursively: naming a directory `post-deploy` does not defer execution.
+
+Run `make test:apps:api TEST_FILES='box-toolbox-compat|toolbox-retention'` with `DB_*`
+set for PostgreSQL coverage. To include actual old/new Go decoder checks, install Go 1.23+
+and set `LEGACY_API_CLIENT_ROOT` to an exported pre-change `apps/libs/api-client-go` directory.
+
 ## Mutation auditing
 
 Business writes use `@Audit` to insert a pending `audit_log` row before the handler runs.

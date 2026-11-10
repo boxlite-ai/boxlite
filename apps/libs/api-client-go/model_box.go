@@ -80,6 +80,9 @@ type Box struct {
 	DaemonVersion *string `json:"daemonVersion,omitempty"`
 	// The runner ID of the box
 	RunnerId *string `json:"runnerId,omitempty"`
+	// Deprecated compatibility field; always empty. Clients must tolerate its absence in a future release.
+	// Deprecated
+	ToolboxProxyUrl *string `json:"toolboxProxyUrl,omitempty"`
 	// What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled
 	Progress *BoxProgress `json:"progress,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -958,6 +961,41 @@ func (o *Box) SetRunnerId(v string) {
 	o.RunnerId = &v
 }
 
+// GetToolboxProxyUrl returns the ToolboxProxyUrl field value if set, zero value otherwise.
+// Deprecated
+func (o *Box) GetToolboxProxyUrl() string {
+	if o == nil || IsNil(o.ToolboxProxyUrl) {
+		var ret string
+		return ret
+	}
+	return *o.ToolboxProxyUrl
+}
+
+// GetToolboxProxyUrlOk returns a tuple with the ToolboxProxyUrl field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// Deprecated
+func (o *Box) GetToolboxProxyUrlOk() (*string, bool) {
+	if o == nil || IsNil(o.ToolboxProxyUrl) {
+		return nil, false
+	}
+	return o.ToolboxProxyUrl, true
+}
+
+// HasToolboxProxyUrl returns a boolean if a field has been set.
+func (o *Box) HasToolboxProxyUrl() bool {
+	if o != nil && !IsNil(o.ToolboxProxyUrl) {
+		return true
+	}
+
+	return false
+}
+
+// SetToolboxProxyUrl gets a reference to the given string and assigns it to the ToolboxProxyUrl field.
+// Deprecated
+func (o *Box) SetToolboxProxyUrl(v string) {
+	o.ToolboxProxyUrl = &v
+}
+
 // GetProgress returns the Progress field value if set, zero value otherwise.
 func (o *Box) GetProgress() BoxProgress {
 	if o == nil || IsNil(o.Progress) {
@@ -1065,6 +1103,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.RunnerId) {
 		toSerialize["runnerId"] = o.RunnerId
 	}
+	if !IsNil(o.ToolboxProxyUrl) {
+		toSerialize["toolboxProxyUrl"] = o.ToolboxProxyUrl
+	}
 	if !IsNil(o.Progress) {
 		toSerialize["progress"] = o.Progress
 	}
@@ -1150,6 +1191,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "class")
 		delete(additionalProperties, "daemonVersion")
 		delete(additionalProperties, "runnerId")
+		delete(additionalProperties, "toolboxProxyUrl")
 		delete(additionalProperties, "progress")
 		o.AdditionalProperties = additionalProperties
 	}
