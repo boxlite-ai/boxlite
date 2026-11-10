@@ -534,7 +534,7 @@ udevadm trigger --name-match=kvm || true`,
           metadataStartupScript: userData.apply((encoded: string) =>
             Buffer.from(encoded, 'base64').toString('utf8'),
           ),
-          labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
+          labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': $app.stage },
           // A host holds boxes. A teardown that took one with it would take
           // every box running on it.
           deletionProtection: true,
@@ -612,9 +612,10 @@ udevadm trigger --name-match=kvm || true`,
           location: zone,
           description: `BoxLite runner binary ${request.binary.identity}`,
           instanceFilter: {
-            // OR the existing per-host labels; no instance relabeling is needed.
+            // AND stage and runner within each entry; entries themselves are ORed.
+            // Dev and stage may share a project and logical runner names.
             inclusionLabels: batch.hosts.map(({ slot }) => ({
-              labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
+              labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': $app.stage },
             })),
           },
           osPolicies: [

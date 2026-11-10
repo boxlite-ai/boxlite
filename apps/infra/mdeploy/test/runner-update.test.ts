@@ -48,7 +48,7 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
         JSON.stringify(
           ['default', 'runner-2'].map((label, index) => ({
             name: `boxlite-app-dev2-runner${index ? '-2' : ''}`,
-            labels: { 'boxlite-runner': label },
+            labels: { 'boxlite-runner': label, 'boxlite-stage': 'dev2' },
           })),
         ),
       )
@@ -60,7 +60,11 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
         JSON.stringify({
           name: `projects/p/locations/z/osPolicyAssignments/${assignment}`,
           revisionId: args[3] === 'update' ? 'new-revision' : 'old-revision',
-          instanceFilter: { inclusionLabels: [{ labels: { 'boxlite-runner': fleet ? 'runner-2' : 'default' } }] },
+          instanceFilter: {
+            inclusionLabels: [
+              { labels: { 'boxlite-runner': fleet ? 'runner-2' : 'default', 'boxlite-stage': 'dev2' } },
+            ],
+          },
           rollout: {
             disruptionBudget: fleet ? { percent: 100 } : { fixed: 1 },
             minWaitDuration: fleet ? '0s' : '300s',
@@ -305,4 +309,30 @@ test('a stage is required, and mstage says which ones there are', async () => {
   // Refused by `resolveScope` rather than by a check here: it already names the
   // stages the config declares, which is what someone who mistyped one needs.
   await assert.rejects(() => drive([], awsFleet()), /--stage is required\..*declares: dev, prod, dev2/s)
+})
+
+// A missing/wrong stage must fail before the first policy update.
+test('GCP rejects unscoped or cross-stage hosts and selectors before writing', async () => {
+  for (const boundary of ['host', 'policy']) {
+    for (const stage of [undefined, 'dev']) {
+      const calls: string[][] = []
+      const base = gcpFleet(calls)
+      const run: RunCommand = (file, args) => {
+        const result = base(file, args)
+        if (boundary === 'host' && args[1] === 'instances') {
+          const hosts = JSON.parse(result.stdout)
+          for (const host of hosts) host.labels['boxlite-stage'] = stage
+          return ok(JSON.stringify(hosts))
+        }
+        if (boundary === 'policy' && args[2] === 'os-policy-assignments' && args[3] === 'describe') {
+          const policy = JSON.parse(result.stdout)
+          for (const entry of policy.instanceFilter.inclusionLabels) entry.labels['boxlite-stage'] = stage
+          return ok(JSON.stringify(policy))
+        }
+        return result
+      }
+      await assert.rejects(() => drive(['--stage', 'dev2'], run, 'gcp'), /mdeploy/)
+      assert.equal(calls.filter((call) => call[4] === 'update').length, 0)
+    }
+  }
 })

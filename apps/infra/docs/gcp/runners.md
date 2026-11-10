@@ -12,9 +12,19 @@ Development binaries live in the stage's GCS artifact bucket.
 
 ## Rollout behavior
 
-Each stage requires its own GCP project. Runner labels intentionally identify logical runners
-without a stage suffix; OS Config selects them within the configured project and zone.
-Sharing a project between stages is unsupported because matching labels can select another stage's hosts.
+Runner VMs carry `boxlite-stage=<stage>` alongside their logical `boxlite-runner` label.
+Every OS Config inclusion entry requires both labels, so dev and stage can share a project
+and zone without selecting each other's runners. For example, a stage canary requires
+`boxlite-stage=stage` AND `boxlite-runner=default`; the dev canary uses `boxlite-stage=dev`.
+Separate inclusion entries are ORed, so the stage label must stay inside every runner entry.
+These labels isolate policy targeting, not IAM permissions or other applications using the same stage name.
+
+For existing shared-project hosts, narrow every dev/stage Runner assignment before adding stage labels
+to VMs. Wait for each new narrowed revision to finish rollout and become the baseline, then add the
+correct stage label while preserving existing labels. Changing labels is an in-place operation;
+it does not replace VMs or disks. Preserve policy scripts, target versions and rollout settings.
+Do not run an older deployment during or after migration: it can restore the unscoped selectors.
+Inspect both environments afterward; narrowing selectors does not undo earlier wrong-environment execution.
 
 mdeploy splits the fleet into two disjoint OS Config assignments:
 
@@ -36,7 +46,8 @@ address, volume backend and registry proxy host. Existing hosts retain their dis
 local box state; machine-type and boot-image/startup changes do not resize or replace them.
 New hosts use the current [runner sizing settings](../configuration.md#runner-sizing).
 
-`runner:update` checks both assignments before writing, then updates them in the same order. It waits
+`runner:update` checks host stage labels and both assignments' exact stage-and-runner selectors before
+writing, refusing legacy or mismatched scopes, then updates them in the same order. It waits
 for each rollout and verifies that every policy on each targeted host reports compliant with the updated
 revision. A failed update, missing report or stale revision stops progression. The first runner must be
 running, and runner labels must be unique after normalization. The command refuses `--host`;
