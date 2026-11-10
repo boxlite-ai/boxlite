@@ -95,6 +95,7 @@ const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] 
   { value: 'dark', label: 'Dark', icon: <MoonIcon className="size-3.5" /> },
 ]
 
+/** Offers explicit light/dark choices while preserving the system-theme option in the account menu. */
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
     <div className="px-2 py-2">

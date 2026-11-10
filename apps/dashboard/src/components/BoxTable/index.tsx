@@ -262,141 +262,141 @@ export function BoxTable({
         className={cn('hidden min-h-0 overflow-y-auto md:block', isPageFetching && 'opacity-60 transition-opacity')}
         aria-busy={loading || isPageFetching}
       >
-        {loading ? (
-          Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
-              <div className="h-4 w-40 animate-pulse bg-card" />
-            </div>
-          ))
-        ) : data.length === 0 ? (
-          <> {emptyState} </>
-        ) : (
-          data.map((box) => {
-            const st = statusOf(box)
-            const name = getBoxDisplayName(box)
-            const busy = boxIsLoading[box.id]
-            const transitioning = boxStateIsTransitioning[box.id]
-
-            return (
-              <div
-                key={box.id}
-                onClick={() => {
-                  if (isSelectingText()) return
-                  onRowClick?.(box)
-                }}
-                className={`group grid ${GRID} resource-list-row items-center ${
-                  onRowClick ? 'cursor-pointer' : ''
-                } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
-              >
-                {/* the box: its shape drawn, then its name */}
-                <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
-                  <Container className="size-6 shrink-0 text-muted-foreground" />
-                  <a
-                    className="resource-link"
-                    href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-                      if (onRowClick) {
-                        event.preventDefault()
-                        if (!isSelectingText()) onRowClick(box)
-                      }
-                    }}
-                  >
-                    {name}
-                  </a>
-                  <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />
-                </span>
-
-                {/* box id */}
-                <span className="truncate font-mono text-[11px] text-muted-foreground">{getBoxPublicIdLabel(box)}</span>
-
-                {/* status */}
-                <StatusIndicator label={st.label} color={st.color} />
-
-                {/* actions */}
-                <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
-                  {renderActions(box)}
-                </div>
+        {loading
+          ? Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
+                <div className="h-4 w-40 animate-pulse bg-card" />
               </div>
-            )
-          })
-        )}
+            ))
+          : data.length === 0
+            ? emptyState
+            : data.map((box) => {
+                const st = statusOf(box)
+                const name = getBoxDisplayName(box)
+                const busy = boxIsLoading[box.id]
+                const transitioning = boxStateIsTransitioning[box.id]
+
+                return (
+                  <div
+                    key={box.id}
+                    onClick={() => {
+                      if (isSelectingText()) return
+                      onRowClick?.(box)
+                    }}
+                    className={`group grid ${GRID} resource-list-row items-center ${
+                      onRowClick ? 'cursor-pointer' : ''
+                    } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
+                  >
+                    {/* the box: its shape drawn, then its name */}
+                    <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
+                      <Container className="size-6 shrink-0 text-muted-foreground" />
+                      <a
+                        className="resource-link"
+                        href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                          if (onRowClick) {
+                            event.preventDefault()
+                            if (!isSelectingText()) onRowClick(box)
+                          }
+                        }}
+                      >
+                        {name}
+                      </a>
+                      <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />
+                    </span>
+
+                    {/* box id */}
+                    <span className="truncate font-mono text-[11px] text-muted-foreground">
+                      {getBoxPublicIdLabel(box)}
+                    </span>
+
+                    {/* status */}
+                    <StatusIndicator label={st.label} color={st.color} />
+
+                    {/* actions */}
+                    <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
+                      {renderActions(box)}
+                    </div>
+                  </div>
+                )
+              })}
       </div>
 
       <div
         className={cn('min-h-0 space-y-3 overflow-y-auto md:hidden', isPageFetching && 'opacity-60 transition-opacity')}
+        role="region"
+        aria-label="Box cards"
         aria-busy={loading || isPageFetching}
       >
-        {loading ? (
-          Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="border border-border bg-card p-4">
-              <div className="h-4 w-36 animate-pulse bg-background" />
-              <div className="mt-4 h-3 w-52 animate-pulse bg-background" />
-            </div>
-          ))
-        ) : data.length === 0 ? (
-          <> {emptyState} </>
-        ) : (
-          data.map((box) => {
-            const st = statusOf(box)
-            const name = getBoxDisplayName(box)
-            const created = getRelativeTimeString(box.createdAt).relativeTimeString.toUpperCase()
-            const busy = boxIsLoading[box.id]
-            const transitioning = boxStateIsTransitioning[box.id]
-
-            return (
-              <div
-                key={box.id}
-                role={onRowClick ? 'button' : undefined}
-                tabIndex={onRowClick ? 0 : undefined}
-                onClick={() => {
-                  if (isSelectingText()) return
-                  onRowClick?.(box)
-                }}
-                onKeyDown={(e) => {
-                  if (e.target !== e.currentTarget || !onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
-                  e.preventDefault()
-                  onRowClick(box)
-                }}
-                className={`w-full border border-border bg-background p-4 text-left transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:ring-2 focus-visible:ring-brand/35 ${
-                  onRowClick ? 'cursor-pointer' : ''
-                } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
-              >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <span className="min-w-0">
-                    <span className="flex min-w-0 items-center gap-2 font-semibold">
-                      <span style={{ color: 'hsl(var(--brand))' }} className="text-[10px]">
-                        ▸
-                      </span>
-                      <span className="truncate">{name}</span>
-                      <CopyNameButton name={name} />
-                    </span>
-                    <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
-                      {getBoxPublicIdLabel(box)}
-                    </span>
-                  </span>
-                  <StatusIndicator label={st.label} color={st.color} />
-                </div>
-
-                <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">
-                  <Quota label="CPU" value={box.cpu} unit="vCPU" />
-                  <Quota label="RAM" value={box.memory} unit="GB" />
-                  <Quota label="DISK" value={box.disk} unit="GB" />
-                </div>
-
-                <div className="mt-3 flex items-center justify-between gap-3">
-                  <span className="font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                    Created {created}
-                  </span>
-                  <span className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                    {renderActions(box, 'size-10', 'size-4')}
-                  </span>
-                </div>
+        {loading
+          ? Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="border border-border bg-card p-4">
+                <div className="h-4 w-36 animate-pulse bg-background" />
+                <div className="mt-4 h-3 w-52 animate-pulse bg-background" />
               </div>
-            )
-          })
-        )}
+            ))
+          : data.length === 0
+            ? emptyState
+            : data.map((box) => {
+                const st = statusOf(box)
+                const name = getBoxDisplayName(box)
+                const created = getRelativeTimeString(box.createdAt).relativeTimeString.toUpperCase()
+                const busy = boxIsLoading[box.id]
+                const transitioning = boxStateIsTransitioning[box.id]
+
+                return (
+                  <div
+                    key={box.id}
+                    role={onRowClick ? 'button' : undefined}
+                    tabIndex={onRowClick ? 0 : undefined}
+                    onClick={() => {
+                      if (isSelectingText()) return
+                      onRowClick?.(box)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget || !onRowClick || (e.key !== 'Enter' && e.key !== ' ')) return
+                      e.preventDefault()
+                      onRowClick(box)
+                    }}
+                    className={`w-full border border-border bg-background p-4 text-left transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:ring-2 focus-visible:ring-brand/35 ${
+                      onRowClick ? 'cursor-pointer' : ''
+                    } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="flex min-w-0 items-center gap-2 font-semibold">
+                          <span style={{ color: 'hsl(var(--brand))' }} className="text-[10px]">
+                            ▸
+                          </span>
+                          <span className="truncate">{name}</span>
+                          <CopyNameButton name={name} />
+                        </span>
+                        <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
+                          {getBoxPublicIdLabel(box)}
+                        </span>
+                      </span>
+                      <StatusIndicator label={st.label} color={st.color} />
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">
+                      <Quota label="CPU" value={box.cpu} unit="vCPU" />
+                      <Quota label="RAM" value={box.memory} unit="GB" />
+                      <Quota label="DISK" value={box.disk} unit="GB" />
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <span className="font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                        Created {created}
+                      </span>
+                      <span className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                        {renderActions(box, 'size-10', 'size-4')}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
       </div>
 
       <ResourcePagination

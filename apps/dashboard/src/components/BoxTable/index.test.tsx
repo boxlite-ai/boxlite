@@ -404,7 +404,7 @@ describe('BoxTable empty state', () => {
   it('offers filter recovery in the compact empty list', () => {
     const onFiltersChange = vi.fn()
     renderEmpty({ filters: { idOrName: 'missing' }, onFiltersChange })
-    const mobile = document.querySelector('[class*="md:hidden"][aria-busy]')!
+    const mobile = document.querySelector('[role="region"][aria-label="Box cards"]')!
     expect(mobile.textContent).toContain('No matching Boxes')
     const clear = [...mobile.querySelectorAll('button')].find((button) => button.textContent === 'Clear filter')!
     act(() => clear.click())

@@ -694,6 +694,9 @@ or current badge; keyboard-focus indicators are unchanged.
 
 ## Resource screen visual rules
 
+The compact Box list exposes a named “Box cards” region; its filter-recovery
+checks locate that accessible region independently of responsive CSS classes.
+
 True empty lists hide column headers and paging; filtered-empty lists retain context.
 Boxes and TanStack-backed tables share ResourcePagination. Totals and fetching stay
 with the caller; a later empty page always retains a Previous action, while a single

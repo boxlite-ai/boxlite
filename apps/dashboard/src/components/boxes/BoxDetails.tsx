@@ -104,6 +104,7 @@ function SpecRow({ label, children, title }: { label: string; children: ReactNod
   )
 }
 
+/** Composes box metadata, connection controls and tab content within the shared application height. */
 export default function BoxDetails() {
   const { boxId } = useParams<{ boxId: string }>()
   const navigate = useNavigate()
