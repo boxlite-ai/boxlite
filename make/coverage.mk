@@ -1,4 +1,4 @@
-PHONY_TARGETS += coverage codecov
+PHONY_TARGETS += coverage codecov coverage\:go\:checkpoint
 
 # Match Codecov's exclusions locally: production guest and SDK code must not
 # disappear from the denominator just because their tests run separately.
@@ -97,6 +97,18 @@ coverage\:go: dev\:go
 	(cd apps/image-service && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
+
+# Archive preparation does not boot a VM, but the production constructor still
+# requires a supported host. The Linux native-binding job enables KVM first.
+coverage\:go\:checkpoint: dev\:go
+	@mkdir -p target/coverage
+	@native_tags=boxlite_dev,boxlite_integration; \
+	if [ -n "$$CARGO_LLVM_COV" ]; then native_tags=$$native_tags,boxlite_coverage; fi; \
+	cd sdks/go && go test -count=1 -tags=$$native_tags \
+		-o "$(PROJECT_ROOT)/target/coverage/checkpoint-native.test" \
+		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-checkpoint-native.out" \
+		-run '^TestCheckpointArchivePreparation' ./integration/archive
 
 coverage\:python: _ensure-python-deps
 	@mkdir -p target/coverage/python

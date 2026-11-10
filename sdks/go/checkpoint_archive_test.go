@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCheckpointArchivePreparationValidatesArgumentsBeforeNativeSubmission(t *testing.T) {
@@ -70,5 +71,46 @@ func TestCheckpointArchivePreparationRejectsUninitializedAndClosedRuntime(t *tes
 		if _, err := candidate.PrepareCheckpointArchive(context.Background(), source, nil); !errors.Is(err, ErrRuntimeClosed) {
 			t.Errorf("expected ErrRuntimeClosed, got %v", err)
 		}
+	}
+}
+
+func TestCheckpointArchivePreparationRejectsClosingAndCancelledSubmission(t *testing.T) {
+	runtime, err := NewRest(BoxliteRestOptions{URL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	source := CheckpointArchiveSource{Path: "archive.boxlite", SHA256: strings.Repeat("a", 64), PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	ctx := &cancelBetweenErrChecksContext{Context: base, sampled: make(chan struct{}), resume: release}
+	done := make(chan error, 1)
+	go func() { _, err := runtime.PrepareCheckpointArchive(ctx, source, nil); done <- err }()
+	select {
+	case <-ctx.sampled:
+	case <-time.After(time.Second):
+		t.Fatal("preparation did not validate context")
+	}
+	cancel()
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("second admission check lost cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled submission did not return")
+	}
+	runtime.closingOnce.Do(func() { close(runtime.closing) })
+	if _, err := runtime.PrepareCheckpointArchive(context.Background(), source, nil); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("closing preparation: %v", err)
 	}
 }

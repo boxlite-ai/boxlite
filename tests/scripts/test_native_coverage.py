@@ -1,6 +1,7 @@
 """Exercise the native coverage collector across SDK working directories."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ COLLECTOR = Path(__file__).resolve().parents[2] / "scripts/test/coverage-binding
 BUILD_TOOL = """#!/usr/bin/env python3
 import os
 from pathlib import Path
+import shlex
 import sys
 
 root = Path(os.environ["COVERAGE_TEST_ROOT"])
@@ -44,10 +46,32 @@ if tool == "make":
             (target_dir() / "python-gate").write_text(
                 os.environ.get("BOXLITE_REQUIRE_NATIVE", "")
             )
+        elif target == "coverage:go:checkpoint":
+            (target_dir() / "go-link-flags").write_text(
+                os.environ.get("CGO_LDFLAGS", "")
+            )
+            (root / "target/coverage").mkdir(parents=True, exist_ok=True)
+            (root / "target/coverage/checkpoint-native.test").touch()
 elif tool == "rustc":
-    print("host: aarch64-apple-darwin")
+    if args == ["--print", "target-libdir"]:
+        library_dir = root / "rustlib"
+        library_dir.mkdir(exist_ok=True)
+        (library_dir / "libprofiler_builtins-fixture.rlib").touch()
+        print(library_dir)
+    else:
+        print("host: aarch64-apple-darwin")
+elif tool == "llvm-cov":
+    assert args[:2] == ["export", "-format=lcov"]
+    profile = Path(args[2].removeprefix("-instr-profile="))
+    assert profile == target_dir() / "native.profdata" and profile.is_file()
+    binary = root / "target/coverage/checkpoint-native.test"
+    assert Path(args[3]) == binary and binary.is_file()
+    print("SF:" + str(binary))
+elif args[:2] == ["llvm-cov", "show-env"]:
+    print("export CARGO_LLVM_COV_TARGET_DIR=" + shlex.quote(str(target_dir())))
 elif args[:2] == ["llvm-cov", "report"]:
     destination = target_dir()
+    (destination / "report-flags").write_text(os.environ.get("LLVM_COV_FLAGS", ""))
     objects = [destination / (sdk + ".o") for sdk in ("python", "node", "c")]
     missing = [obj.name for obj in objects if not obj.is_file()]
     if missing:
@@ -55,6 +79,7 @@ elif args[:2] == ["llvm-cov", "report"]:
         sys.exit(1)
     report = Path(args[args.index("--output-path") + 1])
     report.write_text("\\n".join("SF:" + str(obj) for obj in objects))
+    (destination / "native.profdata").touch()
 """
 
 
@@ -146,7 +171,7 @@ class NativeCoveragePathsTest(unittest.TestCase):
             shutil.copy2(COLLECTOR, collector)
             tools = root / "bin"
             tools.mkdir()
-            for name in ("cargo", "make", "rustc"):
+            for name in ("cargo", "make", "rustc", "llvm-cov"):
                 executable = tools / name
                 executable.write_text(BUILD_TOOL)
                 executable.chmod(0o755)
@@ -194,14 +219,38 @@ class NativeCoveragePathsTest(unittest.TestCase):
             )
             node_runs = []
             ffi_runs = []
+            go_archive_runs = []
             for line in invocations_path.read_text().splitlines():
                 argv = json.loads(line)
                 if "test:integration:node" in argv:
                     node_runs.append(argv)
                 if "test:unit:ffi" in argv:
                     ffi_runs.append(argv)
+                if "coverage:go:checkpoint" in argv:
+                    go_archive_runs.append(argv)
             self.assertTrue(
                 ffi_runs, "Rust C ABI tests must contribute native coverage"
+            )
+            self.assertEqual(
+                len(go_archive_runs),
+                1,
+                "native Go archive ownership must contribute coverage",
+            )
+            go_link_flags = shlex.split((expected / "go-link-flags").read_text())
+            self.assertEqual(
+                go_link_flags[0],
+                str(expected / "debug/libboxlite.a"),
+                "Go callers must link the instrumented native archive first",
+            )
+            self.assertEqual(
+                go_link_flags[1],
+                str(root / "rustlib/libprofiler_builtins-fixture.rlib"),
+                "CGO must link Rust's matching coverage profile runtime",
+            )
+            self.assertIn(
+                "SF:" + str(root / "target/coverage/checkpoint-native.test"),
+                (root / "target/coverage/native-sdk/go-lcov.info").read_text(),
+                "Go native coverage must use the retained test executable",
             )
             self.assertTrue(node_runs, str(invocations_path))
             for argv in node_runs:

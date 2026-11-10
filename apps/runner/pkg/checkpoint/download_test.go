@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/boxlite-ai/runner/pkg/storage"
 	"github.com/google/uuid"
 )
 
@@ -134,5 +135,52 @@ func TestCheckpointDownloadRejectsMalformedMetadataOrCancellationBeforeTransfer(
 	}
 	if store.calls.Load() != 0 {
 		t.Fatal("invalid or canceled request reached object storage")
+	}
+}
+
+func TestCheckpointDownloadRejectsUnconfiguredOrUnsafeDestinations(t *testing.T) {
+	for _, scenario := range []string{"source-owner", "empty-root", "no-store", "unsupported-store", "root-file", "checkpoint-link", "public-checkpoint"} {
+		t.Run(scenario, func(t *testing.T) {
+			original, record, store := uploaded(t)
+			retained := record.Reference
+			destination := Artifacts{Root: filepath.Join(t.TempDir(), "imports")}
+			var selected storage.ArchiveStore = store
+			switch scenario {
+			case "source-owner":
+				record.SourceBoxID = ""
+			case "empty-root":
+				destination.Root = ""
+			case "no-store":
+				selected = nil
+			case "unsupported-store":
+				selected = &storage.SchemeArchiveStore{}
+			case "root-file":
+				if err := os.WriteFile(destination.Root, []byte("occupied"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "checkpoint-link", "public-checkpoint":
+				if err := os.Mkdir(destination.Root, 0700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(destination.Root, record.CheckpointID)
+				if scenario == "checkpoint-link" {
+					if err := os.Symlink(t.TempDir(), path); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.Mkdir(path, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := destination.Download(t.Context(), record, uuid.NewString(), selected); err == nil {
+				t.Fatal("unsafe download was admitted")
+			}
+			if store.calls.Load() != 0 {
+				t.Fatal("rejected destination reached object storage")
+			}
+			// Rejection may not remove or change the independently retained capture.
+			if _, err := original.Export(t.Context(), retained, noCapture(t)); err != nil {
+				t.Fatalf("download refusal changed captured bytes: %v", err)
+			}
+		})
 	}
 }

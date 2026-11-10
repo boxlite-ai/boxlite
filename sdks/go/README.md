@@ -499,6 +499,13 @@ They run in the `boxlite_integration` archive suite through the shared SDK
 integration target and the VM-capable E2E workflow. Their ownership,
 cancellation, late-completion cleanup and native import assertions stay enabled.
 Hosted unit coverage continues to run checkpoint REST and argument tests.
+The Linux native-binding coverage job also enables KVM and runs the existing
+archive preparation ownership/cancellation cases through
+`make coverage:go:checkpoint`. It uploads the Go profile with the native binding
+reports; the full archive round-trip remains in the VM integration suite.
+The collector links Rust's instrumented library and matching LLVM profile
+runtime. A coverage-only integration test entry point flushes native counters
+before Go exits, so the report includes the C ABI archive preparation path.
 
 ## License
 
