@@ -22,6 +22,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
 
+/** Keeps navigation mounted across lazy routes and owns header/banner viewport offsets. */
 const Dashboard: React.FC = () => {
   const { pathname } = useLocation()
   const isWelcome = pathname === RoutePath.WELCOME

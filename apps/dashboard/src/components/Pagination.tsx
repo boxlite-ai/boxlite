@@ -6,6 +6,7 @@
 
 import { Table } from '@tanstack/react-table'
 import { ResourcePagination } from './ResourcePagination'
+/** Adapts TanStack totals and page state to the shared resource footer. */
 export function Pagination<TData>({
   table,
   selectionEnabled,

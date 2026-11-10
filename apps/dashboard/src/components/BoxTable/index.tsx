@@ -219,6 +219,29 @@ export function BoxTable({
     )
   }
 
+  const emptyState = (
+    <ResourceEmptyState
+      title={hasFilter ? 'No matching Boxes' : 'No boxes yet.'}
+      icon={<Container className="size-6" />}
+      description={
+        hasFilter
+          ? 'Try another name or clear your filter.'
+          : 'Your agent creates them through the SDK, or you can make one by hand.'
+      }
+    >
+      {hasFilter && (
+        <AsciiButton size="sm" onClick={() => onFiltersChange({ ...filters, idOrName: undefined })}>
+          Clear filter
+        </AsciiButton>
+      )}
+      {!hasFilter && onOpenQuickstart && (
+        <button type="button" onClick={onOpenQuickstart} className="resource-guide-link">
+          Open Quickstart →
+        </button>
+      )}
+    </ResourceEmptyState>
+  )
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
@@ -246,26 +269,7 @@ export function BoxTable({
             </div>
           ))
         ) : data.length === 0 ? (
-          <ResourceEmptyState
-            title={hasFilter ? 'No matching Boxes' : 'No boxes yet.'}
-            icon={<Container className="size-6" />}
-            description={
-              hasFilter
-                ? 'Try another name or clear your filter.'
-                : 'Your agent creates them through the SDK, or you can make one by hand.'
-            }
-          >
-            {hasFilter && (
-              <AsciiButton size="sm" onClick={() => onFiltersChange({ ...filters, idOrName: undefined })}>
-                Clear filter
-              </AsciiButton>
-            )}
-            {!hasFilter && onOpenQuickstart && (
-              <button type="button" onClick={onOpenQuickstart} className="resource-guide-link">
-                Open Quickstart →
-              </button>
-            )}
-          </ResourceEmptyState>
+          <> {emptyState} </>
         ) : (
           data.map((box) => {
             const st = statusOf(box)
@@ -332,18 +336,7 @@ export function BoxTable({
             </div>
           ))
         ) : data.length === 0 ? (
-          <div className="flex flex-col items-center justify-center border border-dashed border-border px-6 py-16 text-center">
-            <Container className="mb-4 size-8 text-muted-foreground" strokeWidth={1.3} />
-            <div className="text-sm font-medium">No boxes yet.</div>
-            <div className="mt-2 max-w-sm text-[13px] text-muted-foreground">
-              Spin up a Box with the BoxLite SDK or CLI, or hit “New Box”.
-            </div>
-            {!hasFilter && onOpenQuickstart && (
-              <AsciiButton type="button" onClick={onOpenQuickstart} className="mt-4">
-                Open Quickstart →
-              </AsciiButton>
-            )}
-          </div>
+          <> {emptyState} </>
         ) : (
           data.map((box) => {
             const st = statusOf(box)

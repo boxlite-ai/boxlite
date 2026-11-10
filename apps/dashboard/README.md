@@ -657,7 +657,9 @@ Organization switching, theme and logout remain in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
-expansion control and Quickstart as the last action. Selected navigation uses the
+Quickstart as the last action. Collapse sits beside the logo only while expanded;
+clicking the compact logo expands navigation without changing the route. Keyboard
+focus moves to the replacement toggle. Selected navigation uses the
 accent surface, distinct from the quieter hover surface.
 
 Dashboard owns `--app-header-height`, `--app-banner-height` and
@@ -690,6 +692,6 @@ with the caller; a later empty page always retains a Previous action, while a si
 page hides navigation arrows. Pagination follows the data rather than the viewport.
 Desktop image navigation lives in the expandable rail, with mobile-only page tabs.
 Clicking Images in a compact rail reveals its children. Quota metadata uses readable
-12px type. Template columns use a240px minimum in the available content width;
+12px type. Template columns use a 240px minimum in the available content width;
 short Quickstart code blocks expand naturally. Billing and box details retain all
 data and actions while removing excess whitespace and dotted leaders.

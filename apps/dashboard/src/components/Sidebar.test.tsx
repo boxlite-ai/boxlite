@@ -28,7 +28,6 @@ vi.mock('usehooks-ts', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }))
 
-vi.mock('@/assets/Logo', () => ({ LogoText: () => <span>BoxLite</span>, Logo: () => <span /> }))
 vi.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'dark', setTheme: vi.fn() }),
 }))
@@ -96,6 +95,24 @@ describe('Sidebar primary navigation', () => {
     expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
   })
 
+  it('collapses beside the brand and expands through the compact logo without navigating', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/images/registries')
+    const collapse = document.querySelector<HTMLButtonElement>('[aria-label="Collapse navigation"]')!
+    const brand = document.querySelector('aside a[aria-label="BoxLite home"]')!
+    expect(collapse.parentElement).toBe(brand.parentElement)
+    act(() => collapse.click())
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).toBeNull()
+    const expand = document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!
+    expect(expand.querySelector('img')).not.toBeNull()
+    expect(document.activeElement).toBe(expand)
+    act(() => expand.click())
+    expect(document.querySelector('nav a[aria-current="page"]')?.getAttribute('href')).toBe(
+      '/dashboard/images/registries',
+    )
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse navigation')
+  })
+
   it('reveals the current Images child and supports independent disclosure', () => {
     localStorage.setItem('boxlite-navigation-expanded', 'true')
     renderRoute('/dashboard/images/registries')
@@ -105,6 +122,20 @@ describe('Sidebar primary navigation', () => {
     expect(disclosure.getAttribute('aria-expanded')).toBe('true')
     act(() => disclosure.click())
     expect(document.querySelector('#images-navigation')?.hasAttribute('hidden')).toBe(true)
+  })
+
+  it('reveals registry navigation when Images is opened from the compact rail', () => {
+    renderRoute('/dashboard/boxes')
+    act(() => document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/images"]')!.click())
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+    const registry = document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/images/registries"]')!
+    act(() => registry.click())
+    expect(registry.getAttribute('aria-current')).toBe('page')
+    const disclosure = document.querySelector<HTMLButtonElement>('[aria-label="Toggle Images navigation"]')!
+    act(() => disclosure.click())
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+    act(() => disclosure.click())
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
   })
 
   it('does not treat a similar route prefix as the current feature', () => {

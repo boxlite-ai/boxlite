@@ -28,7 +28,7 @@ const CUSTOM_PLAN_CONTACT_URL =
 const CARD_BADGE_ROW = 'mb-3 flex h-[18px] items-center justify-between gap-3'
 const CARD_BADGE =
   'border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground'
-const CARD_PRICE_BAND = 'mb-3 flex h-[52px] flex-col justify-start'
+const CARD_PRICE_BAND = 'mb-3 flex min-h-[64px] flex-col justify-start'
 
 function SpecRow({ label, value }: { label: string; value: string }) {
   return (
@@ -39,6 +39,7 @@ function SpecRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+/** Uses the current subscription to choose a disabled, scheduled, upgrade or downgrade action. */
 function PlanCard({
   plan,
   organizationPlan,

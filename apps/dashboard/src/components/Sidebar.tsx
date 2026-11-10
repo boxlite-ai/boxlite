@@ -44,7 +44,7 @@ import {
   SunIcon,
 } from '@/components/ui/icon'
 import { usePostHog } from 'posthog-js/react'
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -135,6 +135,12 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(readExpandedPreference)
+  const navigationToggleRef = useRef<HTMLButtonElement>(null)
+  const restoreToggleFocus = useRef(false)
+  const toggleNavigation = () => {
+    restoreToggleFocus.current = true
+    setExpanded((value) => !value)
+  }
   const [managementOpen, setManagementOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<string[]>([])
   useEffect(() => {
@@ -142,6 +148,10 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
       localStorage.setItem(NAVIGATION_EXPANDED_KEY, String(expanded))
     } catch {
       /* Optional preference. */
+    }
+    if (restoreToggleFocus.current) {
+      navigationToggleRef.current?.focus()
+      restoreToggleFocus.current = false
     }
   }, [expanded])
   useEffect(() => {
@@ -217,15 +227,48 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
         style={{ '--navigation-width': expanded ? '224px' : '64px' } as CSSProperties}
         className="sticky top-[var(--app-banner-height,0px)] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 flex-col items-center border-r border-border bg-background pb-3 font-mono text-[13px] md:flex"
       >
-        <Link
-          to={RoutePath.BOXES}
-          aria-label="BoxLite home"
-          className="flex h-[var(--app-header-height,48px)] w-full shrink-0 items-center px-[12px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-        >
-          <span className={cn('flex shrink-0 overflow-hidden', expanded ? 'w-[115px]' : 'w-[38px]')}>
-            <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
-          </span>
-        </Link>
+        <div className="flex h-[var(--app-header-height,48px)] w-full shrink-0 items-center justify-between border-b border-border">
+          {expanded ? (
+            <>
+              <Link
+                to={RoutePath.BOXES}
+                aria-label="BoxLite home"
+                className="flex h-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              >
+                <span className="flex w-[115px] shrink-0 overflow-hidden">
+                  <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
+                </span>
+              </Link>
+              <button
+                ref={navigationToggleRef}
+                type="button"
+                aria-label="Collapse navigation"
+                aria-expanded={true}
+                aria-controls="primary-navigation"
+                title="Collapse navigation"
+                onClick={toggleNavigation}
+                className="mr-2 flex size-9 shrink-0 items-center justify-center text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              >
+                <PanelLeft className="size-[18px]" aria-hidden="true" />
+              </button>
+            </>
+          ) : (
+            <button
+              ref={navigationToggleRef}
+              type="button"
+              aria-label="Expand navigation"
+              aria-expanded={false}
+              aria-controls="primary-navigation"
+              title="Expand navigation"
+              onClick={toggleNavigation}
+              className="flex h-full w-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+            >
+              <span className="flex w-[38px] shrink-0 overflow-hidden">
+                <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
+              </span>
+            </button>
+          )}
+        </div>
         <nav
           id="primary-navigation"
           aria-label="Primary"
@@ -239,10 +282,18 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             )}
             {primaryItems.map((item) => {
               const groupOpen = openGroups.includes(item.path)
+              const expandedGroup = expanded && Boolean(item.children)
+              const selected = isActive(item.path) && !(expandedGroup && groupOpen)
               const currentChild = item.children?.filter((child) => isActive(child.path)).at(-1)
               return (
                 <div key={item.path} className={cn('shrink-0', expanded && 'w-full')}>
-                  <div className="flex items-center">
+                  <div
+                    className={cn(
+                      'flex items-center',
+                      expandedGroup && 'hover:bg-card',
+                      expandedGroup && selected && 'bg-accent hover:bg-accent',
+                    )}
+                  >
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Link
@@ -254,7 +305,8 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                             isActive(item.path) && !(expanded && item.children && groupOpen) ? 'page' : undefined
                           }
                           className={cn(
-                            railItemClass(isActive(item.path) && !(expanded && item.children && groupOpen)),
+                            railItemClass(selected && !expandedGroup),
+                            expandedGroup && 'hover:bg-transparent',
                             isActive(item.path) && 'text-foreground',
                           )}
                         >
@@ -362,21 +414,6 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
           </div>
         </nav>
         <div className="flex w-full shrink-0 flex-col items-center gap-2 px-2 pt-2">
-          <button
-            type="button"
-            aria-label={expanded ? 'Collapse navigation' : 'Expand navigation'}
-            aria-expanded={expanded}
-            aria-controls="primary-navigation"
-            title={expanded ? 'Collapse navigation' : 'Expand navigation'}
-            onClick={() => setExpanded((value) => !value)}
-            className={cn(
-              'hidden h-10 shrink-0 items-center gap-3 text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground md:flex',
-              expanded ? 'w-full px-3' : 'w-10 justify-center',
-            )}
-          >
-            <PanelLeft className="size-[18px] shrink-0" aria-hidden="true" />
-            {expanded && <span>Collapse</span>}
-          </button>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -397,7 +434,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             )}
           </Tooltip>
         </div>
-      </aside>{' '}
+      </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header
           aria-label="Application navigation"

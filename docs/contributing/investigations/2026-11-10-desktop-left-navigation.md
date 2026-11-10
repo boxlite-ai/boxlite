@@ -34,8 +34,9 @@ Billing and conditional Organization children. In compact mode clicking Manageme
 expands the rail and reveals its children. Entering a management route opens the
 group; manual collapse remains possible. Child links carry current-page semantics.
 
-The resource/group area scrolls separately. Collapse and Quickstart are pinned to
-the footer, with Quickstart last. API Keys is in the header. Profile retains
+The resource/group area scrolls separately. Quickstart is pinned to the footer. Collapse
+sits to the right of the expanded wordmark and disappears when compact. Clicking
+the compact logo expands the rail without navigating; toggle focus is retained. API Keys is in the header. Profile retains
 organization switching, theme and logout. Selected items use the neutral accent
 surface (#1f1f1f dark), against #0a0a0a sidebar, with quieter hover and visible
 keyboard focus. Expansion is saved under boxlite-navigation-expanded; unavailable
@@ -62,3 +63,7 @@ Independent design/code review completed. The final UI checks and pagination
 contracts are documented in [visual refinement](2026-11-10-desktop-visual-refinement.md).
 [Before/after screenshots and reproduction](assets/desktop-left-navigation/README.md)
 compare the implementation with main at `6ca4b882`.
+
+The brand-row bottom border continues the header divider across the sidebar.
+An expanded Images group owns its background across the link and disclosure
+button, so hover and closed-group selection have the same width as child rows.

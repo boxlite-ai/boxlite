@@ -199,6 +199,7 @@ function PlanFigures({ plan, wallet }: { plan: OrganizationPlan; wallet: Organiz
   )
 }
 
+/** Places grant progress below both summary columns while retaining the post-credit wallet balance. */
 function FreeTrialFigures({
   mode,
   wallet,
@@ -217,7 +218,7 @@ function FreeTrialFigures({
         />
         <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="used after credits" />
       </div>
-      <div className="border-t border-border px-[22px] py-4">
+      <div className="border-t border-border px-[22px] py-4 lg:col-span-2">
         <div className="flex items-center gap-4 font-mono text-[12px]">
           <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Credits used</span>
           <span className="w-[140px] shrink-0 tabular-nums text-foreground">
