@@ -1,4 +1,3 @@
-import { AddCiPrivatePolicy1794312000000 } from '../migrations/pre-deploy/1794312000000-add-ci-private-policy-migration'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
@@ -60,7 +59,6 @@ integration('CI account settings (real Postgres)', () => {
       await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiWebTarget1794000000000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
-      await new AddCiPrivatePolicy1794312000000().up(runner)
     } finally {
       await runner.release()
     }

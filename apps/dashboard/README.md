@@ -753,8 +753,9 @@ data and actions while removing excess whitespace and dotted leaders.
 
 ## GitHub CI dashboard and browser connect
 
-Primary navigation places **CI** between **Boxes** and **Images** in both the header
-and mobile menu. The CI page follows Images' two-tab layout. **Runners** (`/dashboard/ci`)
+Primary navigation places **CI** in **Applications**, after Infrastructure, in both
+the sidebar and mobile menu. CI uses rail destinations on desktop and tabs on mobile.
+**Runners** (`/dashboard/ci`)
 lists actual JIT Boxes, with state, image, resources and links to Box details.
 It uses Box socket events and three-second polling during transitions, with a
 five-second fallback during socket loss or errors and ten-second refresh for

@@ -1,4 +1,3 @@
-import { AddCiPrivatePolicy1794312000000 } from '../migrations/pre-deploy/1794312000000-add-ci-private-policy-migration'
 import { BadGatewayException } from '@nestjs/common'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
@@ -84,7 +83,6 @@ integration('CI connect persistence (real Postgres)', () => {
       await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiWebTarget1794000000000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
-      await new AddCiPrivatePolicy1794312000000().up(runner)
     } finally {
       await runner.release()
     }
@@ -767,6 +765,31 @@ integration('CI connect persistence (real Postgres)', () => {
       if (scenario.startsWith('foreign')) expect(github.repositoryPage).not.toHaveBeenCalled()
     },
   )
+  it('does not turn a transient selection failure into an install prompt or discard an earlier pending target', async () => {
+    const { attempt, installed } = await accountSession()
+    github.installationFor.mockRejectedValueOnce(new BadGatewayException('GitHub unavailable'))
+    await expect(
+      service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false }),
+    ).rejects.toThrow('GitHub unavailable')
+    expect(await service.getWeb(actor, attempt.id)).toMatchObject({
+      status: 'selection_required',
+      installation_url: undefined,
+    })
+    installed.delete(456)
+    const pending = await service.selectAccount(actor, attempt.id, {
+      account_id: 456,
+      allow_private_repositories: false,
+    })
+    expect(pending.status).toBe('installation_required')
+    const [before] = await db.query('SELECT web_target_ciphertext FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    github.ownedAccounts.mockRejectedValueOnce(new BadGatewayException('GitHub unavailable'))
+    await expect(
+      service.selectAccount(actor, attempt.id, { account_id: 789, allow_private_repositories: false }),
+    ).rejects.toThrow('GitHub unavailable')
+    expect((await service.getWeb(actor, attempt.id)).installation_url).toBe(pending.installation_url)
+    const [after] = await db.query('SELECT web_target_ciphertext FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    expect(after.web_target_ciphertext).toBe(before.web_target_ciphertext)
+  })
   it.each(['ownedAccounts', 'installationFor'])(
     'retains a bounded selection grant after transient %s failure',
     async (method) => {

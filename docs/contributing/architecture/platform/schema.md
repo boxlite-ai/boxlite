@@ -44,16 +44,17 @@ and accessed by `CiConnectService`; they have no TypeORM entity mapping.
 | `ci_installation_binding` | Stable GitHub host/App/installation/account IDs, BoxLite organization, actor, explicit Private/follow policy, provisioning state and generation                                                                                                | UUID primary key; unique host/App/installation; positive GitHub IDs; account/state checks; organization FK with cascade                   |
 | `ci_connect_attempt`      | Initiating user/org, account and policy, grant flow, encrypted device code or web PKCE verifier/token, original OAuth client, encrypted selected CI App/account/installation state, OAuth state hash, expiry, poll/claim lease, result binding | UUID primary key; state/positive interval checks; organization FK with cascade; binding FK; partial expiry index for remaining ciphertext |
 
-Migration [`1794312000000-add-ci-private-policy-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1794312000000-add-ci-private-policy-migration.ts)
-renames `allow_public` to `allow_private` in both tables, defaulting Private access
-to false. Hosted Public access is always eligible within App authorization and is
-not a stored opt-in. The guarded development cutover rejects nonempty bindings,
-attempts or `ci_listener_state`; it never reinterprets an old Public choice as
-Private consent. Finish resource cleanup with the old version, stop its Listeners,
-then reset CI state before the rename. Shared scope hashes now include both Public
-and Private decisions, so standalone operators also need old-resource cleanup and
+The initial connection migration creates `allow_private` in both tables with a
+false default. Hosted Public access is always eligible within App authorization
+and is not a stored opt-in. CI has not shipped, so there is no conversion of old
+Public consent into Private consent.
+
+For existing dev state, finish resource
+cleanup with the old version, stop its Listeners, and explicitly recreate CI
+tables and the journal; deleting rows alone retains the old schema. Shared scope
+hashes include both Public and Private decisions, so standalone operators also need old-resource cleanup and
 a fresh journal; their Public configuration remains independent and Private stays
-allowed. This is not a historical-state migration or automatic dev reset.
+allowed.
 
 Device ciphertext uses AES-256-GCM with transaction/user/organization AAD. Completion,
 cancellation and terminal failure clear it. Expired ciphertext is removed when another
