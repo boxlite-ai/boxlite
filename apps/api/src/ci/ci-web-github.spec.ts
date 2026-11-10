@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { CiGitHubService } from './ci-github.service'
+import { Logger } from '@nestjs/common'
 
 describe('CI browser GitHub transport', () => {
   const original = global.fetch
@@ -26,6 +27,10 @@ describe('CI browser GitHub transport', () => {
       if (scenario === 'missing-identity') config['ci.githubOAuthClientId'] = ''
       if (scenario === 'overlapping-identity') config['ci.githubOAuthClientId'] = config['ci.githubClientId']
       const registry = new CiGitHubService({ get: (key: string) => config[key] } as any)
+      if (scenario === 'changed-identity') {
+        expect(registry.authorizationApp('app-client')).toBe(registry.forType('User'))
+        expect(registry.authorizationApp('identity-client')).toBe(registry.identity())
+      }
       if (scenario === 'changed-identity') {
         registry.identity()
         config['ci.githubOAuthClientId'] = 'changed-client'
@@ -154,6 +159,92 @@ describe('CI dedicated identity registry', () => {
   afterEach(() => {
     global.fetch = original
   })
+  it.each(['success', 'account-mismatch', 'upstream-failure', 'retirement-retry'])(
+    'owns repository metadata authority, safe errors and shutdown cleanup: %s',
+    async (scenario) => {
+      const { generateKeyPairSync } = await import('node:crypto')
+      const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
+      const config: Record<string, string> = {
+        'ci.githubClientId': 'metadata-client',
+        'ci.githubPrivateKey': key.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      }
+      const registry = new CiGitHubService({ get: (name: string) => config[name] } as any)
+      let retirementFails = scenario === 'retirement-retry'
+      const warnings = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+      global.fetch = jest.fn(async (input, options) => {
+        const url = new URL(String(input))
+        if (url.pathname === '/app/installations/11')
+          return new Response(
+            JSON.stringify({
+              id: 11,
+              account: { id: 7, login: 'owner', type: 'User' },
+              suspended_at: null,
+              permissions: { metadata: 'read' },
+              repository_selection: 'selected',
+            }),
+          )
+        if (url.pathname === '/app/installations/11/access_tokens') {
+          expect(JSON.parse(String(options?.body))).toEqual({ permissions: { metadata: 'read' } })
+          return new Response(
+            JSON.stringify({
+              token: 'private-metadata-token',
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              permissions: { metadata: 'read' },
+            }),
+            { status: 201 },
+          )
+        }
+        if (url.pathname === '/installation/repositories') {
+          expect(url.searchParams.get('page')).toBe('1')
+          expect(url.searchParams.get('per_page')).toBe('25')
+          return scenario === 'upstream-failure'
+            ? new Response('private-upstream-body', { status: 503 })
+            : new Response(
+                JSON.stringify({
+                  total_count: 1,
+                  repositories: [{ id: 21, name: 'repo', private: true, owner: { id: 7, login: 'owner' } }],
+                }),
+              )
+        }
+        expect(url.pathname).toBe('/installation/token')
+        expect(options?.method).toBe('DELETE')
+        return retirementFails ? new Response('{}', { status: 503 }) : new Response(null, { status: 204 })
+      }) as typeof fetch
+      try {
+        const page = registry.repositoryPage(
+          'metadata-client',
+          {
+            installationId: 11,
+            accountId: 7,
+            accountLogin: 'owner',
+            accountType: scenario === 'account-mismatch' ? 'Organization' : 'User',
+          },
+          1,
+          25,
+        )
+        if (scenario === 'account-mismatch') {
+          await expect(page).rejects.toThrow('Original CI App account type changed')
+          expect(global.fetch).not.toHaveBeenCalled()
+        } else if (scenario === 'upstream-failure') {
+          const error = await page.catch((error) => error)
+          expect(error.getStatus()).toBe(502)
+          expect(error.getResponse().message).toBe('Unable to read GitHub repositories; retry later')
+        } else {
+          expect(await page).toMatchObject({ total: 1, repositories: [{ id: 21 }], next_page: null })
+          if (retirementFails) {
+            expect(warnings).toHaveBeenCalledWith('CI metadata credential retirement deferred')
+            await expect(registry.onApplicationShutdown()).rejects.toThrow('retirement remains pending')
+            retirementFails = false
+          }
+        }
+        await expect(registry.onApplicationShutdown()).resolves.toBeUndefined()
+      } finally {
+        retirementFails = false
+        await registry.onApplicationShutdown()
+        warnings.mockRestore()
+      }
+    },
+  )
   it('discovers an owned Organization CI installation without a Personal CI installation', async () => {
     const { generateKeyPairSync, verify } = await import('node:crypto')
     const personal = generateKeyPairSync('rsa', { modulusLength: 2048 }),

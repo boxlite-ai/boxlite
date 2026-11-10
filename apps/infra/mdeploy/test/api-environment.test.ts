@@ -527,6 +527,54 @@ test('Organization App secrets use the workload channel with a distinct identity
   for (const key of orgSecrets) assert.ok(declared.envSelectGroup.secret.includes(key))
 })
 
+for (const [scenario, message] of [
+  ['anchor', /Personal App identity is required/],
+  ['client', /Organization App requires a distinct client ID/],
+  ['slug', /Organization App slug is required/],
+  ['private-key', /CI_GITHUB_ORG_APP_PRIVATE_KEY requires a mstage secret ref/],
+  ['webhook', /CI_GITHUB_ORG_WEBHOOK_SECRET requires a mstage secret ref/],
+  ['oauth-secret', /CI_GITHUB_OAUTH_CLIENT_SECRET requires a mstage secret ref/],
+  ['oauth-anchor', /Identity OAuth requires the hosted CI storage anchor/],
+  ['web-anchor', /CI_GITHUB_APP_CLIENT_ID is required for browser connect/],
+] as const) {
+  test(`optional CI App configuration fails closed for a missing or invalid ${scenario}`, () => {
+    const ref = (name: string) => JSON.stringify({ address: `projects/test-project/secrets/${name}/versions/1` })
+    const input: Record<string, string> = {
+      ...ciValues('gcp'),
+      CI_GITHUB_ORG_APP_CLIENT_ID: 'org-client',
+      CI_GITHUB_ORG_APP_SLUG: 'org-app',
+      CI_GITHUB_ORG_APP_PRIVATE_KEY: ref('org-key'),
+      CI_GITHUB_ORG_WEBHOOK_SECRET: ref('org-hook'),
+    }
+    if (['anchor', 'oauth-anchor', 'web-anchor'].includes(scenario)) delete input.CI_GITHUB_APP_CLIENT_ID
+    if (scenario === 'client') input.CI_GITHUB_ORG_APP_CLIENT_ID = 'org/invalid'
+    if (scenario === 'slug') delete input.CI_GITHUB_ORG_APP_SLUG
+    if (scenario === 'private-key') delete input.CI_GITHUB_ORG_APP_PRIVATE_KEY
+    if (scenario === 'webhook') delete input.CI_GITHUB_ORG_WEBHOOK_SECRET
+    if (scenario === 'oauth-secret') input.CI_GITHUB_OAUTH_CLIENT_ID = 'identity-client'
+    if (scenario === 'oauth-anchor' || scenario === 'web-anchor') {
+      for (const key of Object.keys(input)) if (key.startsWith('CI_GITHUB_ORG_')) delete input[key]
+      if (scenario === 'oauth-anchor') {
+        input.CI_GITHUB_OAUTH_CLIENT_ID = 'identity-client'
+        input.CI_GITHUB_OAUTH_CLIENT_SECRET = ref('identity')
+      } else input.CI_GITHUB_APP_CLIENT_SECRET = ref('personal-web')
+    }
+    const keys = Object.keys(input)
+    const secrets = keys.filter((key) => input[key].startsWith('{'))
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, ...input },
+          declaration: groups(keys, secrets),
+          region: 'us-east1',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      message,
+    )
+  })
+}
+
 test('identity OAuth uses a distinct optional client and a secret reference without changing CI credentials', () => {
   const identity = 'CI_GITHUB_OAUTH_CLIENT_ID',
     secret = 'CI_GITHUB_OAUTH_CLIENT_SECRET'

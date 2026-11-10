@@ -14,6 +14,7 @@ import {
   ExecutionJournal,
   CiGitHubApp,
   StateDatabase,
+  scopeKey,
   verifyWebhook,
 } from '@boxlite-ai/ci-listener'
 import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
@@ -168,6 +169,88 @@ describe('Standalone App binding and HTTP ingress', () => {
       } finally {
         await backend.close()
       }
+    },
+  )
+  it.each(['valid', 'root', 'account', 'app', 'provenance'])(
+    'rechecks original App scan authority before publishing recovered jobs: %s',
+    async (scenario) => {
+      const claim = (await state.scans().claim('app-scanner'))!
+      expect(claim.scope.runners.kind).toBe('repository')
+      const repository = claim.scope.runners.kind === 'repository' ? claim.scope.runners.repository : undefined
+      const previous = global.fetch
+      global.fetch = jest.fn(async (input, options) => {
+        const url = new URL(String(input))
+        if (url.pathname === '/app/installations/1/access_tokens') {
+          const request = JSON.parse(String(options?.body))
+          expect(request).toEqual({ permissions: { actions: 'read' }, repository_ids: [repository!.id] })
+          return new Response(
+            JSON.stringify({
+              token: 'private-scan-token',
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              permissions: request.permissions,
+              repositories: [repository],
+            }),
+            { status: 201 },
+          )
+        }
+        if (url.pathname === '/repositories/' + repository!.id) return new Response(JSON.stringify(repository))
+        if (url.pathname.endsWith('/actions/runs'))
+          return new Response(
+            JSON.stringify({
+              total_count: url.searchParams.get('status') === 'queued' ? 1 : 0,
+              workflow_runs:
+                url.searchParams.get('status') === 'queued' ? [{ id: 99, repository: { id: repository!.id } }] : [],
+            }),
+          )
+        if (url.pathname.endsWith('/actions/runs/99/jobs'))
+          return new Response(
+            JSON.stringify({
+              total_count: 1,
+              jobs: [
+                {
+                  id: 55,
+                  run_id: 99,
+                  status: 'queued',
+                  labels: ['boxlite-ci-runner'],
+                  runner_id: null,
+                  conclusion: null,
+                  completed_at: null,
+                },
+              ],
+            }),
+          )
+        return previous(input, options)
+      }) as typeof fetch
+      const scanner = await host.scan(claim, AbortSignal.timeout(3000))
+      try {
+        const jobs = await scanner.queued(AbortSignal.timeout(3000))
+        expect(jobs).toHaveLength(1)
+        if (scenario !== 'valid') {
+          const key =
+            scenario === 'root'
+              ? 'backend/github'
+              : scenario === 'provenance'
+                ? 'app-scope/' + scopeKey(claim.scope).slice(6)
+                : 'binding/self/current'
+          const [record] = await state.read([key])
+          const payload = structuredClone(record.payload) as any
+          if (scenario === 'root') payload.applications = []
+          if (scenario === 'account') payload.accounts[String(claim.scope.installation.id)] = 999
+          if (scenario === 'app') payload.applications[String(claim.scope.installation.id)] = 'foreign-client'
+          if (scenario === 'provenance') payload.application = 'foreign-client'
+          await state.commit(lease, [{ key, expected: record.version, payload }])
+          await expect(scanner.publish(jobs, AbortSignal.timeout(3000))).rejects.toThrow(
+            'Original scan binding changed',
+          )
+          expect(await state.read(['notice/1/55'])).toEqual([])
+        } else {
+          await scanner.publish(jobs, AbortSignal.timeout(3000))
+          expect((await state.read(['notice/1/55']))[0].payload).toMatchObject({ repositoryId: repository!.id })
+        }
+      } finally {
+        await scanner.close()
+      }
+      expect(await state.scan(lease, { prefix: 'credential/' })).toEqual([])
     },
   )
   it('denies an old user scan when the configured App now permits organizations only', async () => {
