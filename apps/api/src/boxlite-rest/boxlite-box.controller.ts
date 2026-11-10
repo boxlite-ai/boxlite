@@ -48,7 +48,6 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
-import { OrganizationService } from '../organization/services/organization.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -80,7 +79,6 @@ export class BoxliteBoxController {
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
-    private readonly organizationService: OrganizationService,
   ) {}
 
   @Post()
@@ -186,14 +184,7 @@ export class BoxliteBoxController {
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     const dto = await this.boxService.toBoxDtoWithExitCode(box)
-    const response = boxToBoxResponse(dto)
-    const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(
-      authContext.organizationId,
-    )
-    if (nestedVirtualizationEnabled && !box.nestedVirtualization) {
-      response.reuse_error = `box '${box.name || box.id}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box`
-    }
-    return response
+    return boxToBoxResponse(dto)
   }
 
   @Head(':boxId')

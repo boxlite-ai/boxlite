@@ -50,13 +50,6 @@ and cannot downgrade it.
 Other security and engine compatibility checks still apply. Nested archive
 import and migration remain unsupported.
 
-REST detail GET responses carry an optional, read-only `reuse_error` when the
-current policy prevents reuse. Updated SDKs report it from `get_or_create`
-without a creation request. Older servers omit this metadata and retain their
-previous reuse behavior: upgrade the API/server and calling SDKs before enabling
-this RC. Local server policy is captured at startup; Cloud evaluates the
-authenticated organization's policy. Client ENV does not change either decision.
-
 ## Supported hosts
 
 | Host | Requirements |

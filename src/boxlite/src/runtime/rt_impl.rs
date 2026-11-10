@@ -601,13 +601,6 @@ impl RuntimeImpl {
         Ok(())
     }
 
-    fn nested_reuse_error(config: &BoxConfig) -> String {
-        let name = config.name.as_deref().unwrap_or_else(|| config.id.as_str());
-        format!(
-            "box '{name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
-        )
-    }
-
     /// Get a handle to an existing box by ID or name.
     ///
     /// Returns a LiteBox handle that can be used to operate on the box.
@@ -1867,31 +1860,6 @@ impl super::backend::RuntimeBackend for LocalRuntime {
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
         self.0.get_info(id_or_name).await
-    }
-
-    async fn get_reuse_error(&self, box_id: &str) -> BoxliteResult<Option<String>> {
-        if self.0.runner_managed
-            || !self
-                .0
-                .experimental_features
-                .is_enabled(crate::experimental::ExperimentalFeature::NestedVirtualization)
-        {
-            return Ok(None);
-        }
-        let runtime = Arc::clone(&self.0);
-        let box_id = box_id.to_owned();
-        tokio::task::spawn_blocking(move || {
-            let (config, _) = runtime
-                .box_manager
-                .lookup_box(&box_id)?
-                .ok_or_else(|| BoxliteError::NotFound(format!("box not found: {box_id}")))?;
-            Ok((!config.options.advanced.nested_virtualization)
-                .then(|| RuntimeImpl::nested_reuse_error(&config)))
-        })
-        .await
-        .map_err(|error| {
-            BoxliteError::Internal(format!("failed to read box reuse policy: {error}"))
-        })?
     }
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {

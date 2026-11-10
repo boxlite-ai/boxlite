@@ -47,11 +47,6 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>>;
 
-    /// Server-only policy metadata; ordinary reads remain available.
-    async fn get_reuse_error(&self, _box_id: &str) -> BoxliteResult<Option<String>> {
-        Ok(None)
-    }
-
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>>;
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool>;

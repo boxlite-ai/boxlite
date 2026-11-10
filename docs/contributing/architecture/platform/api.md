@@ -30,22 +30,16 @@ Missing or non-true values, failed requests and timeouts refuse creation before
 inserting or dispatching a box. The rejection log includes
 `organizationId`, `boxId`, `runnerId`, `apiVersion`, and a stable reason.
 
-Detail `GET /api/v1[/{prefix}]/boxes/{boxId}` adds the read-only `reuse_error`
-when organization policy requires nesting but the saved box is ordinary.
-Updated SDK `get_or_create` reports that error without a creation request;
-ordinary `get` and `get_info` remain available. Local `boxlite serve` supplies
-the same metadata from its captured ENV policy. Other responses omit it.
-Upgrade API/server instances and calling SDKs before enabling this RC; older
-versions retain their previous reuse behavior.
-
 Allowlisted creates bypass ordinary warm boxes because their VM options are
 already fixed. The saved box decision survives replay, restart and recovery;
-changing the organization switch changes future creates and whether an existing
-ordinary box can satisfy `get_or_create`, without changing its saved configuration.
-Creation and detail GET read the current policy directly from the database,
-bypassing the authentication cache; a failed policy read rejects the operation.
-Each operation uses the policy observed by its own query, so concurrent later
-switch changes apply to subsequent operations. Nested boxes do
+changing the organization switch affects future creates only. `get_or_create`
+reuses an existing box with its saved nesting decision; it does not upgrade or
+downgrade that configuration. Other security and engine compatibility checks
+still apply.
+Creation reads the current policy directly from the database, bypassing the
+authentication cache; a failed policy read rejects creation. Detail GET does not
+query the creation policy. Each creation uses its own query snapshot, so
+concurrent later switch changes apply to subsequent creates. Nested boxes do
 not support archive migration. The internal Runner recovery request carries the
 saved value and checks authorization before deleting an existing box.
 The API first confirms the original Runner's capability under the health deadline,

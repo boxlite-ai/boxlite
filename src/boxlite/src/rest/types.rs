@@ -397,9 +397,6 @@ pub(crate) struct BoxResponse {
     /// The stored guest privilege mode, unknown when an older server omits it.
     #[serde(default)]
     pub privileged: Option<bool>,
-    /// A server policy rejection for named reuse; ordinary reads remain available.
-    #[serde(default)]
-    pub reuse_error: Option<String>,
     #[serde(default)]
     pub labels: HashMap<String, String>,
     /// Absent while the box's main command is still running. An older server
@@ -1452,7 +1449,6 @@ mod tests {
             cpus: 2.0,
             memory_mib: 512,
             privileged: None,
-            reuse_error: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 1800,
@@ -1484,7 +1480,6 @@ mod tests {
             cpus: 2.0,
             memory_mib: 512,
             privileged: None,
-            reuse_error: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 1800,
@@ -1523,7 +1518,6 @@ mod tests {
             cpus: 1.0,
             memory_mib: 256,
             privileged: None,
-            reuse_error: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,
@@ -1555,7 +1549,6 @@ mod tests {
             cpus: 1.0,
             memory_mib: 256,
             privileged: None,
-            reuse_error: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,
@@ -1632,7 +1625,6 @@ mod tests {
             cpus: 2.0,
             memory_mib: 512,
             privileged: None,
-            reuse_error: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,

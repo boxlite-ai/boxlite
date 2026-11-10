@@ -89,10 +89,8 @@ async fn nested_policy_reuse_matches_local_through_rest() {
                     .json()
                     .await
                     .unwrap();
-            let denied = enabled && name == "ordinary";
-            assert_eq!(
-                body.get("reuse_error").is_some(),
-                denied,
+            assert!(
+                body.get("reuse_error").is_none(),
                 "{case}/{identifier}: {body}"
             );
             assert!(remote.get(identifier).await.unwrap().is_some());
@@ -105,14 +103,9 @@ async fn nested_policy_reuse_matches_local_through_rest() {
             .get_or_create(BoxOptions::default(), Some(name.into()))
             .await;
         for result in [local, rest] {
-            if enabled && name == "ordinary" {
-                assert!(
-                    matches!(result, Err(boxlite::BoxliteError::Unsupported(ref message)) if message.contains("without nested virtualization"))
-                );
-            } else {
-                let (_, created) = result.unwrap();
-                assert!(!created);
-            }
+            let (reused, created) = result.unwrap();
+            assert!(!created);
+            assert_eq!(reused.id(), &info.id);
         }
     }
     {

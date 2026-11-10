@@ -95,14 +95,7 @@ pub(in crate::commands::serve) async fn get_box(
     Path(box_id): Path<String>,
 ) -> Response {
     match state.runtime.get_info(&box_id).await {
-        Ok(Some(info)) => match state.runtime.get_reuse_error(info.id.as_str()).await {
-            Ok(reuse_error) => {
-                let mut response = state.box_response(&info).await;
-                response.reuse_error = reuse_error;
-                Json(response).into_response()
-            }
-            Err(error) => error_from_boxlite(&error),
-        },
+        Ok(Some(info)) => Json(state.box_response(&info).await).into_response(),
         Ok(None) => error_response(
             StatusCode::NOT_FOUND,
             format!("box not found: {box_id}"),

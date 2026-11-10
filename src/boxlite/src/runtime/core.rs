@@ -369,12 +369,6 @@ impl BoxliteRuntime {
         self.backend.get_info(id_or_name).await
     }
 
-    /// Internal REST server metadata for enforcing the current creation policy on reuse.
-    #[doc(hidden)]
-    pub async fn get_reuse_error(&self, box_id: &str) -> BoxliteResult<Option<String>> {
-        self.backend.get_reuse_error(box_id).await
-    }
-
     /// List all boxes, sorted by creation time (newest first).
     pub async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
         self.backend.list_info().await
