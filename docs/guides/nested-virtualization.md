@@ -39,9 +39,10 @@ configuration. A nested box still requires current runtime/Runner authorization
 when it starts or restarts. Replay and recovery preserve the saved requirement
 and cannot downgrade it.
 
-With local nesting enabled, `get_or_create` rejects a same-name ordinary box.
-Use a new name or explicitly remove and recreate it. Nested archive import and
-migration remain unsupported.
+`get_or_create` reuses a same-name box with its saved nesting decision and returns
+`created=false`. A missing name creates a box using the current runtime policy.
+Other security and engine compatibility checks still apply. Nested archive
+import and migration remain unsupported.
 
 ## Supported hosts
 
@@ -73,6 +74,5 @@ An `Unsupported` error on macOS usually means the Mac or operating system is too
 old. On Linux, check that `/dev/kvm` is usable, that the applicable KVM module
 reports nesting, and that any outer hypervisor exposes the feature.
 
-The option is immutable for an existing box: a request that requires nesting
-will not silently reuse a box created without it. Remove and recreate the box,
-or choose a new name.
+To change an existing box's nesting configuration, explicitly remove and
+recreate it, or use a new name. Enabling the policy does not upgrade a reused box.

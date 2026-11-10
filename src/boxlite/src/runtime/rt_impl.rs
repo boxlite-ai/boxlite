@@ -414,10 +414,9 @@ impl RuntimeImpl {
     ///
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
     /// if an existing box with the given name was found. When an existing box is
-    /// returned, general options are ignored, but its capability policy must
-    /// match exactly and it must already provide any required nested
-    /// virtualization, so reuse cannot silently weaken privileges or drop a
-    /// requested capability.
+    /// returned, general options and the new nesting policy are ignored; the
+    /// saved nesting decision is retained. Security and engine compatibility
+    /// checks still apply.
     pub async fn get_or_create(
         self: &Arc<Self>,
         options: BoxOptions,
@@ -554,24 +553,14 @@ impl RuntimeImpl {
 
     /// Reject reuse when the request disagrees with the box's stored options.
     ///
-    /// Only the capability policy is compared: silently adopting a box whose
-    /// privileges differ from the request is the case that matters for safety.
+    /// Security and engine choices are compared; nesting retains its saved
+    /// creation-time value.
     fn check_options_compatibility(
         requested: &BoxOptions,
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
 
-        // One-way: a nested-capable box satisfies any request, but a plain box
-        // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
-        // success and defer the failure into the guest.
-        if requested.advanced.nested_virtualization
-            && !actual.options.advanced.nested_virtualization
-        {
-            return Err(BoxliteError::Unsupported(format!(
-                "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
-            )));
-        }
         // The engine is fixed at creation: a box on one VMM cannot serve a
         // request for another, so compare against the persisted kind. An
         // unset engine is the default one, as at creation.
@@ -2454,21 +2443,35 @@ mod tests {
                         .contains("BOXLITE_EXPERIMENTAL=custom-kernel")
                 );
 
-                // Existing ordinary metadata must not satisfy the enabled policy.
-                runtime
+                let existing = runtime
                     .create(BoxOptions::default(), Some("legacy".into()))
                     .await
                     .unwrap();
-                let error = RuntimeBackend::get_or_create(
+                let (reused, created) = RuntimeBackend::get_or_create(
                     &local,
                     BoxOptions::default(),
                     Some("legacy".into()),
                 )
                 .await
-                .err()
                 .unwrap();
-                assert!(matches!(error, BoxliteError::Unsupported(_)));
+                assert!(!created);
+                assert_eq!(reused.id(), existing.id());
+                let (saved, _) = runtime.box_manager.box_by_id(reused.id()).unwrap().unwrap();
+                assert!(!saved.options.advanced.nested_virtualization);
             }
+            let (fresh, created) = RuntimeBackend::get_or_create(
+                &local,
+                BoxOptions::default(),
+                Some("fresh-policy".into()),
+            )
+            .await
+            .unwrap();
+            assert!(created);
+            let (saved, _) = runtime.box_manager.box_by_id(fresh.id()).unwrap().unwrap();
+            assert_eq!(
+                saved.options.advanced.nested_virtualization,
+                case == "enabled"
+            );
         });
     }
 
@@ -3593,11 +3596,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_or_create_rejects_nested_virtualization_upgrade() {
+    async fn get_or_create_preserves_existing_nesting() {
         let (runtime, _dir) = create_test_runtime();
         let name = Some("plain-box".to_string());
 
-        let (_, created) = runtime
+        let (existing, created) = runtime
             .get_or_create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
@@ -3611,7 +3614,7 @@ mod tests {
 
         let mut nested_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         nested_advanced.nested_virtualization = true;
-        let result = runtime
+        let (reused, created) = runtime
             .get_or_create(
                 BoxOptions {
                     rootfs: RootfsSpec::Image("alpine:latest".into()),
@@ -3620,16 +3623,12 @@ mod tests {
                 },
                 name,
             )
-            .await;
-
-        match result {
-            Err(BoxliteError::Unsupported(message)) => {
-                assert!(message.contains("nested virtualization"));
-                assert!(message.contains("plain-box"));
-            }
-            Err(other) => panic!("expected Unsupported error, got: {other}"),
-            Ok(_) => panic!("get_or_create must not reuse a non-nested box"),
-        }
+            .await
+            .unwrap();
+        assert!(!created);
+        assert_eq!(reused.id(), existing.id());
+        let (saved, _) = runtime.box_manager.box_by_id(reused.id()).unwrap().unwrap();
+        assert!(!saved.options.advanced.nested_virtualization);
     }
 
     #[tokio::test]
