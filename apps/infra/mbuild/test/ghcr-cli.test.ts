@@ -36,7 +36,7 @@ elif [[ "$*" == *'images list'* ]]; then printf '%s' '${digest}'; fi`)
   return (args: string[]) => spawnSync(process.execPath, ['--import', loader, '--conditions=development', cli, ...args], { cwd: directory, env, encoding: 'utf8', timeout: 10_000 })
 }
 
-for (const command of ['verify']) test(`GHCR CLI ${command} executes its production operation`, (t) => {
+for (const command of ['publish', 'verify']) test(`GHCR CLI ${command} executes its production operation`, (t) => {
   const run = fixture(t)
   const result = run([command, '--ghcr', 'boxlite-ai/boxlite', '--tag', sha, '--version', 'v1.2.3', ...(command === 'import-release' ? ['--stage', 'dev'] : [])])
   assert.equal(result.status, 0, result.stderr)
@@ -46,7 +46,7 @@ for (const command of ['verify']) test(`GHCR CLI ${command} executes its product
 test('GHCR CLI rejects unsupported operations, incomplete releases and unknown artifacts', (t) => {
   const run = fixture(t)
   for (const [args, expected] of [
-    [['inspect', '--ghcr', 'boxlite-ai/boxlite'], /requires verify/],
+    [['inspect', '--ghcr', 'boxlite-ai/boxlite'], /requires.*verify/],
     [['verify', '--ghcr', 'boxlite-ai/boxlite', '--tag', sha], /requires --version/],
     [['verify', '--ghcr', 'boxlite-ai/boxlite', '--tag', 'short', '--version', 'v1.2.3'], /full commit SHA/],
     [['verify', '--ghcr', 'boxlite-ai/boxlite', '--tag', sha, '--version', 'v1.2.3', '--artifact', 'unknown'], /unknown|declares no artifact/],

@@ -68,7 +68,7 @@ const USAGE = [
   '       npm run mbuild promote -- --tag <commit-sha> --from <stage> --to <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild verify -- --tag <commit-sha> --stage <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild inspect -- --stage <stage>',
-  '       npm run mbuild verify -- --tag <full-sha> --ghcr <owner/repository> --version v<X.Y.Z>',
+  '       npm run mbuild publish|verify -- --tag <full-sha> --ghcr <owner/repository> --version v<X.Y.Z>',
   '',
   '--artifact narrows the command to one declared artifact. Absent means every',
   'one, which is what a deploy asks about.',
@@ -178,10 +178,11 @@ const main = async (): Promise<number> => {
   const ghcr = option(argv, 'ghcr')
   const config = ghcr === undefined ? loadBuildConfig() : loadArtifactConfig()
   if (ghcr !== undefined) {
-    if (command !== 'verify') throw new Error('--ghcr currently requires verify')
+    if (command !== 'publish' && command !== 'verify') throw new Error('--ghcr requires publish or verify')
     if (!option(argv, 'version') || !/^[0-9a-f]{40}$/.test(required(argv, 'tag'))) throw new Error('--ghcr requires --version and a full commit SHA')
     const registry = ghcrRegistryFor(ghcr)
-    for (const outcome of await verifyPublished({ config: narrowed(config, argv), stage: 'ghcr', registry, tag: tagOf(argv), run })) {
+    const operation = command === 'publish' ? publish : verifyPublished
+    for (const outcome of await operation({ config: narrowed(config, argv), stage: 'ghcr', registry, tag: tagOf(argv), run })) {
       console.log(`${outcome.artifact}=${outcome.address}`)
     }
     return 0
