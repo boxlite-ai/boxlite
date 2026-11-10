@@ -82,7 +82,15 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
                 guest: GuestInitConfig {
-                    volumes: volume_mgr.build_guest_mounts(),
+                    volumes: if ctx.config.engine_kind == crate::vmm::VmmKind::Native {
+                        volume_mgr
+                            .build_aggregate_mounts(
+                                boxlite_shared::constants::mount_tags::AGGREGATE,
+                            )?
+                            .guest_mounts
+                    } else {
+                        volume_mgr.build_guest_mounts()
+                    },
                     network,
                 },
                 container: ContainerInitConfig {

@@ -4,8 +4,8 @@
 //! One output-only virtio console port, sharing the serial console's queue.
 //!
 //! TX completion waits only for a copy into the bounded host queue, never for
-//! its sink. The VM wiring that owns this device's lifecycle and final TX scan
-//! follows separately.
+//! its sink. The VM stops vCPUs and device callbacks before the final TX scan,
+//! then finishes the shared host console worker.
 
 use std::io::Write;
 

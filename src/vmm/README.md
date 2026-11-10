@@ -10,7 +10,7 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 
 `Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
 are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
-carries; M2's engine adapter will consume that API and inspect the error's host
+carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
 `Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
@@ -29,7 +29,7 @@ boxlite-vmm
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, disks }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes, at most 8 `DiskConfig { path, format, read_only }` entries |
+| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; bounds are 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
@@ -43,21 +43,14 @@ boxlite-vmm
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-The x86_64 KVM boot and lifecycle are in place. The virtio common
-infrastructure (`virtio`) is in place for M2: the device contract, queue
-adapter, MMIO transport, interrupt handle and the shared virtio workers are
-tested with test devices, and `Vm` owns them. `devices::add_all` composes one
-`virtio::blk` device per disk and then the reporting balloon, and both are
-tested with a real kernel. The output-only virtio console device is implemented
-and tested against real guest RAM and split virtqueues, but it is not wired
-into `Vm` yet. Linux arm64 and macOS arm64 remain required M2 qualification
-gates, blocked by their boot dependencies; unit tests or x86_64 evidence do not
-qualify those platforms or complete M2. The BoxLite engine adapter
-(`src/boxlite/src/vmm/native/`, behind the runtime's `native` feature)
-builds a `VmConfig` from the box specification and runs `Vm`; the pinned kernel
-also mounts an ext4 root disk and devtmpfs for a disk-root boot, so a box boots
-to `boxlite-guest` as PID 1. The vsock and virtio-fs devices and the virtio-net
-wiring follow in M2.
+The Linux x86_64 native engine composes disks, reporting balloon, aggregate
+virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
+The adapter maps the runtime specification into `VmConfig`; optional devices
+are omitted when not requested. Disk order remains `vda` (container) then
+`vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
+vsock and receives aggregate mount instructions before container startup.
+Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64
+results alone do not establish complete M2 acceptance.
 Neither new crate depends on `boxlite-shared`; the release workflow publishes
 `boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
 adapter depends on `boxlite-vmm`.
@@ -66,8 +59,8 @@ adapter depends on `boxlite-vmm`.
 
 `devices::net::Net::new(socket_path, mac)` implements an internal RX/TX queue
 pair over the Linux gvproxy QEMU stream. It compiles on Unix for socket tests;
-macOS gvproxy uses a different wire protocol. VM assembly and
-snapshots remain out of scope; `Vm::new` does not yet attach this device.
+macOS gvproxy uses a different wire protocol. `Vm::new` attaches Net when
+`VmConfig.network` is present. Snapshots of device state remain unsupported.
 
 - Device ID 1, RX queue 0, TX queue 1, up to 256 entries each; only MAC is
   offered by Net. The unchanged transport owns VERSION_1 negotiation.
@@ -289,8 +282,10 @@ The Unix-only `virtio::vsock` module provides the wire codec, captured writable
 guest buffers, registered Unix socket sources, stream connections and explicit
 Unix backend routing behind `Vsock`, a stream-only virtio device.
 The [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312) covers this
-contract; `Vm::new` does not attach it and native-engine integration remains
-outside this layer.
+contract. `Vm::new` attaches it when `VmConfig::vsock` is present; the native
+engine maps host RPC and ready sockets to guest ports 2695 and 2696. The device
+removes its listener paths after failed attachment or teardown only when the
+path still identifies the socket it bound; pre-existing and replaced paths survive.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
@@ -764,7 +759,8 @@ port and shares `ConsoleWriter`/`ConsoleWorker` with COM1.
   appending to the same `console.log`. `reset` clears activation and failed
   state for a new `DRIVER_OK`.
 - **VM seam.** The device is exercised with real guest RAM, split virtqueues,
-  the MMIO transport and the console worker; it is not wired into `Vm` yet.
+  the MMIO transport and the console worker; `Vm` attaches it when requested
+  and drains final TX after vCPUs and workers stop, before closing the sink.
   The callback still processes every available TX head, so a continuously
   refilled queue is unbounded. N1 in the design closes that before the device
   becomes the default path. A stalled sink cannot block TX, but its backlog

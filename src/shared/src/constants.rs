@@ -45,6 +45,8 @@ pub mod executor {
 /// These tags identify shared filesystems mounted via virtiofs.
 /// They must match between host (when creating shares) and guest (when mounting).
 pub mod mount_tags {
+    /// Native virtio-fs device containing the logical share exports.
+    pub const AGGREGATE: &str = "boxlite";
     /// Tag for prepared rootfs virtiofs share (merged mode)
     pub const ROOTFS: &str = "BoxLiteContainer0Rootfs";
 

@@ -68,6 +68,8 @@ help:
 	@echo "    make test:integration:vmm:mounts - Qualify production guest mounts and mixed exports on KVM"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VMs, RAM mapping and the buses on KVM (Linux x86_64)"
 	@echo "    make test:integration:vmm:native - Qualify native boot and guest PID 1 through boxlite-shim (Linux x86_64)"
+	@echo "  make test:integration:vmm:m2 ENGINE=native|krun  M2 KVM matrix with explicit engine selection"
+	@echo "  make test:integration:vmm:m3 ENGINE=native|krun  M3 KVM matrix with directory volumes"
 	@echo "    make test:integration:vmm:hvf - Qualify the HVF backend on Hypervisor.framework (macOS arm64)"
 	@echo "    make coverage:vmm:kvm      - Add KVM hardware coverage to existing unit profiles"
 	@echo "    make coverage:vmm:boot     - Add real-kernel boot coverage of VMM_KERNEL to existing profiles"

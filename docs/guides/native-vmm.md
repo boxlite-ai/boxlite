@@ -6,15 +6,12 @@ default, Linux x86_64 only, supported only by the local runtime, and it may
 change without the compatibility guarantees of BoxLite's stable CLI and Rust
 API. It has no CLI flag yet.
 
-The engine is still being built up device by device, so a box on it does not
-become ready yet: it has no vsock, virtio-fs or virtio-net device. What it does
-today is boot the pinned kernel, attach the container and guest root disks over
-virtio-blk, and run `boxlite-guest` as PID 1 on the ext4 root until the agent
-needs one of those devices. Requests the engine cannot serve at all fail
-`start` with `Unsupported`: a box without a kernel, a non-ELF kernel, a
-virtio-fs root, or nested virtualization. Virtio-fs shares, networking and the
-agent's socket bridge are logged as unattached and the boot continues; those
-exceptions go away as each device lands.
+The experimental integration attaches virtio-blk, reporting balloon, vsock,
+aggregate virtio-fs, Linux gvproxy networking and virtio-console. It boots the
+pinned kernel and guest root, receives the guest ready notification and can
+initialize and execute an Alpine box. Unsupported requests fail explicitly:
+missing/non-ELF kernels, a virtio-fs root, nested virtualization and datagram
+network backends.
 
 The engine takes its kernel from the custom-kernel RC until the runtime bundles
 one: build it with `make vmm:boot` and pass `target/vmm/boot/x86_64/vmlinux`.
@@ -51,11 +48,61 @@ carry it.
 
 ## Where to look when it stops
 
-The guest's serial console lands in `logs/console.log` under the box
-directory. The runtime-level test in `src/boxlite/tests/native_vmm.rs` pins how
-far the boot gets. These native engine boot tests remain `#[ignore]` and are
+The guest's console lands in `logs/console.log` under the box
+directory. The runtime-level test in `src/boxlite/tests/native_vmm.rs` checks successful
+startup and exec. These native engine boot tests remain `#[ignore]` and are
 not selected by `make test:integration` or the E2E local workflow. Run
 `make test:integration:vmm:native` manually to exercise them together with the
 shim-level kernel boot, using the pinned kernel described above. The
 [VMM design](../contributing/architecture/vmm/README.md#where-the-engine-plugs-in-m2)
-describes the adapter and the devices it still lacks.
+describes the adapter and platform qualification requirements.
+
+## Linux x86_64 M2 and M3 matrices
+
+The [qualification report](../contributing/investigations/2026-11-10-native-m2-m3-qualification.md)
+records the complete runs, remaining failures and acceptance limits.
+
+```sh
+make vmm:boot:host
+make runtime:debug
+make test:integration:vmm:m2 ENGINE=native SETUP_DONE=1
+make test:integration:vmm:m2 ENGINE=krun SETUP_DONE=1
+make test:integration:vmm:m3 ENGINE=native SETUP_DONE=1
+make test:integration:vmm:m3 ENGINE=krun SETUP_DONE=1
+```
+
+Each target explicitly selects the engine in test helpers;
+compiling the `native` Cargo feature alone does not select it. `VMM_KERNEL` can
+override the kernel and `BOXLITE_RUNTIME_DIR` can select a prepared runtime.
+Without `SETUP_DONE=1`, each target first rebuilds the runtime. `FILTER`
+or `NEXTEST_FILTER_EXPR` narrows the same matrix for diagnosis. The default
+runner uses four workers and zero retries. Each run records inputs, logs and
+its exit status under `target/vmm-matrix/`; `VMM_REPORT_DIR` overrides the run
+directory, which must be empty. Kernel and runtime hashes, host kernel, source
+revision/diff, test input hashes and untracked test inputs accompany the actual
+selected-test list. Recovery subprocesses inherit the same engine and runtime.
+It includes the normally ignored network VM tests and requires their egress
+preflight checks; unavailable external endpoints fail the run instead of skipping.
+
+M2 covers lifecycle, shutdown, detach, recovery, exec options and users,
+main commands, TTY, zygote, copy and ownership, disk snapshots, clone/export/import,
+network policy and gvproxy. M3 covers copy ownership, mount security, secret
+substitution, security enforcement, network policy and directory volumes at
+2, 3, 8 and 32 mounts. Each directory case checks host-to-guest reads,
+guest-to-host writes, stop and removal; security enforcement checks mixed
+read-only and writable exports. Secret-substitution cases are configuration
+checks, and mount ID-mapping output is diagnostic rather than an acceptance assertion.
+Kernel/guest probes are run separately with `make test:integration:vmm:native`,
+`make test:integration:vmm:linux` and `make test:integration:vmm:mounts`.
+
+Normal test invocations retain libkrun. Both engines keep existing jailer defaults;
+the common shim currently skips seccomp with in-process gvproxy networking.
+The native kernel includes the script loader for shebang entrypoints; the Linux
+x86_64 seccomp profile allows `fstatfs`, `getpeername`, `getegid` and `fchmodat`
+for filesystem metadata, Unix peer addresses, aggregate root ownership and modes.
+Run all four combinations against the same artifacts, retaining failed runs
+before proceeding to the next combination. Test failures, diagnostic skips and
+missing prerequisites remain failures or limitations in the report; a completed
+run is not an all-green result. ARM64/macOS, virtio-rng, host-sleep clock resync,
+full per-thread filtering and filesystem conformance remain outside these runs,
+so these matrices alone cannot establish complete M2 or M3 acceptance.

@@ -9,9 +9,9 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::{BoxCommand, CopyOptions, CopySourceKind, LiteBox};
+use common::TestRuntime as BoxliteRuntime;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio_stream::StreamExt;

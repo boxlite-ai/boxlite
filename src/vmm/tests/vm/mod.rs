@@ -44,6 +44,9 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         initramfs: None,
         disks: Vec::new(),
         filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
     }
 }
 
@@ -961,6 +964,72 @@ mod lifecycle {
             assert_eq!(console.as_ref().unwrap().dropped_bytes(), 0);
         }
 
+        #[test]
+        fn run_drains_virtio_console_tx_without_a_final_queue_kick() {
+            use crate::devices::{console::ConsoleWorker, virtio_console::VirtioConsole};
+            use virtio_queue::desc::split::Descriptor;
+            use vm_memory::{Bytes, GuestAddress};
+
+            let sink = SlowSink::default();
+            let (writer, worker) = ConsoleWorker::spawn(Box::new(sink.clone()), 64).unwrap();
+            let console = Arc::new(Mutex::new(VirtioConsole::new(writer)));
+            let mut steps: Vec<_> = [
+                (0x070, 1),
+                (0x070, 3),
+                (0x024, 1),
+                (0x020, 1),
+                (0x070, 0xb),
+                (0x030, 1),
+                (0x038, 8),
+                (0x080, 0x1000),
+                (0x090, 0x2000),
+                (0x0a0, 0x3000),
+                (0x044, 1),
+                (0x070, 0xf),
+            ]
+            .into_iter()
+            .map(|(offset, value)| Step::Write32 {
+                addr: BASE + offset,
+                value,
+            })
+            .collect();
+            // The guest resets without notifying TX. Only Vm's final scan can
+            // deliver this published descriptor after device dispatch stops.
+            steps.push(Step::Reset);
+            let mut vm = Vm::with_backend(
+                config(1, 16),
+                || Ok(MockVm::with_scripts(vec![steps])),
+                |_, _| Ok(BootRegisters::default()),
+                |chipset, ctx| {
+                    ctx.memory
+                        .write_slice(b"final", GuestAddress(0x4000))
+                        .unwrap();
+                    ctx.memory
+                        .write_obj(Descriptor::new(0x4000, 5, 0, 0), GuestAddress(0x1000))
+                        .unwrap();
+                    ctx.memory
+                        .write_obj(1u16.to_le(), GuestAddress(0x2002))
+                        .unwrap();
+                    add(chipset, ctx, console.clone())
+                },
+            )
+            .unwrap();
+            vm.console = Mutex::new(Some(worker));
+            vm.virtio_console = Some(console);
+
+            let (exit, vm) = run(vm);
+            assert_eq!(exit.unwrap(), VmExit::GuestReset);
+            assert_eq!(*sink.0.lock().unwrap(), b"final");
+            assert_eq!(
+                vm.ram
+                    .memory()
+                    .read_obj::<u16>(GuestAddress(0x3002))
+                    .unwrap(),
+                1u16.to_le()
+            );
+            assert!(vm.virtio_console.is_none());
+        }
+
         /// A runtime that never stops, as when a device event never returns.
         #[derive(Default)]
         struct StuckRuntime {
@@ -1171,7 +1240,7 @@ fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
             );
             Ok(BootRegisters::default())
         },
-        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer).map(|_| ()),
     )
     .unwrap();
     let mut id = [0; 4];

@@ -59,9 +59,10 @@ Separate boots check argument errors and incorrect filesystem types; namespace t
 Host namespace and shutdown unit tests deny global `sync` with a test-only seccomp filter; KVM boots exercise the unfiltered sync/reset path.
 The probe is an explicitly built Cargo example and is excluded from runtime artifacts.
 
-Native Box readiness still needs VMM device integration.
-With the current kernel, vsock can bind `CID_ANY` without a device; the ready notification fails to connect and the host times out.
-This is separate from fatal startup errors, which reset PID 1.
+Native Box qualification requires a successful ready notification, start, exec
+and shutdown over the attached vsock device. Native initialization uses the
+aggregate virtio-fs device tag and logical export key; libkrun retains per-tag
+mount instructions.
 Linux x86_64 results do not qualify macOS or arm64.
 
 ## Native VMM mount acceptance
@@ -70,7 +71,7 @@ Linux x86_64 results do not qualify macOS or arm64.
 
 The driver calls the same `storage::mount_volumes` as the initialization RPC. It checks SHARED and nested directory, writable single-file and read-only single-file exports with colliding filenames. It reads through resolved guest paths, requires EROFS on read-only write-open, writes and syncs writable files, and verifies rollback after both a partial mount failure and dropping an uncommitted initialization guard. It then remounts and commits successfully. The host harness checks write-through to the original hardlinked file and snapshot isolation. A successful guest prints `GUEST-MOUNTS-OK` and reboots; an error or panic must fail host acceptance.
 
-This test establishes the guest mount adapter and native device working together. Production runtime startup still uses legacy per-tag guest instructions: a native runtime engine adapter, container target binding, copy RPCs and full Box lifecycle acceptance remain separate integration work.
+This test establishes the guest mount adapter and native device working together. The native runtime sends aggregate guest instructions; libkrun retains per-tag instructions. The [M2/M3 matrices](../../docs/guides/native-vmm.md#linux-x86_64-m2-and-m3-matrices) exercise container binding, copy RPCs, volumes and Box lifecycle separately from this mount-only acceptance test.
 
 The acceptance init lives in `tests/support/mount_init.rs` and is included only
 with `integration-test-init`. It is not a standalone Cargo integration test.
