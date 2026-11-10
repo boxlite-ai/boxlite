@@ -250,11 +250,38 @@ impl Drop for CleanupGuard {
 
         tracing::warn!(box_id = %self.box_id, reason = %reason, "Box initialization failed, cleaning up");
 
-        // Stop handler if started
-        if let Some(ref mut handler) = self.handler
-            && let Err(e) = handler.stop()
-        {
-            tracing::warn!("Failed to stop handler during cleanup: {}", e);
+        // Stop handler if started. `ShimHandler::stop` polls graceful
+        // shutdown with `std::thread::sleep` (≤ `GRACEFUL_SHUTDOWN_TIMEOUT_MS`),
+        // so it must NOT run on the Tokio worker this `Drop` runs on. A
+        // `Drop` cannot `.await`, so fire-and-forget on a blocking thread.
+        // This is safe here specifically: init-failure cleanup is
+        // best-effort, and the `ShimHandler`'s `keepalive` (dropped with
+        // the handler when the task is dropped, whether it ran or was
+        // abandoned) closes the watchdog pipe, delivering POLLHUP to the
+        // shim and triggering its self-shutdown — the kernel-level safety
+        // net that covers the case where the task never starts.
+        // See docs/investigations/issue-1242-teardown-blocks-worker.md.
+        if let Some(mut handler) = self.handler.take() {
+            let box_id = self.box_id.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn_blocking(move || {
+                    if let Err(e) = handler.stop() {
+                        tracing::warn!(
+                            box_id = %box_id,
+                            "Failed to stop handler during cleanup: {}", e
+                        );
+                    }
+                });
+            } else {
+                // No Tokio runtime context (e.g. a `Drop` outside any
+                // runtime) — block in place; there is no worker to park.
+                if let Err(e) = handler.stop() {
+                    tracing::warn!(
+                        box_id = %box_id,
+                        "Failed to stop handler during cleanup: {}", e
+                    );
+                }
+            }
         }
 
         // DON'T cleanup filesystem - preserve diagnostic files for debugging
