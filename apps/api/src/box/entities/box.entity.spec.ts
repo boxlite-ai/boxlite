@@ -36,7 +36,14 @@ describe('Box entity destroy invariant', () => {
 describe('Box entity secret redaction', () => {
   it('omits the secrets field from JSON.stringify output', () => {
     const box = new Box('us', 'secret-box')
-    box.secrets = [{ name: 'openai', value: 'sk-super-secret', hosts: ['api.openai.com'] }]
+    box.secrets = [
+      {
+        name: 'openai',
+        value: 'sk-super-secret',
+        hosts: ['api.openai.com'],
+        headers: { Authorization: 'Bearer {value}' },
+      },
+    ]
 
     const serialized = JSON.stringify(box)
 

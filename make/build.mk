@@ -1,3 +1,10 @@
+PHONY_TARGETS += generate\:runner-client
+
+# Regenerate the client from the committed runner schema without starting the API.
+generate\:runner-client: _ensure-apps-deps
+	@cd apps && yarn openapi-generator-cli generate --git-repo-id=boxlite --git-user-id=boxlite-ai -i runner/pkg/api/docs/swagger.json -g typescript-axios --additional-properties=supportsES6=true,typescriptThreePlus=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,useTags=true,enumPropertyNaming=UPPERCASE --type-mappings=DateTime=Date -o libs/runner-api-client/src
+	@cd apps && node hack/ts-client/type-request-function.mjs libs/runner-api-client/src
+
 PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps build\:apps\:api build\:apps\:dashboard build\:apps\:ci-listener
 
 vmm:

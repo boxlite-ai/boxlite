@@ -1835,6 +1835,18 @@ void boxlite_options_add_secret(CBoxliteOptions *opts,
                                 const char *const *hosts,
                                 int hosts_count);
 
+// Add a secret with parallel header-name and template arrays.
+// At least one entry is required at creation; zero entries and empty strings are rejected by Rust.
+void boxlite_options_add_secret_with_headers(CBoxliteOptions *opts,
+                                             const char *name,
+                                             const char *value,
+                                             const char *placeholder,
+                                             const char *const *hosts,
+                                             int hosts_count,
+                                             const char *const *header_names,
+                                             const char *const *header_templates,
+                                             int headers_count);
+
 // Deprecated: use `boxlite_options_set_auto_delete_interval`.
 void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
 

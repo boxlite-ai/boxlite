@@ -81,21 +81,37 @@ describe('BoxLite lifecycle policy mapper', () => {
   it('maps REST secret specs to secret placeholder rules', () => {
     const mapped = createBoxToCreateBox({
       secrets: [
-        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        {
+          name: 'openai',
+          value: 'sk-test',
+          hosts: ['api.openai.com'],
+          placeholder: '<BOXLITE_SECRET:openai>',
+          headers: { 'x-api-key': '{value}' },
+        } as any,
       ],
     })
 
     expect(mapped.secrets).toEqual([
-      { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+      {
+        name: 'openai',
+        value: 'sk-test',
+        hosts: ['api.openai.com'],
+        placeholder: '<BOXLITE_SECRET:openai>',
+        headers: { 'x-api-key': '{value}' },
+      },
     ])
   })
 
   it('passes a secret without a placeholder through untouched', () => {
     const mapped = createBoxToCreateBox({
-      secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }],
+      secrets: [
+        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+      ],
     })
 
-    expect(mapped.secrets).toEqual([{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }])
+    expect(mapped.secrets).toEqual([
+      { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+    ])
   })
 
   it('returns the effective second-based policy', () => {

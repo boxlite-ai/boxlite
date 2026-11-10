@@ -13,6 +13,61 @@ pub struct OptionsHandle {
     pub name: Option<String>,
 }
 
+#[cfg(test)]
+mod required_headers_tests {
+    use super::*;
+    use std::{ffi::CString, ptr};
+
+    #[test]
+    fn required_headers_legacy_c_call_rejects_create() {
+        let home = std::env::temp_dir().join(format!(
+            "boxlite-required-c-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let rootfs = home.join("rootfs");
+        std::fs::create_dir_all(&rootfs).unwrap();
+        let runtime = boxlite::BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
+            home_dir: home.join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut handle = OptionsHandle {
+            options: BoxOptions {
+                rootfs: boxlite::RootfsSpec::RootfsPath(rootfs.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+            name: None,
+        };
+        let name = CString::new("x").unwrap();
+        let value = CString::new("private-token").unwrap();
+        let host = CString::new("api.test.com").unwrap();
+        unsafe {
+            boxlite_options_add_secret(
+                &mut handle,
+                name.as_ptr(),
+                value.as_ptr(),
+                ptr::null(),
+                [host.as_ptr()].as_ptr(),
+                1,
+            );
+        }
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let result = executor.block_on(runtime.create(handle.options, None));
+        let message = result.err().map(|error| error.to_string());
+        drop(runtime);
+        std::fs::remove_dir_all(home).unwrap();
+        assert!(
+            message.as_deref().is_some_and(|message| message
+                .contains("secret \"x\" has no headers; recreate the box with headers")),
+            "legacy C secret accepted: {message:?}"
+        );
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_new(
     image: *const c_char,
@@ -188,7 +243,48 @@ pub unsafe extern "C" fn boxlite_options_add_secret(
     hosts: *const *const c_char,
     hosts_count: c_int,
 ) {
-    options_add_secret(opts, name, value, placeholder, hosts, hosts_count)
+    unsafe {
+        boxlite_options_add_secret_with_headers(
+            opts,
+            name,
+            value,
+            placeholder,
+            hosts,
+            hosts_count,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
+/// Add a secret with parallel header-name and template arrays.
+/// At least one entry is required at creation; zero entries and empty strings are rejected by Rust.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_secret_with_headers(
+    opts: *mut CBoxliteOptions,
+    name: *const c_char,
+    value: *const c_char,
+    placeholder: *const c_char,
+    hosts: *const *const c_char,
+    hosts_count: c_int,
+    header_names: *const *const c_char,
+    header_templates: *const *const c_char,
+    headers_count: c_int,
+) {
+    unsafe {
+        options_add_secret_with_headers(
+            opts,
+            name,
+            value,
+            placeholder,
+            hosts,
+            hosts_count,
+            header_names,
+            header_templates,
+            headers_count,
+        )
+    }
 }
 
 /// Deprecated: use `boxlite_options_set_auto_delete_interval`.
@@ -540,13 +636,16 @@ pub unsafe fn options_set_network_inbound_disabled(handle: *mut OptionsHandle) {
     }
 }
 
-pub unsafe fn options_add_secret(
+pub unsafe fn options_add_secret_with_headers(
     handle: *mut OptionsHandle,
     name: *const c_char,
     value: *const c_char,
     placeholder: *const c_char,
     hosts: *const *const c_char,
     hosts_count: c_int,
+    header_names: *const *const c_char,
+    header_templates: *const *const c_char,
+    headers_count: c_int,
 ) {
     unsafe {
         if handle.is_null() || name.is_null() || value.is_null() {
@@ -566,12 +665,36 @@ pub unsafe fn options_add_secret(
         };
 
         let hosts = parse_c_string_array(hosts, hosts_count);
+        let headers = if headers_count == 0 {
+            None
+        } else {
+            let mut headers = std::collections::BTreeMap::new();
+            if headers_count > 0 && !header_names.is_null() && !header_templates.is_null() {
+                for index in 0..headers_count as usize {
+                    let pair = (
+                        c_str_to_string(*header_names.add(index)),
+                        c_str_to_string(*header_templates.add(index)),
+                    );
+                    let (Ok(key), Ok(template)) = pair else {
+                        headers.clear();
+                        break;
+                    };
+                    if headers.insert(key, template).is_some() {
+                        // Preserve an invalid configuration instead of silently
+                        // collapsing duplicate C entries into a valid map.
+                        headers.clear();
+                        break;
+                    }
+                }
+            }
+            Some(headers)
+        };
         (*handle).options.secrets.push(Secret {
             name,
             hosts,
             placeholder,
             value,
-            header: None,
+            headers,
         });
     }
 }
@@ -651,4 +774,43 @@ fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> 
     }
 
     values
+}
+
+#[cfg(test)]
+mod headers_map_tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::ptr;
+
+    #[test]
+    fn secret_headers_ffi_preserves_templates() {
+        let name = CString::new("bot").unwrap();
+        let value = CString::new("token").unwrap();
+        let host = CString::new("api.example.com").unwrap();
+        let hosts = [host.as_ptr()];
+        let key = CString::new("Authorization").unwrap();
+        let template = CString::new("Bot {value}").unwrap();
+        let empty = CString::new("").unwrap();
+        for (template_ptr, expected) in [(template.as_ptr(), "Bot {value}"), (empty.as_ptr(), "")] {
+            let mut handle = OptionsHandle {
+                options: BoxOptions::default(),
+                name: None,
+            };
+            unsafe {
+                boxlite_options_add_secret_with_headers(
+                    &mut handle,
+                    name.as_ptr(),
+                    value.as_ptr(),
+                    ptr::null(),
+                    hosts.as_ptr(),
+                    1,
+                    [key.as_ptr()].as_ptr(),
+                    [template_ptr].as_ptr(),
+                    1,
+                );
+            }
+            let wire = serde_json::to_value(&handle.options.secrets[0]).unwrap();
+            assert_eq!(wire["headers"]["Authorization"], expected);
+        }
+    }
 }

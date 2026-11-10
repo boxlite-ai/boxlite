@@ -151,6 +151,7 @@ func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
 			Value:       secret.Value,
 			Hosts:       secret.Hosts,
 			Placeholder: secret.Placeholder,
+			Headers:     secret.Headers,
 		})
 	}
 	return specs
@@ -427,6 +428,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
 	if err != nil {
+		return "", "", err
+	}
+	if err := validateRecreatableSecrets(boxDto.Secrets); err != nil {
 		return "", "", err
 	}
 	operation, err := c.checkpointOperations().Lock(ctx, boxDto.Id)

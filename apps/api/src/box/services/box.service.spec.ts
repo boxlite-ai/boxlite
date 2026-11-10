@@ -830,15 +830,183 @@ describe('BoxService inbound defaults', () => {
     const { service, boxRepository } = makeCreateService()
 
     await service.create(
-      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      {
+        name: 'secret-box',
+        image: 'base',
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      } as any,
       { id: 'org-1' } as any,
       Context.user(),
     )
 
     expect(boxRepository.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ secrets: [{ name: 'openai', value: 'sk-test' }] }),
+      expect.objectContaining({
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      }),
       undefined,
     )
+  })
+
+  describe.each(['direct', 'rest'])('required headers through %s create', (path) => {
+    it.each([undefined, null, {}])('rejects absent headers %j before persistence', async (headers) => {
+      const { service, boxRepository } = makeCreateService()
+      const input = { image: 'base', secrets: [{ name: 'x', value: 'token', hosts: ['api.test.com'], headers }] }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await expect(service.create(dto as any, { id: 'org-1' } as any, Context.user())).rejects.toThrow(
+        'secret "x" has no headers; recreate the box with headers',
+      )
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+  })
+
+  describe.each(['direct', 'rest'])('secret headers through %s create', (path) => {
+    it.each([
+      {},
+      '',
+      [],
+      { 'Bad Header': '{value}' },
+      { 'X-Key': '' },
+      { 'X-Key': '{value}{value}' },
+      { 'X-Key': '{other}{value}' },
+      { 'X-Key': '{value}\r\n' },
+      { 'X-Key': '{value}\u007f' },
+      { 'X-Key': '{value}', 'x-key': '{value}' },
+    ])('rejects invalid templates %j before persistence', async (headers) => {
+      const { service, boxRepository } = makeCreateService()
+      const input = { image: 'base', secrets: [{ name: 'key', value: 'token', hosts: ['api.example.com'], headers }] }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await expect(service.create(dto as any, { id: 'org-1' } as any, Context.user())).rejects.toBeInstanceOf(
+        BadRequestError,
+      )
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+
+    it.each(['\u0000', '\u0001', '\r', '\n', '\u007f'])('rejects control bytes in the value %j', async (control) => {
+      const { service, boxRepository } = makeCreateService()
+      const input = {
+        image: 'base',
+        secrets: [
+          {
+            name: 'key',
+            value: `token${control}`,
+            hosts: ['api.example.com'],
+            headers: { Authorization: 'Bearer {value}' },
+          },
+        ],
+      }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await expect(service.create(dto as any, { id: 'org-1' } as any, Context.user())).rejects.toBeInstanceOf(
+        BadRequestError,
+      )
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+
+    it('persists multiple templates without interpreting the secret value', async () => {
+      const { service, boxRepository } = makeCreateService()
+      const secrets = [
+        {
+          name: 'key',
+          value: 'token {value}\t',
+          hosts: ['api.example.com', 'API.example.com'],
+          headers: { Authorization: 'Bot {value}', 'X-Key': '\t{value} ' },
+        },
+      ]
+      const input = { image: 'base', secrets }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await service.create(dto as any, { id: 'org-1' } as any, Context.user())
+      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ secrets }), undefined)
+    })
+  })
+
+  it.each(['direct', 'rest'])('rejects a forbidden secret header on the %s create path', async (path) => {
+    const { service, boxRepository } = makeCreateService()
+    const input = {
+      name: 'secret-box',
+      image: 'base',
+      secrets: [
+        { name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { 'Proxy-Connection': '{value}' } },
+      ],
+    }
+    const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+
+    let error: unknown
+    try {
+      await service.create(dto as any, { id: 'org-1' } as any, Context.user())
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(BadRequestError)
+    expect(String(error)).not.toContain('test-value')
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'Host',
+    'Connection',
+    'Proxy-Connection',
+    'proxy-authenticate',
+    'Proxy-Authorization',
+    'Keep-Alive',
+    'TE',
+    'Trailer',
+    'Upgrade',
+    'Content-Length',
+    'Transfer-Encoding',
+  ])('rejects forbidden header %s', async (header) => {
+    const { service } = makeCreateService()
+    await expect(
+      service.create(
+        {
+          image: 'base',
+          secrets: [{ name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { [header]: '{value}' } }],
+        } as any,
+        { id: 'org-1' } as any,
+        Context.user(),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestError)
+  })
+
+  it.each([
+    [
+      { name: 'first', value: 'one', hosts: ['api.example.com'], headers: { 'x-api-key': '{value}' } },
+      { name: 'second', value: 'two', hosts: ['api.example.com'], headers: { Authorization: '{value}' } },
+    ],
+    [
+      {
+        name: 'first',
+        value: 'one',
+        hosts: ['api.example.com', 'API.example.com'],
+        headers: { 'x-api-key': '{value}' },
+      },
+    ],
+  ])('allows distinct headers and repeated hosts within one secret', async (...secrets) => {
+    const { service, boxRepository } = makeCreateService()
+    await service.create({ image: 'base', secrets } as any, { id: 'org-1' } as any, Context.user())
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'bad token',
+      [{ name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { 'bad header': '{value}' } }],
+    ],
+    ['empty header', [{ name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { '': '{value}' } }]],
+    [
+      'duplicate host and header',
+      [
+        { name: 'first', value: 'test-value', hosts: ['API.example.com'], headers: { 'X-API-Key': '{value}' } },
+        { name: 'second', value: 'other-value', hosts: ['api.example.com'], headers: { 'x-api-key': '{value}' } },
+      ],
+    ],
+  ])('rejects %s in secret headers', async (_case, secrets) => {
+    const { service } = makeCreateService()
+    await expect(
+      service.create({ name: 'secret-box', image: 'base', secrets } as any, { id: 'org-1' } as any, Context.user()),
+    ).rejects.toBeInstanceOf(BadRequestError)
   })
 
   it.each([
@@ -882,7 +1050,13 @@ describe('BoxService inbound defaults', () => {
     ;(service as any).redis.exists.mockResolvedValue(0)
 
     await service.create(
-      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      {
+        name: 'secret-box',
+        image: 'base',
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      } as any,
       { id: 'org-1' } as any,
       Context.user(),
     )

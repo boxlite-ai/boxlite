@@ -231,6 +231,10 @@ export class SecretSpecDto {
   @IsOptional()
   @IsString()
   placeholder?: string
+
+  @IsDefined()
+  @IsObject()
+  headers: Record<string, string>
 }
 
 export class CreateBoxDto {

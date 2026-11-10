@@ -305,6 +305,7 @@ export interface JsSecret {
   value: string;
   hosts?: string[];
   placeholder?: string;
+  headers: Record<string, string>;
 }
 
 export interface JsSecurityOptions {

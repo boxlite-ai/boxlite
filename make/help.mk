@@ -83,6 +83,7 @@ help:
 	@echo "    make test:perf:import-export - Run manual 1 GiB import/export benchmark (release, requires VM)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"
 	@echo "    make test:unit:gvproxy      - Run gvproxy bridge unit tests"
+	@echo "    make test:unit:openapi:server - Run reference-server request mapping tests"
 	@echo "    make test:integration:cli   - Run CLI integration tests (FILTER=<pattern>)"
 	@echo "    make test:unit:python       - Run Python SDK unit tests"
 	@echo "    make test:integration:python - Run Python SDK integration tests"

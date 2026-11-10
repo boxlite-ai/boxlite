@@ -108,7 +108,7 @@ impl LiteBox {
     /// For Configured boxes: initializes VM for the first time.
     /// For Stopped boxes: restarts the VM.
     ///
-    /// This is idempotent - calling start() on a Running box is a no-op.
+    /// A Running VM may still have an unstarted container; this starts its main command once.
     /// Also called implicitly by exec() if the box is not running.
     pub async fn start(&self) -> BoxliteResult<()> {
         self.box_backend.start().await

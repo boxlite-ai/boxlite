@@ -150,6 +150,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         value: secret.value,
         hosts: secret.hosts,
         placeholder: secret.placeholder,
+        headers: secret.headers,
       })),
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,

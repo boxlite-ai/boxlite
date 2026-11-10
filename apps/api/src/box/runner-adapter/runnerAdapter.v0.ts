@@ -279,6 +279,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         value: secret.value,
         hosts: secret.hosts,
         placeholder: secret.placeholder,
+        headers: secret.headers,
       })),
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,
@@ -353,6 +354,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         value: secret.value,
         hosts: secret.hosts,
         placeholder: secret.placeholder,
+        headers: secret.headers,
       })),
       volumes: box.volumes?.map((volume) => ({
         volumeId: volume.volumeId,

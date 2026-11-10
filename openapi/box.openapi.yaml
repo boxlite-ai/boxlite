@@ -427,8 +427,9 @@ paths:
       operationId: startBox
       summary: Start a box (initialize VM)
       description: |
-        Initializes the VM for a box. Idempotent: if already running, returns
-        current state. Transitions: configured → running, stopped → running.
+        Initializes the VM and starts its main command. A running VM can have
+        an unstarted container; this call starts it. It is not a read-only check.
+        Transitions: configured → running, stopped → running.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -2814,7 +2815,8 @@ components:
             $ref: "#/components/schemas/SecretSpec"
           description: |
             Secrets injected into a request header on outbound HTTPS requests.
-            Requests to a secret's hosts carry its value. A host that echoes the
+            Requests to a secret's hosts replace only configured headers already
+            present in the request. A host that echoes the
             injected header returns the value to the guest, so bind secrets only to
             trusted hosts.
         detach:
@@ -3084,7 +3086,7 @@ components:
     SecretSpec:
       type: object
       description: Secret injected into a request header on outbound HTTPS requests to its hosts
-      required: [name, value, hosts]
+      required: [name, value, hosts, headers]
       properties:
         name:
           type: string
@@ -3102,6 +3104,23 @@ components:
           description: |
             Dummy value for the guest environment; the proxy never parses it.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
+        headers:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+          description: |
+            Header names mapped to templates containing exactly one {value} and
+            no other braces. Required; omitted, null and empty maps are rejected.
+            Only headers already present in the original request are overwritten;
+            all entries use this secret's value, substituted once without recursion.
+            Empty maps, invalid HTTP token names, case-insensitive duplicate names,
+            and Host, Content-Length, Connection, Proxy-Connection,
+            Proxy-Authenticate, Proxy-Authorization, Keep-Alive, TE, Trailer,
+            Upgrade and Transfer-Encoding are rejected. Templates and rendered
+            values must not contain ASCII controls other than HTAB or contain DEL.
+            Different secrets must not configure the same case-insensitive host
+            and header pair; repeated hosts within one secret are deduplicated.
 
     Snapshot:
       type: object

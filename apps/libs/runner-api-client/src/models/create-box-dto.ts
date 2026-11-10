@@ -26,6 +26,9 @@ import type { RegistryDTO } from './registry-dto';
 export interface CreateBoxDTO {
     'authToken'?: string;
     'cmd'?: Array<string>;
+    /**
+     * CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.
+     */
     'cpuQuota'?: number;
     'entrypoint'?: Array<string>;
     'env'?: { [key: string]: string; };

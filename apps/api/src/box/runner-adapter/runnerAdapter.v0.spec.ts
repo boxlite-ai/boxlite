@@ -70,7 +70,13 @@ describe('RunnerAdapterV0 createBox', () => {
       disk: 3,
       env: {},
       secrets: [
-        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        {
+          name: 'openai',
+          value: 'sk-test',
+          hosts: ['api.openai.com'],
+          placeholder: '<BOXLITE_SECRET:openai>',
+          headers: { 'x-api-key': '{value}' },
+        },
       ],
       outboundEnabled: true,
       outboundAllowNet: undefined,
@@ -84,7 +90,13 @@ describe('RunnerAdapterV0 createBox', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         secrets: [
-          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+          {
+            name: 'openai',
+            value: 'sk-test',
+            hosts: ['api.openai.com'],
+            placeholder: '<BOXLITE_SECRET:openai>',
+            headers: { 'x-api-key': '{value}' },
+          },
         ],
       }),
     )
@@ -116,7 +128,7 @@ describe('RunnerAdapterV0 createBox', () => {
       disk: 3,
       env: {},
       volumes: [],
-      secrets: [{ name: 'openai', value: 'sk-test' }],
+      secrets: [{ name: 'openai', value: 'sk-test', headers: { 'x-api-key': '{value}' } }],
       outboundEnabled: true,
       outboundAllowNet: undefined,
       errorReason: 'crashed',
@@ -127,7 +139,7 @@ describe('RunnerAdapterV0 createBox', () => {
     expect(recover).toHaveBeenCalledWith(
       'box-1',
       expect.objectContaining({
-        secrets: [{ name: 'openai', value: 'sk-test' }],
+        secrets: [{ name: 'openai', value: 'sk-test', headers: { 'x-api-key': '{value}' } }],
       }),
     )
   })

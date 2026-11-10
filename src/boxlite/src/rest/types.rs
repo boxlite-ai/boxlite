@@ -363,7 +363,7 @@ pub(crate) struct CreateBoxSecret {
     pub hosts: Vec<String>,
     pub placeholder: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub header: Option<String>,
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
@@ -373,7 +373,7 @@ impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
             value: secret.value.clone(),
             hosts: secret.hosts.clone(),
             placeholder: secret.placeholder.clone(),
-            header: secret.header.clone(),
+            headers: secret.headers.clone(),
         }
     }
 }
@@ -1018,14 +1018,17 @@ mod tests {
             value: "key".into(),
             hosts: vec!["generativelanguage.googleapis.com".into()],
             placeholder: "<BOXLITE_SECRET:gemini>".into(),
-            header: Some("x-goog-api-key".into()),
+            headers: Some(std::collections::BTreeMap::from([(
+                "x-goog-api-key".into(),
+                "{value}".into(),
+            )])),
         };
         let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
-        assert_eq!(json["header"], "x-goog-api-key");
+        assert_eq!(json["headers"]["x-goog-api-key"], "{value}");
 
-        secret.header = None;
+        secret.headers = None;
         let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
-        assert!(json.get("header").is_none());
+        assert!(json.get("headers").is_none());
     }
 
     #[test]
@@ -1049,7 +1052,10 @@ mod tests {
             value: "sk-test".into(),
             hosts: vec!["api.openai.com".into()],
             placeholder: "<BOXLITE_SECRET:openai>".into(),
-            header: None,
+            headers: Some(std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                "Bearer {value}".into(),
+            )])),
         }]);
         req.auto_stop = Some(900);
         req.auto_delete = Some(604800);
@@ -1088,7 +1094,10 @@ mod tests {
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
-                header: None,
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer {value}".into(),
+                )])),
             }],
             volumes: vec![VolumeSpec::managed_volume("volume-123", "/data")],
             auto_stop: Some(1800),

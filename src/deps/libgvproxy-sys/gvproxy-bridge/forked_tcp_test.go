@@ -32,7 +32,7 @@ func TestMitmRouting_SecretHostGetsMitmd(t *testing.T) {
 		Name:        "api_key",
 		Hosts:       []string{"api.openai.com"},
 		Placeholder: "<BOXLITE_SECRET:api_key>",
-		Value:       "sk-real-key-123",
+		Headers:     map[string]string{"Authorization": "Bearer {value}"}, Value: "sk-real-key-123",
 	}}
 
 	// Start an upstream HTTPS server that echoes the Authorization header
@@ -86,7 +86,7 @@ func TestMitmRouting_NonSecretHostPassthrough(t *testing.T) {
 		Name:        "api_key",
 		Hosts:       []string{"api.openai.com"},
 		Placeholder: "<BOXLITE_SECRET:api_key>",
-		Value:       "sk-real-key-123",
+		Headers:     map[string]string{"Authorization": "Bearer {value}"}, Value: "sk-real-key-123",
 	}}
 	matcher := NewSecretHostMatcher(secrets)
 
@@ -108,7 +108,7 @@ func TestMitmRouting_SecretHostPort80_NoMitm(t *testing.T) {
 		Name:        "api_key",
 		Hosts:       []string{"api.openai.com"},
 		Placeholder: "<BOXLITE_SECRET:api_key>",
-		Value:       "sk-real-key-123",
+		Headers:     map[string]string{"Authorization": "Bearer {value}"}, Value: "sk-real-key-123",
 	}}
 	matcher := NewSecretHostMatcher(secrets)
 
@@ -133,7 +133,7 @@ func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
 		Name:        "key",
 		Hosts:       []string{"api.example.com"},
 		Placeholder: "<BOXLITE_SECRET:key>",
-		Value:       "real-value",
+		Headers:     map[string]string{"Authorization": "Bearer {value}"}, Value: "real-value",
 	}}
 	matcher := NewSecretHostMatcher(secrets)
 
@@ -187,7 +187,7 @@ func TestMitmRouting_SecretsOnly_NoAllowlist(t *testing.T) {
 		Name:        "key",
 		Hosts:       []string{"api.openai.com"},
 		Placeholder: "<BOXLITE_SECRET:key>",
-		Value:       "real-value",
+		Headers:     map[string]string{"Authorization": "Bearer {value}"}, Value: "real-value",
 	}}
 	matcher := NewSecretHostMatcher(secrets)
 

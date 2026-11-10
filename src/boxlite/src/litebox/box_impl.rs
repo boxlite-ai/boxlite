@@ -297,7 +297,7 @@ impl BoxImpl {
     /// For Configured boxes: full pipeline (filesystem, rootfs, spawn, connect, init)
     /// For Stopped boxes: restart pipeline (reuse rootfs, spawn, connect, init)
     ///
-    /// This is idempotent - calling start() on a Running box is a no-op.
+    /// A Running VM may still have an unstarted container; this starts its main command once.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
 

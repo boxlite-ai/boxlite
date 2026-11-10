@@ -430,7 +430,7 @@ func TestInjectSecretHeaders_DefaultAuthorization(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer bogus-token")
 
 	secrets := []SecretConfig{
-		{Header: "", Value: "sk-real-key"},
+		{Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "sk-real-key"},
 	}
 	injectSecretHeaders(req, req.Header, secrets)
 
@@ -448,7 +448,7 @@ func TestInjectSecretHeaders_ExplicitAuthorization(t *testing.T) {
 	req.Header.Set("Authorization", "")
 	// Case-insensitive header name matching
 	secrets := []SecretConfig{
-		{Header: "authorization", Value: "sk-real-key"},
+		{Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "sk-real-key"},
 	}
 	injectSecretHeaders(req, req.Header, secrets)
 
@@ -466,7 +466,7 @@ func TestInjectSecretHeaders_CustomHeader(t *testing.T) {
 	req.Header.Set("x-goog-api-key", "old-key")
 
 	secrets := []SecretConfig{
-		{Header: "x-goog-api-key", Value: "AIza-real-key"},
+		{Headers: map[string]string{"x-goog-api-key": "{value}"}, Value: "AIza-real-key"},
 	}
 	injectSecretHeaders(req, req.Header, secrets)
 
@@ -484,7 +484,7 @@ func TestInjectSecretHeaders_UnconfiguredHeaderNotTouched(t *testing.T) {
 	req.Header.Set("X-Debug", "<BOXLITE_SECRET:openai>")
 
 	secrets := []SecretConfig{
-		{Header: "Authorization", Value: "sk-real-key"},
+		{Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "sk-real-key"},
 	}
 	injectSecretHeaders(req, req.Header, secrets)
 
@@ -503,8 +503,8 @@ func TestInjectSecretHeaders_MultipleHeaders(t *testing.T) {
 	req.Header.Set("X-Api-Key", "dummy")
 
 	secrets := []SecretConfig{
-		{Header: "Authorization", Value: "val-a"},
-		{Header: "X-Api-Key", Value: "val-b"},
+		{Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "val-a"},
+		{Headers: map[string]string{"X-Api-Key": "{value}"}, Value: "val-b"},
 	}
 	injectSecretHeaders(req, req.Header, secrets)
 
@@ -532,7 +532,7 @@ func TestInjectSecretHeaders_EmptySecrets(t *testing.T) {
 
 func TestInjectSecretHeaders_Concurrent(t *testing.T) {
 	secrets := []SecretConfig{
-		{Header: "Authorization", Value: "real-value"},
+		{Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: "real-value"},
 	}
 
 	var wg sync.WaitGroup

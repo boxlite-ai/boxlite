@@ -7,7 +7,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **authToken** | **string** |  | [optional] [default to undefined]
 **cmd** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
-**cpuQuota** | **number** |  | [optional] [default to undefined]
+**cpuQuota** | **number** | CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1. | [optional] [default to undefined]
 **entrypoint** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **fromVolumeId** | **string** |  | [optional] [default to undefined]

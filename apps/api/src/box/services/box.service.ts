@@ -44,7 +44,7 @@ import { OrganizationEvents } from '../../organization/constants/organization-ev
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
+import { BoxDto, BoxDtoReads, BoxSecret, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import {
   DISABLED_OUTBOUND_RULES_ERROR,
@@ -122,6 +122,63 @@ export type BoxCreationOptions = {
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
+
+function validateSecrets(secrets: BoxSecret[] | undefined): void {
+  const forbidden = new Set([
+    'host',
+    'connection',
+    'proxy-connection',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'keep-alive',
+    'te',
+    'trailer',
+    'upgrade',
+    'content-length',
+    'transfer-encoding',
+  ])
+  // RFC 9110 token syntax; the denied names are Go httputil hopHeaders
+  // plus Host and Content-Length, matching the Rust create check.
+  const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+  // HTTP field values deliberately reject these control bytes, except HTAB.
+  // eslint-disable-next-line no-control-regex
+  const controls = /[\x00-\x08\x0a-\x1f\x7f]/
+  const seen = new Set<string>()
+
+  for (const secret of secrets ?? []) {
+    if (!secret.hosts?.length || secret.hosts.some((host) => !host)) {
+      throw new BadRequestError(`Secret ${secret.name} must list non-empty hosts`)
+    }
+    const headers = secret.headers
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers) || Object.keys(headers).length === 0) {
+      throw new BadRequestError(`secret ${JSON.stringify(secret.name)} has no headers; recreate the box with headers`)
+    }
+    if (typeof secret.value !== 'string' || controls.test(secret.value)) {
+      throw new BadRequestError(`Secret ${secret.name} has an invalid header value`)
+    }
+    const ownHeaders = new Set<string>()
+    const hosts = new Set(secret.hosts.map((value) => value.toLowerCase()))
+    for (const [header, template] of Object.entries(headers)) {
+      const normalizedHeader = header.toLowerCase()
+      if (!token.test(header) || forbidden.has(normalizedHeader) || ownHeaders.has(normalizedHeader)) {
+        throw new BadRequestError(`Secret ${secret.name} has an invalid or duplicate header name`)
+      }
+      ownHeaders.add(normalizedHeader)
+      // Check template and value separately: braces in the value are literal,
+      // and rendering cannot introduce a control byte absent from both inputs.
+      if (typeof template !== 'string' || !/^[^{}]*\{value\}[^{}]*$/.test(template) || controls.test(template)) {
+        throw new BadRequestError(`Secret ${secret.name} has an invalid header template`)
+      }
+      for (const host of hosts) {
+        const key = `${host}\0${normalizedHeader}`
+        if (seen.has(key)) {
+          throw new BadRequestError(`Conflicting secrets on host ${host} for header ${header}`)
+        }
+        seen.add(key)
+      }
+    }
+  }
+}
 
 @Injectable()
 export class BoxService {
@@ -243,6 +300,7 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    validateSecrets(createBoxDto.secrets)
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)

@@ -2378,7 +2378,10 @@ mod tests {
             hosts: vec![],
             placeholder: "<BOXLITE_SECRET:legacy>".to_string(),
             value: "real-value".to_string(),
-            header: None,
+            headers: Some(std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                "Bearer {value}".into(),
+            )])),
         }
     }
 

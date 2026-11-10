@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**headers** | **{ [key: string]: string; }** |  | [default to undefined]
 **hosts** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **name** | **string** |  | [default to undefined]
 **placeholder** | **string** |  | [optional] [default to undefined]
@@ -16,6 +17,7 @@ Name | Type | Description | Notes
 import { DtoSecretDTO } from './api';
 
 const instance: DtoSecretDTO = {
+    headers,
     hosts,
     name,
     placeholder,

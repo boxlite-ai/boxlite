@@ -67,7 +67,13 @@ describe('RunnerAdapterV2 createBox', () => {
       disk: 3,
       volumes: [],
       secrets: [
-        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        {
+          name: 'openai',
+          value: 'sk-test',
+          hosts: ['api.openai.com'],
+          placeholder: '<BOXLITE_SECRET:openai>',
+          headers: { 'x-api-key': '{value}' },
+        },
       ],
       outboundEnabled: true,
       outboundAllowNet: undefined,
@@ -86,7 +92,13 @@ describe('RunnerAdapterV2 createBox', () => {
       'box-1',
       expect.objectContaining({
         secrets: [
-          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+          {
+            name: 'openai',
+            value: 'sk-test',
+            hosts: ['api.openai.com'],
+            placeholder: '<BOXLITE_SECRET:openai>',
+            headers: { 'x-api-key': '{value}' },
+          },
         ],
       }),
     )

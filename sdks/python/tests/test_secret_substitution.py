@@ -34,9 +34,19 @@ if not hasattr(boxlite, "Secret"):
 class TestSecretConstruction:
     """Test Secret class creation and field access via PyO3."""
 
+    def test_custom_headers(self):
+        secret = boxlite.Secret(
+            name="gemini",
+            value="test-value",
+            hosts=["api.example.com"],
+            headers={"x-goog-api-key": "{value}"},
+        )
+        assert secret.headers == {"x-goog-api-key": "{value}"}
+
     def test_basic_creation(self):
         """Secret with all required fields."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="openai",
             value="sk-real-key-123",
             hosts=["api.openai.com"],
@@ -48,6 +58,7 @@ class TestSecretConstruction:
     def test_multiple_hosts(self):
         """Secret targeting multiple hostnames (PyO3 Vec conversion)."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="api_key",
             value="key-123",
             hosts=["api.openai.com", "api.anthropic.com", "api.google.com"],
@@ -58,6 +69,7 @@ class TestSecretConstruction:
     def test_wildcard_host(self):
         """Secret with wildcard hostname pattern."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="corp_key",
             value="key-456",
             hosts=["*.internal.corp.com"],
@@ -66,12 +78,15 @@ class TestSecretConstruction:
 
     def test_empty_hosts_default(self):
         """Hosts defaults to empty list (PyO3 default parameter)."""
-        s = boxlite.Secret(name="test", value="val")
+        s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"}, name="test", value="val"
+        )
         assert s.hosts == []
 
     def test_custom_placeholder(self):
         """Custom placeholder kwarg overrides auto-generated one."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="openai",
             value="sk-123",
             hosts=["api.openai.com"],
@@ -82,7 +97,9 @@ class TestSecretConstruction:
 
     def test_field_mutation(self):
         """PyO3 #[pyo3(get, set)] allows field mutation."""
-        s = boxlite.Secret(name="test", value="val")
+        s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"}, name="test", value="val"
+        )
         s.name = "updated"
         s.value = "new-val"
         s.hosts = ["new-host.com"]
@@ -93,6 +110,7 @@ class TestSecretConstruction:
     def test_repr_redacts_value(self):
         """repr() must not contain the actual secret value."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="openai",
             value="sk-super-secret-key-DO-NOT-LEAK",
             hosts=["api.openai.com"],
@@ -109,7 +127,12 @@ class TestBoxOptionsWithSecrets:
 
     def test_secrets_with_other_options(self):
         """Secrets coexist with other BoxOptions fields."""
-        secret = boxlite.Secret(name="key", value="val", hosts=["api.example.com"])
+        secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
+            name="key",
+            value="val",
+            hosts=["api.example.com"],
+        )
         opts = boxlite.BoxOptions(
             image="python:3.12",
             cpus=2,
@@ -131,7 +154,12 @@ class TestBoxOptionsWithSecrets:
 
     def test_secrets_with_network_spec(self):
         """Secrets and NetworkSpec can be used together."""
-        secret = boxlite.Secret(name="key", value="val", hosts=["api.openai.com"])
+        secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
+            name="key",
+            value="val",
+            hosts=["api.openai.com"],
+        )
         opts = boxlite.BoxOptions(
             image="alpine:latest",
             network=boxlite.NetworkSpec(
@@ -148,6 +176,7 @@ class TestBoxOptionsWithSecrets:
     def test_secret_fields_accessible_through_boxoptions(self):
         """Secret fields accessible via BoxOptions.secrets[i]."""
         secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="test",
             value="secret-value",
             hosts=["h1.com", "h2.com"],
@@ -179,10 +208,16 @@ class TestSecretIntegration:
         """With secrets: placeholder env vars present, real values hidden, CA cert injected."""
         secrets = [
             boxlite.Secret(
-                name="key_a", value="real-val-a-DO-NOT-LEAK", hosts=["a.com"]
+                headers={"Authorization": "Bearer {value}"},
+                name="key_a",
+                value="real-val-a-DO-NOT-LEAK",
+                hosts=["a.com"],
             ),
             boxlite.Secret(
-                name="key_b", value="real-val-b-DO-NOT-LEAK", hosts=["b.com"]
+                headers={"Authorization": "Bearer {value}"},
+                name="key_b",
+                value="real-val-b-DO-NOT-LEAK",
+                hosts=["b.com"],
             ),
         ]
         sandbox = runtime.create(
@@ -243,6 +278,7 @@ class TestSecretIntegration:
         """
         real_value = "sk-test-real-key-12345"
         secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="testkey",
             value=real_value,
             hosts=["httpbingo.org"],
@@ -289,6 +325,7 @@ class TestSecretIntegration:
         The key assertion: non-secret traffic is not blocked or broken.
         """
         secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="key",
             value="val",
             hosts=["api.openai.com"],  # only openai is MITM'd
