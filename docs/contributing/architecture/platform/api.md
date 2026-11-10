@@ -678,7 +678,7 @@ require organization membership and Box write permission:
 | Method | Path | Result |
 | --- | --- | --- |
 | GET | `/organizations/{organizationId}/custom-domains` | `{enabled, subscription, domains}`; subscription is `active`, `required` or `unavailable` |
-| POST | same collection | `{hostname}` creates or returns a draft, `201`; requires an active subscription |
+| POST | same collection | `{hostname}` creates or returns a draft, `201`; requires an active subscription; one non-deleted configuration per organization |
 | GET | `…/custom-domains/{id}` | Configuration, phase, readiness, error code, challenge expiry and DNS records |
 | POST | `…/custom-domains/{id}/verify` | Schedules a check and returns configuration, `202`; provider backoff remains enforced |
 | DELETE | `…/custom-domains/{id}` | Stops access, releases ownership and schedules cloud cleanup, `204` |
@@ -686,6 +686,11 @@ require organization membership and Box write permission:
 Each configuration has `id`, `hostname`, `phase`, `ready`, `errorCode`,
 `challengeExpiresAt` and `dnsRecords` (`name`, `type`, `value`). Challenges and
 certificate DNS records appear here, not in portable bind/list responses.
+Pending, failed and expired drafts count toward the custom-domain allowance.
+Creating a different hostname while any non-deleted configuration exists returns
+`400 custom_domain_count_limit_reached`; retrying the same hostname remains idempotent.
+Delete frees the allowance immediately; unbind does not. Pre-existing configurations
+are retained, but block new hostnames until all are deleted. Platform quota is separate.
 Subscription checks reuse Commerce's existing `GET /organization/{organizationId}/plan`;
 no new subscription endpoint is introduced. Active eligibility is cached in Redis
 for at most one day, shortened to `cycleTo`; denied or unavailable results last

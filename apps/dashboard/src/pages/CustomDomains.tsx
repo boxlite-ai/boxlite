@@ -102,7 +102,8 @@ export default function CustomDomains({
         <div>
           <h2 className="text-lg font-semibold">Custom domains</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Use your own domain with an active organization subscription. It does not use platform domain allowance.
+            Use one custom domain per organization with an active subscription, including pending setups. Delete the
+            configuration before adding another hostname. Platform domain allowance is separate.
           </p>
         </div>
         <button

@@ -151,8 +151,13 @@ default proxy only.
 #### Bring your own domain
 
 On an enabled GCP deployment, an organization with an active subscription can add
-its own hostname in **Dashboard → Domains → Add custom domain**. Platform-domain
-allowance does not limit this flow, even when it is zero or full.
+one hostname in **Dashboard → Domains → Add custom domain**. Pending, failed and
+expired setup drafts also occupy this one-per-organization allowance. Adding a
+different hostname returns `400 custom_domain_count_limit_reached` until the existing
+configuration is deleted; repeating the same hostname returns its existing configuration.
+Platform-domain allowance remains separate, even when it is zero or full.
+Pre-existing configurations are retained; an organization already above the allowance
+must delete all its configurations before adding a different hostname.
 
 1. Enter a public subdomain, such as `app.example.com`; use ASCII/Punycode, at most 220 bytes, with no wildcard or apex domain.
 2. At your DNS provider, add the traffic CNAME and configuration-specific TXT shown in the guide; turn off CDN proxying.
@@ -175,8 +180,8 @@ can be recognized without waiting a day. DNS/TLS readiness lasts at most five
 minutes and never beyond the eligibility deadline; an outage cannot extend it.
 Existing connections are not forcibly disconnected. Recovery requires fresh DNS/TLS checks.
 
-**Unbind** keeps the domain and HTTPS configuration. **Delete configuration** in
-Dashboard releases ownership and stops new requests, then cleans up cloud resources
+**Unbind** keeps the domain, HTTPS configuration and occupied allowance. **Delete configuration** in
+Dashboard immediately frees the allowance, releases ownership and stops new requests, then cleans up cloud resources
 asynchronously. Delete and unbind remain available after subscription expiry.
 After deletion, remove the DNS records; adding the hostname again creates a new TXT challenge.
 

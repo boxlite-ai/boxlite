@@ -179,6 +179,94 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
     expect(await db.query(`SELECT * FROM custom_domain_config`)).toEqual([])
   })
 
+  it.each(['pending', 'failed', 'expired', 'ready'])(
+    'limits an organization to one %s custom domain',
+    async (state) => {
+      const first = await domains.create(org, 'app.example.com')
+      if (state === 'failed') {
+        dns.verify.mockRejectedValue(new DomainSetupError('ownership_txt_mismatch', true))
+        await worker.reconcileDue()
+      }
+      if (state === 'expired') {
+        await db.query(`UPDATE custom_domain_config SET challenge_expires_at = now() - interval '1 second'`)
+      }
+      if (state === 'ready') await worker.reconcileDue()
+      await expect(domains.create(org, 'second.example.com')).rejects.toMatchObject({
+        status: 400,
+        response: { code: 'custom_domain_count_limit_reached' },
+      })
+      const duplicate = await domains.create(org, 'App.Example.com.')
+      expect(duplicate.id).toBe(first.id)
+      if (state === 'expired') expect(duplicate.dnsRecords[1]).not.toEqual(first.dnsRecords[1])
+      await expect(domains.create(other, 'second.example.com')).resolves.toMatchObject({
+        hostname: 'second.example.com',
+      })
+      expect((await domains.list(org)).domains).toHaveLength(1)
+      await domains.delete(org, first.id)
+      await expect(domains.create(org, 'replacement.example.com')).resolves.toMatchObject({
+        hostname: 'replacement.example.com',
+      })
+      expect((await domains.list(org)).domains).toHaveLength(1)
+    },
+  )
+
+  it('retains legacy configurations but requires deleting all of them before adding another hostname', async () => {
+    const first = await domains.create(org, 'first.example.com')
+    const second = await domains.create(other, 'second.example.com')
+    // Model records admitted before the allowance, using service-created configurations.
+    await db.query(`UPDATE custom_domain_config SET organization_id = $1 WHERE id = $2`, [org, second.id])
+    await expect(domains.create(org, 'third.example.com')).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'custom_domain_count_limit_reached' },
+    })
+    await expect(domains.create(org, first.hostname)).resolves.toMatchObject({ id: first.id })
+    await expect(domains.create(org, second.hostname)).resolves.toMatchObject({ id: second.id })
+    await domains.delete(org, first.id)
+    await expect(domains.create(org, 'third.example.com')).rejects.toMatchObject({
+      response: { code: 'custom_domain_count_limit_reached' },
+    })
+    await domains.delete(org, second.id)
+    await expect(domains.create(org, 'third.example.com')).resolves.toMatchObject({ hostname: 'third.example.com' })
+  })
+
+  it('admits only one of two concurrent custom-domain creates after the organization lock', async () => {
+    const blocker = db.createQueryRunner()
+    await blocker.connect()
+    await blocker.startTransaction()
+    await blocker.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [org])
+    const pending = Promise.allSettled([
+      domains.create(org, 'first.example.com'),
+      domains.create(org, 'second.example.com'),
+    ])
+    try {
+      const deadline = Date.now() + 2_000
+      let waiting = 0
+      while (Date.now() < deadline) {
+        const [row] = await db.query(
+          `SELECT count(*)::int AS waiting FROM pg_stat_activity
+          WHERE query = 'SELECT id FROM organization WHERE id = $1 FOR UPDATE'
+            AND cardinality(pg_blocking_pids(pid)) > 0`,
+        )
+        waiting = row.waiting
+        if (waiting === 2) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(waiting).toBe(2)
+    } finally {
+      await blocker.commitTransaction()
+      await blocker.release()
+      await pending
+    }
+    const results = await pending
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { status: 400, response: { code: 'custom_domain_count_limit_reached' } },
+    })
+    expect(
+      await db.query(`SELECT id FROM custom_domain_config WHERE organization_id = $1 AND deleted_at IS NULL`, [org]),
+    ).toHaveLength(1)
+  })
+
   it('does not claim a name or call GCP on failed DNS proof', async () => {
     const draft = await domains.create(org, 'app.example.com')
     dns.verify.mockRejectedValue(new DomainSetupError('ownership_txt_mismatch', true))
@@ -242,7 +330,11 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
   it('bounds two replicas and ignores overlapping ticks without processing a hostname twice', async () => {
     for (let offset = 0; offset < 96; offset += 16) {
       await Promise.all(
-        Array.from({ length: 16 }, (_, index) => domains.create(org, `batch-${offset + index}.example.com`)),
+        Array.from({ length: 16 }, async (_, index) => {
+          const organizationId = randomUUID()
+          await db.query(`INSERT INTO organization (id) VALUES ($1)`, [organizationId])
+          return domains.create(organizationId, `batch-${offset + index}.example.com`)
+        }),
       )
     }
     const replica = new CustomDomainWorkerService(
@@ -305,7 +397,11 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
     ]
     for (let offset = 0; offset < 1000; offset += 20) {
       await Promise.all(
-        Array.from({ length: 20 }, (_, index) => domains.create(org, `scale-${offset + index}.example.com`)),
+        Array.from({ length: 20 }, async (_, index) => {
+          const organizationId = randomUUID()
+          await db.query(`INSERT INTO organization (id) VALUES ($1)`, [organizationId])
+          return domains.create(organizationId, `scale-${offset + index}.example.com`)
+        }),
       )
     }
     for (let round = 0; round < 16; round++) await Promise.all(replicas.map((replica) => replica.reconcileDue()))

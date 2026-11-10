@@ -629,8 +629,10 @@ to execute the tests rather than replay Nx output, and clear the local
 
 `TEST_FILES=custom-domain.integration.spec.ts` selects the custom-domain lifecycle
 checks. They use actual service-created records and PostgreSQL transactions to
-exercise competing organizations, expired worker leases, deletion during cloud work,
-two concurrent worker instances and 1000 ready domains. The concurrency case holds
+exercise the one-custom-domain allowance (including drafts), concurrent creation,
+replacement after deletion, retained legacy configurations, competing organizations,
+expired worker leases, deletion during cloud work, two concurrent worker instances
+and 1000 ready domains across 1000 organizations. The concurrency case holds
 DNS work at a barrier to check the active and per-tick limits. The scale case drives
 ticks directly and checks that ready-domain maintenance makes no provider calls.
 DNS, TLS and Certificate Manager use controlled test doubles here, so these checks

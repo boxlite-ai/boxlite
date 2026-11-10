@@ -70,6 +70,21 @@ export class CustomDomainService {
         )
         return existing[0].id
       }
+      // Drafts reserve the slot; create and delete hold the same organization lock.
+      const [held] = await manager.query(
+        `SELECT id FROM custom_domain_config WHERE organization_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [organizationId],
+      )
+      if (held) {
+        throw new HttpException(
+          {
+            code: 'custom_domain_count_limit_reached',
+            message:
+              'Each organization can have one custom domain. Delete the existing configuration before adding another.',
+          },
+          400,
+        )
+      }
       const [created] = await manager.query(
         `INSERT INTO custom_domain_config
         (organization_id, hostname, challenge, challenge_expires_at) VALUES ($1, $2, $3, now() + interval '1 day') RETURNING id`,
