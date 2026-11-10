@@ -427,6 +427,11 @@ then leaves the other reader protected. Nested acquisition and read-to-write
 upgrades are unsupported. Blocking acquisition is synchronous; fairness is not
 guaranteed.
 
+Nonblocking file-lock acquisition returns `false` only for contention
+(`EWOULDBLOCK`/`EAGAIN`). Interrupted calls (`EINTR`) are retried; other OS errors
+panic with their details, matching blocking acquisition. Async guards propagate
+those failures instead of treating them as a reason to keep polling.
+
 Existing boot and outbound-policy changes still acquire exclusive guards. Shared
 read support alone does not coordinate lifecycle and disk operations that use
 other locks. Custom `Locker` implementations inherit exclusive fallback read

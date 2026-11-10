@@ -294,6 +294,24 @@ struct FileLock {
     file: File,
 }
 
+impl FileLock {
+    fn try_flock(&self, operation: libc::c_int) -> bool {
+        loop {
+            // SAFETY: File owns a live descriptor; callers supply flock flags.
+            let result = unsafe { libc::flock(self.file.as_raw_fd(), operation) };
+            if result == 0 {
+                return true;
+            }
+            let error = std::io::Error::last_os_error();
+            match error.kind() {
+                std::io::ErrorKind::WouldBlock => return false,
+                std::io::ErrorKind::Interrupted => continue,
+                _ => panic!("flock({operation:#x}) failed: {error}"),
+            }
+        }
+    }
+}
+
 impl Locker for FileLock {
     fn id(&self) -> LockId {
         self.id
@@ -316,9 +334,7 @@ impl Locker for FileLock {
     }
 
     fn try_lock(&self) -> bool {
-        let fd = self.file.as_raw_fd();
-        let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-        result == 0
+        self.try_flock(libc::LOCK_EX | libc::LOCK_NB)
     }
 
     fn read_lock(&self) {
@@ -330,9 +346,7 @@ impl Locker for FileLock {
     }
 
     fn try_read_lock(&self) -> bool {
-        let fd = self.file.as_raw_fd();
-        let result = unsafe { libc::flock(fd, libc::LOCK_SH | libc::LOCK_NB) };
-        result == 0
+        self.try_flock(libc::LOCK_SH | libc::LOCK_NB)
     }
 }
 
@@ -518,3 +532,7 @@ mod tests {
         assert_eq!(manager.allocated_count().unwrap(), 0);
     }
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "tests/flock_errno.rs"]
+mod flock_errno_tests;

@@ -168,6 +168,10 @@ pub trait Locker: Send + Sync {
     /// Try to acquire the write lock without blocking.
     ///
     /// Returns `true` if the lock was acquired, `false` if it was already held.
+    ///
+    /// # Panics
+    ///
+    /// Fatal acquisition errors may panic, as with [`Self::lock`].
     fn try_lock(&self) -> bool;
 
     /// Acquire a read lock, blocking until the writer releases it.
@@ -186,6 +190,10 @@ pub trait Locker: Send + Sync {
     /// Try to acquire a read lock without blocking.
     ///
     /// The default attempts exclusive acquisition for custom implementations.
+    ///
+    /// # Panics
+    ///
+    /// Fatal acquisition errors may panic, as with [`Self::read_lock`].
     fn try_read_lock(&self) -> bool {
         self.try_lock()
     }
