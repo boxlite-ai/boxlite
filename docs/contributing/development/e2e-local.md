@@ -86,6 +86,15 @@ runs fast: the first run compiles everything, and later runs reuse the cached to
 build output. With 4 vCPUs a cold build is much slower than on the previous 16-vCPU
 `c8i.4xlarge`, so a first run can come close to the 50-minute timeout.
 
+Disk cleanup runs after checkout, before dependency setup, and again after tests and
+diagnostic uploads. At **70% used or less than 50 GiB free**, it removes test caches
+(`target/boxlite-test`, temporary `boxlite-*` paths, and `~/.boxlite`) first. If pressure
+remains, it removes Cargo debug/release outputs, including Linux GNU/musl profiles,
+stopping once usage is below 70% and at least 50 GiB is free. Healthy caches, toolchains,
+`target/native`, `target/nextest`, rescued logs, and persistent test logs are preserved.
+Final cleanup also runs after failure or cancellation, except failed debug sessions;
+it requires successful checkout and a live runner. Cleanup errors fail the step.
+
 Authentication uses no long-lived cloud secrets, and every identity is scoped to this VM:
 
 - **GCP** — the workflow exchanges its GitHub OIDC token through workload identity pool
@@ -158,7 +167,7 @@ gh workflow run e2e-local.yml
 | `Federate a GCP identity` fails | the run's workflow is not `e2e-local.yml` in this repository, or the pool/provider changed | check the provider condition above; reusable or renamed workflows need the condition updated |
 | `start-runner` times out waiting for the runner to come online | the startup script failed | read the VM's serial port output (`gcloud compute instances get-serial-port-output ci-gha-e2e-1 --project boxlite-dev-project --zone us-east5-a`) and search for `startup-script` |
 | `start-runner` fails with `could not start ci-gha-e2e-1 after 6 attempts` | `us-east5-a` has no `c3-highcpu-4` capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`) | re-run the job later; if it persists, change the VM's machine type with `gcloud compute instances set-machine-type` while it is stopped |
-| `e2e-tests` fails on low disk | `target/` build artifacts filled the disk | the job evicts caches at 80% use and refuses below 20 GB free; if it still fails, grow the disk |
+| `e2e-tests` fails on low disk | Allowed cache eviction could not restore headroom | cleanup targets below 70% use and at least 50 GiB free before builds and after tests; inspect remaining usage or grow the disk |
 | `e2e-tests` hits its 50-minute timeout with every suite slower | box starts wait on a public registry: `boot_timing_profile` shows `stage_image_prepare` in seconds | Rust, CLI, Python and Node suites pull through a [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry); the C suite's `boxlite_simple_new` test still pulls from docker.io |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |
 | A labeled fork PR doesn't re-run after a push | fork approval is per-commit | remove and re-add the `e2e-local` label to approve the new head |
