@@ -70,11 +70,10 @@ test('public GHCR verification is read-only and reports confirmed absence', asyn
   await assert.rejects(verifyPublished({ config, stage: 'ghcr', registry: ghcr, tag, run: probe({ missing: true }).run }), NotPublishedError)
 })
 
-test('unsupported GHCR import routes are refused before any external command', async () => {
+test('a GHCR import destination is refused before any external command', async () => {
   let effects = 0
   const run: Run = async () => { effects++; return ok() }
   const cloud = resolveRegistry({ config, stage: 'dev', region: 'us-east1', project: 'project' })
-  await assert.rejects(promote({ config, tag, from: { stage: 'ghcr', registry: ghcr }, to: { stage: 'dev', registry: cloud }, run }), /not supported/)
-  await assert.rejects(promote({ config, tag, from: { stage: 'dev', registry: cloud }, to: { stage: 'ghcr', registry: ghcr }, run }), /not supported/)
+  await assert.rejects(promote({ config, tag, from: { stage: 'dev', registry: cloud }, to: { stage: 'ghcr', registry: ghcr }, run }), /destination/)
   assert.equal(effects, 0)
 })

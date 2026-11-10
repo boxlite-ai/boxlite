@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { addressFor, type Registry } from './address.ts'
 import type { BuildConfig } from './config.ts'
-import type { Run } from './publish.ts'
+import type { Registrar, Run } from './publish.ts'
 
 const MANIFEST_TYPES = ['application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json']
 // Request indexes too, so an unsupported existing release cannot look absent.
@@ -13,7 +13,7 @@ export const ghcrRegistrar = ({ config, registry, run, environment = process.env
   registry: Extract<Registry, { kind: 'ghcr' }>
   run: Run
   environment?: NodeJS.ProcessEnv
-}) => {
+}): Registrar => {
   const username = environment.GHCR_USERNAME ?? environment.GITHUB_ACTOR
   const password = environment.GHCR_TOKEN ?? environment.GH_TOKEN
   if (!username || !password) throw new Error('GHCR requires GHCR_USERNAME/GITHUB_ACTOR and GHCR_TOKEN/GH_TOKEN')
@@ -60,7 +60,7 @@ export const ghcrRegistrar = ({ config, registry, run, environment = process.env
   return {
     ensureRepository: async () => {}, // GHCR creates repository-linked packages on first push.
     digestOf,
-    isPublished: async (artifact: string, tag: string) => (await digestOf(artifact, tag)) !== null,
+    isPublished: async (artifact, tag) => (await digestOf(artifact, tag)) !== null,
     async login() {
       const result = await run('docker', ['login', '--username', username, '--password-stdin', 'ghcr.io'], { stdin: password })
       if (result.code !== 0) throw new Error(`Could not log in to GHCR: docker exited ${result.code}`)

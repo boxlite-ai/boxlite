@@ -38,30 +38,46 @@ Use the deployment workflow to resolve a ref and prepare the matching source tre
 | GCP | Artifact Registry | Declared project, region and repository |
 | AWS | ECR | Account from credentials, declared region and repository |
 
-### Reading release images in GHCR
+### Release images in GHCR
 
-Verify release artifacts without loading a cloud stage file:
+GHCR publication runs in the `publish` job of `mbuild-release` on `main`, independently of dev/prod cloud credentials.
+Local operators dispatch the workflow; direct GHCR CLI writes outside that context are refused before registry access.
+This publication path requires the dependent release-workflow integration.
 
 ```bash
-npm run mbuild verify -- --ghcr boxlite-ai/boxlite --version vX.Y.Z --tag <full-commit-sha>
+gh workflow run mbuild-release.yml --repo boxlite-ai/boxlite --ref main -f command=publish -f tag=vX.Y.Z
+npm run mbuild verify -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite
+npm run mbuild import-release -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite --stage prod
 ```
 
-The address is `ghcr.io/<owner>/<repository>/<artifact>:vX.Y.Z-<full-sha>`, matching AR's artifact/tag names.
-Set `GHCR_USERNAME` and `GHCR_TOKEN`, or `GITHUB_ACTOR` and `GH_TOKEN` in Actions; reads need package read access.
-HTTP Content-Type identifies single-platform OCI or Docker schema 2 manifests; an embedded media type may be omitted but must agree when present.
-Indexes are refused, and digests are computed from the original manifest bytes.
-Confirmed missing images exit `66`; authentication, transport and malformed responses fail separately.
-GHCR publication is restricted to the `publish` job of `mbuild-release` on `main`, independently of cloud credentials.
-Local operators use the workflow; direct CLI writes outside its context fail before registry access.
-The GHCR release workflow integration is required for publication.
-Workflow concurrency serializes runs for one release; atomic locks in `RUNNER_TEMP` exclude competing CLI processes inside a job.
-Different artifacts remain parallel, and failed publications release their locks.
-Publication audits dependencies, builds only missing images, and verifies every uploaded digest.
-Images carry the source repository label and explicitly target `linux/amd64`; Docker API 1.46 or later is required.
-These guarantees cover the supported publisher; a package writer can still bypass it with a direct push.
-GHCR imports are not supported by this tooling version.
+The address is `ghcr.io/<owner>/<repository>/<artifact>:vX.Y.Z-<full-sha>`.
+Artifact names and tags match Artifact Registry's layout; GHCR has no stage suffix.
+Set `GHCR_USERNAME` and `GHCR_TOKEN`, or use `GITHUB_ACTOR` and `GH_TOKEN` in Actions.
+Publishing needs package write access; verification/import needs package read access.
+`publish` and `verify` with `--ghcr` read the artifact declaration without a cloud stage file.
+For publication, use `MSTAGE_ENV_CONFIG` to select the release source's declaration and build context.
+`import-release` imports and verifies the artifacts required by its current declaration;
+an older release lacking a required artifact fails this import.
 
-Promotion copies existing image bytes within one registry kind. Cross-cloud promotion is refused.
+Publication audits dependencies and reuses existing images without overwriting them.
+Workflow concurrency serializes the full publication interval for one release;
+an atomic lock under `RUNNER_TEMP` prevents competing CLI processes inside a job.
+Different artifacts remain parallel, and locks are released after failed commands.
+These guarantees cover the supported publisher; a package writer can still bypass it and push directly.
+Retry a partial publication to build only missing artifacts; success requires every selected image to exist.
+Import checks all source manifests before destination writes, copies immutable source digests with Docker Buildx,
+refuses conflicting destination images, and verifies the copied manifest digest.
+`imagetools create --prefer-index=false` preserves manifest bytes without the local Docker image store.
+Artifact Registry lookups match exact tags, including when a similarly named backup tag exists.
+Only single-platform OCI and Docker schema 2 manifests are supported; indexes are refused.
+Manifest `Content-Type` is authoritative; an embedded media type may be omitted but must agree when present.
+GHCR publication pushes `linux/amd64` explicitly and requires Docker API 1.46 or later.
+GHCR image scanning runs after import, using the receiving stage's existing scan policy.
+Artifact Analysis discovery must report completion before vulnerability findings are accepted.
+Pending or missing discovery waits up to the configured timeout; failed or unsupported scans stop immediately.
+Confirmed missing manifests exit `66`; authentication, transport and other registry errors fail separately.
+
+Stage-to-stage promotion copies existing image bytes within one cloud registry kind. Cross-cloud promotion is refused.
 The caller needs source read and destination write access; `promoteFrom` lets bootstrap prepare
 those permissions. On AWS, the current CLI uses one resolved account for both registry addresses.
 
@@ -118,4 +134,5 @@ The reusable [mbuild workflow](../../../.github/workflows/mbuild.yml) is called 
 [mdeploy-all](../../../.github/workflows/mdeploy-all.yml); release publication uses
 [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 
-Run `make test:apps:infra` from the repository root for tooling typechecks and tests.
+Run `make test:apps:mbuild` for image tooling typechecks and tests, or `make test:apps:infra`
+for the complete infrastructure suite, from the repository root.
