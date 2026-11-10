@@ -647,9 +647,10 @@ let cmd = BoxCommand::new("python3")
 
 An unknown user or group fails the exec with `BoxliteError::InvalidArgument`
 (HTTP 400 over REST) and the command does not run. Over REST, a command with a
-`user` first re-reads `exec_user_enabled` from `GET /v1/config` (uncached); a
-server that does not advertise it gets `BoxliteError::Unsupported` and no exec
-request, because it would otherwise run the command as the box default user.
+`user` checks the server release from `GET /v1/config` against the OpenAPI
+minimum before sending exec. Discovery is shared for the client lifetime.
+An insufficient or missing version returns `BoxliteError::Unsupported`; see
+[server version checks](../README.md#sdk-server-version-checks).
 
 ### Execution
 

@@ -22,6 +22,7 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { DomainService } from '../box/services/domain.service'
 import { BoxliteConfigController } from './boxlite-config.controller'
+import { TypedConfigService } from '../config/typed-config.service'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
@@ -59,9 +60,10 @@ describe('BoxLite REST routing', () => {
       // present, so one that shadowed PUT network/inbound would fail below.
       [BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
       [
+        TypedConfigService,
         {
           provide: ConfigService,
-          useValue: new ConfigService({ checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true } }),
+          useValue: new ConfigService({ version: '0.12.0', checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true } }),
         },
         {
           provide: BoxService,
@@ -288,22 +290,20 @@ describe('BoxLite REST routing', () => {
     expect(updateInboundEnabled).not.toHaveBeenCalled()
   })
 
-  // Clients call the inbound route, and send a per-exec user, only when the
-  // server advertises it; otherwise they report "unsupported" instead of a
-  // bare 404 or a command silently run as the box default user.
-  it('advertises inbound updates and exec user overrides in /v1/config', async () => {
+  // Preserve legacy flags while new clients use the deployed release.
+  it('reports the deployed product version and legacy flags in /v1/config', async () => {
     await startRoutingTestApp()
 
     const response = await get('/api/v1/config')
     const body = await response.json()
+    expect(body.api_version).toBe('0.12.0')
 
     expect(body.capabilities.inbound_update_enabled).toBe(true)
     expect(body.capabilities.checkpoints_enabled).toBe(true)
     expect(body.capabilities.exec_user_enabled).toBe(true)
   })
 
-  // An older API ignores isPublic and would publish the port, so clients
-  // refuse private prepare unless /v1/config advertises it.
+  // Older SDKs require the legacy private-tunnel flag to avoid public exposure.
   it('advertises private tunnels in /v1/config', async () => {
     await startRoutingTestApp()
 

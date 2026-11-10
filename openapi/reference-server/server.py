@@ -599,7 +599,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="BoxLite Box API",
-    version="0.1.0",
+    version=boxlite.__version__,
     lifespan=lifespan,
 )
 
@@ -619,6 +619,7 @@ async def runtime_error_handler(request: Request, err: RuntimeError):
 @app.get("/v1/config")
 async def get_config():
     return {
+        "api_version": boxlite.__version__,
         "defaults": {
             "cpus": 2,
             "memory_mib": 512,

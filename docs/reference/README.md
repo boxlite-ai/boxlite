@@ -45,13 +45,93 @@ implementation currently serves all 35 paths:
 | `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
-Read each server's routes rather than either README — both under-report.
-`GET /config` does not close this gap: its feature flags (`tty_enabled`,
-`streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
-`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`) cover only some routes, there is no
-flag at all for volumes, images or tunnel, and a flag can disagree with the
-routes — the reference server advertises `streaming_enabled: true` while
-serving no attach route.
+`GET /v1/config` reports `api_version`, using the server's product release
+number (the same numbering as SDK releases). Version compatibility does not
+promise that every deployment enables every operation. Servers still reject
+unsupported features and unauthorized requests explicitly. Existing discovery
+flags remain for older SDKs; new SDK checks use only the version.
+
+### SDK server version checks
+
+The shared Rust REST transport matches each outgoing request against generated
+OpenAPI routes. An operation minimum applies to every call; a property minimum
+applies only when that property triggers its declared condition. JSON, empty
+responses, binary responses, file streams, and WebSocket handshakes all use the
+same evaluator. Proxy CONNECT is a separate protocol; its REST preparation is checked.
+
+The first request that needs a version fetches `/v1/config`. Successful discovery
+is cached for the client lifetime and shared with clones and derived boxes.
+There is no TTL or refresh API. Failed or cancelled discovery is retryable;
+a valid but insufficient version remains cached. Recreate the client after a
+server upgrade. Ordinary requests without triggered rules never fetch config.
+Rolling upgrades and downgrades are outside this cache contract.
+
+Comparisons use SemVer precedence: `0.13.0-rc.1` is below `0.13.0`, while
+`0.13.0+build.7` has equal precedence. Missing, malformed, or insufficient versions
+produce `Unsupported` before the business request, with the operation, field,
+required version, and upgrade advice. Authentication and network failures keep
+their usual categories. Requested values are never silently omitted.
+
+### Adding an operation or request field
+
+Declare the first release that will contain the feature, strictly above the
+version on the development base. For example, when developing on `0.12.0` for
+release `0.13.0`, a new operation declares:
+
+```yaml
+/{prefix}/boxes/{box_id}/diagnostics:
+  get:
+    operationId: getDiagnostics
+    x-boxlite-min-server-version: "0.13.0"
+    # parameters and responses follow the ordinary OpenAPI contract
+```
+
+For a new optional field whose contract already defines `false` as its default:
+
+```yaml
+include_details:
+  type: boolean
+  default: false
+  x-boxlite-min-server-version: "0.13.0"
+  x-boxlite-version-check: non-default
+```
+
+Omitted or `false` keeps the legacy request behavior; `true` requires `0.13.0`.
+Use `present` when any supplied value requires support, including null, an empty
+string, or an empty object. Version annotations never add or change defaults.
+A future patch release does not necessarily contain a new feature, so declare
+its actual first release instead of accepting every server above the development version.
+
+1. Add the route or request property and its version declaration to `openapi/box.openapi.yaml`.
+2. Run `make setup:openapi` once in your Python environment, then `make generate:openapi`.
+3. Implement the ordinary SDK/server operation; no per-call compatibility hook is needed.
+4. Add real SDK request tests and run `make test:unit:openapi BASE=origin/main` plus the relevant SDK tests.
+
+CI rejects stale generated data, new operations without future minima, and new
+reachable request properties/parameters without a future gate on themselves,
+a parent property, or their operation. Response-only/read-only additions do not
+need request gates. Previously released minima stay fixed as SDK versions advance.
+Unknown SDK routes fail locally instead of bypassing checks.
+
+The generator supports local references, nested object properties, `allOf`,
+whole-property `present` checks, scalar `non-default` checks, and scalar query,
+header, and path parameters. Annotations inside arrays, maps, unions, parameter
+content, or non-JSON bodies fail generation; use an operation gate for those
+shapes. It does not validate general request schemas. Consumers use packaged
+rules and need no Python or YAML parser. Keep OpenAPI `info.version` aligned
+with the workspace version when publishing a release; CI checks this too.
+
+The initial migration uses `0.12.0`, the inspected source baseline, rather than
+claiming exact historical introduction releases:
+
+| Existing behavior | Version rule |
+| --- | --- |
+| Snapshot create/list/get/remove/restore | Operation minimum |
+| Clone, export, import | Operation minimum |
+| Custom Linux capability policy | `advanced.capabilities`, `present` |
+| Guest privilege | `advanced.privileged`, `non-default` (`false`) |
+| Per-execution user | `user`, `present` |
+| Private service tunnel | `isPublic`, `non-default` (`true`) |
 
 `{prefix}` is a deployment-defined routing slot, opaque to the client, published
 by a server as `Principal.path_prefix`. A single-tenant server may omit the

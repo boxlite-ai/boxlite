@@ -349,6 +349,7 @@ pub(super) struct ResizeRequest {
 /// schema in `openapi/box.openapi.yaml`.
 #[derive(Serialize)]
 pub(super) struct ServerConfig {
+    pub api_version: &'static str,
     pub capabilities: ServerCapabilities,
 }
 

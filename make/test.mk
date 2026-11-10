@@ -525,7 +525,14 @@ test\:unit\:gvproxy:
 # directory needs python-dotenv, fastapi and pydantic, which no setup target
 # here installs — discovering the whole directory would fail this suite on
 # every checkout that does not intend to run the server.
-test\:unit\:openapi:
+generate\:openapi:
+	@python3 openapi/generate_version_rules.py
+
+check\:openapi:
+	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
+
+test\:unit\:openapi: check\:openapi
+	@python3 -m unittest discover -s openapi/tests -v
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 

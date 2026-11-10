@@ -355,6 +355,23 @@ jobs:
       - name: Test CI and coverage scripts against fake tools
         run: make test:unit:scripts
 
+  openapi:
+    name: OpenAPI version contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-python
+      - run: make setup:openapi
+      - name: Check generated rules and request additions
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: make test:unit:openapi
+
   # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
   # Codecov gates changed lines at 90% and reports total coverage separately.
   rust:
@@ -468,12 +485,6 @@ jobs:
         env:
           BOXLITE_DEPS_STUB: '1'
         run: make coverage:bindings:external
-
-      - name: Run OpenAPI reference-server unit tests
-        # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
-        # filter), so a new variant must add its row there before the reference
-        # server can name the class. stdlib only — no extra setup.
-        run: make test:unit:openapi
 
       - name: Run guest mount tests
         if: runner.os == 'Linux'
@@ -970,7 +981,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
+    needs: [changes, infra, openapi, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}
