@@ -115,15 +115,16 @@ async fn nested_policy_reuse_matches_local_through_rest() {
             }
         }
     }
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 14);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.starts_with("GET /v1/boxes/")),
-        "{requests:?}"
-    );
-    drop(requests);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 14);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with("GET /v1/boxes/")),
+            "{requests:?}"
+        );
+    }
     server.abort();
     let _ = server.await;
     runtime.shutdown(Some(0)).await.unwrap();
