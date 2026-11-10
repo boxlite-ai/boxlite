@@ -488,25 +488,6 @@ func goBoxliteOnRegistryRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer)
 
 // ─── Info callbacks ────────────────────────────────────────────────────────
 
-//export goBoxliteOnCpuLimit
-func goBoxliteOnCpuLimit(cores C.double, hasLimit C.bool, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
-	h := ptrToHandle(userData)
-	if h == 0 || !claimHandleForDispatch(h) {
-		return
-	}
-	defer h.Delete()
-	ch, ok := h.Value().(chan cpuLimitResult)
-	if !ok {
-		return
-	}
-	var value *float64
-	if bool(hasLimit) {
-		v := float64(cores)
-		value = &v
-	}
-	ch <- cpuLimitResult{value: value, err: errorFromCError(errPtr)}
-}
-
 //export goBoxliteOnInfo
 func goBoxliteOnInfo(info *C.CBoxInfo, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
@@ -830,11 +811,6 @@ type registryListResult struct {
 
 type infoResult struct {
 	value *BoxInfo
-	err   error
-}
-
-type cpuLimitResult struct {
-	value *float64
 	err   error
 }
 

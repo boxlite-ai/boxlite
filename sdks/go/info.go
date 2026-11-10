@@ -72,15 +72,13 @@ type NetworkInfo struct {
 
 // BoxInfo holds information about a box.
 type BoxInfo struct {
-	ID      string
-	Name    string
-	Image   string
-	State   State
-	Running bool
-	PID     int
-	CPUs    int
-	// CPULimit is the creation-only aggregate limit in cores, or nil when unset.
-	CPULimit   *float64
+	ID         string
+	Name       string
+	Image      string
+	State      State
+	Running    bool
+	PID        int
+	CPUs       float64
 	MemoryMiB  int
 	Network    *NetworkInfo
 	AutoStop   uint32
@@ -139,9 +137,6 @@ func (b *Box) Info(ctx context.Context) (*BoxInfo, error) {
 		if res.value != nil && res.value.Name != "" && b.name == "" {
 			b.name = res.value.Name
 		}
-		if res.err == nil && res.value != nil {
-			res.value.CPULimit, res.err = b.runtime.cpuLimit(ctx, res.value.ID)
-		}
 		return res.value, res.err
 	case <-ctx.Done():
 		drainAndDelete(ch, h, b.runtime.closing)
@@ -168,15 +163,6 @@ func (r *Runtime) ListInfo(ctx context.Context) ([]BoxInfo, error) {
 
 	select {
 	case res := <-ch:
-		if res.err == nil {
-			for i := range res.value {
-				limit, err := r.cpuLimit(ctx, res.value[i].ID)
-				if err != nil {
-					return nil, err
-				}
-				res.value[i].CPULimit = limit
-			}
-		}
 		return res.value, res.err
 	case <-ctx.Done():
 		drainAndDelete(ch, h, r.closing)
@@ -204,42 +190,6 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 		return nil, freeError(&cerr)
 	}
 
-	select {
-	case res := <-ch:
-		if res.err == nil && res.value != nil {
-			res.value.CPULimit, res.err = r.cpuLimit(ctx, res.value.ID)
-		}
-		return res.value, res.err
-	case <-ctx.Done():
-		drainAndDelete(ch, h, r.closing)
-		return nil, ctx.Err()
-	case <-r.closing:
-		drainAndDelete(ch, h, r.closing)
-		return nil, ErrRuntimeClosed
-	}
-}
-
-// Query after info callbacks return so the drain thread can deliver completion.
-// Always use the returned immutable ID; a name can be reassigned between calls.
-func (r *Runtime) cpuLimit(ctx context.Context, id string) (*float64, error) {
-	select {
-	case <-r.closing:
-		return nil, ErrRuntimeClosed
-	default:
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	r.ensureDrainRunning()
-	cID := toCString(id)
-	defer C.free(unsafe.Pointer(cID))
-	ch := make(chan cpuLimitResult, 1)
-	h := registerHandleForDispatch(cgo.NewHandle(ch))
-	var cerr C.CBoxliteError
-	if C.boxlite_get_cpu_limit(r.handle, cID, C.cbCpuLimit(), handleToPtr(h), &cerr) != C.Ok {
-		deleteHandleForDispatch(h)
-		return nil, freeError(&cerr)
-	}
 	select {
 	case res := <-ch:
 		return res.value, res.err
@@ -277,7 +227,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		State:      State(cString(info.status)),
 		Running:    info.running != 0,
 		PID:        pid,
-		CPUs:       int(info.cpus),
+		CPUs:       float64(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
 		Network:    cNetworkInfoToGo(info.network),
 		AutoStop:   uint32(info.auto_stop),

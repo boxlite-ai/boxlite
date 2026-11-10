@@ -460,10 +460,7 @@ pub struct BoxInfo {
     pub image: String,
 
     /// Allocated CPU count
-    pub cpus: u8,
-
-    /// Immutable aggregate CPU limit in cores (Linux), if configured
-    pub cpu_limit: Option<CpuLimit>,
+    pub cpus: f64,
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
@@ -794,11 +791,8 @@ Options for constructing a box.
 
 ```rust
 pub struct BoxOptions {
-    /// Number of CPUs (default: 2)
-    pub cpus: Option<u8>,
-
-    /// Creation-only CPU time limit; e.g. Some(CpuLimit::new(0.5)?)
-    pub cpu_limit: Option<CpuLimit>,
+    /// CPU allocation (default: 1); fractions require Linux
+    pub cpus: Option<f64>,
 
     /// Memory in MiB (default: 512)
     pub memory_mib: Option<u32>,
@@ -856,7 +850,7 @@ use boxlite::{AdvancedBoxOptions, ContainerCapabilities};
 use boxlite::runtime::options::{BoxOptions, RootfsSpec, VolumeSpec, PortSpec};
 
 let options = BoxOptions {
-    cpus: Some(4),
+    cpus: Some(4.0),
     memory_mib: Some(2048),
     rootfs: RootfsSpec::Image("python:3.11".to_string()),
     env: vec![
@@ -1543,7 +1537,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configure box
     let options = BoxOptions {
-        cpus: Some(2),
+        cpus: Some(2.0),
         memory_mib: Some(1024),
         rootfs: RootfsSpec::Image("python:3.11-slim".to_string()),
         volumes: vec![

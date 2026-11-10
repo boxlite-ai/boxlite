@@ -19,9 +19,7 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub rootfs_path: Option<String>,
     #[serde(default)]
-    pub cpus: Option<u8>,
-    #[serde(default)]
-    pub cpu_limit: Option<boxlite::CpuLimit>,
+    pub cpus: Option<f64>,
     #[serde(default)]
     pub memory_mib: Option<u32>,
     #[serde(default)]
@@ -163,8 +161,8 @@ pub(super) struct BoxResponse {
     pub updated_at: String,
     pub pid: Option<u32>,
     pub image: String,
-    pub cpus: u8,
-    pub cpu_limit: Option<boxlite::CpuLimit>,
+    #[serde(serialize_with = "boxlite::runtime::cpu_count::serialize")]
+    pub cpus: f64,
     pub memory_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privileged: Option<bool>,

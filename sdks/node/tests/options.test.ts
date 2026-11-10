@@ -14,13 +14,14 @@ vi.mock("../lib/native.js", () => ({
 }));
 
 describe("SimpleBoxOptions", () => {
-  test("forwards cpu_limit as cpuLimit while keeping integer cpus", async () => {
+  test("forwards fractional cpus to native options", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
-    const box = new SimpleBox({ cpus: 2, cpuLimit: 0.125 });
-    expect((box as any)._boxOpts.cpus).toBe(2);
-    expect((box as any)._boxOpts.cpuLimit).toBe(0.125);
-    expect((new SimpleBox() as any)._boxOpts.cpuLimit).toBeUndefined();
+    for (const cpus of [0.125, 1.5, 2]) {
+      const box = new SimpleBox({ cpus });
+      expect((box as any)._boxOpts.cpus).toBe(cpus);
+    }
   });
+
   test("cmd defaults to undefined", () => {
     const opts: SimpleBoxOptions = {};
     expect(opts.cmd).toBeUndefined();

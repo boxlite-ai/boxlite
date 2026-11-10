@@ -169,9 +169,8 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Info: %v", err)
 	}
-	// Info fetches the immutable CPU limit separately to preserve the C ABI.
-	if got := requestCount.Load(); got != 3 {
-		t.Fatalf("request count: got %d, want 3", got)
+	if got := requestCount.Load(); got != 2 {
+		t.Fatalf("request count: got %d, want 2", got)
 	}
 	if info.ID != "box1" || info.Name != "service" {
 		t.Errorf("identity: got ID=%q Name=%q", info.ID, info.Name)
@@ -181,7 +180,7 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 	}
 	if info.Image != "alpine:3.21" || info.CPUs != 2 || info.MemoryMiB != 768 {
 		t.Errorf(
-			"resources: got Image=%q CPUs=%d MemoryMiB=%d",
+			"resources: got Image=%q CPUs=%g MemoryMiB=%d",
 			info.Image,
 			info.CPUs,
 			info.MemoryMiB,

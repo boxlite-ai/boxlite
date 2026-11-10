@@ -730,29 +730,6 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CExecutionInfoList>(result, user_data, cb),
-            RuntimeEvent::CpuLimit {
-                cb,
-                user_data,
-                result,
-            } => {
-                let mut err = FFIError::default();
-                let limit = match result {
-                    Ok(limit) => limit,
-                    Err(error) => {
-                        err = crate::error::error_to_c_error(error);
-                        None
-                    }
-                };
-                cb(
-                    limit.map_or(0.0, boxlite::CpuLimit::cores),
-                    limit.is_some(),
-                    &mut err,
-                    user_data as *mut c_void,
-                );
-                if !err.message.is_null() {
-                    crate::boxlite_error_free(&mut err);
-                }
-            }
             RuntimeEvent::Metrics {
                 cb,
                 user_data,

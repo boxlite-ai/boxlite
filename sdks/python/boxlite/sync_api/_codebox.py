@@ -40,7 +40,7 @@ class SyncCodeBox(SyncSimpleBox):
         self,
         image: str = "python:slim",
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["SyncBoxlite"] = None,
         name: str | None = None,
         auto_remove: bool = True,

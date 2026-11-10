@@ -2,8 +2,8 @@
 //! Requires root and mount namespaces; quota enforcement has separate KVM acceptance.
 
 use super::ShimSpawner;
+use crate::BoxOptions;
 use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
-use crate::{BoxOptions, CpuLimit};
 use nix::mount::{MsFlags, mount};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::{fs, path::Path};
@@ -59,8 +59,7 @@ fn assert_spawn_survives_membership_failure(membership_target: Option<&Path>) {
     .unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     let options = BoxOptions {
-        cpus: Some(2),
-        cpu_limit: Some(CpuLimit::new(0.5).unwrap()),
+        cpus: Some(0.5),
         ..Default::default()
     };
     let config = "membership failure must preserve exec";
@@ -82,12 +81,12 @@ fn assert_spawn_survives_membership_failure(membership_target: Option<&Path>) {
 
 #[test]
 #[ignore = "requires Linux root, mount namespaces, and bubblewrap"]
-fn cpu_limit_missing_membership_file_allows_exec() {
+fn fractional_cpus_missing_membership_file_allows_exec() {
     assert_spawn_survives_membership_failure(None);
 }
 
 #[test]
 #[ignore = "requires Linux root, mount namespaces, and bubblewrap"]
-fn cpu_limit_membership_write_failure_allows_exec() {
+fn fractional_cpus_membership_write_failure_allows_exec() {
     assert_spawn_survives_membership_failure(Some(Path::new("/dev/full")));
 }

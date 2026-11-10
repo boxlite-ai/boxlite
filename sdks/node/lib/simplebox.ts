@@ -297,8 +297,6 @@ export interface SimpleBoxOptions {
 
   /** Number of CPU cores */
   cpus?: number;
-  /** Creation-only aggregate CPU limit in cores (Linux). */
-  cpuLimit?: number;
 
   /** Disk size in GB for container rootfs (sparse, grows as needed) */
   diskSizeGb?: number;
@@ -672,7 +670,6 @@ export class SimpleBox {
       image: options.image,
       rootfsPath: options.rootfsPath,
       cpus: options.cpus,
-      cpuLimit: options.cpuLimit,
       memoryMib: options.memoryMib,
       diskSizeGb: options.diskSizeGb,
       autoRemove: options.autoRemove ?? true,

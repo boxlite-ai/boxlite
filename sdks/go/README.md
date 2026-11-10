@@ -280,12 +280,13 @@ Port publication is local-only. Remote runtimes reject it with guidance to use
 the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
 
-### Linux CPU time limits
+### Fractional CPUs
 
-Use `WithCPUs(2), WithCPULimit(0.5)` at creation to share half a CPU across two vCPUs and the Box's VMM threads.
-`BoxInfo.CPULimit` is a `*float64`, with `nil` meaning unset; information queries perform a separate lookup to preserve the native C ABI.
-This limit cannot be changed after creation; macOS local runtimes reject it.
-See [CPU time limits](../../docs/guides/resource-limits.md#creation-only-cpu-time-limit-linux) for validation, cgroup delegation, and REST support.
+Use `WithCPUs(0.5)` for half a CPU of aggregate time on Linux, or `WithCPUs(1.5)` for two guest vCPUs sharing 1.5 CPUs.
+`BoxInfo.CPUs` is a `float64`, reported through the initial native callback without extra information requests.
+Integer inputs retain existing behavior; fractional values are immutable and macOS rejects them.
+Rebuild against the matching C header/library because CPU fields and parameters now use `double`.
+See [fractional CPUs](../../docs/guides/resource-limits.md#fractional-cpus-linux) for validation, cgroup delegation, and REST support.
 
 ## Service Tunnels
 

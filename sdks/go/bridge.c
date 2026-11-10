@@ -37,7 +37,6 @@ extern void goBoxliteOnRegistryList(CRegistryCredentialList *list, CBoxliteError
 extern void goBoxliteOnRegistryRemove(CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnInfo(CBoxInfo *info, CBoxliteError *err, void *ud);
-extern void goBoxliteOnCpuLimit(double cores, bool has_limit, CBoxliteError *err, void *ud);
 extern void goBoxliteOnInfoList(CBoxInfoList *list, CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionInfoList(CExecutionInfoList *list, CBoxliteError *err, void *ud);
 
@@ -91,7 +90,6 @@ CBoxRegistryListCb cbRegistryList(void) { return (CBoxRegistryListCb)goBoxliteOn
 CBoxRegistryRemoveCb cbRegistryRemove(void) { return (CBoxRegistryRemoveCb)goBoxliteOnRegistryRemove; }
 
 CBoxInfoCb cbInfo(void) { return (CBoxInfoCb)goBoxliteOnInfo; }
-CBoxCpuLimitCb cbCpuLimit(void) { return (CBoxCpuLimitCb)goBoxliteOnCpuLimit; }
 CBoxInfoListCb cbInfoList(void) { return (CBoxInfoListCb)goBoxliteOnInfoList; }
 CExecutionInfoListCb cbExecutionInfoList(void) { return (CExecutionInfoListCb)goBoxliteOnExecutionInfoList; }
 

@@ -437,7 +437,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	opts := []boxlite.BoxOption{
 		boxlite.WithName(boxDto.Id),
-		boxlite.WithCPUs(cpus),
+		boxlite.WithCPUs(float64(cpus)),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),

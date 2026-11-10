@@ -146,12 +146,12 @@ impl JsBoxlite {
     /// Returns an object with `box` (the box handle) and `created` (true if
     /// newly created, false if an existing box was found).
     ///
-    /// When an existing box is returned, general options are ignored, but an
-    /// explicit CPU limit must match. The local runtime refuses a box whose capability
+    /// When an existing box is returned, general options are ignored. The
+    /// local runtime additionally refuses to adopt a box whose capability
     /// policy differs from the requested one.
     ///
     /// # Arguments
-    /// * `options` - Creation configuration and the policies checked on reuse
+    /// * `options` - Box configuration (used only if creating a new box)
     /// * `name` - Name to look up or assign to the new box
     ///
     /// # Example

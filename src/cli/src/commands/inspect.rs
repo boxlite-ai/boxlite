@@ -43,9 +43,8 @@ struct InspectPresenter {
     #[serde(rename = "State")]
     state: InspectStatePresenter,
     #[serde(rename = "Cpus")]
-    cpus: u8,
-    #[serde(rename = "CpuLimit")]
-    cpu_limit: Option<boxlite::CpuLimit>,
+    #[serde(serialize_with = "boxlite::runtime::cpu_count::serialize")]
+    cpus: f64,
     #[serde(rename = "Memory")]
     memory: u64,
     /// Both directions of the network policy; `null` when the runtime does
@@ -122,7 +121,6 @@ impl From<&BoxInfo> for InspectPresenter {
                 last_activity_at: info.last_activity_at.as_ref().map(|at| at.to_rfc3339()),
             },
             cpus: info.cpus,
-            cpu_limit: info.cpu_limit,
             memory: info.memory_mib as u64 * 1024 * 1024,
             network: info.network.as_ref().map(InspectNetworkPresenter::from),
         }
@@ -293,8 +291,7 @@ mod tests {
             last_updated: now,
             pid: None,
             image: "alpine:latest".into(),
-            cpus: 1,
-            cpu_limit: None,
+            cpus: 1.0,
             memory_mib: 512,
             privileged: None,
             network: None,
@@ -307,6 +304,19 @@ mod tests {
             started_at,
             last_activity_at: None,
             resolved_image: None,
+        }
+    }
+
+    #[test]
+    fn fractional_cpus_inspect_preserves_allocation_and_integer_json() {
+        let mut info = inspect_info(None);
+        for cpus in [0.125, 1.5, 2.0] {
+            info.cpus = cpus;
+            let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
+            assert_eq!(value["Cpus"].as_f64(), Some(cpus));
+            if cpus == 2.0 {
+                assert!(value["Cpus"].is_u64());
+            }
         }
     }
 

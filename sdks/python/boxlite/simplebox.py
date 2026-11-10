@@ -154,12 +154,11 @@ class SimpleBox:
         image: str | None = None,
         rootfs_path: str | None = None,
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["Boxlite"] = None,
         name: str | None = None,
         auto_remove: bool = True,
         reuse_existing: bool = False,
-        cpu_limit: float | None = None,
         **kwargs,
     ):
         """
@@ -170,7 +169,6 @@ class SimpleBox:
             rootfs_path: Path to local OCI layout directory (overrides image if provided)
             memory_mib: Memory limit in MiB
             cpus: Number of CPU cores
-            cpu_limit: Creation-only aggregate CPU time limit in cores (Linux).
             runtime: Optional runtime instance (uses global default if None)
             name: Optional name for the box (must be unique)
             auto_remove: Remove box when stopped (default: True)
@@ -205,7 +203,6 @@ class SimpleBox:
             image=image,
             rootfs_path=rootfs_path,
             cpus=cpus,
-            cpu_limit=cpu_limit,
             memory_mib=memory_mib,
             auto_remove=auto_remove,
             **kwargs,

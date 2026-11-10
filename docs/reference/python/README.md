@@ -206,8 +206,7 @@ Configuration options for creating a box.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
-| `cpus` | `int` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
-| `cpu_limit` | `float \| None` | `None` | Creation-only aggregate CPU time limit in cores, Linux; see [resource limits](../../guides/resource-limits.md#creation-only-cpu-time-limit-linux) |
+| `cpus` | `float` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require Linux; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
@@ -386,8 +385,7 @@ Metadata about a box.
 | `started_at` | `str \| None` | Time when the box most recently entered `Running` (RFC 3339); `None` if not recorded or unavailable over REST |
 | `last_activity_at` | `str \| None` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; `None` for a local box, which records no activity |
 | `image` | `str` | OCI image used |
-| `cpus` | `int` | Allocated CPU cores |
-| `cpu_limit` | `float \| None` | Configured immutable aggregate CPU limit, or `None` |
+| `cpus` | `float` | Configured CPU allocation; guest vCPUs are rounded up for fractions |
 | `memory_mib` | `int` | Allocated memory in MiB |
 | `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
 
@@ -686,7 +684,7 @@ from boxlite import SimpleBox
 SimpleBox(
     image: str,
     memory_mib: int = None,
-    cpus: int = None,
+    cpus: float = None,
     runtime: Boxlite = None,
     name: str = None,
     auto_remove: bool = True,
@@ -698,7 +696,7 @@ SimpleBox(
 |-----------|------|---------|-------------|
 | `image` | `str` | Required | Container image to use |
 | `memory_mib` | `int` | System default | Memory limit in MiB |
-| `cpus` | `int` | System default | Number of CPU cores |
+| `cpus` | `float` | System default | Number of CPU cores |
 | `runtime` | `Boxlite` | Global default | Runtime instance |
 | `name` | `str` | None | Optional unique name |
 | `auto_remove` | `bool` | `True` | Remove box when stopped |
@@ -749,7 +747,7 @@ from boxlite import CodeBox
 CodeBox(
     image: str = "python:slim",
     memory_mib: int = None,
-    cpus: int = None,
+    cpus: float = None,
     runtime: Boxlite = None,
     **kwargs
 )
@@ -960,7 +958,7 @@ InteractiveBox(
     shell: str = "/bin/sh",
     tty: bool = None,
     memory_mib: int = None,
-    cpus: int = None,
+    cpus: float = None,
     runtime: Boxlite = None,
     name: str = None,
     auto_remove: bool = True,

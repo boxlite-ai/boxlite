@@ -37,6 +37,7 @@ pub struct BoxConfig {
     // === User Options (preserved for restart) ===
     /// User-provided options at creation time.
     /// These are preserved to allow proper restart with the same configuration.
+    #[serde(deserialize_with = "crate::runtime::cpu_count::deserialize_options")]
     pub options: crate::runtime::options::BoxOptions,
 
     // === Runtime-Generated Configuration ===

@@ -1260,7 +1260,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--cpus N` | u8 | Number of CPUs, 1–16 with the bundled guest kernel. 17–255 are rejected when the box is created; 0 and values above 255 fail while parsing the command line |
+| `--cpus N` | f64 | CPU allocation, 0.01–16 with the bundled kernel, step 0.001; fractions require Linux and round guest vCPUs up, while integers add no bandwidth quota; creation validates numeric values |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
 | `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 

@@ -1196,7 +1196,6 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         pid: info.pid,
         image: info.image.clone(),
         cpus: info.cpus,
-        cpu_limit: info.cpu_limit,
         memory_mib: info.memory_mib,
         privileged: info.privileged,
         labels: info.labels.clone(),
@@ -1330,7 +1329,6 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
-        cpu_limit: req.cpu_limit,
         memory_mib: req.memory_mib,
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
@@ -2114,6 +2112,22 @@ mod tests {
     mod executions;
     mod ssh;
 
+    #[test]
+    fn fractional_cpus_survive_serve_request_conversion() {
+        for cpus in ["0.125", "1.5", "2", "2.0"] {
+            let request: CreateBoxRequest =
+                serde_json::from_str(&format!(r#"{{"image":"alpine","cpus":{cpus}}}"#)).unwrap();
+            assert_eq!(
+                build_box_options(&request).unwrap().cpus,
+                Some(cpus.parse().unwrap())
+            );
+        }
+        let error = serde_json::from_str::<CreateBoxRequest>(r#"{"cpu_limit":0.5}"#)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("cpu_limit"));
+    }
+
     // --- API-key auth decision (pure; no runtime/network needed) ---
 
     #[test]
@@ -2273,36 +2287,6 @@ mod tests {
             !build_box_options(&without).expect("build").tty,
             "no tty asked for, none granted"
         );
-    }
-
-    #[test]
-    fn cpu_limit_wire_values_and_info_use_cores() {
-        for body in [
-            r#"{"image":"alpine"}"#,
-            r#"{"image":"alpine","cpu_limit":null}"#,
-        ] {
-            let request: CreateBoxRequest = serde_json::from_str(body).unwrap();
-            assert!(build_box_options(&request).unwrap().cpu_limit.is_none());
-        }
-        let request: CreateBoxRequest =
-            serde_json::from_str(r#"{"image":"alpine","cpus":2,"cpu_limit":0.125}"#).unwrap();
-        let options = build_box_options(&request).unwrap();
-        assert_eq!(options.cpus, Some(2));
-        assert_eq!(options.cpu_limit.unwrap().cores(), 0.125);
-        let mut info = info_as_the_runtime_reports_it("configured");
-        info.cpu_limit = options.cpu_limit;
-        assert_eq!(
-            serde_json::to_value(box_info_to_response(&info)).unwrap()["cpu_limit"],
-            0.125
-        );
-        for invalid in [0.0, -0.5, 0.001, 0.1255] {
-            assert!(
-                serde_json::from_value::<CreateBoxRequest>(
-                    serde_json::json!({"image":"alpine","cpu_limit":invalid})
-                )
-                .is_err()
-            );
-        }
     }
 
     #[test]

@@ -222,7 +222,11 @@ impl BoxOptions {
     /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
     /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
     fn sanitize_remote(&self) -> BoxliteResult<()> {
-        self.validate_cpu_limit()?;
+        if self.cpu_count()?.is_some_and(|cpu| cpu.is_fractional()) && !cfg!(target_os = "linux") {
+            return Err(BoxliteError::Unsupported(
+                "fractional cpus requires a Linux host".into(),
+            ));
+        }
         self.advanced.validate_privileged_capability_conflict()?;
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
@@ -382,7 +386,7 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
-                    options.check_reused_cpu_limit(response.cpu_limit)?;
+                    options.check_reused_cpus(response.cpus)?;
                     let actual = response.privileged.ok_or_else(|| {
                         BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the server did not report its \
@@ -518,10 +522,6 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
 
     RuntimeMetrics::new(storage)
 }
-
-#[cfg(test)]
-#[path = "tests/cpu_limit.rs"]
-mod cpu_limit_tests;
 
 #[cfg(test)]
 mod tests {
@@ -761,49 +761,6 @@ mod tests {
             .expect("create without a capability policy");
 
         assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
-    }
-
-    async fn recording_json_server(
-        replies: Vec<&'static str>,
-    ) -> (
-        u16,
-        tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>,
-    ) {
-        let (port, server) =
-            exchange_server(replies.into_iter().map(|body| (200, body)).collect()).await;
-        let parsed = tokio::spawn(async move {
-            server
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|(line, body)| {
-                    let body = if body.is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::from_str(&body).unwrap()
-                    };
-                    (line, body)
-                })
-                .collect()
-        });
-        (port, parsed)
-    }
-
-    #[tokio::test]
-    async fn cpu_limit_reuse_checks_immutable_value() {
-        let (port, server) = recording_json_server(vec![BOX_RESPONSE]).await;
-        let runtime =
-            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let options = BoxOptions {
-            cpu_limit: Some(crate::CpuLimit::new(0.5).unwrap()),
-            ..Default::default()
-        };
-        assert!(matches!(
-            RuntimeBackend::get_or_create(&runtime, options, Some("named".into())).await,
-            Err(BoxliteError::InvalidArgument(_))
-        ));
-        let requests = server.await.unwrap();
-        assert!(requests.iter().all(|r| r.0.starts_with("GET /v1/boxes/")));
     }
 
     /// A server that does not honor `ExecRequest.user` would run the command
@@ -2033,3 +1990,7 @@ mod tests {
         assert_eq!(server.await.unwrap(), ["GET /v1/domains HTTP/1.1"]);
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/fractional_cpus.rs"]
+mod fractional_cpus_tests;
