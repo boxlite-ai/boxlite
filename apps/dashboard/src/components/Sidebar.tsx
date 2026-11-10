@@ -41,6 +41,7 @@ import {
   MoreHorizontal,
   PanelLeft,
   Settings,
+  Server,
   SunIcon,
 } from '@/components/ui/icon'
 import { usePostHog } from 'posthog-js/react'
@@ -58,7 +59,7 @@ interface NavItem {
   icon?: React.ReactElement
   label: string
   path: RoutePath | string
-  children?: { label: string; path: RoutePath }[]
+  children?: { label: string; path: RoutePath; icon: React.ReactElement }[]
 }
 
 const PRIMARY_NAV_ITEMS: NavItem[] = [
@@ -68,8 +69,16 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
     icon: <Layers className="size-[18px] shrink-0" aria-hidden="true" />,
     path: RoutePath.IMAGES,
     children: [
-      { label: 'Image library', path: RoutePath.IMAGES },
-      { label: 'Private registries', path: RoutePath.IMAGE_REGISTRIES },
+      {
+        label: 'Image library',
+        path: RoutePath.IMAGES,
+        icon: <Layers className="size-3.5 shrink-0" aria-hidden="true" />,
+      },
+      {
+        label: 'Private registries',
+        path: RoutePath.IMAGE_REGISTRIES,
+        icon: <Server className="size-3.5 shrink-0" aria-hidden="true" />,
+      },
     ],
   },
   {
@@ -423,11 +432,12 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                             to={child.path}
                             aria-current={currentChild === child ? 'page' : undefined}
                             className={cn(
-                              'flex min-h-9 items-center pl-[42px] pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                              'flex min-h-9 items-center gap-2 pl-7 pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
                               currentChild === child && 'bg-accent text-foreground hover:bg-accent',
                             )}
                           >
-                            {child.label}
+                            {child.icon}
+                            <span className="truncate">{child.label}</span>
                           </Link>
                         ))}
                       </div>
@@ -470,19 +480,32 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               </Tooltip>
               <div id="management-navigation" hidden={!showLabels || !managementOpen} className="mt-1">
                 {[
-                  { label: 'Billing', path: RoutePath.BILLING },
-                  ...(selectedOrganization ? [{ label: 'Organization', path: RoutePath.SETTINGS }] : []),
+                  {
+                    label: 'Billing',
+                    path: RoutePath.BILLING,
+                    icon: <CreditCardIcon className="size-3.5 shrink-0" aria-hidden="true" />,
+                  },
+                  ...(selectedOrganization
+                    ? [
+                        {
+                          label: 'Organization',
+                          path: RoutePath.SETTINGS,
+                          icon: <Building2 className="size-3.5 shrink-0" aria-hidden="true" />,
+                        },
+                      ]
+                    : []),
                 ].map((item) => (
                   <Link
                     key={item.path}
                     to={item.path}
                     aria-current={isActive(item.path) ? 'page' : undefined}
                     className={cn(
-                      'flex min-h-9 items-center pl-[42px] pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                      'flex min-h-9 items-center gap-2 pl-7 pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
                       isActive(item.path) && 'bg-accent text-foreground hover:bg-accent',
                     )}
                   >
-                    {item.label}
+                    {item.icon}
+                    <span className="truncate">{item.label}</span>
                   </Link>
                 ))}
               </div>

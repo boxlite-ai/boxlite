@@ -32,7 +32,10 @@ Primary navigation: Boxes, Images, Volumes, Domains, Management. Images has its
 existing Images/Private registries children. Management is a disclosure, with
 Billing and conditional Organization children. In compact mode clicking Management
 expands the rail and reveals its children. Entering a management route opens the
-group; manual collapse remains possible. Child links carry current-page semantics.
+group; manual collapse remains possible. Child links carry current-page semantics and 14px thin-line icons: Layers for
+Image library, Server for Private registries, CreditCard for Billing and Building2
+for Organization. Their 28px inset and 8px icon gap are shared; backgrounds stay
+full-width, without a stepped parent/child selection.
 
 The resource/group area scrolls separately. Quickstart is pinned to the footer. Collapse
 sits to the right of the expanded wordmark and disappears when compact. Clicking

@@ -646,7 +646,8 @@ returns focus to the logo. The top Collapse button also dismisses the preview;
 clicking the logo pins the expanded sidebar. Hover
 never changes the saved preference, and touch uses the explicit click control.
 Images has an independent disclosure for its existing Images and Private
-registries routes. Navigation data accepts second-level children without adding
+registries routes. Child links use 14px thin-line icons, a shared inset and full-width
+selection; primary icons remain 18px. Navigation data accepts second-level children without adding
 speculative destinations. Entering a child route reveals its group; the active
 route remains highlighted when the whole sidebar collapses.
 
