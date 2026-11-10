@@ -639,6 +639,12 @@ while an explicit logout retains the existing manual sign-in guard.
 Desktop navigation uses a 64px icon rail by default. Expand navigation reveals
 labels in a 224px sidebar; the choice is saved as `boxlite-navigation-expanded`
 in localStorage, with an in-memory fallback when storage is unavailable.
+Hover the compact logo for 350ms to preview the full sidebar as an overlay;
+content keeps its position. Moving into the menu keeps it open; leaving closes it
+after 150ms, unless a child has keyboard focus. Escape dismisses the preview and
+returns focus to the logo. The top Collapse button also dismisses the preview;
+clicking the logo pins the expanded sidebar. Hover
+never changes the saved preference, and touch uses the explicit click control.
 Images has an independent disclosure for its existing Images and Private
 registries routes. Navigation data accepts second-level children without adding
 speculative destinations. Entering a child route reveals its group; the active

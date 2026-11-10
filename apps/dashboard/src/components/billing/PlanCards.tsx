@@ -157,6 +157,7 @@ export function PlanCardsSkeleton({ count = 3 }: { count?: number }) {
   )
 }
 
+/** Compares self-serve prices against the active plan and routes changes through confirmation. */
 export function PlanCards({ plans, organizationPlan }: { plans: Plan[]; organizationPlan?: OrganizationPlan | null }) {
   const navigate = useNavigate()
   // A lapsed subscription still names its old plan, but that plan no longer

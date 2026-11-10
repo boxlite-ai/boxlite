@@ -36,7 +36,8 @@ group; manual collapse remains possible. Child links carry current-page semantic
 
 The resource/group area scrolls separately. Quickstart is pinned to the footer. Collapse
 sits to the right of the expanded wordmark and disappears when compact. Clicking
-the compact logo expands the rail without navigating; toggle focus is retained. API Keys is in the header. Profile retains
+the compact logo expands the rail without navigating; toggle focus is retained.
+API Keys is in the header. Profile retains
 organization switching, theme and logout. Selected items use the neutral accent
 surface (#1f1f1f dark), against #0a0a0a sidebar, with quieter hover and visible
 keyboard focus. Expansion is saved under boxlite-navigation-expanded; unavailable
@@ -67,3 +68,24 @@ compare the implementation with main at `6ca4b882`.
 The brand-row bottom border continues the header divider across the sidebar.
 An expanded Images group owns its background across the link and disclosure
 button, so hover and closed-group selection have the same width as child rows.
+
+## Temporary expansion
+
+When compact, a mouse dwelling on the logo for 350ms reveals a 224px overlay.
+The layout keeps reserving 64px, so neither the header nor page content moves.
+Moving into the menu keeps it open; leaving the sidebar closes it after 150ms.
+Keyboard focus inside the overlay keeps it open until focus leaves or Escape
+returns focus to the compact logo. Touch does not trigger hover expansion.
+Clicking the logo pins the expanded sidebar and persists that choice. Hover alone
+never changes the saved preference. Both expanded states show Collapse beside the
+logo; in preview it dismisses the overlay without changing the saved preference.
+This is a new interaction contract; verify timing, cancellation, keyboard focus,
+persistence and unchanged content geometry in tests and the desktop mock preview.
+
+Desktop mock verification at 1440×900 measured the same content x-position
+(104px) before and during preview, with the rail reserving 64px and the overlay
+measuring 224px. Pinning moved content to 264px. Mouse navigation followed by
+leaving dismissed the preview; the top Collapse button and Escape both restored
+focus to the compact logo without changing the saved preference. Light and dark
+captures are in the screenshot index. Component tests cover these new contracts,
+including brief hover cancellation, touch exclusion and keyboard focus retention.

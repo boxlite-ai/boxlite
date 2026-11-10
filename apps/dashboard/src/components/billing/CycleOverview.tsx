@@ -57,6 +57,7 @@ export function billingMode(
   return { kind: 'payg' }
 }
 
+/** Selects subscription, trial-credit or pay-as-you-go figures without changing their billing semantics. */
 export function CycleOverview({
   wallet,
   organizationPlan,

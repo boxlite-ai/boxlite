@@ -135,12 +135,48 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(readExpandedPreference)
+  const [peeking, setPeeking] = useState(false)
+  const showLabels = expanded || peeking
+  const panelRef = useRef<HTMLDivElement>(null)
+  const pointerInside = useRef(false)
+  const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const navigationToggleRef = useRef<HTMLButtonElement>(null)
   const restoreToggleFocus = useRef(false)
+  /** Explicit toggles persist; a hover preview never changes the saved layout. */
   const toggleNavigation = () => {
+    clearTimeout(openTimer.current)
+    clearTimeout(closeTimer.current)
+    setPeeking(false)
     restoreToggleFocus.current = true
     setExpanded((value) => !value)
   }
+  /** Dismiss temporary navigation without changing the persistent layout choice. */
+  const dismissPreview = () => {
+    clearTimeout(openTimer.current)
+    clearTimeout(closeTimer.current)
+    setPeeking(false)
+    navigationToggleRef.current?.focus()
+  }
+  /** Keep keyboard-operated children mounted until focus leaves the preview. */
+  const schedulePreviewClose = () => {
+    clearTimeout(openTimer.current)
+    clearTimeout(closeTimer.current)
+    closeTimer.current = setTimeout(() => {
+      const focusedChild =
+        panelRef.current?.contains(document.activeElement) &&
+        document.activeElement !== navigationToggleRef.current &&
+        document.activeElement?.matches(':focus-visible')
+      if (!focusedChild) setPeeking(false)
+    }, 150)
+  }
+  useEffect(
+    () => () => {
+      clearTimeout(openTimer.current)
+      clearTimeout(closeTimer.current)
+    },
+    [],
+  )
   const [managementOpen, setManagementOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<string[]>([])
   useEffect(() => {
@@ -196,7 +232,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   const railItemClass = (active: boolean) =>
     cn(
       'flex h-10 min-w-0 shrink items-center gap-3 text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground',
-      expanded ? 'w-full justify-start px-3' : 'w-10 justify-center',
+      showLabels ? 'w-full justify-start px-3' : 'w-10 justify-center',
       active && 'bg-accent text-foreground hover:bg-accent',
     )
 
@@ -220,219 +256,259 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     </>
   )
 
+  const collapseControl = (
+    <button
+      ref={expanded ? navigationToggleRef : undefined}
+      type="button"
+      aria-label="Collapse navigation"
+      aria-expanded={true}
+      aria-controls="primary-navigation"
+      title="Collapse navigation"
+      onClick={expanded ? toggleNavigation : dismissPreview}
+      className="mr-2 flex size-9 shrink-0 items-center justify-center text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+    >
+      <PanelLeft className="size-[18px]" aria-hidden="true" />
+    </button>
+  )
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <aside
         aria-label="Feature navigation"
         style={{ '--navigation-width': expanded ? '224px' : '64px' } as CSSProperties}
-        className="sticky top-[var(--app-banner-height,0px)] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 flex-col items-center border-r border-border bg-background pb-3 font-mono text-[13px] md:flex"
+        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-mono text-[13px] md:block"
       >
-        <div className="flex h-[var(--app-header-height,48px)] w-full shrink-0 items-center justify-between border-b border-border">
-          {expanded ? (
-            <>
-              <Link
-                to={RoutePath.BOXES}
-                aria-label="BoxLite home"
-                className="flex h-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-              >
-                <span className="flex w-[115px] shrink-0 overflow-hidden">
-                  <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
-                </span>
-              </Link>
-              <button
-                ref={navigationToggleRef}
-                type="button"
-                aria-label="Collapse navigation"
-                aria-expanded={true}
-                aria-controls="primary-navigation"
-                title="Collapse navigation"
-                onClick={toggleNavigation}
-                className="mr-2 flex size-9 shrink-0 items-center justify-center text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-              >
-                <PanelLeft className="size-[18px]" aria-hidden="true" />
-              </button>
-            </>
-          ) : (
-            <button
-              ref={navigationToggleRef}
-              type="button"
-              aria-label="Expand navigation"
-              aria-expanded={false}
-              aria-controls="primary-navigation"
-              title="Expand navigation"
-              onClick={toggleNavigation}
-              className="flex h-full w-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-            >
-              <span className="flex w-[38px] shrink-0 overflow-hidden">
-                <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
-              </span>
-            </button>
+        <div
+          ref={panelRef}
+          data-state={expanded ? 'expanded' : peeking ? 'preview' : 'compact'}
+          style={{ width: showLabels ? '224px' : '64px' }}
+          className={cn(
+            'absolute inset-y-0 left-0 flex flex-col items-center border-r border-border bg-background pb-3',
+            peeking && !expanded && 'shadow-[8px_0_24px_-12px_rgba(0,0,0,0.3)]',
           )}
-        </div>
-        <nav
-          id="primary-navigation"
-          aria-label="Primary"
-          className="hidden min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto overflow-x-hidden px-2 py-4 md:flex"
+          onPointerEnter={() => {
+            pointerInside.current = true
+            clearTimeout(closeTimer.current)
+          }}
+          onPointerLeave={() => {
+            pointerInside.current = false
+            schedulePreviewClose()
+          }}
+          onBlur={(event) => {
+            if (!pointerInside.current && !event.currentTarget.contains(event.relatedTarget)) schedulePreviewClose()
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && peeking) {
+              event.preventDefault()
+              dismissPreview()
+            }
+          }}
         >
-          <div role="group" aria-label="Infrastructure" className="flex w-full shrink-0 flex-col items-center gap-2">
-            {expanded && (
-              <div className="w-full px-3 pb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                Infrastructure
-              </div>
+          <div className="flex h-[var(--app-header-height,48px)] w-full shrink-0 items-center justify-between border-b border-border">
+            {expanded ? (
+              <>
+                <Link
+                  to={RoutePath.BOXES}
+                  aria-label="BoxLite home"
+                  className="flex h-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                >
+                  <span className="flex w-[115px] shrink-0 overflow-hidden">
+                    <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
+                  </span>
+                </Link>
+                {collapseControl}
+              </>
+            ) : (
+              <>
+                <button
+                  ref={navigationToggleRef}
+                  type="button"
+                  aria-label={peeking ? 'Pin navigation' : 'Expand navigation'}
+                  aria-expanded={peeking}
+                  aria-controls="primary-navigation"
+                  title={peeking ? 'Keep navigation expanded' : 'Expand navigation'}
+                  onPointerEnter={(event) => {
+                    if (event.pointerType !== 'mouse') return
+                    clearTimeout(openTimer.current)
+                    openTimer.current = setTimeout(() => setPeeking(true), 350)
+                  }}
+                  onPointerLeave={() => clearTimeout(openTimer.current)}
+                  onClick={toggleNavigation}
+                  className="flex h-full min-w-0 flex-1 items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                >
+                  <span className={cn('flex shrink-0 overflow-hidden', peeking ? 'w-[115px]' : 'w-[38px]')}>
+                    <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
+                  </span>
+                </button>
+                {peeking && collapseControl}
+              </>
             )}
-            {primaryItems.map((item) => {
-              const groupOpen = openGroups.includes(item.path)
-              const expandedGroup = expanded && Boolean(item.children)
-              const selected = isActive(item.path) && !(expandedGroup && groupOpen)
-              const currentChild = item.children?.filter((child) => isActive(child.path)).at(-1)
-              return (
-                <div key={item.path} className={cn('shrink-0', expanded && 'w-full')}>
-                  <div
-                    className={cn(
-                      'flex items-center',
-                      expandedGroup && 'hover:bg-card',
-                      expandedGroup && selected && 'bg-accent hover:bg-accent',
-                    )}
-                  >
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Link
-                          to={item.path}
-                          onClick={() => {
-                            if (!expanded && item.children) setExpanded(true)
-                          }}
-                          aria-current={
-                            isActive(item.path) && !(expanded && item.children && groupOpen) ? 'page' : undefined
-                          }
-                          className={cn(
-                            railItemClass(selected && !expandedGroup),
-                            expandedGroup && 'hover:bg-transparent',
-                            isActive(item.path) && 'text-foreground',
-                          )}
-                        >
-                          {item.icon}
-                          <span className={expanded ? 'truncate' : 'sr-only'}>{item.label}</span>
-                        </Link>
-                      </TooltipTrigger>
-                      {!expanded && (
-                        <TooltipContent side="right" sideOffset={12}>
-                          {item.label}
-                        </TooltipContent>
+          </div>
+          <nav
+            id="primary-navigation"
+            aria-label="Primary"
+            className="hidden min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto overflow-x-hidden px-2 py-4 md:flex"
+          >
+            <div role="group" aria-label="Infrastructure" className="flex w-full shrink-0 flex-col items-center gap-2">
+              {showLabels && (
+                <div className="w-full px-3 pb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  Infrastructure
+                </div>
+              )}
+              {primaryItems.map((item) => {
+                const groupOpen = openGroups.includes(item.path)
+                const expandedGroup = showLabels && Boolean(item.children)
+                const selected = isActive(item.path) && !(expandedGroup && groupOpen)
+                const currentChild = item.children?.filter((child) => isActive(child.path)).at(-1)
+                return (
+                  <div key={item.path} className={cn('shrink-0', showLabels && 'w-full')}>
+                    <div
+                      className={cn(
+                        'flex items-center',
+                        expandedGroup && 'hover:bg-card',
+                        expandedGroup && selected && 'bg-accent hover:bg-accent',
                       )}
-                    </Tooltip>
-                    {expanded && item.children && (
-                      <button
-                        type="button"
-                        aria-label={`Toggle ${item.label} navigation`}
-                        aria-expanded={groupOpen}
-                        aria-controls={`${item.label.toLowerCase()}-navigation`}
-                        onClick={() =>
-                          setOpenGroups((groups) =>
-                            groupOpen ? groups.filter((path) => path !== item.path) : [...groups, item.path],
-                          )
-                        }
-                        className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-                      >
-                        <ChevronDown
-                          className={cn('size-3.5 transition-transform', !groupOpen && '-rotate-90')}
-                          aria-hidden="true"
-                        />
-                      </button>
+                    >
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Link
+                            to={item.path}
+                            onClick={() => {
+                              if (!showLabels && item.children) setExpanded(true)
+                            }}
+                            aria-current={
+                              isActive(item.path) && !(showLabels && item.children && groupOpen) ? 'page' : undefined
+                            }
+                            className={cn(
+                              railItemClass(selected && !expandedGroup),
+                              expandedGroup && 'hover:bg-transparent',
+                              isActive(item.path) && 'text-foreground',
+                            )}
+                          >
+                            {item.icon}
+                            <span className={showLabels ? 'truncate' : 'sr-only'}>{item.label}</span>
+                          </Link>
+                        </TooltipTrigger>
+                        {!showLabels && (
+                          <TooltipContent side="right" sideOffset={12}>
+                            {item.label}
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                      {showLabels && item.children && (
+                        <button
+                          type="button"
+                          aria-label={`Toggle ${item.label} navigation`}
+                          aria-expanded={groupOpen}
+                          aria-controls={`${item.label.toLowerCase()}-navigation`}
+                          onClick={() =>
+                            setOpenGroups((groups) =>
+                              groupOpen ? groups.filter((path) => path !== item.path) : [...groups, item.path],
+                            )
+                          }
+                          className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                        >
+                          <ChevronDown
+                            className={cn('size-3.5 transition-transform', !groupOpen && '-rotate-90')}
+                            aria-hidden="true"
+                          />
+                        </button>
+                      )}
+                    </div>
+                    {showLabels && item.children && (
+                      <div id={`${item.label.toLowerCase()}-navigation`} hidden={!groupOpen} className="mt-1">
+                        {item.children.map((child) => (
+                          <Link
+                            key={child.path}
+                            to={child.path}
+                            aria-current={currentChild === child ? 'page' : undefined}
+                            className={cn(
+                              'flex min-h-9 items-center pl-[42px] pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                              currentChild === child && 'bg-accent text-foreground hover:bg-accent',
+                            )}
+                          >
+                            {child.label}
+                          </Link>
+                        ))}
+                      </div>
                     )}
                   </div>
-                  {expanded && item.children && (
-                    <div id={`${item.label.toLowerCase()}-navigation`} hidden={!groupOpen} className="mt-1">
-                      {item.children.map((child) => (
-                        <Link
-                          key={child.path}
-                          to={child.path}
-                          aria-current={currentChild === child ? 'page' : undefined}
-                          className={cn(
-                            'flex min-h-9 items-center pl-[42px] pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
-                            currentChild === child && 'bg-accent text-foreground hover:bg-accent',
-                          )}
-                        >
-                          {child.label}
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-          <div className="my-1 h-px w-full shrink-0 bg-border" />
-          <div className={cn('shrink-0', expanded && 'w-full')}>
+                )
+              })}
+            </div>
+            <div className="my-1 h-px w-full shrink-0 bg-border" />
+            <div className={cn('shrink-0', showLabels && 'w-full')}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Toggle Management navigation"
+                    aria-expanded={showLabels && managementOpen}
+                    aria-controls="management-navigation"
+                    onClick={() => {
+                      if (!showLabels) setExpanded(true)
+                      setManagementOpen(showLabels ? !managementOpen : true)
+                    }}
+                    className={cn(
+                      railItemClass(managementActive && !(showLabels && managementOpen)),
+                      managementActive && 'text-foreground',
+                    )}
+                  >
+                    <Settings className="size-[18px] shrink-0" aria-hidden="true" />
+                    {showLabels && (
+                      <>
+                        <span>Management</span>
+                        <ChevronDown
+                          className={cn('ml-auto size-3.5 shrink-0', !managementOpen && '-rotate-90')}
+                          aria-hidden="true"
+                        />
+                      </>
+                    )}
+                  </button>
+                </TooltipTrigger>
+                {!showLabels && <TooltipContent side="right">Management</TooltipContent>}
+              </Tooltip>
+              <div id="management-navigation" hidden={!showLabels || !managementOpen} className="mt-1">
+                {[
+                  { label: 'Billing', path: RoutePath.BILLING },
+                  ...(selectedOrganization ? [{ label: 'Organization', path: RoutePath.SETTINGS }] : []),
+                ].map((item) => (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    aria-current={isActive(item.path) ? 'page' : undefined}
+                    className={cn(
+                      'flex min-h-9 items-center pl-[42px] pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                      isActive(item.path) && 'bg-accent text-foreground hover:bg-accent',
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </nav>
+          <div className="flex w-full shrink-0 flex-col items-center gap-2 px-2 pt-2">
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  aria-label="Toggle Management navigation"
-                  aria-expanded={expanded && managementOpen}
-                  aria-controls="management-navigation"
-                  onClick={() => {
-                    setExpanded(true)
-                    setManagementOpen(expanded ? !managementOpen : true)
-                  }}
-                  className={cn(
-                    railItemClass(managementActive && !(expanded && managementOpen)),
-                    managementActive && 'text-foreground',
-                  )}
+                  onClick={openOnboardingGuide}
+                  aria-label="Open onboarding guide"
+                  aria-current={isActive(RoutePath.QUICKSTART) ? 'page' : undefined}
+                  className={railItemClass(isActive(RoutePath.QUICKSTART))}
                 >
-                  <Settings className="size-[18px] shrink-0" aria-hidden="true" />
-                  {expanded && (
-                    <>
-                      <span>Management</span>
-                      <ChevronDown
-                        className={cn('ml-auto size-3.5 shrink-0', !managementOpen && '-rotate-90')}
-                        aria-hidden="true"
-                      />
-                    </>
-                  )}
+                  <BookOpen className="size-[18px] shrink-0" aria-hidden="true" />
+                  {showLabels && <span>Quickstart</span>}
                 </button>
               </TooltipTrigger>
-              {!expanded && <TooltipContent side="right">Management</TooltipContent>}
+              {!showLabels && (
+                <TooltipContent side="right" sideOffset={12}>
+                  Quickstart
+                </TooltipContent>
+              )}
             </Tooltip>
-            <div id="management-navigation" hidden={!expanded || !managementOpen} className="mt-1">
-              {[
-                { label: 'Billing', path: RoutePath.BILLING },
-                ...(selectedOrganization ? [{ label: 'Organization', path: RoutePath.SETTINGS }] : []),
-              ].map((item) => (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  aria-current={isActive(item.path) ? 'page' : undefined}
-                  className={cn(
-                    'flex min-h-9 items-center pl-[42px] pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
-                    isActive(item.path) && 'bg-accent text-foreground hover:bg-accent',
-                  )}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </div>
           </div>
-        </nav>
-        <div className="flex w-full shrink-0 flex-col items-center gap-2 px-2 pt-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={openOnboardingGuide}
-                aria-label="Open onboarding guide"
-                aria-current={isActive(RoutePath.QUICKSTART) ? 'page' : undefined}
-                className={railItemClass(isActive(RoutePath.QUICKSTART))}
-              >
-                <BookOpen className="size-[18px] shrink-0" aria-hidden="true" />
-                {expanded && <span>Quickstart</span>}
-              </button>
-            </TooltipTrigger>
-            {!expanded && (
-              <TooltipContent side="right" sideOffset={12}>
-                Quickstart
-              </TooltipContent>
-            )}
-          </Tooltip>
         </div>
       </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
