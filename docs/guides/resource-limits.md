@@ -121,7 +121,10 @@ The SDK never retries creation by rounding or dropping the value; ordinary HTTP 
 Other features may still use `/config`.
 This feature does not add fractional scheduling, capacity accounting, or billing to BoxLite Cloud; older Cloud servers may reject fractional values.
 
-**Compatibility:** C CPU parameters and `CBoxInfo.cpus` now use `double`; rebuild C and Go consumers against the matching header and library.
+**Compatibility (breaking change):** `Box.cpus` responses may contain fractions that older integer-only clients cannot decode, including in list responses.
+Follow the [client migration steps](../reference/README.md#unreleased-fractional-cpu-allocation-breaking-change) before creating fractional Boxes in shared environments.
+
+C CPU parameters and `CBoxInfo.cpus` now use `double`; rebuild C and Go consumers against the matching header and library.
 The Simple C API retains its documented `cpus=0` default sentinel; explicit options use the shared positive-value validation.
 Go information/list calls obtain CPUs from the existing callback without supplementary per-Box requests.
 
