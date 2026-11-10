@@ -36,7 +36,7 @@ name: mbuild-release
 # list showing four `mbuild-release` rows says nothing about which one moved
 # prod.
 run-name: >-
-  ${{ inputs.command == 'publish' && format('publish {0} to {1}', inputs.tag, inputs.stage || 'dev')
+  ${{ inputs.command == 'publish' && format('publish {0} to dev', inputs.tag)
   || format('promote {0} from dev to prod', inputs.tag) }}
 
 on:
@@ -44,7 +44,7 @@ on:
     inputs:
       command:
         description: >-
-          publish builds the release into dev/stage; promote moves the bytes dev
+          publish builds the release into dev; promote moves the bytes dev
           already serves to prod.
         required: true
         default: publish
@@ -54,12 +54,6 @@ on:
         description: 'The release tag, as this repository spells it: v<X.Y.Z>. It must exist and name a commit on main.'
         required: true
         type: string
-      stage:
-        description: Publish target only
-        required: true
-        type: choice
-        default: dev
-        options: [dev, stage]
 
   # Called by `mdeploy-all.yml`, which is the only rollout path. The allowlist
   # above is what a person types; a caller passes a string because
@@ -73,11 +67,6 @@ on:
       tag:
         required: true
         type: string
-      stage:
-        description: Publish target only
-        required: false
-        type: string
-        default: dev
       sha:
         description: >-
           The commit the caller already resolved this tag to. Cross-checked
@@ -92,7 +81,7 @@ concurrency:
   # group is one namespace for the whole repository, so sharing it is what makes
   # a release and a commit publish queue against each other instead of pushing
   # the same immutable tag at once.
-  group: mbuild-${{ inputs.command }}-${{ inputs.command == 'publish' && (inputs.stage || 'dev') || 'prod' }}
+  group: mbuild-${{ inputs.command }}-${{ inputs.command == 'publish' && 'dev' || 'prod' }}
   cancel-in-progress: false
 
 permissions:
@@ -129,18 +118,6 @@ jobs:
           # Tags and the commits they name, and main, which the containment
           # check below compares against. A shallow checkout carries neither.
           fetch-depth: 0
-
-      - name: Validate publication stage
-        if: inputs.command == 'publish'
-        shell: bash
-        env:
-          PUBLISH_STAGE: ${{ inputs.stage || 'dev' }}
-        run: |
-          set -Eeuo pipefail
-          case "$PUBLISH_STAGE" in
-            dev|stage) ;;
-            *) echo "::error title=stage::release publication target must be dev or stage"; exit 1 ;;
-          esac
 
       - name: Require a released version
         id: version
@@ -277,10 +254,8 @@ jobs:
     # here: a release is what other stages promote from, so the bytes it names
     # have to come from the branch this repository will keep producing.
     if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
-    environment: ${{ inputs.stage || 'dev' }}
+    environment: dev
     runs-on: ubuntu-latest
-    env:
-      PUBLISH_STAGE: ${{ inputs.stage || 'dev' }}
     strategy:
       # Each artifact is its own image with its own registry tag; cancelling the
       # siblings when one fails leaves a partial release that is harder to read
@@ -301,7 +276,7 @@ jobs:
 
       - uses: ./.github/actions/setup-infra
         with:
-          stages: ${{ inputs.stage || 'dev' }}
+          stages: dev
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
 
       # docker writes the registry token to disk in cleartext, so it is written
@@ -318,7 +293,7 @@ jobs:
         working-directory: apps/infra
         run: |
           set -Eeuo pipefail
-          if ! output="$(npm run --silent mbuild inspect -- --stage "$PUBLISH_STAGE" 2>&1)"; then
+          if ! output="$(npm run --silent mbuild inspect -- --stage dev 2>&1)"; then
             echo "::error title=stage::$output"
             exit 1
           fi
@@ -329,7 +304,7 @@ jobs:
         if: steps.config.outputs.kind == 'ecr'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage || 'dev' }}-github-deploy
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-dev-github-deploy
           aws-region: ${{ steps.config.outputs.region }}
           role-session-name: mbuild-release-publish-${{ github.run_id }}
 
@@ -366,7 +341,7 @@ jobs:
       # release: a dispatcher who named last month's version would be told the
       # publish succeeded. Asked before anything is built, so the refusal costs
       # a registry read rather than a full image build.
-      - name: Refuse an artifact the target already holds
+      - name: Refuse an artifact dev already holds
         working-directory: apps/infra
         env:
           SHA: ${{ needs.resolve.outputs.sha }}
@@ -381,16 +356,16 @@ jobs:
           # skips the artifact it finds (`publish.ts:634`), and the run reports
           # a publish it never did, which is the answer this gate exists for.
           held=0
-          npm run --silent mbuild verify -- --tag "$SHA" --stage "$PUBLISH_STAGE" --artifact "$ARTIFACT" --version "$TAG" || held=$?
+          npm run --silent mbuild verify -- --tag "$SHA" --stage dev --artifact "$ARTIFACT" --version "$TAG" || held=$?
           if [ "$held" -eq 0 ]; then
-            echo "::error title=already published::$PUBLISH_STAGE already holds $ARTIFACT for $TAG ($SHA). Publishing again would overwrite nothing and report success; nothing was done."
+            echo "::error title=already published::dev already holds $ARTIFACT for $TAG ($SHA). Publishing again would overwrite nothing and report success; nothing was done."
             exit 1
           fi
           if [ "$held" -ne 66 ]; then
-            echo "::error title=registry::could not tell whether $PUBLISH_STAGE holds $ARTIFACT for $TAG ($SHA); mbuild verify exited $held. Nothing was published."
+            echo "::error title=registry::could not tell whether dev holds $ARTIFACT for $TAG ($SHA); mbuild verify exited $held. Nothing was published."
             exit 1
           fi
-          echo "$PUBLISH_STAGE does not hold $ARTIFACT at $TAG yet; publishing."
+          echo "dev does not hold $ARTIFACT at $TAG yet; publishing."
 
       - name: Build and upload
         working-directory: apps/infra
@@ -403,7 +378,7 @@ jobs:
           # Audit failures (65) and image scan refusals (78) stop immediately.
           # Other publication failures retain retries for transient errors.
           for attempt in 1 2 3; do
-            npm run --silent mbuild publish -- --tag "$SHA" --stage "$PUBLISH_STAGE" --artifact "$ARTIFACT" --version "$TAG" && exit 0
+            npm run --silent mbuild publish -- --tag "$SHA" --stage dev --artifact "$ARTIFACT" --version "$TAG" && exit 0
             status=$?
             if [ "$status" -eq 65 ]; then
               echo "::error title=publish::$ARTIFACT at $SHA failed the dependency audit; details are above"
@@ -416,7 +391,7 @@ jobs:
             echo "Publish failed (attempt $attempt/3, exit $status); retrying in $((attempt * 15))s"
             sleep $((attempt * 15))
           done
-          echo "::error title=publish::Could not publish $ARTIFACT at $SHA to $PUBLISH_STAGE after 3 attempts"
+          echo "::error title=publish::Could not publish $ARTIFACT at $SHA to dev after 3 attempts"
           exit 1
 
       - name: Report
@@ -434,7 +409,7 @@ jobs:
             echo "| commit | \`$SHA\` |"
             echo "| image tag | \`${{ inputs.tag }}-$SHA\` |"
             echo "| artifact | \`${{ matrix.artifact }}\` |"
-            echo "| stage | \`$PUBLISH_STAGE\` |"
+            echo "| stage | \`dev\` |"
             echo "| registry | \`${{ steps.config.outputs.kind }}\` in \`${{ steps.config.outputs.region }}\` |"
             echo "| result | \`${{ job.status }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

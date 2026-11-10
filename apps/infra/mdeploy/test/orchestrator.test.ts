@@ -249,11 +249,8 @@ test('prod deploys released versions and refuses a bare commit', () => {
   const classify = jobAt('resolve')
   assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
   assert.doesNotMatch(classify, /"\$STAGE" = 'prod'/, 'a deny-list on prod admits the next stage silently')
-  // Only the two candidate environments publish; prod retains promotion.
-  assert.match(
-    jobAt('plan'),
-    /\[\[ "\$STAGE" = 'dev' \|\| "\$STAGE" = 'stage' \]\] && echo release-publish \|\| echo release-promote/,
-  )
+  // And the plan routes dev to the cut and everything else to the move.
+  assert.match(jobAt('plan'), /\[ "\$STAGE" = 'dev' \] && echo release-publish \|\| echo release-promote/)
 })
 
 test('an image address carries the version when there is one', () => {

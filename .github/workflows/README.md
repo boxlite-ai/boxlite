@@ -33,8 +33,8 @@ LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
-DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (SHA ──▶ dev/stage; #<n> ──▶ dev/stage)
-                                                     └─▶ mbuild-release (stable images ──▶ dev/stage; dev or stage ──▶ prod)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
+                                                     └─▶ mbuild-release (stable images ──▶ dev; dev ──▶ prod)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
                                         config workflow ◀── build workflows
@@ -65,9 +65,9 @@ own.
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the main suite and identity lane on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Prepared GCP/AWS stages: dev/stage accept SHA/PR or stable releases; candidate workflows can run from the selected branch, while release workflows run from main. Prod retains stable-release-only admission and promotes from dev |
+| `mdeploy-all.yml` | dispatch | — | Prepared GCP/AWS stages: dev/stage accept SHA/PR; stage treats stable tags as commit references. Candidate workflows can run from the selected branch. Dev/prod release workflows run from main; prod promotes from dev |
 | `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch, `workflow_call` | yes | Stable images tagged `v<X.Y.Z>-<sha>`: publish into dev/stage using the publish-only `stage` input (default dev), or promote from dev to prod; refuse versions already held by the target |
+| `mbuild-release.yml` | dispatch, `workflow_call` | yes | Stable images tagged `v<X.Y.Z>-<sha>`: publish into dev, or promote from dev to prod; refuse versions already held by the target |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |

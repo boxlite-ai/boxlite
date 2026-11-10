@@ -42,16 +42,19 @@ A moved PR/base can change that merge SHA; a merge candidate outside the selecte
 | --- | --- | --- |
 | Full SHA | `dev`, `stage` | Ensure commit images and runner build exist; the commit must belong to the selected workflow branch |
 | Open PR `#number` | `dev`, `stage` | Use the current open, mergeable PR's merge commit for images and runner build |
-| Published `vX.Y.Z` release | `dev`, `stage`, `prod` | Version-qualified images and published runner release |
+| Stable `vX.Y.Z` tag | `stage` | Resolve to a commit on the selected branch; use commit images and runner build |
+| Published `vX.Y.Z` release | `dev`, `prod` | Version-qualified images and published runner release |
 
-Release dispatches run from `main`. Production accepts releases only. For a protected production apply:
+Dev/prod release dispatches run from `main`. Production accepts releases only. For a protected production apply:
 
 ```bash
 gh workflow run mdeploy-all.yml --ref main   -f stage=prod -f ref=vX.Y.Z -f components=api+runner -f apply=true -f confirm=true
 ```
 
-Stage follows dev: candidate dispatches may use a workflow branch and accept its full SHAs or open PR merge candidates. Published stable releases still run from `main`; RC inputs remain refused.
-Its release images publish directly into stage; the release publisher's optional `stage` input defaults to dev for existing callers.
+Stage candidate dispatches may use a workflow branch and accept its full SHAs or open PR merge candidates.
+Stage also accepts stable tags as commit references: it resolves the tag once, then builds or reuses artifacts for that SHA.
+It does not require a GitHub Release or use its published Runner assets.
+Dev/prod published stable releases still run from `main`; RC inputs remain refused.
 Production promotion continues to read release images from dev; stage is an independent deployment target.
 Production still requires a stable release on main, its published Runner assets and protected apply confirmation.
 Example stage preview after its prerequisites and artifacts are prepared:
@@ -61,7 +64,7 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='<full-main-sha
 gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f components=api+runner -f apply=false
 ```
 
-Run a preview of that release first. `components=api` or `runner` narrows artifact preparation,
+Run a preview of the chosen ref first. `components=api` or `runner` narrows artifact preparation,
 not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
 Image releases are published/promoted through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 

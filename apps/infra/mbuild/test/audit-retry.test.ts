@@ -68,7 +68,6 @@ exec "$AUDIT_TEST_NODE" --import "$AUDIT_TEST_LOADER" --conditions=development "
     IMAGE_TAG: sha,
     SHA: sha,
     TARGET_STAGE: 'dev',
-    PUBLISH_STAGE: 'dev',
     ARTIFACT: 'api',
     TAG: 'v1.2.3',
   }

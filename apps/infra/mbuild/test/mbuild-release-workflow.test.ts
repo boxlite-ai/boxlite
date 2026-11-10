@@ -151,7 +151,7 @@ test('the version is refused before a registry is asked about it', () => {
    */
   const resolve = workflow.jobs.resolve
   assert.equal(resolve.environment, undefined, 'a typo must not cost an approval to report')
-  const step = resolve.steps.find((one: any) => one.id === 'version')
+  const step = resolve.steps.find((one: any) => /^\s*set -Eeuo/.test(String(one.run ?? '')) && /TAG/.test(String(one.run)))
   assert.ok(step, 'resolve validates no version')
   assert.match(step.run, /looks like a commit/, 'a commit SHA is not refused by name')
   // `v` and a stable X.Y.Z — the shape this repository's tags actually carry,

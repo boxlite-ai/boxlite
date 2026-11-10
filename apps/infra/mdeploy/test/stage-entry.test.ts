@@ -10,7 +10,6 @@ import { Lexer, Parser, Evaluator, data } from '@actions/expressions'
 const readWorkflow = (name: string): any =>
   load(readFileSync(new URL(`../../../../.github/workflows/${name}`, import.meta.url), 'utf8'))
 const deployment = readWorkflow('mdeploy-all.yml')
-const release = readWorkflow('mbuild-release.yml')
 const step = (job: any, name: string): any => {
   const found = job.steps.find((candidate: any) => candidate.name === name || candidate.id === name)
   assert.ok(found, `missing workflow boundary: ${name}`)
@@ -23,7 +22,7 @@ const run = (script: string, env: Record<string, string>, cwd?: string) =>
     env: { ...process.env, ...env },
   })
 
-test('stage admits SHA, PR and stable release while RC and prod commit refusals remain', () => {
+test('stage admits SHA, PR and stable tags while prod admission remains', () => {
   const directory = mkdtempSync(join(tmpdir(), 'stage-ref-policy-'))
   try {
     const classify = step(deployment.jobs.resolve, 'classify').run
@@ -68,7 +67,6 @@ test('stage shares dev branch access and keeps the existing branch containment a
   assert.equal(resolve.uses, './.github/actions/resolve-ref')
   assert.equal(resolve.with.branch, '${{ github.ref_name }}')
   assert.equal(deployment.jobs['build-images'].with.stage, '${{ inputs.stage }}')
-  assert.equal(deployment.jobs['release-publish'].with.stage, '${{ inputs.stage }}')
 })
 
 test('caller and reusable image jobs admit stage candidate branches without admitting prod', () => {
@@ -99,56 +97,65 @@ test('caller and reusable image jobs admit stage candidate branches without admi
   }
 })
 
-test('missing stage stable images publish locally while prod still plans promotion', () => {
+test('missing stage commit images build while dev and prod retain release planning', () => {
   const directory = mkdtempSync(join(tmpdir(), 'stage-image-plan-'))
   try {
-    writeFileSync(join(directory, 'npm'), '#!/bin/sh\nexit 66\n', { mode: 0o755 })
+    writeFileSync(
+      join(directory, 'npm'),
+      '#!/bin/sh\ncase "$*" in *runner:build*) echo staged=missing ;; *) exit 66 ;; esac\n',
+      { mode: 0o755 },
+    )
     const script = step(deployment.jobs.plan, 'Decide').run
-    for (const [stage, version, expected] of [
-      ['stage', 'v1.2.3', 'release-publish'],
+    for (const [stage, ref, expected] of [
       ['dev', 'v1.2.3', 'release-publish'],
       ['prod', 'v1.2.3', 'release-promote'],
-      ['stage', '', 'build'],
+      ['stage', 'v1.2.3', 'build'],
+      ['stage', 'a'.repeat(40), 'build'],
     ]) {
       const output = join(directory, 'output')
+      writeFileSync(output, '')
+      const classified = run(step(deployment.jobs.resolve, 'classify').run, {
+        REF: ref,
+        STAGE: stage,
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_OUTPUT: output,
+      })
+      assert.equal(classified.status, 0, classified.stdout + classified.stderr)
+      const fields = Object.fromEntries(
+        readFileSync(output, 'utf8').trimEnd().split('\n').map((line) => line.split('=')),
+      )
+      assert.equal(fields.candidate, ref)
+      assert.equal(fields.version, stage === 'stage' ? '' : ref)
+      writeFileSync(output, '')
+      const addressed = run(step(deployment.jobs.resolve, 'tag').run, {
+        VERSION: fields.version,
+        RESOLVED: 'a'.repeat(40),
+        GITHUB_OUTPUT: output,
+      })
+      assert.equal(addressed.status, 0, addressed.stdout + addressed.stderr)
+      const address = Object.fromEntries(
+        readFileSync(output, 'utf8').trimEnd().split('\n').map((line) => line.split('=')),
+      )
+      assert.equal(address.image, stage === 'stage' ? address.sha : `${ref}-${address.sha}`)
       writeFileSync(output, '')
       const result = run(script, {
         PATH: `${directory}:${process.env.PATH}`,
         STAGE: stage,
-        VERSION: version,
-        SHA: 'a'.repeat(40),
-        IMAGE_TAG: 'a'.repeat(40),
-        LINE: 'candidate',
-        COMPONENTS: 'api',
+        VERSION: fields.version,
+        SHA: address.sha,
+        IMAGE_TAG: address.image,
+        LINE: fields.line,
+        COMPONENTS: 'api+runner',
         GITHUB_OUTPUT: output,
         GITHUB_STEP_SUMMARY: join(directory, 'summary'),
       })
       assert.equal(result.status, 0, `${stage}: ${result.stdout}${result.stderr}`)
       assert.match(readFileSync(output, 'utf8'), new RegExp(`^api=${expected}$`, 'm'), stage)
+      assert.match(readFileSync(output, 'utf8'), new RegExp(`^runner=${stage === 'stage' ? 'build' : 'skip'}$`, 'm'), stage)
     }
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
-})
-
-test('release publish target is allowlisted before an Environment and defaults to dev', () => {
-  assert.ok(release.on.workflow_dispatch.inputs.stage, 'release publication stage input is missing')
-  assert.deepEqual(release.on.workflow_dispatch.inputs.stage.options, ['dev', 'stage'])
-  assert.equal(release.on.workflow_call.inputs.stage.default, 'dev')
-  assert.equal(release.jobs.resolve.environment, undefined)
-  const guard = step(release.jobs.resolve, 'Validate publication stage')
-  for (const [target, allowed] of [
-    ['dev', true],
-    ['stage', true],
-    ['prod', false],
-    ['typo', false],
-  ]) {
-    const result = run(guard.run, { PUBLISH_STAGE: target as string })
-    assert.equal(result.status === 0, allowed, `${target}: ${result.stdout}${result.stderr}`)
-  }
-  assert.equal(release.jobs.publish.environment, "${{ inputs.stage || 'dev' }}")
-  assert.equal(release.jobs.publish.env.PUBLISH_STAGE, "${{ inputs.stage || 'dev' }}")
-  assert.equal(release.jobs.promote.environment, 'prod')
 })
 
 test('stage PR resolution requires an open, mergeable request and uses its merge SHA', () => {
@@ -181,46 +188,6 @@ test('stage PR resolution requires an open, mergeable request and uses its merge
       })
       assert.equal(result.status === 0, allowed, `${state}/${mergeable}: ${result.stdout}${result.stderr}`)
       assert.equal(readFileSync(output, 'utf8'), allowed ? `sha=${merge}\n` : '')
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
-  }
-})
-
-test('the actual release inspect, registry gate and publish all use the chosen stage', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'stage-publisher-'))
-  try {
-    writeFileSync(
-      join(directory, 'npm'),
-      `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(process.env.NPM_CALLS,JSON.stringify(args)+'\\n');if(args.includes('verify'))process.exit(66);if(args.includes('inspect'))console.log('kind=artifact-registry\\nregion=us-east5');\n`,
-      { mode: 0o755 },
-    )
-    for (const target of ['dev', 'stage']) {
-      const calls = join(directory, 'calls')
-      writeFileSync(calls, '')
-      const env = {
-        PATH: `${directory}:${process.env.PATH}`,
-        NPM_CALLS: calls,
-        PUBLISH_STAGE: target,
-        SHA: 'a'.repeat(40),
-        TAG: 'v1.2.3',
-        ARTIFACT: 'api',
-        GITHUB_OUTPUT: join(directory, 'output'),
-      }
-      const job = release.jobs.publish
-      const gate = job.steps.find((candidate: any) => candidate.name?.startsWith('Refuse an artifact'))
-      assert.ok(gate, 'missing immutable-release gate')
-      for (const boundary of [step(job, 'Resolve the stage'), gate, step(job, 'Build and upload')]) {
-        const result = run(boundary.run, env)
-        assert.equal(result.status, 0, `${target}/${boundary.name}: ${result.stdout}${result.stderr}`)
-      }
-      const recorded = readFileSync(calls, 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as string[])
-      assert.equal(recorded.length, 3)
-      for (const invocation of recorded)
-        assert.equal(invocation[invocation.indexOf('--stage') + 1], target, invocation.join(' '))
     }
   } finally {
     rmSync(directory, { recursive: true, force: true })

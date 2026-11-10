@@ -20,8 +20,9 @@
 #                     shaking that out tells you about a tree nobody will
 #                     merge. dev or stage.
 #
-#   a release tag     the release path. Images are the `v<X.Y.Z>-<sha>` bytes
-#                     mbuild-release publishes into dev/stage or promotes to prod;
+#   a stable tag      stage resolves it to a commit and follows the commit path.
+#                     dev/prod use the release path: `v<X.Y.Z>-<sha>` images
+#                     mbuild-release publishes into dev and promotes to prod;
 #                     the runner is the tarball already attached to the GitHub
 #                     Release, not a rebuild of it. prod takes nothing else.
 #
@@ -81,8 +82,8 @@ on:
           - runner
       ref:
         description: >-
-          A release tag (v<X.Y.Z>); a full commit SHA for dev/stage; or a pull
-          request (#<number>) for dev/stage. Empty uses this dispatch's own commit.
+          A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>)
+          for dev/stage. Stage builds the commit named by a tag. Empty uses this dispatch's own commit.
         required: false
       apply:
         description: Apply the change. Off previews it and stops.
@@ -176,7 +177,8 @@ jobs:
           # one, and the sigil keeps the operator's intent explicit rather than
           # letting the shape guess it.
           if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            version="$candidate"
+            # Stage uses the tag only to identify a commit, not release artifacts.
+            if [ "$STAGE" != 'stage' ]; then version="$candidate"; fi
           elif [[ "$candidate" =~ ^#[1-9][0-9]*$ ]]; then
             pr="${candidate#\#}"
           elif [[ ! "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
@@ -459,9 +461,8 @@ jobs:
                 echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
                 exit 1
               elif [ -n "$VERSION" ]; then
-                # Candidate environments publish directly; prod keeps receiving
-                # the release bytes through its existing promotion path.
-                api=$([[ "$STAGE" = 'dev' || "$STAGE" = 'stage' ]] && echo release-publish || echo release-promote)
+                # The release line publishes into dev and promotes into prod.
+                api=$([ "$STAGE" = 'dev' ] && echo release-publish || echo release-promote)
               else
                 api=build
               fi
@@ -506,7 +507,7 @@ jobs:
             echo "| components | \`$COMPONENTS\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The release line: publish into dev/stage, or promote into prod. Both call the
+  # The release line: publish into dev, or promote into prod. Both call the
   # workflow that owns the refusals a release needs — a version already in the
   # target registry is an operator mistake, not something to skip over.
   release-publish:
@@ -518,7 +519,6 @@ jobs:
       command: publish
       tag: ${{ needs.resolve.outputs.version }}
       sha: ${{ needs.resolve.outputs.sha }}
-      stage: ${{ inputs.stage }}
     secrets: inherit
 
   release-promote:
