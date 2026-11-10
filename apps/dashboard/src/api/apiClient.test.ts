@@ -230,6 +230,35 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(requests[0].params).toEqual({ page: 2, limit: 25 })
     expect(requests[1].params).toEqual({ page: 1, limit: 25, name: 'CI-JIT-%' })
   })
+  it('scopes repository pages and account actions to the captured organization and encoded grant', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    const signal = new AbortController().signal
+    await api.getCiRepositories('org/one', { kind: 'binding', id: 'binding/id' }, 2, signal)
+    await api.getCiRepositories('org/one', { kind: 'grant', id: 'grant/id', account: 37 }, 1, signal)
+    await api.getCiConnect('org/one', 'grant/id')
+    await api.cancelCiConnect('org/one', 'grant/id')
+    await api.selectCiAccount('org/one', 'grant/id', 37, true)
+    await api.selectCiConnect('org/one', 'grant/id', 11)
+    await api.completeCiInstallation('org/one', 'grant/id', { installation_id: 11, state: 'private-state' })
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'get', url: '/v1/org%2Fone/ci/connections/binding%2Fid/repositories' },
+      { method: 'get', url: '/v1/org%2Fone/ci/connect/grant%2Fid/accounts/37/repositories' },
+      { method: 'get', url: '/v1/org%2Fone/ci/connect/grant%2Fid' },
+      { method: 'delete', url: '/v1/org%2Fone/ci/connect/grant%2Fid' },
+      { method: 'post', url: '/v1/org%2Fone/ci/connect/grant%2Fid/accounts' },
+      { method: 'post', url: '/v1/org%2Fone/ci/connect/grant%2Fid/select' },
+      { method: 'post', url: '/v1/org%2Fone/ci/connect/grant%2Fid/installation' },
+    ])
+    expect(requests[0].params).toEqual({ page: 2, limit: 25 })
+    expect(requests[1].params).toEqual({ page: 1, limit: 25 })
+    expect(requests[0].signal).toBe(signal)
+    expect(requests[1].signal).toBe(signal)
+    expect(requests.every((request) => request.headers.Authorization === 'Bearer tok')).toBe(true)
+    expect(JSON.parse(requests[4].data)).toEqual({ account_id: 37, allow_private_repositories: true })
+    expect(JSON.parse(requests[5].data)).toEqual({ installation_id: 11 })
+    expect(JSON.parse(requests[6].data)).toEqual({ installation_id: 11, state: 'private-state' })
+  })
   it('updates only a connection policy using its captured organization and encoded binding', async () => {
     const requests: any[] = []
     const api = await makeClient(vi.fn(), 200, {}, requests)
@@ -247,6 +276,15 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
       .completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
       .catch((error) => error)
     expect(error.message).toBe('GitHub authorization could not be completed. Restart connect.')
+    expect(error.cause).toBeUndefined()
+  })
+  it('installation completion discards Axios state and response bodies from surfaced errors', async () => {
+    const api = await makeClient(vi.fn(), 403, { message: 'private-state private-token' })
+    const error = await api
+      .completeCiInstallation('org', 'grant', { installation_id: 11, state: 'private-state' })
+      .catch((error) => error)
+    expect(error.message).toBe('GitHub installation could not be verified. Restart connect.')
+    expect(error.config).toBeUndefined()
     expect(error.cause).toBeUndefined()
   })
 
