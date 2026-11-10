@@ -127,7 +127,7 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
         &vm.workers,
         &vm.events.lock().unwrap(),
         |release| {
-            let error = vm.workers.shutdown().unwrap_err();
+            let error = vm.workers.shutdown().map_err(Error::from).unwrap_err();
             assert!(matches!(error, Error::VirtioWorker(error)
                 if error.kind() == io::ErrorKind::TimedOut));
             assert!(memory.upgrade().is_some());
@@ -795,7 +795,7 @@ mod lifecycle {
                 ActivationContext, DeviceContext, DeviceError, DeviceEvent, DeviceSpec,
                 FeatureError, SnapshotSupport, VirtioDevice, VirtioInterrupt, WorkerContext,
                 mmio::{self, Slot},
-                worker::{SlotId, VirtioWorkers, WorkerRuntime},
+                worker::{ShutdownError, SlotId, VirtioWorkers, WorkerRuntime},
             },
         };
 
@@ -966,6 +966,66 @@ mod lifecycle {
 
         #[test]
         fn run_drains_virtio_console_tx_without_a_final_queue_kick() {
+            use vm_memory::{Bytes, GuestAddress};
+
+            let (vm, sink) = console_vm(0, Step::Reset);
+            let (exit, vm) = run(vm);
+            assert_eq!(exit.unwrap(), VmExit::GuestReset);
+            assert_eq!(*sink.0.lock().unwrap(), b"final");
+            assert_eq!(
+                vm.ram
+                    .memory()
+                    .read_obj::<u16>(GuestAddress(0x3002))
+                    .unwrap(),
+                1u16.to_le()
+            );
+        }
+
+        #[test]
+        fn console_quiesce_failure_preserves_run_error_and_allows_ram_release() {
+            for (step, clean) in [(Step::Reset, true), (Step::Fail, false)] {
+                // A writable TX descriptor is rejected by the final scan.
+                let (vm, sink) = console_vm(2, step);
+                let log = vm.host_vm.log();
+                let memory = Arc::downgrade(vm.ram.memory());
+                let (exit, vm) = run(vm);
+                let error = exit.unwrap_err();
+                if clean {
+                    assert!(
+                        matches!(
+                            error,
+                            Error::VirtioDevice {
+                                device: "virtio-console",
+                                ..
+                            }
+                        ),
+                        "{error:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(error, Error::Hypervisor(HypervisorError::RunVcpu { .. })),
+                        "{error:?}"
+                    );
+                }
+                assert!(sink.0.lock().unwrap().is_empty());
+                assert!(vm.workers.shutdown().is_err(), "hook failure is cached");
+
+                drop(vm);
+
+                assert!(
+                    log.lock()
+                        .unwrap()
+                        .iter()
+                        .any(|call| matches!(call, Call::Unmap { .. }))
+                );
+                assert!(
+                    memory.upgrade().is_none(),
+                    "joined workers permit RAM release"
+                );
+            }
+        }
+
+        fn console_vm(flags: u16, exit: Step) -> (Vm<MockVm>, SlowSink) {
             use crate::devices::{console::ConsoleWorker, virtio_console::VirtioConsole};
             use virtio_queue::desc::split::Descriptor;
             use vm_memory::{Bytes, GuestAddress};
@@ -993,9 +1053,8 @@ mod lifecycle {
                 value,
             })
             .collect();
-            // The guest resets without notifying TX. Only Vm's final scan can
-            // deliver this published descriptor after device dispatch stops.
-            steps.push(Step::Reset);
+            // No TX kick: shutdown must find the console through its slot.
+            steps.push(exit);
             let mut vm = Vm::with_backend(
                 config(1, 16),
                 || Ok(MockVm::with_scripts(vec![steps])),
@@ -1005,29 +1064,17 @@ mod lifecycle {
                         .write_slice(b"final", GuestAddress(0x4000))
                         .unwrap();
                     ctx.memory
-                        .write_obj(Descriptor::new(0x4000, 5, 0, 0), GuestAddress(0x1000))
+                        .write_obj(Descriptor::new(0x4000, 5, flags, 0), GuestAddress(0x1000))
                         .unwrap();
                     ctx.memory
                         .write_obj(1u16.to_le(), GuestAddress(0x2002))
                         .unwrap();
-                    add(chipset, ctx, console.clone())
+                    add(chipset, ctx, console)
                 },
             )
             .unwrap();
             vm.console = Mutex::new(Some(worker));
-            vm.virtio_console = Some(console);
-
-            let (exit, vm) = run(vm);
-            assert_eq!(exit.unwrap(), VmExit::GuestReset);
-            assert_eq!(*sink.0.lock().unwrap(), b"final");
-            assert_eq!(
-                vm.ram
-                    .memory()
-                    .read_obj::<u16>(GuestAddress(0x3002))
-                    .unwrap(),
-                1u16.to_le()
-            );
-            assert!(vm.virtio_console.is_none());
+            (vm, sink)
         }
 
         /// A runtime that never stops, as when a device event never returns.
@@ -1062,9 +1109,11 @@ mod lifecycle {
 
             fn cancel_prepare(&self, _slot: SlotId) {}
 
-            fn shutdown(&self) -> io::Result<()> {
+            fn shutdown(&self) -> Result<(), ShutdownError> {
                 self.shutdowns.fetch_add(1, Ordering::SeqCst);
-                Err(io::Error::from(io::ErrorKind::TimedOut))
+                Err(ShutdownError::Join(io::Error::from(
+                    io::ErrorKind::TimedOut,
+                )))
             }
         }
 

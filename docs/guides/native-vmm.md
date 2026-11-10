@@ -59,9 +59,6 @@ describes the adapter and platform qualification requirements.
 
 ## Linux x86_64 M2 and M3 matrices
 
-The [qualification report](../contributing/investigations/2026-11-10-native-m2-m3-qualification.md)
-records the complete runs, remaining failures and acceptance limits.
-
 ```sh
 make vmm:boot:host
 make runtime:debug
@@ -101,8 +98,8 @@ The native kernel includes the script loader for shebang entrypoints; the Linux
 x86_64 seccomp profile allows `fstatfs`, `getpeername`, `getegid` and `fchmodat`
 for filesystem metadata, Unix peer addresses, aggregate root ownership and modes.
 Run all four combinations against the same artifacts, retaining failed runs
-before proceeding to the next combination. Test failures, diagnostic skips and
-missing prerequisites remain failures or limitations in the report; a completed
-run is not an all-green result. ARM64/macOS, virtio-rng, host-sleep clock resync,
+before proceeding to the next combination. Record test failures, diagnostic skips
+and missing prerequisites with the run artifacts; a completed run is not an
+all-green result. ARM64/macOS, virtio-rng, host-sleep clock resync,
 full per-thread filtering and filesystem conformance remain outside these runs,
 so these matrices alone cannot establish complete M2 or M3 acceptance.

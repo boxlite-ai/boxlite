@@ -14,7 +14,7 @@
 //! the transport, the devices or `Vm`.
 
 use std::{
-    io,
+    fmt, io,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -29,6 +29,36 @@ pub(crate) use self::shared::SharedRuntime;
 /// One device's place in a runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SlotId(pub(crate) u32);
+
+/// Whether shutdown failed before or after every device callback stopped.
+#[derive(Debug)]
+pub(crate) enum ShutdownError {
+    /// A worker may still access guest RAM; joining can be retried.
+    Join(io::Error),
+    /// All workers joined, but a device's final cleanup failed.
+    Quiesce {
+        device: &'static str,
+        reason: &'static str,
+    },
+}
+
+impl fmt::Display for ShutdownError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Join(error) => write!(f, "joining virtio workers: {error}"),
+            Self::Quiesce { device, reason } => write!(f, "quiescing {device}: {reason}"),
+        }
+    }
+}
+
+impl From<ShutdownError> for Error {
+    fn from(error: ShutdownError) -> Self {
+        match error {
+            ShutdownError::Join(error) => Self::VirtioWorker(error),
+            ShutdownError::Quiesce { device, reason } => Self::VirtioDevice { device, reason },
+        }
+    }
+}
 
 /// How long the workers wait for an event in flight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,9 +105,11 @@ pub(crate) trait WorkerRuntime: Send + Sync {
     fn cancel_prepare(&self, slot: SlotId);
 
     /// Stops delivering events, closes every source and joins the runtime's
-    /// threads. Nothing opens afterwards. A call after a success does nothing;
-    /// a call after a failure retries the join.
-    fn shutdown(&self) -> io::Result<()>;
+    /// threads, then quiesces every device while RAM is still registered. The
+    /// caller must first stop vCPUs. Nothing opens afterwards. Join failure
+    /// retries on the next call; quiesce failures are cached without retrying
+    /// hooks. A quiesce failure still permits RAM unmapping.
+    fn shutdown(&self) -> Result<(), ShutdownError>;
 }
 
 /// The virtio workers of one VM.
@@ -120,8 +152,8 @@ impl VirtioWorkers {
 
     /// Stops every device and joins the worker thread; see
     /// [`WorkerRuntime::shutdown`].
-    pub(crate) fn shutdown(&self) -> crate::error::Result<()> {
-        self.runtime.shutdown().map_err(Error::VirtioWorker)
+    pub(crate) fn shutdown(&self) -> Result<(), ShutdownError> {
+        self.runtime.shutdown()
     }
 }
 

@@ -15,7 +15,10 @@ use crate::{
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
-    virtio::{DeviceContext, worker::VirtioWorkers},
+    virtio::{
+        DeviceContext,
+        worker::{ShutdownError, VirtioWorkers},
+    },
 };
 
 /// The registers the boot vCPU starts with.
@@ -72,7 +75,6 @@ pub struct Vm<H: HostVm> {
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
     console: Mutex<Option<ConsoleWorker>>,
-    virtio_console: Option<Arc<Mutex<crate::devices::virtio_console::VirtioConsole>>>,
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
@@ -107,18 +109,13 @@ impl Vm<boxlite_hypervisor::KvmVm> {
         config.validate()?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
-        let mut virtio_console = None;
         let mut vm = Self::with_devices(
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| {
-                virtio_console = crate::devices::add_all(chipset, ctx, config, writer)?;
-                Ok(())
-            },
+            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
         vm.console = Mutex::new(Some(worker));
-        vm.virtio_console = virtio_console;
         Ok(vm)
     }
 }
@@ -191,7 +188,6 @@ impl<H: HostVm> Vm<H> {
             chipset,
             workers,
             console: Mutex::new(None),
-            virtio_console: None,
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
@@ -276,21 +272,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         });
         // No vCPU notifies a queue any more. Stop the virtio devices before the
         // console finishes, so a device's last output still reaches the sink.
-        let shutdown = self.workers.shutdown().and_then(|()| {
-            // vCPUs and device callbacks are stopped; drain the final guest TX
-            // before closing the host sink, while guest RAM is still registered.
-            if let Some(console) = self.virtio_console.take() {
-                console
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .finish_tx()
-                    .map_err(|_| Error::VirtioDevice {
-                        device: "virtio-console",
-                        reason: "final TX drain",
-                    })?;
-            }
-            Ok(())
-        });
+        let shutdown = self.workers.shutdown().map_err(Error::from);
         let console = self
             .console
             .get_mut()
@@ -314,11 +296,11 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         match (ended, shutdown) {
             (ended, Ok(())) => ended,
             (Ok(exit), Err(error)) => {
-                tracing::warn!(?exit, "the VM ended, but its virtio workers did not stop");
+                tracing::warn!(?exit, "the VM ended, but virtio shutdown failed");
                 Err(error)
             }
             (Err(ended), Err(error)) => {
-                tracing::warn!(%error, "the virtio workers did not stop");
+                tracing::warn!(%error, "virtio shutdown failed");
                 Err(ended)
             }
         }
@@ -329,12 +311,13 @@ impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
         // A device event that outlived the shutdown may still touch guest
         // RAM, so the registrations stay and `GuestRam` leaks the backing.
-        if let Err(error) = self.workers.shutdown() {
+        if let Err(ShutdownError::Join(error)) = self.workers.shutdown() {
             tracing::warn!(%error, "the virtio workers did not stop; leaking guest RAM");
             return;
         }
-        // A VM that never ran still holds its registrations. Remove them so
-        // the backing can be released; `GuestRam` leaks it on failure.
+        // Quiesce failure after joining cannot leave a live callback. A VM
+        // that never ran also holds registrations; remove them so the backing
+        // can be released. `GuestRam` leaks it on unmap failure.
         let _ = self.ram.unmap(&*self.host_vm);
     }
 }

@@ -44,6 +44,7 @@ use crate::{
         FeatureError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
         mmio::VIRTIO_F_VERSION_1,
         queue::{VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC, VirtQueues},
+        worker::{ShutdownError, VirtioWorkers},
     },
 };
 
@@ -186,6 +187,7 @@ struct FakeState {
     pending: Vec<(u32, Request)>,
     done: Vec<CompletedRequest>,
     flushes: usize,
+    flush_error: Option<io::ErrorKind>,
 }
 
 impl FakeState {
@@ -234,8 +236,9 @@ impl DiskBackend for FakeBackend {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.state.lock().unwrap().flushes += 1;
-        Ok(())
+        let mut state = self.state.lock().unwrap();
+        state.flushes += 1;
+        state.flush_error.map_or(Ok(()), |kind| Err(kind.into()))
     }
 }
 
@@ -929,4 +932,42 @@ fn quiesce_flushes_the_backend() {
     let mut fixture = Fixture::pending();
     assert_eq!(fixture.blk.quiesce(), Ok(()));
     assert_eq!(fixture.fake().flushes, 1);
+}
+
+#[test]
+fn shutdown_quiesces_block_once() {
+    check_shutdown_flush(None);
+}
+
+#[test]
+fn shutdown_caches_block_quiesce_failure() {
+    check_shutdown_flush(Some(io::ErrorKind::Other));
+}
+
+fn check_shutdown_flush(flush_error: Option<io::ErrorKind>) {
+    let fixture = Fixture::pending();
+    let state = Arc::clone(fixture.fake.as_ref().unwrap());
+    state.lock().unwrap().flush_error = flush_error;
+    let events = EventLoop::new().unwrap();
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
+    workers.add(Arc::new(Mutex::new(fixture.blk)), fixture.interrupt);
+
+    for _ in 0..2 {
+        let result = workers.shutdown();
+        if flush_error.is_some() {
+            assert!(
+                matches!(
+                    result,
+                    Err(ShutdownError::Quiesce {
+                        device: "block",
+                        reason: "block flush"
+                    })
+                ),
+                "block flush failure must reach shutdown: {result:?}"
+            );
+        } else {
+            result.unwrap();
+        }
+    }
+    assert_eq!(state.lock().unwrap().flushes, 1);
 }

@@ -340,9 +340,13 @@ pub(crate) trait VirtioDevice: Send {
     /// exceed the worker's stop timeout.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
-    /// Stops accepting new work and drains requests the device already took.
+    /// Performs device-specific cleanup after vCPUs and event dispatch stop,
+    /// while guest RAM is still registered. The default succeeds without
+    /// draining queues or flushing backends. Repeated calls must be harmless;
+    /// activation stays available for [`Self::resume`] until reset or drop.
+    /// Success does not establish snapshot support.
     fn quiesce(&mut self) -> Result<(), DeviceError> {
-        Err(DeviceError::Unsupported("quiesce"))
+        Ok(())
     }
 
     /// Returns a stable state; only valid after [`Self::quiesce`].
