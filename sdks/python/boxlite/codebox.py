@@ -34,7 +34,7 @@ class CodeBox(SimpleBox):
         self,
         image: str = "python:slim",
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["Boxlite"] = None,
         **kwargs,
     ):

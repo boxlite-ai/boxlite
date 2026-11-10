@@ -225,25 +225,23 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 - The resolved set is applied to OCI bounding, effective, and permitted sets.
   Inheritable and ambient capabilities stay unset; they are not implied by `add`.
 
-### `cpus: int`
+### `cpus: float`
 
-Number of CPU cores allocated to the box.
+CPU allocation, default `1`, from `0.01` to `16` with the bundled kernel, in increments of `0.001`.
+Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
+Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
-**Default:** 1
-
-**Range:** 1 to 16 — the bundled guest kernel brings up at most 16 vCPUs, so
-create rejects larger values (see [Resource limits](../guides/resource-limits.md#cpu-configuration)).
-
-**Example:**
 ```python
-cpus=2  # 2 CPU cores
-cpus=4  # 4 CPU cores
+cpus=0.5  # 1 guest vCPU, half a CPU of aggregate time
+cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
+cpus=2    # 2 guest vCPUs, no additional bandwidth quota
 ```
 
-**Notes:**
-- CPU scheduling is proportional (shares-based)
-- Does not reserve physical cores, just scheduling weight
-- Monitor actual usage with `box.metrics().cpu_time_ms`
+Fractional values require a Linux execution host, the jailer, and writable cgroup v2 CPU quotas.
+Local macOS execution rejects them; macOS REST clients can request them from a supporting Linux server.
+Quota-write failures prevent startup; cgroup membership remains best-effort and can leave a running Box without enforcement.
+Information queries return the configured allocation.
+Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
 
 ### `memory_mib: int`
 

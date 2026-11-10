@@ -54,31 +54,91 @@ Available runner capacity still determines whether an allowed request can run.
 
 ## CPU configuration
 
-**Set CPU Count:**
+Set the CPU allocation with `cpus`; the default remains one virtual CPU.
 
 ```python
-boxlite.BoxOptions(
-    cpus=2,  # 2 CPU cores
-)
+options = boxlite.BoxOptions(image="alpine:latest", cpus=1.5)
+box = await runtime.create(options)
+print((await box.info()).cpus)  # 1.5; the guest sees 2 vCPUs
 ```
 
-**Range:** 1 to 16. The bundled guest kernel is built with `CONFIG_NR_CPUS=16`
-and brings up at most 16 vCPUs, so creating a box with `cpus` outside this
-range fails with an invalid-argument error. A box created with a custom kernel
-(experimental) is not bound by this limit. A box created with more than 16
-vCPUs before this check still starts, logs a warning, and runs on 16.
+| Input | Guest vCPUs | Additional CPU bandwidth quota |
+| --- | --- | --- |
+| Omitted/null | Existing default: 1 | None |
+| `2` or `2.0` | 2 | None; preserves integer behavior |
+| `0.5` | 1 | Half a CPU on Linux |
+| `1.5` | 2 | 1.5 CPUs on Linux |
 
-**Behavior:**
-- Proportional scheduling (shares-based)
-- Does not reserve physical cores
-- Multiple boxes can exceed host CPU count
+Fractional allocations round up only the guest topology; information queries retain the requested value.
+They do not reserve physical cores or guarantee latency.
+Integer allocations add no new cgroup requirement and continue working on macOS.
 
-**Monitor Usage:**
+**Range:** `0.01` to `16`, in increments of `0.001`, with the bundled guest kernel.
+Zero, negatives, non-finite values, and excessive precision are rejected.
+A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
+Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
 
-```python
-metrics = await box.metrics()
-print(f"CPU time: {metrics.cpu_time_ms}ms")
-```
+### Fractional CPUs (Linux)
+
+Linux applies the allocation to the Box's cgroup using a fixed 100 ms period.
+For example, `cpus=0.125` writes `12500 100000` to `cpu.max`; `cpus=1.5` writes `150000 100000`.
+When cgroup membership succeeds, all vCPU and host VMM/device threads share that budget.
+Parallel work can exhaust it early and wait for the next period.
+Boot and device I/O also consume this budget; very small allocations can hit existing operation timeouts.
+
+| Condition | Behavior |
+| --- | --- |
+| Execution host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; REST applies these requirements to the server; rootless operation needs CPU delegation |
+| Quota write failure | Startup fails before guest execution |
+| Membership failure | Existing best-effort joining remains; a Box can start without the requested quota taking effect |
+| Local macOS execution | Fractional values return `Unsupported` |
+| macOS REST client | Can request fractional CPUs from a supporting Linux server; the client needs no local cgroup support |
+| Existing host limits | A tighter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` behavior is unchanged |
+| Information queries | Return configured `cpus`, not CPU usage, reserved capacity, or proof of enforcement |
+
+CPU configuration is immutable after creation.
+Restart, reconnect, disk snapshot restore, clone, and archive import retain it.
+Disk-only `restore_from_archive` retains the destination Box's CPU configuration.
+
+After option and security compatibility checks, `get_or_create` keeps an existing named Box's saved `cpus` for integer, fractional, and omitted requests.
+Local runtimes also check CPU support on their execution host.
+For example, an existing `cpus=2` Box stays at `2` when requested with `cpus=0.5`, and returns `created=false`.
+The requested allocation applies only when creating a new Box; `create` still rejects duplicate names.
+
+| Interface | Creation | Query |
+| --- | --- | --- |
+| Rust | `cpus: Some(0.5)` | `BoxInfo.cpus: f64` |
+| Python | `BoxOptions(cpus=0.5)` or `SimpleBox(cpus=0.5)` | `BoxInfo.cpus` |
+| Node | `{ cpus: 0.5 }` | `JsBoxInfo.cpus` |
+| Go | `WithCPUs(0.5)` | `BoxInfo.CPUs: float64` |
+| C | `boxlite_options_set_cpus(opts, 0.5)` | `CBoxInfo.cpus: double` |
+| CLI | `boxlite create --cpus 0.5 alpine` | `boxlite inspect` → `Cpus` |
+| REST/serve | `{"image":"alpine","cpus":0.5}` | Box response `cpus` |
+
+REST clients validate CPU values independently of the client OS and send `cpus` directly in `POST /boxes`, without a CPU-specific `/config` request.
+The server checks its execution host before running the Box.
+Integer values serialize as integer JSON for compatibility with strict older servers.
+A successful fractional create must return exactly the requested allocation.
+Missing, rounded, or changed values produce an `Unsupported` error containing the created Box ID; inspect or remove that Box before retrying.
+The SDK never retries creation by rounding or dropping the value; ordinary HTTP failures retain their original error classification.
+Other features may still use `/config`.
+This feature does not add fractional scheduling, capacity accounting, or billing to BoxLite Cloud; older Cloud servers may reject fractional values.
+
+**Compatibility (breaking change):** `Box.cpus` responses may contain fractions that older integer-only clients cannot decode, including in list responses.
+Follow the [client migration steps](../reference/README.md#unreleased-fractional-cpu-allocation-breaking-change) before creating fractional Boxes in shared environments.
+
+C CPU parameters and `CBoxInfo.cpus` now use `double`; rebuild C and Go consumers against the matching header and library.
+The Simple C API retains its documented `cpus=0` default sentinel; explicit options use the shared positive-value validation.
+Go information/list calls obtain CPUs from the existing callback without supplementary per-Box requests.
+
+Persistence stores numeric `cpus`; calculations normalize it to integer millicpu.
+Main-branch integer data remains readable, but experimental non-null `cpu_limit` or `cpu_limit_millicpu` records are rejected rather than silently converted.
+Fractional archives use version 6; integer exports retain the existing version 3/4/5 selection.
+Import supports versions 1–6 and rejects newer archive versions.
+Downgrading a local database containing fractional CPUs is unsupported.
+
+Monitor consumption with `box.metrics().cpu_time_ms`.
+Run `make test:fractional-cpus:acceptance` on a KVM host with CPU controller delegation to check topology, aggregate throttling, and lifecycle preservation.
 
 ## Memory management
 

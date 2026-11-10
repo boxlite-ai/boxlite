@@ -2,7 +2,7 @@
 
 use crate::runtime::constants::envs as const_envs;
 use crate::runtime::layout::dirs as const_dirs;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -381,7 +381,10 @@ mod registry_options_tests {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct BoxOptions {
-    pub cpus: Option<u8>,
+    /// CPU allocation; fractional values require a Linux execution host.
+    /// For REST runtimes, this requirement applies to the server.
+    #[serde(serialize_with = "super::cpu_count::serialize_optional")]
+    pub cpus: Option<f64>,
     pub memory_mib: Option<u32>,
     /// Disk size in GB for the container rootfs (sparse, grows as needed).
     ///
@@ -668,6 +671,9 @@ impl BoxOptions {
     ///   guest-networking switch (it gates host jailer grants only)
     /// - every mount in `mounts` fits its type
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
+        // CPU host requirements belong to local execution; REST clients may
+        // run on a different platform from the server.
+        self.cpu_count()?;
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -841,8 +847,26 @@ impl BoxOptions {
         Ok(())
     }
 
-    /// Validate a persisted box without requiring ingestion sources to remain.
+    /// Check CPU quota support on the host that will execute the box.
+    fn validate_local_cpu_support(&self) -> BoxliteResult<()> {
+        if self.cpu_count()?.is_some_and(|cpu| cpu.is_fractional()) {
+            if !cfg!(target_os = "linux") {
+                return Err(BoxliteError::Unsupported(
+                    "fractional cpus requires a Linux host".into(),
+                ));
+            }
+            if !self.advanced.security.jailer_enabled {
+                return Err(BoxliteError::Unsupported(
+                    "fractional cpus requires the jailer and cgroup v2 CPU controller".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a persisted box on this host without requiring ingestion sources to remain.
     pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
+        self.validate_local_cpu_support()?;
         self.sanitize_common()?;
 
         for (host, header) in self.secret_header_conflicts() {
@@ -859,7 +883,9 @@ impl BoxOptions {
         Ok(())
     }
 
+    /// Validate and normalize options for local execution.
     pub fn sanitize(&mut self) -> BoxliteResult<()> {
+        self.validate_local_cpu_support()?;
         self.sanitize_common()?;
 
         if let Some(kernel) = &self.advanced.kernel {
@@ -890,11 +916,19 @@ impl BoxOptions {
         Ok(())
     }
 
+    /// Normalize the public resource quantity before deriving quotas or topology.
+    pub(crate) fn cpu_count(&self) -> BoxliteResult<Option<super::cpu_count::CpuCount>> {
+        self.cpus.map(super::cpu_count::CpuCount::new).transpose()
+    }
+
     /// The requested vCPU count when the bundled guest kernel cannot bring
     /// all of them online. A custom kernel sets its own ceiling, so it never
     /// exceeds this one.
     pub(crate) fn cpus_beyond_guest_kernel(&self) -> Option<u8> {
-        self.cpus
+        self.cpu_count()
+            .ok()
+            .flatten()
+            .map(|cpu| cpu.vcpus())
             .filter(|&cpus| cpus > MAX_CPUS && self.advanced.kernel.is_none())
     }
 
@@ -905,10 +939,11 @@ impl BoxOptions {
     /// reuse, and a box created before this limit must keep starting (boot
     /// warns via `cpus_beyond_guest_kernel`).
     pub(crate) fn validate_cpus(&self) -> BoxliteResult<()> {
+        self.cpu_count()?;
         match self.cpus {
-            Some(cpus) if cpus == 0 || self.cpus_beyond_guest_kernel().is_some() => Err(
+            Some(cpus) if self.cpus_beyond_guest_kernel().is_some() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
-                    "cpus must be between 1 and {MAX_CPUS} (the guest kernel brings up at \
+                    "cpus must be between 0.01 and {MAX_CPUS} (the guest kernel brings up at \
                      most {MAX_CPUS} vCPUs), got {cpus}"
                 )),
             ),
@@ -2178,13 +2213,56 @@ mod tests {
         assert!(opts.sanitize().is_err());
     }
 
+    #[test]
+    fn fractional_cpus_common_validation_ignores_execution_host() {
+        for cpus in [0.01, 0.125, 1.5] {
+            for jailer_enabled in [false, true] {
+                let mut options = BoxOptions {
+                    cpus: Some(cpus),
+                    ..Default::default()
+                };
+                options.advanced.security.jailer_enabled = jailer_enabled;
+                options.sanitize_common().unwrap();
+                options.sanitize_create().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_cpus_local_validation_requires_host_support() {
+        for cpus in [None, Some(2.0), Some(0.01), Some(1.5)] {
+            for jailer_enabled in [false, true] {
+                let mut options = BoxOptions {
+                    cpus,
+                    ..Default::default()
+                };
+                options.advanced.security.jailer_enabled = jailer_enabled;
+                let fractional = cpus.is_some_and(|cpus| cpus.fract() != 0.0);
+                for result in [options.sanitize(), options.sanitize_persisted()] {
+                    if fractional && (!cfg!(target_os = "linux") || !jailer_enabled) {
+                        let error = result.expect_err("fractional CPUs need local host support");
+                        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+                        let requirement = if cfg!(target_os = "linux") {
+                            "jailer"
+                        } else {
+                            "Linux host"
+                        };
+                        assert!(error.to_string().contains(requirement), "{error}");
+                    } else {
+                        result.unwrap();
+                    }
+                }
+            }
+        }
+    }
+
     /// The vCPU ceiling is a create-time check. A box persisted (or exported)
     /// with more vCPUs than the guest kernel supports must still restart and
     /// import, so neither shared validation path may enforce it.
     #[test]
     fn persisted_and_imported_boxes_keep_cpus_beyond_guest_kernel() {
         let mut opts = BoxOptions {
-            cpus: Some(24),
+            cpus: Some(24.0),
             ..Default::default()
         };
 

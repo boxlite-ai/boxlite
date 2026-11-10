@@ -2095,7 +2095,7 @@ mod tests {
     async fn create_rejects_cpus_outside_guest_kernel_range() {
         let (runtime, _dir) = create_test_runtime();
         let local = LocalRuntime(Arc::clone(&runtime));
-        for cpus in [0, 17, 24] {
+        for cpus in [0.0, 17.0, 24.0] {
             let name = format!("cpus-{cpus}");
             let options = BoxOptions {
                 cpus: Some(cpus),
@@ -2104,7 +2104,7 @@ mod tests {
             let error = RuntimeBackend::create(&local, options, Some(name.clone()))
                 .await
                 .err()
-                .expect("cpus outside 1..=16 must be rejected at create");
+                .expect("cpus outside 0.01..=16 must be rejected at create");
 
             assert!(
                 matches!(error, BoxliteError::InvalidArgument(_)),
@@ -2112,14 +2112,16 @@ mod tests {
             );
             let message = error.to_string();
             assert!(message.contains("cpus"), "{message}");
-            assert!(message.contains("16"), "{message}");
+            if cpus > 16.0 {
+                assert!(message.contains("16"), "{message}");
+            }
             assert!(
                 runtime.box_manager.lookup_box(&name).unwrap().is_none(),
                 "a rejected create must not persist a box"
             );
         }
 
-        for cpus in [None, Some(1), Some(16)] {
+        for cpus in [None, Some(1.0), Some(16.0)] {
             let options = BoxOptions {
                 cpus,
                 ..Default::default()
@@ -2138,14 +2140,14 @@ mod tests {
         let (runtime, _dir) = create_test_runtime();
         let mut config = test_box_config_in_layout(false, &runtime);
         config.name = Some("legacy".to_string());
-        config.options.cpus = Some(24);
+        config.options.cpus = Some(24.0);
         runtime
             .box_manager
             .add_box(&config, &BoxState::new())
             .unwrap();
         let local = LocalRuntime(Arc::clone(&runtime));
         let request = || BoxOptions {
-            cpus: Some(24),
+            cpus: Some(24.0),
             ..Default::default()
         };
 
@@ -2171,7 +2173,7 @@ mod tests {
     async fn custom_kernel_is_not_bound_by_bundled_kernel_cpu_limit() {
         let (runtime, _dir) = create_test_runtime();
         let mut options = BoxOptions {
-            cpus: Some(24),
+            cpus: Some(24.0),
             ..Default::default()
         };
         options.advanced.kernel = Some(KernelOptions::new("/custom/vmlinux"));
@@ -3926,5 +3928,79 @@ mod tests {
         // mark_stop runs for non-Configured states; Failed -> Stopped.
         let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
         assert_eq!(db_state.status, BoxStatus::Stopped);
+    }
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn fractional_cpus_named_reuse_preserves_saved_allocation() {
+        for saved_cpus in [2.0, 0.5] {
+            let (runtime, _dir) = create_test_runtime();
+            let local = LocalRuntime(Arc::clone(&runtime));
+            let options = BoxOptions {
+                cpus: Some(saved_cpus),
+                ..Default::default()
+            };
+            let (created, is_new) =
+                RuntimeBackend::get_or_create(&local, options.clone(), Some("fractional".into()))
+                    .await
+                    .unwrap();
+            assert!(is_new);
+            assert_eq!(created.info().await.unwrap().cpus, saved_cpus);
+
+            for cpus in [Some(1.0), Some(2.0), Some(0.5), Some(1.5), None] {
+                let (reused, is_new) = RuntimeBackend::get_or_create(
+                    &local,
+                    BoxOptions {
+                        cpus,
+                        ..options.clone()
+                    },
+                    Some("fractional".into()),
+                )
+                .await
+                .unwrap();
+                assert!(!is_new);
+                assert_eq!(reused.id(), created.id());
+                assert_eq!(reused.info().await.unwrap().cpus, saved_cpus);
+                let (config, _) = runtime
+                    .box_manager
+                    .lookup_box("fractional")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(config.options.cpus, Some(saved_cpus));
+            }
+
+            let error = RuntimeBackend::create(
+                &local,
+                BoxOptions {
+                    cpus: Some(1.5),
+                    ..options
+                },
+                Some("fractional".into()),
+            )
+            .await
+            .err()
+            .expect("create must reject a duplicate name instead of reusing it");
+            assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+            assert!(error.to_string().contains("already exists"));
+        }
+    }
+
+    #[test]
+    fn fractional_cpus_config_reads_main_but_rejects_experimental_limits() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut value = serde_json::to_value(config).unwrap();
+        for cpus in [serde_json::json!(24), serde_json::json!(1.5)] {
+            value["options"]["cpus"] = cpus.clone();
+            value["options"]["unused_legacy_field"] = serde_json::json!(true);
+            let config: BoxConfig = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(config.options.cpus, cpus.as_f64());
+        }
+        for field in ["cpu_limit", "cpu_limit_millicpu"] {
+            value["options"][field] = serde_json::json!(125);
+            let error = serde_json::from_value::<BoxConfig>(value.clone()).unwrap_err();
+            assert!(error.to_string().contains(field));
+            value["options"][field] = serde_json::Value::Null;
+            serde_json::from_value::<BoxConfig>(value.clone()).unwrap();
+        }
     }
 }

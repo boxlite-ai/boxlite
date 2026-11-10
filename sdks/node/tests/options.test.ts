@@ -14,6 +14,14 @@ vi.mock("../lib/native.js", () => ({
 }));
 
 describe("SimpleBoxOptions", () => {
+  test("forwards fractional cpus to native options", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    for (const cpus of [0.125, 1.5, 2]) {
+      const box = new SimpleBox({ cpus });
+      expect((box as any)._boxOpts.cpus).toBe(cpus);
+    }
+  });
+
   test("cmd defaults to undefined", () => {
     const opts: SimpleBoxOptions = {};
     expect(opts.cmd).toBeUndefined();

@@ -280,6 +280,15 @@ Port publication is local-only. Remote runtimes reject it with guidance to use
 the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
 
+### Fractional CPUs
+
+Use `WithCPUs(0.5)` for half a CPU of aggregate time on a Linux execution host, or `WithCPUs(1.5)` for two guest vCPUs sharing 1.5 CPUs.
+`BoxInfo.CPUs` is a `float64`, reported through the initial native callback without extra information requests.
+Integer inputs retain existing behavior; fractional values are immutable and local macOS execution rejects them.
+A macOS REST client can request fractional CPUs from a supporting Linux server.
+Rebuild against the matching C header/library because CPU fields and parameters now use `double`.
+See [fractional CPUs](../../docs/guides/resource-limits.md#fractional-cpus-linux) for validation, cgroup delegation, and REST support.
+
 ## Service Tunnels
 
 The same route workflow works with local and remote runtimes:

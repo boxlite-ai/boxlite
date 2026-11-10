@@ -180,7 +180,7 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 	}
 	if info.Image != "alpine:3.21" || info.CPUs != 2 || info.MemoryMiB != 768 {
 		t.Errorf(
-			"resources: got Image=%q CPUs=%d MemoryMiB=%d",
+			"resources: got Image=%q CPUs=%g MemoryMiB=%d",
 			info.Image,
 			info.CPUs,
 			info.MemoryMiB,

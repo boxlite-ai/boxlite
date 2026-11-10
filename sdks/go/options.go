@@ -233,7 +233,7 @@ type Secret struct {
 
 type boxConfig struct {
 	name       string
-	cpus       int
+	cpus       *float64
 	memoryMiB  int
 	diskSizeGB int
 	rootfsPath string
@@ -269,9 +269,9 @@ func WithName(name string) BoxOption {
 	return func(c *boxConfig) { c.name = name }
 }
 
-// WithCPUs sets the number of virtual CPUs.
-func WithCPUs(n int) BoxOption {
-	return func(c *boxConfig) { c.cpus = n }
+// WithCPUs sets the CPU allocation. Fractions require Linux and round guest vCPUs up.
+func WithCPUs(n float64) BoxOption {
+	return func(c *boxConfig) { c.cpus = &n }
 }
 
 // WithMemory sets the memory limit in MiB.
@@ -499,8 +499,8 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		C.boxlite_options_set_name(cOpts, cName)
 		C.free(unsafe.Pointer(cName))
 	}
-	if cfg.cpus > 0 {
-		C.boxlite_options_set_cpus(cOpts, C.int(cfg.cpus))
+	if cfg.cpus != nil {
+		C.boxlite_options_set_cpus(cOpts, C.double(*cfg.cpus))
 	}
 	if cfg.memoryMiB > 0 {
 		C.boxlite_options_set_memory(cOpts, C.int(cfg.memoryMiB))

@@ -531,7 +531,7 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) rootfs_path: Option<String>,
     #[pyo3(get, set)]
-    pub(crate) cpus: Option<u8>,
+    pub(crate) cpus: Option<f64>,
     #[pyo3(get, set)]
     pub(crate) memory_mib: Option<u32>,
     #[pyo3(get, set)]
@@ -615,7 +615,7 @@ impl PyBoxOptions {
     fn new(
         image: Option<String>,
         rootfs_path: Option<String>,
-        cpus: Option<u8>,
+        cpus: Option<f64>,
         memory_mib: Option<u32>,
         disk_size_gb: Option<u64>,
         working_dir: Option<String>,
@@ -677,6 +677,9 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
     #[allow(deprecated)]
     fn try_from(py_opts: PyBoxOptions) -> Result<Self, Self::Error> {
+        if let Some(cpus) = py_opts.cpus {
+            boxlite::runtime::cpu_count::CpuCount::new(cpus)?;
+        }
         let auto_remove = py_opts.auto_remove;
         let auto_delete = py_opts.auto_delete;
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
@@ -1450,5 +1453,19 @@ mod tests {
             BoxOptions::default().tty,
             "an unset tty must not overwrite the core default"
         );
+    }
+    #[test]
+    fn fractional_cpus_python_conversion() {
+        for cores in [0.01, 0.125, 1.5, 2.0] {
+            let mut options = py_box_options_with_tty(None);
+            options.cpus = Some(cores);
+            let core = BoxOptions::try_from(options).unwrap();
+            assert_eq!(core.cpus, Some(cores));
+        }
+        for cores in [0.0, -0.5, 0.009, 0.1255, f64::NAN, f64::INFINITY] {
+            let mut options = py_box_options_with_tty(None);
+            options.cpus = Some(cores);
+            assert!(BoxOptions::try_from(options).is_err(), "{cores}");
+        }
     }
 }

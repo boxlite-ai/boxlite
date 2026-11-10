@@ -64,6 +64,24 @@ impl<'a> ShimSpawner<'a> {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn apply_cpu_quota(&self) -> BoxliteResult<()> {
+        let Some(limit) = self.options.cpu_count()?.filter(|cpu| cpu.is_fractional()) else {
+            return Ok(());
+        };
+        let security = &self.options.advanced.security;
+        if !security.jailer_enabled {
+            return Err(BoxliteError::Engine("CPU limit requires the jailer".into()));
+        }
+        crate::jailer::cgroup::set_cpu_max(self.box_id, limit, &security.resource_limits).map_err(
+            |error| {
+                BoxliteError::Engine(format!(
+                    "cannot apply CPU limit before starting VM: {error}"
+                ))
+            },
+        )
+    }
+
     /// Grant the confined shim the host files libkrun probes before enabling
     /// nested virtualization. The caller passes the value from the VM request
     /// it is about to serialize, which is the authority on what the shim runs.
@@ -136,6 +154,8 @@ impl<'a> ShimSpawner<'a> {
 
         // 3. Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
         jail.prepare()?;
+        #[cfg(target_os = "linux")]
+        self.apply_cpu_quota()?;
 
         // 4. Build isolated command — no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];
@@ -228,6 +248,10 @@ impl<'a> ShimSpawner<'a> {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/fractional_cpus_membership.rs"]
+mod fractional_cpus_membership_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +264,36 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fractional_cpus_requires_quota_write_before_start() {
+        let layout = test_layout();
+        let mut options = BoxOptions::default();
+        options.advanced.security.jailer_enabled = false;
+        let unlimited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(unlimited.apply_cpu_quota().is_ok());
+        options.cpus = Some(2.0);
+        let integer = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(integer.apply_cpu_quota().is_ok());
+        options.cpus = Some(0.125);
+        let limited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(
+            limited.apply_cpu_quota().is_err(),
+            "disabled jailer must fail closed"
+        );
+        options.advanced.security.jailer_enabled = true;
+        let limited = ShimSpawner::new(
+            Path::new("/unused"),
+            &layout,
+            "missing-fractional-cpus-test",
+            &options,
+        );
+        assert!(
+            limited.apply_cpu_quota().is_err(),
+            "absent cgroup must fail closed"
+        );
     }
 
     #[test]

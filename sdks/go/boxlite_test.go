@@ -265,8 +265,8 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.name != "test-box" {
 		t.Errorf("name: got %q", cfg.name)
 	}
-	if cfg.cpus != 4 {
-		t.Errorf("cpus: got %d", cfg.cpus)
+	if cfg.cpus == nil || *cfg.cpus != 4 {
+		t.Errorf("cpus: got %v", cfg.cpus)
 	}
 	if cfg.memoryMiB != 1024 {
 		t.Errorf("memoryMiB: got %d", cfg.memoryMiB)

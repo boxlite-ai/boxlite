@@ -2112,6 +2112,22 @@ mod tests {
     mod executions;
     mod ssh;
 
+    #[test]
+    fn fractional_cpus_survive_serve_request_conversion() {
+        for cpus in ["0.125", "1.5", "2", "2.0"] {
+            let request: CreateBoxRequest =
+                serde_json::from_str(&format!(r#"{{"image":"alpine","cpus":{cpus}}}"#)).unwrap();
+            assert_eq!(
+                build_box_options(&request).unwrap().cpus,
+                Some(cpus.parse().unwrap())
+            );
+        }
+        let error = serde_json::from_str::<CreateBoxRequest>(r#"{"cpu_limit":0.5}"#)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("cpu_limit"));
+    }
+
     // --- API-key auth decision (pure; no runtime/network needed) ---
 
     #[test]

@@ -433,7 +433,7 @@ as completed executions with status `126` or `127`.
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
-| `--cpus N` | | CPU limit |
+| `--cpus N` | | CPU allocation, e.g. `2` or `0.5`; fractional values require a Linux execution host |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
@@ -495,7 +495,7 @@ default, and `exec` still starts it on demand.
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
-| `--cpus N` | | CPU limit |
+| `--cpus N` | | CPU allocation, e.g. `2` or `0.5`; fractional values require a Linux execution host |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
