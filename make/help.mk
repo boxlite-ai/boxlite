@@ -97,7 +97,7 @@ help:
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"
 	@echo "    make test:e2e:setup         - Prepare isolated services, current clients, fixtures and guest smoke"
-	@echo "    make test:e2e [FILTER=...]  - Sync/build/restart the local stack, then run E2E cases"
+	@echo "    make test:e2e [FILTER=...]  - Run E2E cases; reuse an unchanged healthy local stack"
 	@echo "    make test:e2e:up            - Start/recover owned services; retain data"
 	@echo "    make test:e2e:down          - Stop owned services; retain data"
 	@echo "    make test:e2e:doctor        - Check host tools, KVM and volume prerequisites"

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from contextlib import ExitStack
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("e2e_local", ROOT / "apps/e2e/local.py")
@@ -160,6 +161,7 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(local.prune_box_dirs(local.box_dirs(home)), 1)
         self.assertFalse(box.exists())
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux /proc process identities")
     def test_stop_host_reaps_exited_direct_child(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
                                    start_new_session=True)
@@ -218,6 +220,7 @@ class LocalE2ETest(unittest.TestCase):
                 with self.assertRaises(local.Failure):
                     local.status({})
 
+    @unittest.skipUnless(sys.platform == "linux", "requires Linux /proc process identities")
     def test_start_reaps_only_unrecoverable_box_processes(self):
         home = self.state / "runtime"
         boxes = home / "boxes"
@@ -295,11 +298,96 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(observations, [{"api": {"pid": 123, "starttime": "456"}}])
         self.assertEqual(local.load_pids(), {})
 
+    def test_unchanged_healthy_stack_skips_preparation_but_source_changes_restart(self):
+        root = self.state / "repo"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        source = root / "Cargo.toml"
+        source.write_text("original")
+        with ExitStack() as mocks:
+            mocks.enter_context(patch.object(local, "ROOT", root))
+            python = root / "venv/bin/python"
+            mocks.enter_context(patch.object(local, "PYTHON", python))
+            for path in [python, root / "target/debug/boxlite", root / "target/debug/libboxlite.a",
+                         root / "sdks/node/dist/index.js", root / "apps/node_modules/.bin/ts-node",
+                         *[self.state / "bin" / name for name in ("runner", "proxy", "registry-proxy")]]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            (root / "sdks/node/node_modules").mkdir()
+            for name in ("write_files", "wait_dependencies", "create_bucket", "fixture"):
+                mocks.enter_context(patch.object(local, name))
+            build = mocks.enter_context(patch.object(local, "build"))
+            start = mocks.enter_context(patch.object(local, "start"))
+            mocks.enter_context(patch.object(local, "compose", return_value="postgres redis registry dex minio"))
+            mocks.enter_context(patch.object(local, "compose_services", return_value=set()))
+            mocks.enter_context(patch.object(local, "box_processes", return_value=[]))
+            mocks.enter_context(patch.object(local, "process_matches", return_value=True))
+            mocks.enter_context(patch.object(local, "wait_http"))
+            mocks.enter_context(patch.object(local, "request", return_value=[{"name": "boxlite-e2e", "state": "ready"}]))
+            local.save_pids({name: {"pid": i, "starttime": "1"} for i, name in enumerate(
+                ("api", "runner", "proxy", "registry-proxy"), 1)})
+            local.up({})
+            cases = root / "apps/e2e/cases"
+            cases.mkdir(parents=True)
+            (cases / "test_example.py").write_text("changed test")
+            local.up({})
+            self.assertEqual(build.call_count, 1, "test-only changes rebuilt the stack")
+            self.assertEqual(start.call_count, 1, "test-only changes restarted services")
+            source.write_text("changed product")
+            local.up({})
+            self.assertEqual(build.call_count, 2)
+            self.assertEqual(start.call_count, 2)
+            local.up({"BOXLITE_LISTEN_HOST": "changed"})
+            self.assertEqual(start.call_count, 3, "configuration changes reused old services")
+            local.save_pids({})
+            local.up({"BOXLITE_LISTEN_HOST": "changed"})
+            self.assertEqual(start.call_count, 4, "missing services were reused")
+            local.save_pids({name: {"pid": i, "starttime": "1"} for i, name in enumerate(
+                ("api", "runner", "proxy", "registry-proxy"), 1)})
+            with patch.object(local, "wait_http", side_effect=local.Failure("unhealthy")):
+                local.up({"BOXLITE_LISTEN_HOST": "changed"})
+            self.assertEqual(start.call_count, 5, "unhealthy services were reused")
+            (self.state / "bin/runner").unlink()
+            local.up({"BOXLITE_LISTEN_HOST": "changed"})
+            self.assertEqual(start.call_count, 6, "missing artifacts were reused")
+            with patch.object(local, "build", side_effect=local.Failure("build")):
+                with self.assertRaises(local.Failure):
+                    local.up({"BOXLITE_LISTEN_HOST": "changed"})
+            self.assertFalse((self.state / "stack-inputs.json").exists())
+
+    def test_build_skips_unchanged_dependencies_and_retries_failed_sync(self):
+        root = self.state / "repo"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        python = root / "venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.touch()
+        for directory in ("apps/node_modules", "sdks/node/node_modules"):
+            (root / directory).mkdir(parents=True)
+        manifest = root / "apps/package.json"
+        manifest.write_text("original")
+        with patch.object(local, "ROOT", root), patch.object(local, "PYTHON", python), \
+                patch.object(local, "make") as make:
+            local.build({})
+            local.build({})
+            self.assertEqual(sum(call.args[0] == "test:e2e:deps:apps"
+                                 for call in make.call_args_list), 1)
+            manifest.write_text("updated")
+            local.build({})
+            self.assertEqual(sum(call.args[0] == "test:e2e:deps:apps"
+                                 for call in make.call_args_list), 2)
+            manifest.write_text("broken")
+            make.side_effect = local.Failure("sync")
+            with self.assertRaises(local.Failure):
+                local.build({})
+            self.assertFalse((self.state / "dependencies-inputs.json").exists())
+
     def test_startup_failure_unwinds_new_resources(self):
         events = []
         def fake_compose(args, env):
             events.append(tuple(args))
         with patch.object(local, "write_files"), patch.object(local, "build"), \
+                patch.object(local, "box_processes", return_value=[]), \
                 patch.object(local, "compose", side_effect=fake_compose), \
                 patch.object(local, "compose_services", create=True, return_value=set()), \
                 patch.object(local, "wait_dependencies"), patch.object(local, "create_bucket"), \
@@ -346,6 +434,7 @@ class LocalE2ETest(unittest.TestCase):
         with patch.object(local, "write_files"), patch.object(local, "build"), \
                 patch.object(local, "compose_services", create=True, return_value={"postgres"}), \
                 patch.object(local, "compose", side_effect=lambda args, env: events.append(args)), \
+                patch.object(local, "box_processes", return_value=[]), \
                 patch.object(local, "wait_dependencies", side_effect=KeyboardInterrupt), \
                 patch.object(local, "stop_host"), \
                 patch.object(local, "stop_orphaned_boxes", return_value=[]):

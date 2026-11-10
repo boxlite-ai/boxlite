@@ -251,10 +251,67 @@ def make(target, env, **variables):
          *[f"{key}={value}" for key, value in variables.items()]], env=env)
 
 
+def input_digest(env, *, dependencies=False):
+    """Hash working-tree inputs, including untracked sources and submodule edits."""
+    digest = hashlib.sha256()
+
+    def scan(root, prefix=Path()):
+        files = subprocess.check_output(
+            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+             "--exclude-standard"], stderr=subprocess.DEVNULL).split(b"\0")
+        for raw in sorted(set(files) - {b""}):
+            relative = prefix / os.fsdecode(raw)
+            path = ROOT / relative
+            parts = relative.parts
+            if ("tests" in parts or "__tests__" in parts or "cases" in parts
+                    or relative.suffix == ".md" or parts[0] == "docs"
+                    or (ROOT in STATE.parents and (path == STATE or STATE in path.parents))):
+                continue
+            if path.is_dir() and not path.is_symlink():
+                if not dependencies:
+                    scan(path, relative)
+                continue
+            if dependencies and path.name not in (
+                    "package.json", "package-lock.json", "yarn.lock", ".yarnrc.yml",
+                    "pyproject.toml", "uv.lock", "dependencies.json", "python_env.py"):
+                continue
+            digest.update(str(relative).encode() + b"\0")
+            if path.is_symlink():
+                digest.update(os.readlink(path).encode())
+            elif path.exists():
+                with path.open("rb") as stream:
+                    for block in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(block)
+            else:
+                digest.update(b"<missing>")
+            digest.update(b"\0")
+
+    scan(ROOT)
+    ignored = {"FILTER", "E2E_ARGS", "MAKEFLAGS", "MFLAGS", "MAKELEVEL"}
+    digest.update(json.dumps({key: value for key, value in env.items()
+                              if key not in ignored}, sort_keys=True).encode())
+    digest.update(str(PYTHON).encode())
+    return digest.hexdigest()
+
+
+def read_record(name):
+    """Treat missing or damaged cache records as requiring preparation."""
+    try:
+        return json.loads((STATE / name).read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def build(env):
-    make("test:e2e:deps", env)
-    make("test:e2e:deps:apps", env)
-    make("test:e2e:deps:node", env)
+    dependencies = input_digest(env, dependencies=True)
+    ready = (PYTHON.exists() and (ROOT / "apps/node_modules").is_dir()
+             and (ROOT / "sdks/node/node_modules").is_dir())
+    if not ready or read_record("dependencies-inputs.json") != dependencies:
+        (STATE / "dependencies-inputs.json").unlink(missing_ok=True)
+        make("test:e2e:deps", env)
+        make("test:e2e:deps:apps", env)
+        make("test:e2e:deps:node", env)
+        atomic_json(STATE / "dependencies-inputs.json", dependencies)
     make("runtime:debug", env)
     make("test:e2e:build:python", env, SETUP_DONE=1)
     make("test:e2e:build:node", env, SETUP_DONE=1)
@@ -615,8 +672,38 @@ def stack_lock(home=COORDINATION, *, reserve=True):
         handle.close()
 
 
+def reusable(env):
+    """Require owned processes, built artifacts and live dependency/service checks."""
+    artifacts = [STATE / "bin" / name for name in ("runner", "proxy", "registry-proxy")]
+    artifacts += [PYTHON, ROOT / "target/debug/boxlite", ROOT / "target/debug/libboxlite.a",
+                  ROOT / "sdks/node/dist/index.js", ROOT / "sdks/node/node_modules",
+                  ROOT / "apps/node_modules/.bin/ts-node"]
+    if not all(path.exists() for path in artifacts):
+        return False
+    pids = load_pids()
+    for name in ("api", "runner", "proxy", "registry-proxy"):
+        entry = pids.get(name, {})
+        if not entry or not process_matches(entry.get("pid"), entry.get("starttime")):
+            return False
+    try:
+        wait_dependencies(env)
+        for name, health in (("API", "/api/health"), ("RUNNER", "/"),
+                             ("PROXY", "/health"), ("REGISTRY_PROXY", "/health")):
+            wait_http(endpoint(name) + health, 3)
+        return any(row.get("name") == "boxlite-e2e" and row.get("state") == "ready"
+                   for row in request("/admin/runners", env))
+    except (Failure, OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
 def up(env):
     write_files()
+    inputs = input_digest(env)
+    record = STATE / "stack-inputs.json"
+    if read_record(record.name) == inputs and reusable(env):
+        print("[e2e] reusing unchanged healthy stack", flush=True)
+        return
+    record.unlink(missing_ok=True)
     build(env)
     existing = compose_services(env)
     previous = load_pids()
@@ -634,6 +721,7 @@ def up(env):
         host_starting = True
         start(env)
         fixture(env)
+        atomic_json(record, inputs)
     except BaseException:
         # Only resources created by this attempt are unwound. Existing Compose
         # dependencies and volumes are retained, as are logs for diagnosis.
