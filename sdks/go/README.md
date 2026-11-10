@@ -479,6 +479,8 @@ reports; the full archive round-trip remains in the VM integration suite.
 The collector links Rust's instrumented library and matching LLVM profile
 runtime. A coverage-only integration test entry point flushes native counters
 before Go exits, so the report includes the C ABI archive preparation path.
+LLVM collection builds the C library in the collector's Cargo target directory
+before compiling the tagged Go tests.
 
 ## License
 

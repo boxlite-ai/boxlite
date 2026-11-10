@@ -100,7 +100,7 @@ coverage\:go: dev\:go
 
 # Archive preparation does not boot a VM, but the production constructor still
 # requires a supported host. The Linux native-binding job enables KVM first.
-coverage\:go\:checkpoint: dev\:go
+coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
 	@mkdir -p target/coverage
 	@native_tags=boxlite_dev,boxlite_integration; \
 	if [ -n "$$CARGO_LLVM_COV" ]; then native_tags=$$native_tags,boxlite_coverage; fi; \
