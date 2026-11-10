@@ -318,3 +318,7 @@ mod tests {
         let _ = result.leak();
     }
 }
+
+#[cfg(test)]
+#[path = "image_disk_tests.rs"]
+mod permission_tests;
