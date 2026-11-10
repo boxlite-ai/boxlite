@@ -59,6 +59,39 @@ elif args[:2] == ["llvm-cov", "report"]:
 
 
 class NativeCoveragePathsTest(unittest.TestCase):
+    def test_sdk_integration_keeps_native_go_archives_in_the_vm_workflow(self):
+        import json
+
+        suites = COLLECTOR.parents[2] / "make/test.mk"
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            recorder = root / "record-make"
+            recorder.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                'with open(os.environ["SDK_SUITE_LOG"], "a") as log:\n'
+                '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+            )
+            recorder.chmod(0o755)
+            (root / "Makefile").write_text(f"include {suites}\n")
+            log = root / "sdk-suites.jsonl"
+            result = subprocess.run(
+                ["make", "test:integration:sdk", "SETUP_DONE=1", f"MAKE={recorder}"],
+                cwd=root,
+                env={**os.environ, "SDK_SUITE_LOG": str(log)},
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertIn(
+                ["test:integration:go", "SETUP_DONE=1"],
+                calls,
+                "native Go archive tests must run through the VM integration entry point",
+            )
+
     def test_core_coverage_runs_the_no_vm_checkpoint_cli_binary(self):
         import json
 

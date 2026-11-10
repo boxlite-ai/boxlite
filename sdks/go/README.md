@@ -476,8 +476,11 @@ Build from source (requires Rust toolchain):
 # From the project root
 make dev:go
 
-# Run tests
+# Run hosted unit and REST tests
 make test:unit:go
+
+# Run native archive preparation and round-trip tests on a VM-capable host
+make test:integration:go
 ```
 
 Nested-virtualization argument tests always check malformed tokens before native
@@ -489,6 +492,13 @@ Host-independent SDK tests capture ordinary REST requests with empty, enabled
 and invalid local feature ENV; all use server policy without adding a nesting field.
 The Runner-only bridge is separately exercised through Go/C and the native
 managed runtime, preserving authorization and each saved decision without booting a VM.
+
+Native checkpoint archive tests use the production runtime constructor, which
+validates KVM or Hypervisor.framework even when preparation does not start a VM.
+They run in the `boxlite_integration` archive suite through the shared SDK
+integration target and the VM-capable E2E workflow. Their ownership,
+cancellation, late-completion cleanup and native import assertions stay enabled.
+Hosted unit coverage continues to run checkpoint REST and argument tests.
 
 ## License
 

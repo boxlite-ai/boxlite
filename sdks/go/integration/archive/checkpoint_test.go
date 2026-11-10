@@ -1,6 +1,9 @@
-package boxlite
+//go:build boxlite_dev && boxlite_integration
+
+package archive_test
 
 import (
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"archive/tar"
 	"context"
 	"crypto/sha256"
@@ -21,10 +24,10 @@ import (
 )
 
 type checkpointPreparationFixture struct {
-	runtime  *Runtime
+	runtime  *boxlite.Runtime
 	registry *httptest.Server
 	home     string
-	source   CheckpointArchiveSource
+	source   boxlite.CheckpointArchiveSource
 	started  chan struct{}
 	release  chan struct{}
 	once     sync.Once
@@ -77,7 +80,7 @@ func newCheckpointPreparationFixture(t *testing.T) *checkpointPreparationFixture
 	f.registry = server
 	t.Cleanup(func() { f.unblock(); server.Close() })
 	host := strings.TrimPrefix(server.URL, "http://")
-	f.runtime, err = NewRuntime(WithHomeDir(f.home), WithImageRegistry(ImageRegistry{Host: host, Transport: RegistryTransportHTTP}))
+	f.runtime, err = boxlite.NewRuntime(boxlite.WithHomeDir(f.home), boxlite.WithImageRegistry(boxlite.ImageRegistry{Host: host, Transport: boxlite.RegistryTransportHTTP}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +97,7 @@ func checkpointDigest(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func checkpointSourceFixture(t *testing.T, image string) CheckpointArchiveSource {
+func checkpointSourceFixture(t *testing.T, image string) boxlite.CheckpointArchiveSource {
 	t.Helper()
 	// Empty standalone QCOW2 v2: header, refcount table, refcount block and L1
 	// occupy four clusters; no guest data is allocated. This tests the archive
@@ -153,7 +156,7 @@ func checkpointSourceFixture(t *testing.T, image string) CheckpointArchiveSource
 	if err != nil {
 		t.Fatal(err)
 	}
-	return CheckpointArchiveSource{Path: path, SHA256: checkpointDigest(data), PinnedImage: image}
+	return boxlite.CheckpointArchiveSource{Path: path, SHA256: checkpointDigest(data), PinnedImage: image}
 }
 
 func TestCheckpointArchivePreparationLocalCallbackOwnsDerivedArchive(t *testing.T) {
@@ -186,7 +189,7 @@ func TestCheckpointArchivePreparationLocalCallbackOwnsDerivedArchive(t *testing.
 	}
 	t.Cleanup(func() { _ = imported.Close() })
 	accepted, err := f.runtime.GetInfo(ctx, "target")
-	if err != nil || accepted.ID != imported.ID() || accepted.ID == "target" || accepted.Name != "target" || accepted.State != StateStopped || accepted.CPUs != 1 || accepted.MemoryMiB != 128 {
+	if err != nil || accepted.ID != imported.ID() || accepted.ID == "target" || accepted.Name != "target" || accepted.State != boxlite.StateStopped || accepted.CPUs != 1 || accepted.MemoryMiB != 128 {
 		t.Fatalf("native import did not preserve target identity/resources: %#v %v", accepted, err)
 	}
 	if err := prepared.Close(); err != nil {
@@ -290,7 +293,7 @@ func TestCheckpointArchivePreparationCancellationDisposesLateNativeSuccess(t *te
 	assertCheckpointSourceUnchanged(t, f.source)
 }
 
-func assertCheckpointSourceUnchanged(t *testing.T, source CheckpointArchiveSource) {
+func assertCheckpointSourceUnchanged(t *testing.T, source boxlite.CheckpointArchiveSource) {
 	t.Helper()
 	data, err := os.ReadFile(source.Path)
 	if err != nil {

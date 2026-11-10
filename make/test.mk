@@ -239,10 +239,10 @@ test\:unit\:sdk:
 	@echo "── SDK unit suites (python, node, c, go) ──"
 	$(call run_suites,test:unit:python test:unit:node test:unit:c test:unit:go)
 
-# SDK integration suites: Python integration + Node integration + C SDK test suite.
+# SDK integration suites run on the VM-capable E2E runner, including Go archives.
 test\:integration\:sdk:
-	@echo "── SDK integration suites (python, node, c) ──"
-	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c)
+	@echo "── SDK integration suites (python, node, c, go) ──"
+	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c test:integration:go)
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 #
@@ -627,8 +627,8 @@ test\:unit\:go:
 	@$(MAKE) dev:go
 	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
 
-# Go SDK archive round-trip integration test. Intentionally excluded from
-# default test matrices and CI.
+# Native Go archive preparation and round-trip tests require a supported host.
+# Keep them in the VM-capable integration workflow, outside hosted unit coverage.
 test\:integration\:go: dev\:go
 	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
 	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v $(GOTEST_FILTER) ./integration/archive

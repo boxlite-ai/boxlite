@@ -194,7 +194,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            checkpoint_replacements: tokio::sync::Mutex::new(()),
+            checkpoint_operations: tokio::sync::Mutex::new(()),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
