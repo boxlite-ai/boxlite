@@ -293,3 +293,30 @@ test('the deploy group demands only what a deploy cannot run without', () => {
     ],
   )
 })
+
+/*
+ * The expansion switch and its cap are the API's to interpret; the deploy's
+ * whole job is to carry them or not carry them. An absent key is the API's
+ * own default — switch off, cap unset — which is what keeps a stage that
+ * never heard of the feature behaving exactly as it did before it existed.
+ */
+test('the disk-expansion switch travels only where the stage set it', () => {
+  const { environment } = assemble(base)
+  assert.equal('RUNNER_DISK_EXPANSION_ENABLED' in environment, false)
+  assert.equal('RUNNER_DISK_EXPANSION_CAP_GIB' in environment, false)
+
+  const on = assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'true', RUNNER_DISK_EXPANSION_CAP_GIB: '4096' })
+  assert.equal(on.environment.RUNNER_DISK_EXPANSION_ENABLED, 'true')
+  assert.equal(on.environment.RUNNER_DISK_EXPANSION_CAP_GIB, '4096')
+
+  const off = assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'false', RUNNER_DISK_EXPANSION_CAP_GIB: '512' })
+  assert.equal(off.environment.RUNNER_DISK_EXPANSION_ENABLED, 'false')
+  assert.equal(off.environment.RUNNER_DISK_EXPANSION_CAP_GIB, '512')
+})
+
+test('a disk-expansion switch that is neither true nor false is refused at the deploy', () => {
+  // 'True' would pass through and be read as off forever: the API compares
+  // strict equality, so a typo'd switch stays closed with nothing saying why.
+  // Refused here, where the stage can still be told.
+  assert.throws(() => assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'True' }), /must be true or false/)
+})

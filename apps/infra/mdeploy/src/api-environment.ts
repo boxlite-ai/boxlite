@@ -235,6 +235,29 @@ const systemImagesFrom = (environment: Environment): Record<string, string> => {
 }
 
 /**
+ * The online disk-expansion switch and its cap, delivered only when the stage
+ * set them.
+ *
+ * A key absent from the container's environment is the API's own default: the
+ * switch off and the cap unset, which is exactly the behavior of every stage
+ * before this mechanism existed. Delivering `false` unconditionally would
+ * read the same but say more than the stage did — and the cap's absence is
+ * load-bearing, because the controller skips uncapped runners loudly rather
+ * than silently growing disks to wherever the default lands. A value that is
+ * neither true nor false is refused here rather than left for the API to read
+ * as off, which is how a typo'd switch would stay closed forever.
+ */
+const runnerDiskExpansionFrom = (environment: Environment): Record<string, string> => {
+  const enabled = optional(environment, 'RUNNER_DISK_EXPANSION_ENABLED')
+  const cap = optional(environment, 'RUNNER_DISK_EXPANSION_CAP_GIB')
+  if (enabled !== null) flag(environment, 'RUNNER_DISK_EXPANSION_ENABLED')
+  return {
+    ...(enabled ? { RUNNER_DISK_EXPANSION_ENABLED: enabled } : {}),
+    ...(cap ? { RUNNER_DISK_EXPANSION_CAP_GIB: cap } : {}),
+  }
+}
+
+/**
  * The two channels the API reads, assembled from one stage's configuration.
  *
  * `region` is here because the object-storage endpoints are regional and the
@@ -316,6 +339,7 @@ export const apiEnvironmentFrom = ({
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),
+      ...runnerDiskExpansionFrom(environment),
       ...(optional(environment, 'POSTHOG_HOST') ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string } : {}),
       ...(optional(environment, 'SVIX_SERVER_URL')
         ? { SVIX_SERVER_URL: optional(environment, 'SVIX_SERVER_URL') as string }

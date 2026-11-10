@@ -25,12 +25,14 @@ export type AlarmThreshold = {
 }
 
 /**
- * The three things worth waking someone for, and no more.
+ * The five things worth waking someone for, and no more.
  *
  * Deliberately short. An alarm nobody acts on trains people to close the page,
  * and each of these has a different action behind it: the API failing is a
- * rollback, the proxy losing its targets is a networking change, and a runner
- * going unreachable is capacity.
+ * rollback, the proxy losing its targets is a networking change, a runner
+ * going unreachable is capacity, an expansion that cannot complete is the
+ * disk filling behind it, and a runner at critical disk pressure is the same
+ * disk one stage before the expansion could have saved it.
  */
 export type AlarmRequest = {
   /** The control plane answering 5xx at all. */
@@ -39,6 +41,10 @@ export type AlarmRequest = {
   proxyUnhealthyTargets: AlarmThreshold
   /** A registered runner the control plane has stopped hearing from. */
   runnersUnreachable: AlarmThreshold
+  /** Runner data-disk expansions failing — rate limits, refused operations, unconfirmed grows. */
+  runnersDiskExpansionFailing: AlarmThreshold
+  /** A runner at critical data-disk usage, which online expansion must catch before. */
+  runnersDiskPressureCritical: AlarmThreshold
 }
 
 /** What the alarms watch. Handles, so an alarm names the resource it is about. */

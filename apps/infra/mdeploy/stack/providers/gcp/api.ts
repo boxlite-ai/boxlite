@@ -40,6 +40,7 @@ import { CACHE_CA_PATH, CACHE_PASSWORD_VARIABLE, type CacheBinding } from '../..
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import { DATABASE_PASSWORD_VARIABLE, type DatabaseBinding } from '../../database.ts'
 import type { Placement } from '../../network.ts'
+import { runnerDataDiskPrefix } from '../../runners.ts'
 import type { StorageBinding } from '../../storage.ts'
 import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
@@ -126,12 +127,15 @@ const bindingsFor = ({
   capability,
   index,
   project,
+  zone,
   member,
   bucketName,
 }: {
   capability: ApiCapability
   index: number
   project: string
+  /** The zone the runner data disks live in, which the disk grant's prefix names. */
+  zone: string
   member: $util.Output<string>
   bucketName: $util.Output<string>
 }): any[] => {
@@ -216,6 +220,71 @@ const bindingsFor = ({
         }),
       ]
     }
+    case 'resize-runner-disks': {
+      /*
+       * Two custom roles because no predefined role is this narrow: the
+       * narrowest that carries `compute.disks.update` also carries create and
+       * delete, and a runaway resizer's ceiling must be "bigger disk, more
+       * money" and nothing past it. One role for the disks, one for the
+       * operations that confirm them — and the disk role is bounded by a CEL
+       * prefix to this stage's data disks, where the operation role stays
+       * unconditional because an operation is not a Disk resource and a name
+       * prefix matches nothing on it.
+       *
+       * The prefix is derived from the same function the disks are created
+       * under, so the grant and the resources it bounds cannot be spelled a
+       * second time. A prefix that matched nothing would be no grant and no
+       * error — the first resize 403ing hours later, which is the failure this
+       * derivation exists to keep out.
+       */
+      const roleIdFor = (role: string): string => {
+        const id = `${$app.name}_${$app.stage}_${role}`.replace(/[^a-zA-Z0-9_.]/g, '_')
+        if (id.length > 64) throw new Error(`The custom role id "${id}" is ${id.length} characters and the limit is 64`)
+        return id
+      }
+      /*
+       * No `protect`, on purpose, matching the registry credential roles —
+       * the other custom roles the API holds, and the closest thing to a
+       * precedent for these. A role holds no state: if it is deleted out of
+       * band, the next deploy recreates it from this declaration; what
+       * `protect` would add is a refusal when a deploy itself deletes one
+       * (a rename, say), and that window — the binding dangling until the
+       * role exists again, the first resize 403ing — is one the registry
+       * roles have lived with since they shipped, now watched by an alarm
+       * rather than a deletion guard.
+       */
+      const resizer = new gcp.projects.IAMCustomRole(`ApiCapability${index}DiskResizerRole`, {
+        project,
+        roleId: roleIdFor('runner_disk_resizer'),
+        title: `Grow runner data disks (${$app.stage})`,
+        permissions: ['compute.disks.get', 'compute.disks.update'],
+      })
+      const operations = new gcp.projects.IAMCustomRole(`ApiCapability${index}DiskOperationReaderRole`, {
+        project,
+        roleId: roleIdFor('runner_disk_operation_reader'),
+        title: `Read runner disk operations (${$app.stage})`,
+        permissions: ['compute.zoneOperations.get'],
+      })
+      return [
+        resizer,
+        operations,
+        new gcp.projects.IAMMember(`ApiCapability${index}DiskResize`, {
+          project,
+          role: resizer.name,
+          member: principal,
+          condition: {
+            title: 'runner-data-disks-only',
+            description: `Disks named ${runnerDataDiskPrefix({ app: $app.name, stage: $app.stage })}*`,
+            expression: `resource.type == "compute.googleapis.com/Disk" && resource.name.startsWith("projects/${project}/zones/${zone}/disks/${runnerDataDiskPrefix({ app: $app.name, stage: $app.stage })}")`,
+          },
+        }),
+        new gcp.projects.IAMMember(`ApiCapability${index}DiskOperations`, {
+          project,
+          role: operations.name,
+          member: principal,
+        }),
+      ]
+    }
   }
 }
 
@@ -224,6 +293,7 @@ export const gcpApiProvider =
     dependencies,
     project,
     region,
+    zone,
     domain,
     dashboardDomain,
     callers,
@@ -234,6 +304,8 @@ export const gcpApiProvider =
     dependencies: ApiDependencies
     project: string
     region: string
+    /** The zone the runner data disks live in, which the disk grant is bounded to. */
+    zone: string
     /** The stage's own domain. `api.<domain>` is where this answers. */
     domain: string
     /** Where the dashboard is served, or null for the stage domain itself. */
@@ -459,7 +531,14 @@ export const gcpApiProvider =
     })
 
     const granted = request.capabilities.flatMap((capability, index) =>
-      bindingsFor({ capability, index, project, member: placement.serviceAccount, bucketName: dependencies.storage.name }),
+      bindingsFor({
+        capability,
+        index,
+        project,
+        zone,
+        member: placement.serviceAccount,
+        bucketName: dependencies.storage.name,
+      }),
     )
 
     /*

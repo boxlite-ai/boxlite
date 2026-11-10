@@ -36,7 +36,7 @@ import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
-import type { RunnerBinary, RunnerSlot } from './runners.ts'
+import { runnerDataDiskNameFor, type RunnerBinary, type RunnerSlot } from './runners.ts'
 
 /** Stable X.Y.Z, optionally carrying the commit a build was produced from. */
 const BINARY_IDENTITY = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(\+[0-9a-f]{40})?$/
@@ -57,6 +57,17 @@ const UNIT_ENV_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/?$/
 const VOLUME_BACKEND = /^[a-z0-9]+$/
 /** A registry proxy's host, a name and perhaps a port, as this module will spell it. */
 const REGISTRY_PROXY_HOST = /^[a-z0-9.-]+(:\d{1,5})?$/
+/** A GCP project id, as the unit environment will spell it. */
+const GCP_PROJECT = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/
+/** A zone: a region and its letter, as the unit environment will spell it. */
+const GCP_ZONE = /^[a-z]+-[a-z]+[0-9]+-[a-z]$/
+/**
+ * An instance or disk name, in GCE's own charset: lowercase letters, digits and
+ * hyphens, beginning with a letter and ending with a letter or digit — nothing
+ * a shell reads as anything but itself, and no glob character a `case` pattern
+ * would read as a wildcard rather than a name.
+ */
+const GCE_NAME = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/
 
 export class RunnerUpgradeError extends Error {
   constructor(message: string) {
@@ -305,6 +316,61 @@ const assertUnitEnvironment = ({
   }
 }
 
+/**
+ * The identity of the fleet's data disks, as the control plane's online resize
+ * needs it named on the host: the project and zone the disks live in, and every
+ * host of the fleet — from which each host's own disk name follows by the one
+ * rule the disks were created under, `runnerDataDiskNameFor`, so the pairing
+ * between a host and a disk cannot be spelled a second time here.
+ *
+ * Carried as one object because the runner reports the three as one
+ * `dataDiskRef` and omits the whole field when any part is missing: a host is
+ * handed the identity in full or not at all, and never half of one.
+ */
+export type RunnerDataDiskIdentity = {
+  project: string
+  zone: string
+  /** The stack's own names, which the disk-naming rule is derived from. */
+  app: string
+  stage: string
+  /** Every host of the fleet, by its instance name. */
+  hosts: readonly string[]
+}
+
+/**
+ * The data-disk identity, checked wherever it is given.
+ *
+ * The project, the zone and every disk name reach the same two places the
+ * addresses do — a single-quoted assignment and an awk invocation that run as
+ * root — and the host names reach a `case` pattern as well, where a glob
+ * character would not be a name that never matches but a pattern that matches
+ * more than its own row.
+ */
+const assertDataDiskIdentity = ({ project, zone, hosts }: RunnerDataDiskIdentity): void => {
+  if (!GCP_PROJECT.test(project)) {
+    throw new RunnerUpgradeError(
+      `the data disks' project reaches a single-quoted assignment and an awk invocation that run as root; ` +
+        `got ${JSON.stringify(project)}`,
+    )
+  }
+  if (!GCP_ZONE.test(zone)) {
+    throw new RunnerUpgradeError(`the data disks' zone reaches the same two places; got ${JSON.stringify(zone)}`)
+  }
+  if (hosts.length === 0) {
+    throw new RunnerUpgradeError('the data-disk identity names no hosts; a fleet runs at least one runner')
+  }
+  const seen = new Set<string>()
+  for (const host of hosts) {
+    if (!GCE_NAME.test(host)) {
+      throw new RunnerUpgradeError(`a runner host reaches a case pattern a root shell runs; got ${JSON.stringify(host)}`)
+    }
+    if (seen.has(host)) {
+      throw new RunnerUpgradeError(`${host} names two hosts of the fleet; a case cannot tell them apart`)
+    }
+    seen.add(host)
+  }
+}
+
 /** What the host is and how to ask what it is serving. Both scripts open with it. */
 const preamble = (target: UpgradeTarget): string => `set -euo pipefail
 echo "${ON_HOST}"
@@ -484,8 +550,19 @@ export const unitEnvironmentBlock = ({
   otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): string => {
+  dataDiskIdentity = null,
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & {
+  apiUrl: string
+  /**
+   * The fleet's data-disk identity, or null where the cloud's runners keep box
+   * state on the root disk and have no disk to name. Only the GCP policy names
+   * one: the transports that carry a whole host payload read no stage
+   * environment, so a host payload has nothing to select the row with.
+   */
+  dataDiskIdentity?: RunnerDataDiskIdentity | null
+}): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
+  if (dataDiskIdentity) assertDataDiskIdentity(dataDiskIdentity)
   // An array, so an optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, a caller that supplied no collector has no
   // endpoint to enforce, and a stage without a registry proxy has no host to
@@ -497,6 +574,7 @@ export const unitEnvironmentBlock = ({
     ...(otlpUrl ? [`'OTEL_EXPORTER_OTLP_ENDPOINT=${otlpUrl}'`] : []),
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
     ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
+    ...(dataDiskIdentity ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`] : []),
   ].join(' ')
   /*
    * Prefixed names, because this block is concatenated after the binary half,
@@ -510,9 +588,37 @@ export const unitEnvironmentBlock = ({
    * that variable anywhere — an OS policy and an SSM command each start from a
    * clean environment, so the default is what every host uses.
    */
+  /*
+   * This host's own data disk, named by the one rule the disks were created
+   * under. Selected by the host's own name — the metadata server's, overridable
+   * so a test can be a host — because one policy serves a batch and the table
+   * below holds the whole fleet: the row a host reads is the row that says
+   * which disk it may report, and a host reading another row would point the
+   * control plane at another host's disk. A name the table does not hold is
+   * refused rather than defaulted, so the policy reports it instead of a
+   * runner quietly reporting no disk at all.
+   */
+  const dataDisk = dataDiskIdentity
+    ? `
+UNIT_HOST_NAME="\${BOXLITE_RUNNER_HOST_NAME:-$(curl -fsS -H "Metadata-Flavor: Google" --max-time 5 http://metadata.google.internal/computeMetadata/v1/instance/name)}"
+case "$UNIT_HOST_NAME" in
+${dataDiskIdentity.hosts
+  .map(
+    (host) =>
+      `  ${host}) runner_data_disk='${runnerDataDiskNameFor({ app: dataDiskIdentity.app, stage: dataDiskIdentity.stage, host })}' ;;`,
+  )
+  .join('\n')}
+  *)
+    echo "FATAL: $UNIT_HOST_NAME is not one of this stage's runner hosts; refusing to name a data disk" >&2
+    exit 1
+    ;;
+esac
+UNIT_ENV_EXPECTED+=("RUNNER_DATA_DISK_NAME=$runner_data_disk")
+`
+    : ''
   return `UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"
 UNIT_ENV_EXPECTED=(${expected})
-
+${dataDisk}
 unit_environment_matches() {
   local line
   for line in "\${UNIT_ENV_EXPECTED[@]}"; do
@@ -603,11 +709,14 @@ export const renderUnitEnvironmentPolicyScripts = ({
   otlpUrl,
   volumeBackend,
   registryProxyHost,
+  dataDiskIdentity = null,
 }: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & {
   apiUrl: string
+  /** See `unitEnvironmentBlock`. The GCP policy names one; nothing else does. */
+  dataDiskIdentity?: RunnerDataDiskIdentity | null
 }): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })}`
+${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, dataDiskIdentity })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi

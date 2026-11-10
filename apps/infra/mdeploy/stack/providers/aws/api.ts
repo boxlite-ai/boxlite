@@ -93,6 +93,11 @@ const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
       // and the stack only asks for this where one is active. Reaching here
       // means that changed without anyone deciding what the grant is.
       throw new Error(`AWS keeps no registry credential store, but was handed one on ${capability.store.binding.cloud}`)
+    case 'resize-runner-disks':
+      // This cloud's runners keep box state on the root disk; there is no
+      // per-host data disk to grow. Reaching here means the stack was composed
+      // for a capability whose cloud has nothing to bound it to.
+      throw new Error('AWS keeps no per-runner data disk, so there is nothing to resize')
   }
 }
 

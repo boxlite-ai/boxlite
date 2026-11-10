@@ -60,6 +60,10 @@ and stays reachable, with the runner stopped: `systemctl status var-lib-boxlite.
 `/var/log/runner-setup.log` when the boot script refused a disk that was missing, not blank, or would hide data.
 A deploy sets size and performance only at creation and never
 changes them back, so grow the disk online; the disk is protected, so a deploy that would replace it fails.
+Each host's unit environment names its own disk — `GCP_PROJECT_ID`, `GCP_ZONE` and `RUNNER_DATA_DISK_NAME`, converged by
+the same OS policy as the rest of the unit environment, each host reading its own row of the fleet table — which is what the
+control plane reads to grow the disk online without a deploy. The resize grant is the API's alone, bounded to this stage's
+data-disk prefix in this zone.
 The attachment is fixed at creation too: a host that existed before its disk does not get it attached,
 and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
 would carry the ignored attachment over.

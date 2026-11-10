@@ -32,8 +32,9 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 - Database/cache use private connectivity. API and collector have different ClickHouse reader/writer credentials.
 - Volume access uses scoped temporary credentials and bucket-prefix permissions; stage naming alone does not isolate every volume bucket.
 - Registry passwords sit in Secret Manager under `registry-credential-*`. The API holds two custom roles: create a secret, and add or destroy versions under that prefix. It cannot read a password back. The required project isolation separates these stage-independent prefixes.
+- Growing runner data disks online needs two more custom roles, both held by the API alone: grow and read this stage's data disks (`<app>-<stage>-runner-data*`, bounded by a CEL prefix in the runner's own zone), and read the zone operations that confirm a grow. No delete, no create, no attach — the worst case stays "a bigger disk costs more", and a runner holds none of it.
 
 
 Runner updates converge through [OS Config](runners.md); host protection does not establish rollout health.
 
-Sources: [bootstrap roles](../../bootstrap/gcp.ts), [runtime identities and firewall rules](../../mdeploy/stack/providers/gcp/network.ts), [registry credential roles](../../mdeploy/stack/providers/gcp/registry-credentials.ts).
+Sources: [bootstrap roles](../../bootstrap/gcp.ts), [runtime identities and firewall rules](../../mdeploy/stack/providers/gcp/network.ts), [registry credential roles](../../mdeploy/stack/providers/gcp/registry-credentials.ts), [disk resize grants](../../mdeploy/stack/providers/gcp/api.ts).

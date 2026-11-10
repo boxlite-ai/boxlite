@@ -43,6 +43,8 @@ const config: DeployConfig = parseDeployConfig(
       apiServerErrors: { threshold: 1, periods: 1 },
       proxyUnhealthyTargets: { threshold: 1, periods: 2 },
       runnersUnreachable: { threshold: 1, periods: 3 },
+      runnersDiskExpansionFailing: { threshold: 3, periods: 1 },
+      runnersDiskPressureCritical: { threshold: 1, periods: 2 },
     },
   }),
 )
@@ -144,11 +146,13 @@ const bundle = ({
   registryCredentials = true,
   registryProxy = true,
   servesUserDomain = true,
+  resizeRunnerDisks = true,
 }: {
   clickhouse?: boolean
   registryCredentials?: boolean
   registryProxy?: boolean
   servesUserDomain?: boolean
+  resizeRunnerDisks?: boolean
 } = {}) => {
   const seen: Record<string, any> = {}
   const order: string[] = []
@@ -225,6 +229,7 @@ const bundle = ({
     edge: (input: any) => (request: any) =>
       record('edge', { input, request, url: out('https://box.dev.boxlite.ai'), metricTarget: out('net/proxy/1'), ready: ['edge'] }),
     servesUserDomain: () => servesUserDomain,
+    resizeRunnerDisks: () => resizeRunnerDisks,
     registryProxy: (input: any) => (request: any) =>
       record(
         'registryProxy',
@@ -552,10 +557,22 @@ test('the API is granted exactly the capabilities its storage supports', () => {
       'list-own-bucket',
       'manage-volume-buckets',
       'read-telemetry',
+      'resize-runner-disks',
       'vend-volume-credentials',
       'write-registry-credentials',
     ],
   )
+})
+
+test('the API is granted the disk resize only where a data disk exists to grow', () => {
+  // The AWS-shaped bundle keeps no per-runner data disk, and its provider
+  // refuses the capability outright — so the grant must be asked for and not
+  // assumed. A grant bounded to resources the cloud never creates would be a
+  // permission that silently matched nothing.
+  const { providers, seen } = bundle({ resizeRunnerDisks: false })
+  deployStack({ providers, config, inputs: inputs() })
+  const kinds = seen.api.request.capabilities.map((capability: any) => capability.kind)
+  assert.equal(kinds.includes('resize-runner-disks'), false)
 })
 
 test('the API writes registry passwords only where a store keeps them, and is told which store', () => {
