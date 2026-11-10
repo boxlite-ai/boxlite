@@ -315,7 +315,13 @@ export class VolumeService {
     }
 
     try {
-      const volumeIds = event.box.volumes.map((vol) => vol.volumeId)
+      // Filestore volumes carry an instance name, not a volumeId; they have
+      // no volume row here to timestamp, so only managed volumes are sent to
+      // the id lookup (an undefined in the In() list would break the query).
+      const volumeIds = event.box.volumes.filter((vol) => vol.volumeId).map((vol) => vol.volumeId)
+      if (!volumeIds.length) {
+        return
+      }
       const volumes = await this.volumeRepository.find({ where: { id: In(volumeIds) } })
 
       const results = await Promise.allSettled(

@@ -208,7 +208,7 @@ export class BoxliteBoxController {
   private assertCanAttachVolumes(authContext: OrganizationAuthContext): void {
     const required = [OrganizationResourcePermission.READ_VOLUMES, OrganizationResourcePermission.WRITE_VOLUMES]
     if (!hasOrganizationResourcePermissions(authContext, required)) {
-      throw new ForbiddenException(`Attaching a managed volume requires: ${required.join(', ')}`)
+      throw new ForbiddenException(`Attaching a volume requires: ${required.join(', ')}`)
     }
   }
 

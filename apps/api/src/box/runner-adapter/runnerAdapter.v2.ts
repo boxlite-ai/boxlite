@@ -156,6 +156,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
         subpath: volume.subpath,
+        ...(volume.filestore ? { filestore: volume.filestore } : {}),
       })),
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,

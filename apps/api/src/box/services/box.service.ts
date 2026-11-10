@@ -285,13 +285,22 @@ export class BoxService {
       const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
-        const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        const canonical = await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+        // Filestore volumes reference a runner-side instance by name and have
+        // no volume entity here, so only managed-volume selectors go through
+        // entity validation and resolution.
+        const managedSelectors = createBoxDto.volumes.filter((v) => !v.filestore).map((v) => v.volumeId)
+        const canonical = await this.volumeService.validateVolumes(organization.id, managedSelectors)
         // Replace the caller's selector with the id it resolved to inside this
         // organization. A name is only unique per organization, but everything
         // downstream (the runner, the `boxlite-volume-<id>` bucket) reads this
         // field as a global id - see VolumeService.validateVolumes.
         createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
+          if (volume.filestore) {
+            // Instance existence is deliberately not checked here: the
+            // runner's registry is the source of truth, and the mount fails
+            // loudly there on an unknown name.
+            return volume
+          }
           const canonicalId = canonical.get(volume.volumeId)
           if (!canonicalId) {
             // validateVolumes keys every selector or throws, so this is

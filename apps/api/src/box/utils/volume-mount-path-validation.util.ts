@@ -7,7 +7,13 @@
 import { BoxVolume } from '../dto/box.dto'
 
 /**
- * Validates mount paths for box volumes to ensure they are safe and valid
+ * Validates mount paths for box volumes to ensure they are safe and valid.
+ *
+ * Backend-agnostic by construction: every volume reference carries mountPath
+ * at the top level (managed volumes and filestore volumes alike), so this
+ * needs no per-backend branch and filestore volumes get the same rules for
+ * free.
+ *
  * @param volumes - Array of BoxVolume objects to validate
  * @throws Error with descriptive message if any mount path is invalid
  */

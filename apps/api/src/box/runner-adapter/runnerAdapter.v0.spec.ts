@@ -146,6 +146,40 @@ describe('RunnerAdapterV0 recoverBox', () => {
   })
 })
 
+// A filestore volume needs runner-side NFS mount support that only the v2
+// protocol carries. Failing loudly is the point: silently dropping the
+// reference would create a box whose volume never mounts. Both the create and
+// the recover path must refuse before anything reaches the wire.
+describe('RunnerAdapterV0 filestore volumes', () => {
+  const filestoreBox = {
+    id: 'box-1',
+    image: 'base',
+    volumes: [{ volumeId: undefined, mountPath: '/scratch', filestore: { instance: 'ml-scratch' } }],
+  } as any
+
+  it('rejects createBox for a box referencing a Filestore volume', async () => {
+    const adapter = new RunnerAdapterV0()
+    await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await expect(adapter.createBox(filestoreBox, 'base')).rejects.toThrow(/Filestore volume.*requires a v2 runner/)
+
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('rejects recoverBox for a box referencing a Filestore volume', async () => {
+    const adapter = new RunnerAdapterV0()
+    await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { recover }
+
+    await expect(adapter.recoverBox(filestoreBox)).rejects.toThrow(/Filestore volume.*requires a v2 runner/)
+
+    expect(recover).not.toHaveBeenCalled()
+  })
+})
+
 describe('RunnerAdapterV0 privilege support', () => {
   it.each([undefined, false])(
     'rejects privileged create and recovery when runner support is %s',
