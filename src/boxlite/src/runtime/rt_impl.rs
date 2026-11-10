@@ -2931,12 +2931,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_recovery_marks_unverified_live_shim_running() {
-        use std::os::unix::process::CommandExt;
-
         let (runtime, _dir) = create_test_runtime();
 
+        // Legacy recovery checks liveness, not argv[0]. Keep the real name
+        // so multicall coreutils can select its sleep applet.
         let mut child = std::process::Command::new("sleep")
-            .arg0("boxlite-shim")
             .arg("300")
             .spawn()
             .expect("Failed to spawn legacy shim process");
