@@ -126,7 +126,7 @@ coverage\:node\:integration: dev\:node _local-registry
 	@cd sdks/node && $(WITH_LOCAL_REGISTRY) npm run test:all -- --coverage $(VITEST_FILTER)
 
 coverage\:api: _ensure-apps-deps
-	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(TEST_FILES),--runInBand --passWithNoTests=false --testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 # Add VM integration coverage to the unit profiles instead of erasing them.
 # Run coverage:lcov first for a combined report; BOXLITE_DEPS_STUB must be unset.

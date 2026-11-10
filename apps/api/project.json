@@ -98,6 +98,14 @@
         "default",
         "^default",
         { "env": "DB_HOST" },
+        { "env": "DB_PORT" },
+        { "env": "DB_USERNAME" },
+        { "env": "DB_PASSWORD" },
+        { "env": "DB_DATABASE" },
+        { "env": "REDIS_HOST" },
+        { "env": "REDIS_PORT" },
+        { "env": "REDIS_USERNAME" },
+        { "env": "REDIS_PASSWORD" },
         { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" }
       ],
       "options": {

@@ -735,12 +735,18 @@ export class BoxService {
     return boxes
   }
 
-  async findOneByIdOrName(boxIdOrName: string, organizationId?: string, returnDestroyed?: boolean): Promise<Box> {
+  async findOneByIdOrName(
+    boxIdOrName: string,
+    organizationId?: string,
+    returnDestroyed?: boolean,
+    lockTimeoutMs?: number,
+  ): Promise<Box> {
     const stateFilter = returnDestroyed ? {} : { state: Not(BoxState.DESTROYED) }
     const organizationFilter = organizationId ? { organizationId } : {}
 
     // Public Box ID is the primary key. Name remains a user-facing fallback within an organization.
     let box = await this.boxRepository.findOne({
+      lockTimeoutMs,
       where: {
         id: boxIdOrName,
         ...organizationFilter,
@@ -754,6 +760,7 @@ export class BoxService {
 
     if (!box) {
       box = await this.boxRepository.findOne({
+        lockTimeoutMs,
         where: {
           name: boxIdOrName,
           ...organizationFilter,
@@ -966,7 +973,7 @@ export class BoxService {
   }
 
   async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId, undefined, ctx.lockTimeoutMs)
 
     this.assertBoxNotErrored(box)
 
@@ -989,7 +996,8 @@ export class BoxService {
 
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { pending: false, state: box.state },
+      whereCondition: { pending: false, state: box.state, organizationId: box.organizationId },
+      lockTimeoutMs: ctx.lockTimeoutMs,
     })
 
     recordBoxRequested('box.stop', updatedBox.id, ctx)

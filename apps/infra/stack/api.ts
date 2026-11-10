@@ -349,14 +349,8 @@ export function buildApi(input: ApiInputs) {
           // usage export. Admission calls BILLING_API_URL's plan routes directly;
           // the usage publisher needs a different base path on the same service.
           //
-          // The same signal and the same service as BILLING_API_URL, but
-          // deliberately not the same value: the publisher appends
-          // /internal/usage-events, which Commerce serves off its bare origin
-          // because that route authenticates a service rather than a user and
-          // so sits outside its /api/billing prefix. Sending BILLING_API_URL's
-          // value here would 404 every batch — which is why this derives the
-          // origin from it rather than taking a second setting that could be
-          // pointed somewhere else.
+          // An explicit server-side base may use a separate host or path prefix.
+          // Otherwise use BILLING_API_URL's origin; clients append internal routes.
           USAGE_EXPORT_URL: envOr('USAGE_EXPORT_URL', new URL(process.env.BILLING_API_URL).origin),
           USAGE_EXPORT_TOKEN: usageExportToken.value,
           // Export enablement is derived from the credential rather than set
