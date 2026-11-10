@@ -194,6 +194,17 @@ export class CheckpointService {
         }))
       )
         throw new ConflictException('Checkpoint is being created or used by a Box operation')
+      if (
+        await manager
+          .getRepository(CheckpointOperation)
+          .createQueryBuilder('operation')
+          .innerJoin(Box, 'target', 'target.id = operation."boxId"')
+          .where('operation."checkpointId" = :checkpointId', { checkpointId: checkpoint.id })
+          .andWhere('operation.state = :cancelled', { cancelled: 'cancelled' })
+          .andWhere('target.state <> :destroyed', { destroyed: BoxState.DESTROYED })
+          .getExists()
+      )
+        throw new ConflictException('Checkpoint target destruction is still pending; retry deletion')
       checkpoint.state = 'deleting'
       return manager.save(Checkpoint, checkpoint)
     })

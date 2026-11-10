@@ -203,6 +203,9 @@ destruction, preventing delayed imports from recreating it. An already absent
 native target counts as successful destruction.
 Cancelled checkpoint targets remain eligible for destruction retries even in
 `error`; retention cleanup keeps their rows until native deletion is confirmed.
+Checkpoint deletion, including force, rejects cancelled targets that have not
+reached `destroyed`, before deleting any archive or operation marker. This keeps
+both periodic destruction retries and retention protection active.
 Export completion commits the upload job before notifying the runner's Redis
 queue. If notification fails, the durable job remains available to polling.
 

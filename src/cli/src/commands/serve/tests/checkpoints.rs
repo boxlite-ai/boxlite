@@ -2,6 +2,7 @@
 //! verified separately by boxlite::runtime::checkpoints tests without a VM.
 
 use super::*;
+use axum::extract::Path;
 use serde_json::json;
 
 fn remote_box(id: &str) -> serde_json::Value {
@@ -15,6 +16,104 @@ async fn backend(router: Router) -> (String, tokio::task::JoinHandle<()>) {
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     (format!("http://{address}"), server)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_capture_keeps_box_reads_live_while_policy_publication_waits() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let capture_started = started.clone();
+    let capture_release = release.clone();
+    let (backend_url, backend_server) = backend(
+        Router::new()
+            .route(
+                "/v1/boxes/{key}",
+                get(|Path(key): Path<String>| async move { Json(remote_box(&key)) }),
+            )
+            .route(
+                "/v1/checkpoints",
+                post(move || {
+                    let started = capture_started.clone();
+                    let release = capture_release.clone();
+                    async move {
+                        started.notify_one();
+                        release.notified().await;
+                        Json(
+                            json!({"id":"checkpoint-1","name":"base","source_box_id":"original",
+                            "created_at":"2026-01-01T00:00:00Z","size_bytes":4096,"state":"ready"}),
+                        )
+                    }
+                }),
+            ),
+    )
+    .await;
+    let temporary = tempfile::tempdir().unwrap();
+    let mut state = state(&temporary);
+    Arc::get_mut(&mut state).unwrap().runtime =
+        BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(backend_url)).unwrap();
+    let (url, server) = serve_router(state.clone()).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let capture_client = client.clone();
+    let capture_url = url.clone();
+    let capture = tokio::spawn(async move {
+        capture_client
+            .post(format!("{capture_url}/v1/checkpoints"))
+            .bearer_auth("checkpoint-key")
+            .json(&json!({"source_box_id":"original"}))
+            .send()
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .expect("capture must reach the blocked backend");
+    let policy_entered = Arc::new(tokio::sync::Notify::new());
+    let writer_entered = policy_entered.clone();
+    let writer_state = state.clone();
+    let publication = tokio::spawn(async move {
+        writer_entered.notify_one();
+        writer_state
+            .set_lifecycle(
+                "original",
+                LifecyclePolicy {
+                    auto_stop: 60,
+                    auto_delete: 0,
+                },
+            )
+            .await;
+    });
+    policy_entered.notified().await;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        client
+            .get(format!("{url}/v1/boxes/unrelated"))
+            .bearer_auth("checkpoint-key")
+            .send(),
+    )
+    .await;
+    let publication_waited = !publication.is_finished();
+    release.notify_one();
+    let captured = tokio::time::timeout(std::time::Duration::from_secs(5), capture)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), publication)
+        .await
+        .unwrap()
+        .unwrap();
+    server.abort();
+    backend_server.abort();
+    assert!(
+        publication_waited,
+        "a deadline policy was published during capture"
+    );
+    assert_eq!(captured.status(), StatusCode::CREATED);
+    assert!(
+        response.is_ok(),
+        "a queued policy writer blocked unrelated box metadata during capture"
+    );
+    assert_eq!(response.unwrap().unwrap().status(), StatusCode::OK);
+    assert_eq!(state.lifecycle_of("original").await.auto_stop, 60);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -221,7 +320,7 @@ fn state(temporary: &tempfile::TempDir) -> Arc<AppState> {
         executions: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
         api_key: Some("checkpoint-key".into()),
-        checkpoint_replacements: tokio::sync::Mutex::new(()),
+        checkpoint_operations: tokio::sync::Mutex::new(()),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
     })

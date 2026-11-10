@@ -833,7 +833,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect((await images.findOneByOrFail({ id: image.id })).deletedAt).toBeInstanceOf(Date)
   })
 
-  it('fences import callbacks and releases checkpoint use when the target is explicitly deleted', async () => {
+  it('fences import callbacks and retains checkpoint use until native target destruction', async () => {
     const checkpoint = await readyCheckpoint()
     const created = await recovery
       .createBox(organization, checkpoint.id, 'cancelled-target', undefined)
@@ -862,6 +862,12 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
       state: 'cancelled',
     })
+    await expect(service.remove(organizationId, checkpoint.id)).rejects.toMatchObject({ status: 409 })
+    expect(archiveStore.remove).not.toHaveBeenCalled()
+    expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
+      state: 'cancelled',
+    })
+    await boxes.update(created.id, { state: BoxState.DESTROYED })
     await service.remove(organizationId, checkpoint.id)
     expect(await checkpoints.count()).toBe(0)
   })
@@ -870,6 +876,8 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const checkpoint = await readyCheckpoint()
     const target = await recovery.createBox(organization, checkpoint.id, 'delete-reconcile', undefined)
     await lifecycleService().destroy(target.id, organizationId, Context.user())
+    await expect(service.remove(organizationId, checkpoint.id)).rejects.toMatchObject({ status: 409 })
+    expect(archiveStore.remove).not.toHaveBeenCalled()
     let destroyed: () => void
     const attempted = new Promise<void>((resolve) => {
       destroyed = resolve
@@ -912,6 +920,8 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const checkpoint = await readyCheckpoint()
     const target = await recovery.createBox(organization, checkpoint.id, 'delete-retained', undefined)
     await lifecycleService().destroy(target.id, organizationId, Context.user())
+    await expect(service.remove(organizationId, checkpoint.id, true)).rejects.toMatchObject({ status: 409 })
+    expect(archiveStore.remove).not.toHaveBeenCalled()
     const ordinary = await source('ordinary-error')
     const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
     await boxes.update(target.id, { updatedAt: old })

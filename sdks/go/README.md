@@ -459,9 +459,19 @@ Build from source (requires Rust toolchain):
 # From the project root
 make dev:go
 
-# Run tests
-cd sdks/go && go test -tags boxlite_dev -v ./...
+# Run hosted unit and REST tests
+make test:unit:go
+
+# Run native archive preparation and round-trip tests on a VM-capable host
+make test:integration:go
 ```
+
+Native checkpoint archive tests use the production runtime constructor, which
+validates KVM or Hypervisor.framework even when preparation does not start a VM.
+They run in the `boxlite_integration` archive suite through the shared SDK
+integration target and the VM-capable E2E workflow. Their ownership,
+cancellation, late-completion cleanup and native import assertions stay enabled.
+Hosted unit coverage continues to run checkpoint REST and argument tests.
 
 ## License
 

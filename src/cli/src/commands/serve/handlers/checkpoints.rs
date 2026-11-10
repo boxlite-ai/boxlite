@@ -40,13 +40,10 @@ pub(in crate::commands::serve) async fn create(
         }
         Err(error) => return error_from_boxlite(&error),
     };
-    // Local archives cannot encode serve's in-memory deadlines. Keep the read
-    // guard through capture so a concurrent policy update cannot bypass this check.
-    let policies = state.lifecycle.read().await;
-    if policies
-        .get(&source)
-        .is_some_and(|policy| !policy.is_empty())
-    {
+    // Deadline publication uses the same operation lock. The lifecycle map is
+    // read only for admission, so a pending writer cannot block metadata reads.
+    let _checkpoint_operation = state.checkpoint_operations.lock().await;
+    if !state.lifecycle_of(&source).await.is_empty() {
         return invalid_request("Disable auto_stop and auto_delete before capturing a local checkpoint; their deadlines cannot be preserved in the archive".into());
     }
     match state
@@ -138,7 +135,7 @@ pub(in crate::commands::serve) async fn import_box(
     };
     // A second named replacement must resolve the result of the first one,
     // otherwise it evicts the original ID while leaving the intermediate handle.
-    let _replacement = state.checkpoint_replacements.lock().await;
+    let _replacement = state.checkpoint_operations.lock().await;
     let old_id = match state.runtime.get_info(&target).await {
         Ok(info) => info.map(|info| info.id.to_string()),
         Err(error) => return error_from_boxlite(&error),
