@@ -139,8 +139,8 @@ export class OidcConfig {
 @ApiExtraModels(Announcement)
 @ApiSchema({ name: 'BoxliteConfiguration' })
 export class ConfigurationDto {
-  @ApiProperty({ type: TurnstileConfig })
-  turnstile: TurnstileConfig
+  @ApiPropertyOptional({ type: TurnstileConfig })
+  turnstile?: TurnstileConfig
 
   @ApiProperty({
     description: 'BoxLite version',
@@ -236,9 +236,9 @@ export class ConfigurationDto {
   rateLimit?: RateLimitConfig
 
   constructor(configService: TypedConfigService, options: { endSessionState: EndSessionState }) {
-    this.turnstile = {
-      sitekey: configService.getOrThrow('turnstile.sitekey'),
-      action: configService.getOrThrow('turnstile.action'),
+    const turnstile = configService.get('turnstile')
+    if (turnstile) {
+      this.turnstile = { sitekey: turnstile.sitekey, action: turnstile.action }
     }
     this.version = configService.getOrThrow('version')
 

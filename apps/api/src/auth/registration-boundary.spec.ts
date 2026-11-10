@@ -17,6 +17,7 @@ describe('Registration access boundary', () => {
     const strategy = new JwtStrategy(
       { issuer: 'https://issuer.test', audience: 'api', jwksUri: 'https://issuer.test/jwks' },
       users as never,
+      { get: () => ({ sitekey: 'configured' }) } as never,
       { recordFirstUse: jest.fn() } as never,
     )
     await expect(

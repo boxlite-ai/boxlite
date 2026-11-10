@@ -5131,7 +5131,6 @@ components:
       - maintananceMode
       - oidc
       - proxyTemplateUrl
-      - turnstile
       - version
       type: object
     CreateApiKey:

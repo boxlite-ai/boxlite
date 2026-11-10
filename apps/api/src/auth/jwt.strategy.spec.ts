@@ -9,8 +9,9 @@ import * as jose from 'jose'
 import { JwtStrategy } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { LoginEventRecorder } from './login-event.recorder'
+import { Context } from '../common/context/context'
 
-function buildStrategy() {
+function buildStrategy(protectedRegistration = true) {
   const createdUser = { id: 'user-1', role: 'user', email: 'new@boxlite.dev' }
 
   const userService = {
@@ -24,6 +25,7 @@ function buildStrategy() {
   const strategy = new JwtStrategy(
     { jwksUri: 'https://example.com/.well-known/jwks.json', audience: 'aud', issuer: 'iss' },
     userService,
+    { get: () => (protectedRegistration ? { sitekey: 'configured' } : undefined), getOrThrow: () => 'us' } as never,
     loginEvents,
   )
 
@@ -46,16 +48,17 @@ describe('JwtStrategy.validate — local account access', () => {
     },
   )
 
-  it('hands the resolved user and the token claims to the login recorder', async () => {
-    const { strategy, userService, loginEvents } = buildStrategy()
-    jest
-      .mocked(userService.findOne)
-      .mockResolvedValue({ id: 'user-1', name: 'Existing', email: 'new@boxlite.dev', emailVerified: true } as never)
+  it('records the first login after automatic registration when protection is disabled', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy(false)
     const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
     const payload = { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true, iat: 1000, exp: 4600 }
 
     await strategy.validate(request, payload)
 
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1', email: 'new@boxlite.dev', defaultOrganizationDefaultRegionId: 'us' }),
+      Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+    )
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
   })
 

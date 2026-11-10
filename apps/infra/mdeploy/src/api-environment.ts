@@ -263,6 +263,15 @@ export const apiEnvironmentFrom = ({
   // below asks whether a credential arrived, and asking the raw environment
   // would miss one delivered as an address.
   const delivered = serviceSecretsFrom({ group: API_GROUP, declaration, environment })
+  if (delivered.TURNSTILE_SITEKEY) {
+    for (const key of ['TURNSTILE_SECRET_KEY', 'TURNSTILE_EXPECTED_HOSTNAMES']) {
+      if (!delivered[key]) throw new ApiEnvironmentError(`${key} is required when TURNSTILE_SITEKEY is set`)
+    }
+  } else {
+    for (const key of Object.keys(delivered)) {
+      if (key.startsWith('TURNSTILE_')) delete delivered[key]
+    }
+  }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
 
   return {

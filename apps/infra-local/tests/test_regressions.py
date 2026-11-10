@@ -90,7 +90,7 @@ class NativeRegressions(unittest.TestCase):
         self.p = native._paths(self.cfg)
         self.p.logs.mkdir(parents=True)
 
-    def test_turnstile_template_seeds_fresh_api_and_preserves_operator_widget(self):
+    def test_turnstile_template_is_opt_in_and_preserves_operator_widget(self):
         self.p.infra_local.mkdir(parents=True)
         (self.p.apps / "api").mkdir()
         template = Path(native.__file__).resolve().parents[1] / "api.env"
@@ -98,9 +98,9 @@ class NativeRegressions(unittest.TestCase):
         native._seed_api_env(self.p, "local/agent:test")
         api_env = self.p.apps / "api" / ".env"
         seeded = api_env.read_text()
-        self.assertIn("TURNSTILE_SITEKEY=1x00000000000000000000AA\n", seeded)
-        self.assertIn("TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n", seeded)
-        self.assertIn("TURNSTILE_EXPECTED_HOSTNAMES=localhost,127.0.0.1\n", seeded)
+        self.assertNotIn("TURNSTILE_SITEKEY=", seeded)
+        self.assertNotIn("TURNSTILE_SECRET_KEY=", seeded)
+        self.assertNotIn("TURNSTILE_EXPECTED_HOSTNAMES=", seeded)
 
         configured = {
             "TURNSTILE_SITEKEY": "operator-sitekey",

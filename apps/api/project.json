@@ -64,10 +64,7 @@
           "TS_NODE_PROJECT": "api/tsconfig.app.json",
           "TS_NODE_TRANSPILE_ONLY": "true",
           "NODE_OPTIONS": "--require tsconfig-paths/register",
-          "SKIP_CONNECTIONS": "true",
-          "TURNSTILE_SITEKEY": "openapi-generation-sitekey",
-          "TURNSTILE_SECRET_KEY": "openapi-generation-secret",
-          "TURNSTILE_EXPECTED_HOSTNAMES": "dashboard.example.test"
+          "SKIP_CONNECTIONS": "true"
         }
       }
     },

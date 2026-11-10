@@ -80,6 +80,7 @@ import { TurnstileService } from './turnstile.service'
             jwksUri: jwksUri,
           },
           userService,
+          configService,
           loginEvents,
         )
       },

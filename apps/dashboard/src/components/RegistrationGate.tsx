@@ -29,6 +29,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   const pending = useRef(false)
   const account = useQuery({
     queryKey: ['users', 'registration', user?.profile.sub],
+    enabled: Boolean(turnstile?.sitekey),
     queryFn: ({ signal }) =>
       api.userApi.getAuthenticatedUser({ signal, timeout: 10_000 }).then((response) => response.data),
     retry: false,
@@ -69,6 +70,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
     }
   }
 
+  if (!turnstile?.sitekey) return children
   if (emailError) throw emailError
   if (account.error instanceof RegistrationEmailError) throw account.error
   // Background revalidation must not tear down live terminals for an admitted identity.

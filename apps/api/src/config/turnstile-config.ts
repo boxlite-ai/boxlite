@@ -4,6 +4,8 @@
  */
 
 export function turnstileConfig(env: NodeJS.ProcessEnv = process.env) {
+  const sitekey = env.TURNSTILE_SITEKEY?.trim()
+  if (!sitekey) return undefined
   const required = (name: string): string => {
     const value = env[name]?.trim()
     if (!value) throw new Error(`${name} is required`)
@@ -25,7 +27,7 @@ export function turnstileConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error('TURNSTILE_TIMEOUT_MS must be a positive integer')
   }
   return {
-    sitekey: required('TURNSTILE_SITEKEY'),
+    sitekey,
     secretKey: required('TURNSTILE_SECRET_KEY'),
     expectedHostnames,
     timeoutMs,

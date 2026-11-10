@@ -45,24 +45,24 @@ AWS account identity comes from resolved credentials. GCP project identity is de
 
 ## First account registration
 
-Create a Cloudflare Managed Turnstile widget for each environment, with the actual Dashboard
-hostname registered in the widget. The API must reach `challenges.cloudflare.com`; the site does
+Turnstile protection is opt-in: an absent or blank `TURNSTILE_SITEKEY` keeps automatic local
+registration and requires no widget settings. To enable it, create a Cloudflare Managed widget
+for the actual Dashboard hostname. The API must reach `challenges.cloudflare.com`; the site does
 not need Cloudflare CDN proxying. Auth0 continues to authenticate Google, GitHub and email users.
 
 | API setting | Required/default | Delivery |
 | --- | --- | --- |
-| `TURNSTILE_SITEKEY` | Required, nonempty | Ordinary API configuration; public through `/config` |
-| `TURNSTILE_SECRET_KEY` | Required, nonempty | Server-side secret |
-| `TURNSTILE_EXPECTED_HOSTNAMES` | Required, comma-separated hostnames without scheme, port or path | Ordinary API configuration; private to the API |
+| `TURNSTILE_SITEKEY` | Optional; nonempty enables protection | Ordinary API configuration; public through `/config` when enabled |
+| `TURNSTILE_SECRET_KEY` | Required when enabled | Server-side secret |
+| `TURNSTILE_EXPECTED_HOSTNAMES` | Required when enabled; comma-separated hostnames without scheme, port or path | Ordinary API configuration; private to the API |
 | `TURNSTILE_TIMEOUT_MS` | Positive integer milliseconds; `5000` | Optional API configuration |
 
-The API validates these settings at startup. `/config` exposes only `turnstile.sitekey` and the
-fixed `turnstile.action=signup`; hostname allowlists, timeout and secret remain server-side.
+The API validates enabled widget settings at startup. `/config` exposes only `turnstile.sitekey`
+and the fixed `turnstile.action=signup`; hostname allowlists, timeout and secret remain server-side.
+When disabled, `/config` omits `turnstile` and the Dashboard uses the ordinary authenticated flow.
 Changes take effect after the API restarts, without rebuilding the Dashboard to change the sitekey.
-The configuration can be deployed before the registration flow; configuration alone does not enable
-the first-account check.
 
-mdeploy declares the three required settings in `env.selectGroup.api` and marks
+mdeploy declares the widget settings as optional in `env.selectGroup.api` and marks
 `TURNSTILE_SECRET_KEY` in `env.selectGroup.secret`. Seed the credential in the target cloud's
 secret store, then write its JSON reference with `mstage env set --json` using the
 [secret-reference procedure](../mstage/README.md#secret-references). Accepted examples are
@@ -71,7 +71,8 @@ secret store, then write its JSON reference with `mstage env set --json` using t
 its secret channel; Cloud Run uses `secretKeyRef`. The credential must not be a plaintext API
 environment value. Confirm runtime access to the referenced secret before rolling out the API.
 
-For the legacy SST path, set the stage-scoped `TURNSTILE_SECRET_KEY` with `sst secret set`, using
+With no sitekey, mdeploy omits all widget settings and does not inject an unused secret reference.
+For the legacy SST path, enabling protection requires the stage-scoped `TURNSTILE_SECRET_KEY` via `sst secret set`, using
 stdin for the value. Its ordinary settings belong in the bootstrap `.env`/stage configuration;
 the secret does not. Use `.env.example` for the names and defaults.
 

@@ -13,7 +13,8 @@ export class TurnstileService {
   constructor(private readonly config: TypedConfigService) {}
 
   async verify(token: string): Promise<void> {
-    const settings = this.config.getOrThrow('turnstile')
+    const settings = this.config.get('turnstile')
+    if (!settings) return
     const started = Date.now()
     let signal: AbortSignal | undefined
     try {

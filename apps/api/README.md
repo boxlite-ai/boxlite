@@ -33,28 +33,27 @@ listener for all three cases. It does not start PostgreSQL or a VM.
 
 ## Registration configuration
 
-Set `TURNSTILE_SITEKEY`, `TURNSTILE_SECRET_KEY`, and
-`TURNSTILE_EXPECTED_HOSTNAMES` before starting the API. Hostnames are a comma-separated
-list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS` defaults to 5000 and
-must be a positive integer. Invalid settings stop startup and identify the setting
-without printing its value.
+Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
+blank to create local users automatically after OIDC authentication, without a
+widget or Cloudflare credentials. A nonempty sitekey enables protection and then
+requires `TURNSTILE_SECRET_KEY` and `TURNSTILE_EXPECTED_HOSTNAMES`. Hostnames are a
+comma-separated list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS`
+defaults to 5000 and must be a positive integer when enabled. Invalid enabled
+settings stop startup and identify the setting without printing its value.
 Hostname matching ignores DNS letter case and requires an exact allowlist entry;
 subdomains and suffixes are not implicitly trusted.
 
-`GET /api/config` publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
+`GET /api/config` omits `turnstile` when protection is disabled. When enabled, it
+publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
 The secret, allowed hostnames and verification timeout remain server-side. Restart
 the API to change a widget configuration; the dashboard reads it at runtime.
-Test and OpenAPI-generation fixtures supply explicit placeholder credentials.
-
-The generated TypeScript and Go configuration models require `turnstile`. Go's
-`NewBoxliteConfiguration` takes `TurnstileConfig` as its first argument, and decoding
-requires that field in the response.
+The generated TypeScript and Go configuration models accept an absent `turnstile`.
 
 ## Registration email policy
 
-New OIDC identities complete local registration through `POST /api/auth/register`,
+With protection enabled, new OIDC identities register through `POST /api/auth/register`,
 using an API-audience Access Token and a `turnstileToken` string of 1–2048 characters.
-Ordinary JWT-authenticated requests return `403 registration_required` until that
+Ordinary JWT-authenticated requests then return `403 registration_required` until that
 account exists. Database-account email verification remains an Auth0 Action responsibility.
 The API's registration email policy requires an email address for a new local user.
 `UserService.create` trims and lowercases each non-empty email, validates its syntax,
@@ -129,7 +128,7 @@ primary-key constraints receive this duplicate-ID handling.
 
 ## First local registration
 
-Registration verifies the challenge server-side, including its hostname and `signup`
+When protection is enabled, registration verifies the challenge server-side, including its hostname and `signup`
 action, before inserting the user and creating their default organization in one
 transaction. A new account returns `201 UserDto`; an existing identity returns `200`
 without validating the challenge again. Both require a valid JWT and request body.
@@ -138,7 +137,7 @@ Challenge rejection returns `403 turnstile_verification_failed`; verification se
 failure returns `503 turnstile_unavailable`. Neither creates a local account. The
 internal registration endpoint is excluded from public Swagger and MCP tools.
 Existing users, including MCP tokens without profile claims, keep their local profile
-and existing permissions. New MCP users first complete registration in Dashboard.
+and existing permissions. When protection is enabled, new MCP users first register in Dashboard.
 Notification connections check local user existence before joining rooms.
 A failed user lookup closes the transport before room admission so Socket.IO can
 retry after recovery. Unknown users and invalid credentials are rejected.

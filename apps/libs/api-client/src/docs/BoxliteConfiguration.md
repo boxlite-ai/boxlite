@@ -5,7 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**turnstile** | [**TurnstileConfig**](TurnstileConfig.md) |  | [default to undefined]
+**turnstile** | [**TurnstileConfig**](TurnstileConfig.md) |  | [optional] [default to undefined]
 **version** | **string** | BoxLite version | [default to undefined]
 **posthog** | [**PosthogConfig**](PosthogConfig.md) | PostHog configuration | [optional] [default to undefined]
 **oidc** | [**OidcConfig**](OidcConfig.md) | OIDC configuration | [default to undefined]

@@ -34,13 +34,11 @@ configure [local registration](#local-registration), then sign in at
 
 ### Local registration
 
-The API template includes Cloudflare's public test credentials so a fresh local
-stack can start. These credentials cannot complete BoxLite registration:
-[Cloudflare's dummy response](https://developers.cloudflare.com/turnstile/troubleshooting/testing/#validation-response)
-reports `example.com` and omits `action`, while BoxLite requires the configured
-hostname and `action=signup`.
+Local registration is automatic by default. The API template has no Turnstile
+sitekey, so local development and E2E startup need no Cloudflare credentials or
+hostname configuration.
 
-To create local accounts, use a dedicated Managed Turnstile development widget
+To exercise protected registration, use a dedicated Managed Turnstile development widget
 with `localhost` authorized (add `127.0.0.1` if you browse that address). Put its
 sitekey and secret in the gitignored `apps/api/.env`:
 
@@ -54,8 +52,8 @@ TURNSTILE_TIMEOUT_MS=5000
 Restart with `make restart COMPONENTS=api` and reload the Dashboard. Registration
 requires access to Cloudflare and keeps the same hostname and action checks as
 deployed environments. Existing local `.env` files are preserved: add these
-settings when upgrading a checkout whose file predates Turnstile. Ordinary
-access by existing accounts does not run a new challenge.
+settings to enable protection. Remove or empty `TURNSTILE_SITEKEY` to return to
+automatic registration. Ordinary access by existing accounts does not run a new challenge.
 
 ## Commands
 

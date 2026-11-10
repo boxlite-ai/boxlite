@@ -53,6 +53,7 @@ describe('POST /api/auth/register', () => {
   const loginEvents = { recordFirstUse: jest.fn() }
   const settings = { secretKey: SECRET, expectedHostnames: ['console.example.com'], action: 'signup', timeoutMs: 5000 }
   const config = {
+    get: (key: string) => (key === 'turnstile' ? settings : undefined),
     getOrThrow: jest.fn((key: string) => {
       if (key === 'turnstile') return settings
       if (key === 'defaultRegion.id') return 'platform-default-region'
@@ -76,6 +77,7 @@ describe('POST /api/auth/register', () => {
         jwksUri: `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/jwks`,
       },
       users as never,
+      config as never,
       loginEvents as never,
     )
     const module = await Test.createTestingModule({

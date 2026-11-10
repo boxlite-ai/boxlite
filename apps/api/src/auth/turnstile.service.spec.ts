@@ -19,7 +19,7 @@ describe('TurnstileService Siteverify boundary', () => {
 
   beforeEach(() => {
     settings = { secretKey: SECRET, expectedHostnames: ['console.example.com'], action: 'signup', timeoutMs: 5000 }
-    service = new TurnstileService({ getOrThrow: () => settings } as never)
+    service = new TurnstileService({ get: () => settings } as never)
     fetchMock = jest.spyOn(globalThis, 'fetch')
     warnings = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
     debug = jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined)
@@ -63,7 +63,7 @@ describe('TurnstileService Siteverify boundary', () => {
       TURNSTILE_SECRET_KEY: SECRET,
       TURNSTILE_EXPECTED_HOSTNAMES: configured,
     })
-    service = new TurnstileService({ getOrThrow: () => config } as never)
+    service = new TurnstileService({ get: () => config } as never)
     respond({ success: true, action: 'signup', hostname: returned })
 
     await expect(service.verify(TOKEN)).resolves.toBeUndefined()

@@ -48,16 +48,29 @@ for (const home of ['aws', 'gcp'] as const) {
     assert.equal(environment.TURNSTILE_SECRET_KEY, undefined)
   })
 
-  test(`${home}: optional registration settings leave defaults to the API`, () => {
+  test(`${home}: optional registration settings leave defaults to the API and an absent sitekey disables delivery`, () => {
     const { environment } = assemble(home, fixture(home))
     for (const key of Object.keys(settings)) assert.equal(environment[key], undefined, key)
+    for (const sitekey of [undefined, '', '  ']) {
+      const disabled = assemble(home, {
+        ...fixture(home),
+        ...settings,
+        TURNSTILE_SITEKEY: sitekey,
+        TURNSTILE_SECRET_KEY: 'unused-credential',
+      })
+      assert.equal(
+        Object.keys(disabled.environment).some((key) => key.startsWith('TURNSTILE_')),
+        false,
+      )
+      assert.equal(disabled.secrets.TURNSTILE_SECRET_KEY, undefined)
+    }
   })
 
   test(`${home}: missing Turnstile credentials or hostnames stop the deployment`, () => {
-    for (const key of [...Object.keys(turnstile), 'TURNSTILE_SECRET_KEY']) {
+    for (const key of ['TURNSTILE_EXPECTED_HOSTNAMES', 'TURNSTILE_SECRET_KEY']) {
       const environment = fixture(home)
       delete environment[key]
-      assert.throws(() => assemble(home, environment), new RegExp(`${key} must reach the deploy`))
+      assert.throws(() => assemble(home, environment), new RegExp(`${key} is required when TURNSTILE_SITEKEY is set`))
     }
   })
 

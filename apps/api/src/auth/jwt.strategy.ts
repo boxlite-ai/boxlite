@@ -14,6 +14,9 @@ import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { LoginEventRecorder } from './login-event.recorder'
+import { TypedConfigService } from '../config/typed-config.service'
+import { Context } from '../common/context/context'
+import { UserAlreadyExistsException } from '../user/user-already-exists.exception'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -38,6 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private readonly options: JwtStrategyConfig,
     private readonly userService: UserService,
+    private readonly configService: TypedConfigService,
     private readonly loginEvents: LoginEventRecorder,
   ) {
     super({
@@ -67,7 +71,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email = payload.sub
     }
     if (typeof userId !== 'string' || !userId.trim()) throw new UnauthorizedException('Invalid credentials')
-    const user = await this.userService.findOne(userId)
+    let user = await this.userService.findOne(userId)
 
     if (user && !user.emailVerified && payload.email_verified) {
       await this.userService.update(user.id, {
@@ -76,7 +80,28 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (!user) {
-      throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
+      if (this.configService.get('turnstile')) {
+        throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
+      }
+      if (typeof email !== 'string' || !email.trim()) {
+        throw new ForbiddenException({ message: 'Email address required for registration', code: 'email_required' })
+      }
+      try {
+        user = await this.userService.create(
+          {
+            id: userId,
+            name: payload.name || payload.username || 'Unknown',
+            email,
+            emailVerified: payload.email_verified === true,
+            defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+          },
+          Context.user({ userId, authMethod: 'jwt' }),
+        )
+      } catch (error) {
+        if (!(error instanceof UserAlreadyExistsException)) throw error
+        user = await this.userService.findOne(userId)
+        if (!user) throw error
+      }
     } else {
       // Only what the token states replaces stored profile data: tokens for
       // third-party MCP clients carry no profile claims, and their absence must

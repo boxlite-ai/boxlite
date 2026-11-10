@@ -32,20 +32,15 @@ describe('Turnstile configuration', () => {
 
   it('starts from the checked-in infra-local template without external widget credentials', () => {
     const environment = parse(readFileSync(resolve(__dirname, '../../../infra-local/api.env')))
-    expect(turnstileConfig(environment)).toEqual({
-      sitekey: '1x00000000000000000000AA',
-      secretKey: '1x0000000000000000000000000000000AA',
-      expectedHostnames: ['localhost', '127.0.0.1'],
-      timeoutMs: 5000,
-      action: 'signup',
-    })
+    expect(turnstileConfig(environment)).toBeUndefined()
   })
 
   it.each(['TURNSTILE_SITEKEY', 'TURNSTILE_SECRET_KEY', 'TURNSTILE_EXPECTED_HOSTNAMES'])(
-    'requires %s at startup',
+    'uses %s according to whether protection is enabled',
     (name) => {
       for (const value of [undefined, '', '  ']) {
-        expect(() => turnstileConfig({ ...fixture, [name]: value })).toThrow(name)
+        if (name === 'TURNSTILE_SITEKEY') expect(turnstileConfig({ ...fixture, [name]: value })).toBeUndefined()
+        else expect(() => turnstileConfig({ ...fixture, [name]: value })).toThrow(name)
       }
     },
   )
@@ -67,8 +62,7 @@ describe('Turnstile configuration', () => {
 
   it('projects only public widget fields and observes the next configuration value', () => {
     const config = turnstileConfig(fixture)
-    const get = (key: string) =>
-      key.startsWith('turnstile.') ? config[key.slice(10) as keyof typeof config] : undefined
+    const get = (key: string) => (key === 'turnstile' ? config : undefined)
     const service = { get, getOrThrow: get }
     const dto = new ConfigurationDto(service as never, { endSessionState: 'present' })
     expect(dto.turnstile).toEqual({ sitekey: 'public-key', action: 'signup' })

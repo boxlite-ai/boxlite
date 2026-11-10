@@ -155,8 +155,17 @@ test('SST registration synthesis preserves explicitly configured widget settings
 
 for (const key of ['TURNSTILE_SITEKEY', 'TURNSTILE_EXPECTED_HOSTNAMES']) {
   for (const value of [undefined, '']) {
-    test(`SST registration synthesis rejects ${key} when ${value === undefined ? 'missing' : 'empty'}`, async () => {
-      await assert.rejects(synthesize({ [key]: value }), new RegExp(`${key} is required`))
+    test(`SST registration synthesis ${key === 'TURNSTILE_SITEKEY' ? 'disables verification for' : 'rejects'} ${key} when ${value === undefined ? 'missing' : 'empty'}`, async () => {
+      if (key === 'TURNSTILE_SITEKEY') {
+        const { environment, secrets } = await synthesize({ [key]: value }, null)
+        assert.equal(secrets.has('TURNSTILE_SECRET_KEY'), false)
+        assert.equal(
+          Object.keys(environment).some((name) => name.startsWith('TURNSTILE_')),
+          false,
+        )
+      } else {
+        await assert.rejects(synthesize({ [key]: value }), new RegExp(`${key} is required`))
+      }
     })
   }
 }

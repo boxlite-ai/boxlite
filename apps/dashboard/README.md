@@ -5,9 +5,14 @@ through Nx as the `dashboard` project.
 
 ## New-account email policy
 
-After OIDC sign-in, the console checks `GET /users/me` before loading organizations
-or connecting notifications. A `registration_required` response opens the first-account
-verification screen at the current URL. Turnstile produces a single-use challenge;
+First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without
+public `turnstile` settings, the console loads business providers directly and the
+API keeps automatic local registration.
+
+With verification enabled, the console checks `GET /users/me` after OIDC sign-in,
+before loading organizations or connecting notifications. A `registration_required`
+response opens the first-account verification screen at the current URL. Turnstile
+produces a single-use challenge;
 `POST /auth/register` validates it on the server before creating the local account.
 Existing accounts enter the console without a challenge. Email ownership verification
 remains in the Auth0 login Action.
@@ -22,9 +27,10 @@ script loading time out after 10 seconds. A timed-out creation request follows t
 same account check as a lost response, without automatically resending the token.
 Failed script loads release their shared loader so verification can be retried.
 
-Each newly mounted identity must pass a fresh account check, even when user data is
-cached. Once admitted, the console stays mounted during background revalidation and
-transient failures, preserving open terminals. An explicit `registration_required`
+With verification enabled, each newly mounted identity must pass a fresh account
+check, even when user data is cached. Once admitted, the console stays mounted
+during background revalidation and transient failures, preserving open terminals.
+An explicit `registration_required`
 or email rejection still blocks access and shows the relevant recovery screen.
 
 When the API rejects account creation with `disposable_email`, `email_required`,

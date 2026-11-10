@@ -30,7 +30,7 @@ import type { RateLimitConfig } from './rate-limit-config';
 import type { TurnstileConfig } from './turnstile-config';
 
 export interface BoxliteConfiguration {
-    'turnstile': TurnstileConfig;
+    'turnstile'?: TurnstileConfig;
     /**
      * BoxLite version
      */
