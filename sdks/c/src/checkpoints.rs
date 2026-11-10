@@ -482,4 +482,288 @@ mod tests {
             }
         }
     }
+
+    type Reply = (BoxliteErrorCode, String);
+
+    fn reply_code(error: *mut CBoxliteError) -> BoxliteErrorCode {
+        if error.is_null() {
+            BoxliteErrorCode::Ok
+        } else {
+            unsafe { (*error).code }
+        }
+    }
+
+    fn send_reply(data: *mut c_void, error: *mut CBoxliteError, value: String) {
+        let sender = unsafe { &*(data as *const mpsc::Sender<Reply>) };
+        let _ = sender.send((reply_code(error), value));
+    }
+
+    extern "C" fn checkpoint_metadata_reply(
+        info: *mut CCheckpointInfo,
+        error: *mut CBoxliteError,
+        data: *mut c_void,
+    ) {
+        let value = if info.is_null() {
+            String::new()
+        } else {
+            unsafe {
+                let reason = if (*info).error_reason.is_null() {
+                    String::new()
+                } else {
+                    std::ffi::CStr::from_ptr((*info).error_reason)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                format!(
+                    "{}:{}:{reason}",
+                    std::ffi::CStr::from_ptr((*info).id).to_string_lossy(),
+                    std::ffi::CStr::from_ptr((*info).state).to_string_lossy(),
+                )
+            }
+        };
+        unsafe { boxlite_free_checkpoint_info(info) };
+        send_reply(data, error, value);
+    }
+
+    extern "C" fn checkpoint_list_reply(
+        list: *mut CCheckpointList,
+        error: *mut CBoxliteError,
+        data: *mut c_void,
+    ) {
+        let value = if list.is_null() {
+            String::new()
+        } else {
+            unsafe { (*list).count.to_string() }
+        };
+        unsafe { boxlite_free_checkpoint_list(list) };
+        send_reply(data, error, value);
+    }
+
+    extern "C" fn checkpoint_box_reply(
+        handle: *mut crate::CBoxHandle,
+        error: *mut CBoxliteError,
+        data: *mut c_void,
+    ) {
+        let value = if handle.is_null() {
+            String::new()
+        } else {
+            unsafe { (*handle).box_id.to_string() }
+        };
+        unsafe { crate::box_handle::boxlite_box_free(handle) };
+        send_reply(data, error, value);
+    }
+
+    extern "C" fn checkpoint_remove_reply(error: *mut CBoxliteError, data: *mut c_void) {
+        send_reply(data, error, String::new());
+    }
+
+    #[test]
+    fn checkpoint_c_rest_management_delivers_owned_results_and_errors_through_drain() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        use std::time::Instant;
+
+        let _strings = crate::FREE_STR_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::scope(|scope| {
+            let server = scope.spawn(move || {
+                let mut requests = Vec::new();
+                while requests.len() < 8 {
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    let (mut stream, _) = loop {
+                        match listener.accept() {
+                            Ok(connection) => break connection,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(Instant::now() < deadline, "C checkpoint HTTP request timed out");
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(error) => panic!("C checkpoint HTTP server: {error}"),
+                        }
+                    };
+                    stream.set_nonblocking(false).unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                    stream.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                    let mut reader = BufReader::new(&mut stream);
+                    let mut first = String::new();
+                    reader.read_line(&mut first).unwrap();
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        assert_ne!(reader.read_line(&mut line).unwrap(), 0, "incomplete HTTP request");
+                        if line == "\r\n" { break; }
+                        if let Some((key, value)) = line.split_once(':')
+                            && key.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse::<usize>().unwrap();
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    drop(reader);
+                    let mut request = first.split_whitespace();
+                    let method = request.next().unwrap().to_owned();
+                    let path = request.next().unwrap().to_owned();
+                    let body = if body.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&body).unwrap() };
+                    let info = serde_json::json!({"id":"checkpoint-1","name":"base","source_box_id":"source-1","created_at":"2026-11-06T00:00:00Z","size_bytes":4096,"state":"ready"});
+                    let (status, response) = if path.ends_with("/missing") {
+                        (404, serde_json::json!({"message":"Checkpoint not found"}))
+                    } else if path == "/v1/boxes/import" {
+                        (200, serde_json::json!({"box_id":"target-1","name":"worker","status":"stopped","created_at":"2026-11-06T00:00:00Z","updated_at":"2026-11-06T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}))
+                    } else if method == "GET" && path == "/v1/checkpoints" {
+                        (200, serde_json::json!({"checkpoints":[info]}))
+                    } else if method == "GET" {
+                        let mut failed = info;
+                        failed["state"] = "failed".into();
+                        failed["error_reason"] = "upload failed".into();
+                        (200, failed)
+                    } else { (200, info) };
+                    let response = response.to_string();
+                    write!(stream,"HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+                    requests.push((method, path, body));
+                }
+                requests
+            });
+            let mut runtime = RuntimeHandle {
+                runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(format!(
+                    "http://{address}"
+                )))
+                .unwrap(),
+                tokio_rt: create_tokio_runtime().unwrap(),
+                liveness: Arc::new(RuntimeLiveness::new()),
+                queue: Arc::new(EventQueue::new()),
+            };
+            let (sender, receiver) = mpsc::channel::<Reply>();
+            let data = &sender as *const _ as *mut c_void;
+            let mut error = crate::error::FFIError::default();
+            let source = CString::new("source-1").unwrap();
+            let key = CString::new("checkpoint-1").unwrap();
+            let name = CString::new("worker").unwrap();
+            let target = CString::new("target-1").unwrap();
+            let mut drain = |runtime: &mut RuntimeHandle| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    unsafe { crate::boxlite_runtime_drain(runtime, 50, &mut error) };
+                    if let Ok(reply) = receiver.try_recv() {
+                        break reply;
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "checkpoint callback was not delivered"
+                    );
+                }
+            };
+            unsafe {
+                for supplied_name in [name.as_ptr(), ptr::null()] {
+                    assert_eq!(
+                        boxlite_checkpoint_create(
+                            &mut runtime,
+                            source.as_ptr(),
+                            supplied_name,
+                            Some(checkpoint_metadata_reply),
+                            data,
+                            ptr::null_mut()
+                        ),
+                        BoxliteErrorCode::Ok
+                    );
+                    assert_eq!(
+                        drain(&mut runtime),
+                        (BoxliteErrorCode::Ok, "checkpoint-1:ready:".into())
+                    );
+                }
+                assert_eq!(
+                    boxlite_checkpoint_get(
+                        &mut runtime,
+                        key.as_ptr(),
+                        Some(checkpoint_metadata_reply),
+                        data,
+                        ptr::null_mut()
+                    ),
+                    BoxliteErrorCode::Ok
+                );
+                assert_eq!(
+                    drain(&mut runtime),
+                    (
+                        BoxliteErrorCode::Ok,
+                        "checkpoint-1:failed:upload failed".into()
+                    )
+                );
+                assert_eq!(
+                    boxlite_checkpoint_list(
+                        &mut runtime,
+                        Some(checkpoint_list_reply),
+                        data,
+                        ptr::null_mut()
+                    ),
+                    BoxliteErrorCode::Ok
+                );
+                assert_eq!(drain(&mut runtime), (BoxliteErrorCode::Ok, "1".into()));
+                for (name, target) in [(name.as_ptr(), ptr::null()), (ptr::null(), target.as_ptr())]
+                {
+                    assert_eq!(
+                        boxlite_checkpoint_import_box(
+                            &mut runtime,
+                            key.as_ptr(),
+                            name,
+                            target,
+                            Some(checkpoint_box_reply),
+                            data,
+                            ptr::null_mut()
+                        ),
+                        BoxliteErrorCode::Ok
+                    );
+                    assert_eq!(
+                        drain(&mut runtime),
+                        (BoxliteErrorCode::Ok, "target-1".into())
+                    );
+                }
+                assert_eq!(
+                    boxlite_checkpoint_remove(
+                        &mut runtime,
+                        key.as_ptr(),
+                        1,
+                        Some(checkpoint_remove_reply),
+                        data,
+                        ptr::null_mut()
+                    ),
+                    BoxliteErrorCode::Ok
+                );
+                assert_eq!(drain(&mut runtime), (BoxliteErrorCode::Ok, String::new()));
+                let missing = CString::new("missing").unwrap();
+                assert_eq!(
+                    boxlite_checkpoint_get(
+                        &mut runtime,
+                        missing.as_ptr(),
+                        Some(checkpoint_metadata_reply),
+                        data,
+                        ptr::null_mut()
+                    ),
+                    BoxliteErrorCode::Ok
+                );
+                assert_eq!(
+                    drain(&mut runtime),
+                    (BoxliteErrorCode::NotFound, String::new())
+                );
+            }
+            let requests = server.join().unwrap();
+            assert_eq!(
+                requests[0].2,
+                serde_json::json!({"source_box_id":"source-1","name":"worker"})
+            );
+            assert_eq!(
+                requests[1].2,
+                serde_json::json!({"source_box_id":"source-1"})
+            );
+            assert_eq!(requests[4].1, "/v1/boxes/import");
+            assert_eq!(
+                requests[4].2,
+                serde_json::json!({"checkpoint_id":"checkpoint-1","name":"worker"})
+            );
+            assert_eq!(
+                requests[5].2,
+                serde_json::json!({"checkpoint_id":"checkpoint-1","box_id":"target-1"})
+            );
+            assert_eq!(requests[6].1, "/v1/checkpoints/checkpoint-1?force=true");
+        });
+    }
 }

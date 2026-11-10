@@ -114,10 +114,14 @@ class NativeCoveragePathsTest(unittest.TestCase):
                 else expected / "make-invocations.jsonl"
             )
             node_runs = []
+            ffi_runs = []
             for line in invocations_path.read_text().splitlines():
                 argv = json.loads(line)
                 if "test:integration:node" in argv:
                     node_runs.append(argv)
+                if "test:unit:ffi" in argv:
+                    ffi_runs.append(argv)
+            self.assertTrue(ffi_runs, "Rust C ABI tests must contribute native coverage")
             self.assertTrue(node_runs, str(invocations_path))
             for argv in node_runs:
                 filters = [a for a in argv if a.startswith("FILTER=")]
