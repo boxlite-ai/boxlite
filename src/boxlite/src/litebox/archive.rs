@@ -34,8 +34,8 @@ pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
 /// v5, and the importer canonicalizes anything below it.
 pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 
-/// Older importers must refuse a CPU limit they cannot enforce.
-pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 7;
+/// Older importers must refuse fractional CPUs they cannot enforce.
+pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 6;
 
 /// Maximum archive version this build can import.
 pub(crate) const MAX_SUPPORTED_VERSION: u32 = FRACTIONAL_CPUS_ARCHIVE_VERSION;
@@ -44,7 +44,7 @@ pub(crate) const MAX_SUPPORTED_VERSION: u32 = FRACTIONAL_CPUS_ARCHIVE_VERSION;
 ///
 /// Use the oldest format that can represent all configured policies.
 /// An explicitly empty capability policy still requires v4; ports require v5,
-/// and fractional CPUs require v7 so older readers cannot silently discard them.
+/// and fractional CPUs require v6 so older readers cannot silently discard them.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
     if options
         .cpu_count()
@@ -67,11 +67,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v3: adds `box_options` for full configuration preservation
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
-/// v6: unsupported experimental separate CPU-limit configuration
-/// v7: fractional `box_options.cpus` requires host CPU bandwidth enforcement
+/// v6: fractional `box_options.cpus` requires host CPU bandwidth enforcement
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 5, or 7).
+    /// Archive format version (1 through 6).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -326,7 +325,7 @@ mod tests {
 
     /// An export must not be readable by an importer that would drop part of
     /// its configuration: capability policies are stamped v4, published ports
-    /// v5, ordinary boxes v3.
+    /// v5, fractional CPUs v6, ordinary boxes v3.
     ///
     /// The literals are the compatibility boundary itself — a pre-capability
     /// importer accepts up to 3, a pre-publication one up to 4 — so pin them,
@@ -343,7 +342,7 @@ mod tests {
             cpus: Some(0.125),
             ..ordinary.clone()
         };
-        assert_eq!(archive_version_for_options(&limited), 7);
+        assert_eq!(archive_version_for_options(&limited), 6);
 
         let mut custom_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         custom_advanced
