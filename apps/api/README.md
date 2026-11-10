@@ -246,24 +246,14 @@ ordinary heartbeat clients keep their existing signature and need no new header.
 At most 1,440 preview events per continuously active box/day reach PostHog. Include these sampled
 observations when reviewing the project's ingestion budget and retention settings.
 
-For v0 runners, which have no START_BOX job, BoxManager records an existing start's terminal
-`box.start` outcome after its state is persisted. Returned runner errors, startup timeouts and
-thrown starts yield `runner_start_failed`; v2 outcomes remain with JobStateHandler. Initial
-creation and repeated terminal syncs do not emit an extra start outcome.
-Both accepted-start writes atomically set internal `startEventPending`; it survives runner
-instance loss and recreation across sync invocations. Entity invariants clear it in the
-terminal or superseding state write, including v2 job completion. Logging remains best effort,
-not an exactly-once outbox. Run the pre-deploy migration before upgrading the API; roll back
-the API before dropping the column. Already in-flight UNKNOWN/CREATING operations from before
-the upgrade have no marker and cannot be reliably backfilled as starts.
+For v2 runners, JobStateHandler records a `box.start` success or exception after persisting
+the START_BOX job result. Accepted start requests retain their organization and caller context.
+Activity adds no database column or migration and remains best-effort telemetry, not an
+exactly-once outbox. Legacy v0 runners retain request events; terminal start outcomes are
+outside this contract, including instance recreation across synchronization cycles.
 
-The API CI job sets `BOXLITE_TEST_POSTGRES_URL` to its PostgreSQL service so the start-intent
-migration's up/down and existing-row defaults are exercised. Set this variable to a disposable
-local PostgreSQL database when running `make coverage:api`; without it, that integration spec
-is skipped. Caller-attribution tests cover JWT and API-key administrators and both proxied
-exec/upload error categories without changing authentication policy.
-Integration fixtures that build their schema with explicit migrations must also apply
-the start-intent migration before querying the `Box` entity, including the usage ledger fixture.
+Caller-attribution tests cover JWT and API-key administrators and both proxied exec/upload
+error categories without changing authentication policy.
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both. A proxied call that fails with an

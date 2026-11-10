@@ -417,7 +417,6 @@ export class BoxRepository extends BaseRepository<Box> {
           .set({
             pending: true,
             desiredState: BoxDesiredState.STARTED,
-            startEventPending: true,
             updatedAt: new Date(),
           })
           .where('id = :id', { id: boxId })

@@ -9,7 +9,7 @@ import { JobStatus } from '../enums/job-status.enum'
 
 // Box events record their request where it is accepted (BoxService, the
 // auto-stop and auto-delete crons) and their outcome where the runner reports
-// it (JobStateHandler, or BoxManager for v0 starts), so their two halves cannot share one call.
+// it (JobStateHandler), so their two halves cannot share one call.
 type BoxEventName = 'box.create' | 'box.start' | 'box.stop' | 'box.delete'
 
 /** The box an event is about; its organization travels with every record of it. */
