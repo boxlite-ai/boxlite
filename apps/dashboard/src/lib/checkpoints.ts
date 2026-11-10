@@ -13,7 +13,7 @@ export const CHECKPOINTS_DISABLED_MESSAGE = 'Checkpoints are not enabled in this
 export const isCheckpointNameValid = (name: string) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)
 
 export const isCheckpointBoxIdle = (box: Box) =>
-  (box.state === BoxState.STARTED || box.state === BoxState.STOPPED) &&
+  box.state === BoxState.STOPPED &&
   box.state === String(box.desiredState) &&
   !box.volumes?.length &&
   !('pending' in box && box.pending === true) &&
@@ -27,4 +27,12 @@ export function checkpointErrorMessage(error: unknown): string {
     if (typeof reason === 'string') return reason
   }
   return error instanceof Error ? error.message : 'Request failed. Please try again.'
+}
+
+export function checkpointAdmittedBoxId(error: unknown): string | undefined {
+  const cause = error instanceof Error ? error.cause : undefined
+  if (!isAxiosError(error) && isAxiosError(cause)) return checkpointAdmittedBoxId(cause)
+  if (!isAxiosError(error)) return undefined
+  const id = error.response?.data?.boxId
+  return typeof id === 'string' && id.length > 0 ? id : undefined
 }

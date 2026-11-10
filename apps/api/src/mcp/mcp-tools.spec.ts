@@ -156,7 +156,6 @@ const API_KEY_ONLY = [
   'listCheckpoints',
   'getCheckpoint',
   'removeCheckpoint',
-  'recoverBoxFromCheckpoint',
   'attachBox',
   'prepareTunnel',
   'revokeTunnel',

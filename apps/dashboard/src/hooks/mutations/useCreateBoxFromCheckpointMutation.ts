@@ -4,6 +4,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { getBoxesQueryKey } from '../useBoxes'
+import { checkpointAdmittedBoxId } from '@/lib/checkpoints'
 
 export function useCreateBoxFromCheckpointMutation() {
   const api = useApi()
@@ -18,7 +19,8 @@ export function useCreateBoxFromCheckpointMutation() {
       name: string
       organizationId: string
     }) => api.createBoxFromCheckpoint(organizationId, checkpointId, name.trim() || undefined),
-    onSuccess: async (_box, { organizationId }) => {
+    onSettled: async (_box, error, { organizationId }) => {
+      if (error && !checkpointAdmittedBoxId(error)) return
       await client.invalidateQueries({ queryKey: getBoxesQueryKey(organizationId) })
       await client.invalidateQueries({ queryKey: ['boxesCount', organizationId] })
     },

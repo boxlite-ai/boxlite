@@ -60,7 +60,7 @@ describe('BoxLite REST routing', () => {
       [
         {
           provide: ConfigService,
-          useValue: new ConfigService({ checkpoint: { archivePrefix: 'gs://checkpoint-test/' } }),
+          useValue: new ConfigService({ checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true } }),
         },
         {
           provide: BoxService,

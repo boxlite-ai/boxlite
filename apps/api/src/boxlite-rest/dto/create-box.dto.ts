@@ -19,8 +19,6 @@ import {
   IsObject,
   IsArray,
   Min,
-  MinLength,
-  MaxLength,
   IsIn,
   Validate,
   ValidateIf,
@@ -236,12 +234,6 @@ export class SecretSpecDto {
 }
 
 export class CreateBoxDto {
-  @ValidateIf((_, value) => value !== undefined)
-  @IsString()
-  @MinLength(1)
-  @MaxLength(128)
-  checkpoint_id?: string
-
   @IsOptional()
   @IsString()
   name?: string

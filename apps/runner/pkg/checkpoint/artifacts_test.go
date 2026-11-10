@@ -22,6 +22,36 @@ func reference() Reference {
 	return Reference{CheckpointID: uuid.NewString(), ExportJobID: uuid.NewString(), SourceBoxID: "source", ArcPath: "gs://archives/checkpoints/" + uuid.NewString() + ".boxlite"}
 }
 
+func TestCheckpointArtifactDurabilityFailurePreventsCapture(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permission failure requires an unprivileged user")
+	}
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nested=%v", nested), func(t *testing.T) {
+			parent := t.TempDir()
+			if err := os.Chmod(parent, 0300); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chmod(parent, 0700)
+			root := parent
+			if nested {
+				root = filepath.Join(parent, "new", "archives")
+			}
+			captured := false
+			_, err := (Artifacts{Root: root}).Export(context.Background(), reference(), func(ctx context.Context, path string) (string, string, error) {
+				captured = true
+				return captureBytes("must not capture before parent durability")(ctx, path)
+			})
+			if captured {
+				t.Fatal("capture ran before the parent directory could be synced")
+			}
+			if !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("expected parent sync permission error, got %v", err)
+			}
+		})
+	}
+}
+
 func captureBytes(data string) Capture {
 	return func(_ context.Context, directory string) (string, string, error) {
 		path := filepath.Join(directory, "source.boxlite")

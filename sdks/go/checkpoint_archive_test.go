@@ -56,3 +56,19 @@ func TestCheckpointArchivePreparationOnRestNeverSendsLocalArchivePaths(t *testin
 		t.Fatalf("local archive metadata reached the REST server in %d requests", requests.Load())
 	}
 }
+
+func TestCheckpointArchivePreparationRejectsUninitializedAndClosedRuntime(t *testing.T) {
+	source := CheckpointArchiveSource{Path: "archive.boxlite", SHA256: strings.Repeat("a", 64), PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}
+	runtime, err := NewRest(BoxliteRestOptions{URL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []*Runtime{new(Runtime), runtime} {
+		if _, err := candidate.PrepareCheckpointArchive(context.Background(), source, nil); !errors.Is(err, ErrRuntimeClosed) {
+			t.Errorf("expected ErrRuntimeClosed, got %v", err)
+		}
+	}
+}

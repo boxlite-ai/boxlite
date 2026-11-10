@@ -46,17 +46,28 @@ impl Lifecycle {
     ) -> BoxliteResult<Vec<OwnedRwLockReadGuard<()>>> {
         let keys = keys(id, name);
         let guards = self.read_keys(&keys)?;
+        self.check_available(&keys)?;
+        Ok(guards)
+    }
+
+    fn check_available(&self, keys: &[String]) -> BoxliteResult<()> {
         for key in keys {
-            if self.retired.lock().contains(&key) {
+            if self.retired.lock().contains(key) {
                 return Err(busy());
             }
             for directory in self.catalogs.lock().clone() {
-                if Catalog::new(directory).owns_target(&key)? {
+                if Catalog::new(directory).owns_target(key)? {
                     return Err(busy());
                 }
             }
         }
-        Ok(guards)
+        Ok(())
+    }
+
+    pub(crate) fn capture(&self, id: &str, name: Option<&str>) -> BoxliteResult<RecoveryLease> {
+        let lease = self.reserve(id, name)?;
+        self.check_available(&lease.keys)?;
+        Ok(lease)
     }
 
     pub(crate) fn reserve(&self, id: &str, name: Option<&str>) -> BoxliteResult<RecoveryLease> {

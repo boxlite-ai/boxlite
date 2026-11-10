@@ -307,9 +307,6 @@ paths:
         Creates a new box with the specified configuration.
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
-        Alternatively, supply only `checkpoint_id` and optional `name` to
-        inherit a ready checkpoint's execution settings. Local imports start
-        stopped; cloud deployments may wait for the new Box to start.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -748,7 +745,7 @@ paths:
       - $ref: "#/components/parameters/prefix"
     post:
       operationId: importBox
-      summary: Import a box from an archive
+      summary: Import an archive or checkpoint into a box
       description: |
         Imports a `.boxlite` archive (produced by the export endpoint) to create
         a new box. The archive is uploaded as a binary payload and treated as
@@ -756,21 +753,44 @@ paths:
         defaults. Archives selecting server host paths through a local rootfs or
         volume mount are rejected, as are archives requiring host-only
         experimental features such as custom kernels or nested virtualization.
+
+        JSON imports select a ready managed checkpoint with `checkpoint_id`.
+        Optional `name` creates a new Box; optional `box_id` replaces an idle
+        target. Name and box_id are mutually exclusive. All saved execution
+        settings are inherited, and configuration overrides are refused.
+        Replacement validates the archive and pinned image before removal,
+        but is not atomic: failure after removal retains ownership for retry.
+        Local replacement preserves the name and returns a new native ID;
+        cloud replacement preserves the public Box ID and existing runner.
+
+        Cloud checkpoint imports require `checkpoints_enabled`; binary upload
+        remains controlled separately by `import_enabled`. Cloud wait failures
+        after admission, including 408 and terminal errors, include `boxId` in
+        the error body. Query that Box before retrying an anonymous import.
       tags: [Boxes]
       parameters:
         - name: name
           in: query
-          description: Name for the imported box (auto-generated if omitted)
+          description: Binary archive import name; JSON imports use name in the body.
           schema:
             type: string
       requestBody:
         required: true
         content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportCheckpointRequest"
           application/octet-stream:
             schema:
               type: string
               format: binary
       responses:
+        "200":
+          description: Existing Box replaced from a checkpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
         "201":
           description: Imported box created
           content:
@@ -779,6 +799,14 @@ paths:
                 $ref: "#/components/schemas/Box"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "408":
+          description: Cloud import accepted but still running; response includes boxId to query.
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Execution
@@ -1603,6 +1631,8 @@ paths:
       summary: Capture an independent disk checkpoint
       description: |
         Export the source box directly, without a snapshot or temporary clone.
+        The source must be stopped and idle; other states return 409.
+        Stop the box and wait for stopped before capture; capture never stops it automatically.
         Requires Box write permission. Sources with volumes or secrets are
         refused. A local capture returns ready after export; cloud capture
         returns creating and becomes ready only after upload succeeds.
@@ -1686,43 +1716,6 @@ paths:
       responses:
         "204":
           description: Storage and metadata removed, or missing with force
-        "400":
-          $ref: "#/components/responses/BadRequestError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailableError"
-
-  /{prefix}/boxes/{box_id}/recover:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-    post:
-      operationId: recoverBoxFromCheckpoint
-      summary: Replace an idle stopped or failed box from a checkpoint
-      description: |
-        Requires Box write permission. Accepts only checkpoint_id; all saved
-        execution settings are inherited. Preflight validates the archive and
-        pinned startup image before removal. Replacement is not atomic; failure
-        after removal retains ownership for retry with the same checkpoint.
-        Local recovery preserves the name and returns a new native ID. Cloud
-        recovery preserves the public Box ID and uses the existing runner.
-      tags: [Checkpoints]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RecoverBoxFromCheckpointRequest"
-      responses:
-        "200":
-          description: Recovered Box
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
         "400":
           $ref: "#/components/responses/BadRequestError"
         "404":
@@ -2692,15 +2685,29 @@ components:
           maxLength: 128
           pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
 
-    RecoverBoxFromCheckpointRequest:
+    ImportCheckpointRequest:
       type: object
       additionalProperties: false
+      description: Import a checkpoint into a new Box or replace box_id; name and box_id are mutually exclusive.
       required: [checkpoint_id]
+      not:
+        required: [name, box_id]
       properties:
         checkpoint_id:
           type: string
           minLength: 1
           maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          description: Optional name for a new Box; omit when replacing box_id.
+        box_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Existing idle Box ID or name to replace; omit to create a new Box.
 
     CreateBoxRequest:
       type: object
@@ -2716,15 +2723,6 @@ components:
         quiet fall-through.
       additionalProperties: false
       properties:
-        checkpoint_id:
-          type: string
-          minLength: 1
-          maxLength: 128
-          description: |
-            Create from a ready checkpoint instead of an image. When supplied,
-            only name may accompany it; other configuration fields are rejected.
-            All execution settings are inherited, including image and resource
-            sizing, so ordinary field defaults do not apply to this mode.
         advanced:
           $ref: "#/components/schemas/CreateBoxAdvancedOptions"
         name:

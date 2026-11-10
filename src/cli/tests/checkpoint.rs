@@ -172,28 +172,37 @@ async fn checkpoint_create_list_get_delete_use_the_tenant_and_expected_request_s
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn checkpoint_box_creation_inherits_config_and_recover_keeps_the_public_box_id() {
+async fn checkpoint_import_inherits_config_and_replacement_keeps_the_public_box_id() {
     let home = TempDir::new().unwrap();
     let server = Server::start(|_| (StatusCode::OK, box_info())).await;
     cli(&home, &server)
-        .args(["create", "--checkpoint", "checkpoint-1", "--name", "worker"])
+        .args(["import", "--checkpoint", "checkpoint-1", "--name", "worker"])
         .assert()
         .success()
         .stdout("cloudBox1234\n");
     cli(&home, &server)
-        .args(["recover", "cloudBox1234", "--checkpoint", "checkpoint-1"])
+        .args([
+            "import",
+            "--box",
+            "cloudBox1234",
+            "--checkpoint",
+            "checkpoint-1",
+        ])
         .assert()
         .success()
         .stdout("cloudBox1234\n");
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path, "/v1/tenant/boxes");
+    assert_eq!(requests[0].path, "/v1/tenant/boxes/import");
     assert_eq!(
         requests[0].body,
         json!({"checkpoint_id":"checkpoint-1","name":"worker"})
     );
-    assert_eq!(requests[1].path, "/v1/tenant/boxes/cloudBox1234/recover");
-    assert_eq!(requests[1].body, json!({"checkpoint_id":"checkpoint-1"}));
+    assert_eq!(requests[1].path, "/v1/tenant/boxes/import");
+    assert_eq!(
+        requests[1].body,
+        json!({"checkpoint_id":"checkpoint-1","box_id":"cloudBox1234"})
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -225,11 +234,11 @@ async fn checkpoint_creation_refuses_execution_overrides_before_sending_requests
     ] {
         let mut command = cli(&home, &server);
         command
-            .args(["create", "--checkpoint", "checkpoint-1"])
+            .args(["import", "--checkpoint", "checkpoint-1"])
             .args(flags)
             .assert()
             .failure()
-            .stderr(contains("cannot be used with"));
+            .stderr(contains("unexpected argument"));
     }
     assert!(server.requests.lock().unwrap().is_empty());
 }

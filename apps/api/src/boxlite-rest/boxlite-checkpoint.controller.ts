@@ -49,8 +49,12 @@ export class BoxliteCheckpointController {
   }
 
   @Get()
-  async list(@AuthContext() auth: OrganizationAuthContext, @Query('page_token') pageToken?: string) {
-    const page = await this.checkpoints.list(auth.organizationId, pageToken)
+  async list(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Query('page_token') legacyPageToken?: string,
+    @Query('pageToken') pageToken?: string,
+  ) {
+    const page = await this.checkpoints.list(auth.organizationId, pageToken ?? legacyPageToken)
     return { checkpoints: page.checkpoints.map(response), next_page_token: page.nextPageToken }
   }
 

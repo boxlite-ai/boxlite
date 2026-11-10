@@ -46,6 +46,12 @@ def checkpoint_server():
                 payload = {"checkpoints": [INFO]}
             elif self.path.startswith("/v1/boxes"):
                 payload = BOX
+            if self.command == "GET" and self.path == "/v1/checkpoints/checkpoint-1":
+                payload = {
+                    **INFO,
+                    "state": "failed",
+                    "error_reason": "archive upload failed",
+                }
             encoded = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -80,27 +86,40 @@ async def test_checkpoint_native_rest_management_and_box_creation(checkpoint_ser
         "ready",
     )
     assert (await checkpoints.list())[0].source_box_id == "source-1"
-    assert (await checkpoints.get("checkpoint-1")).id == "checkpoint-1"
-    created = await checkpoints.create_box("checkpoint-1", "worker")
+    detail = await checkpoints.get("checkpoint-1")
+    assert (detail.id, detail.state, detail.error_reason) == (
+        "checkpoint-1",
+        "failed",
+        "archive upload failed",
+    )
+    created = await checkpoints.import_box("checkpoint-1", "worker")
     assert (created.id, created.name) == ("target-1", "worker")
-    recovered = await checkpoints.recover_box("checkpoint-1", "target-1")
+    recovered = await checkpoints.import_box("checkpoint-1", box_id="target-1")
     assert recovered.id == "target-1"
     await checkpoints.remove("checkpoint-1", True)
     await checkpoints.remove("checkpoint-1")
     await checkpoints.remove("checkpoint-1", False)
     await checkpoints.create("source-1")
-    await checkpoints.create_box("checkpoint-1")
+    await checkpoints.import_box("checkpoint-1")
     assert requests == [
         ("POST", "/v1/checkpoints", {"source_box_id": "source-1", "name": "base"}),
         ("GET", "/v1/checkpoints", None),
         ("GET", "/v1/checkpoints/checkpoint-1", None),
-        ("POST", "/v1/boxes", {"checkpoint_id": "checkpoint-1", "name": "worker"}),
-        ("POST", "/v1/boxes/target-1/recover", {"checkpoint_id": "checkpoint-1"}),
+        (
+            "POST",
+            "/v1/boxes/import",
+            {"checkpoint_id": "checkpoint-1", "name": "worker"},
+        ),
+        (
+            "POST",
+            "/v1/boxes/import",
+            {"checkpoint_id": "checkpoint-1", "box_id": "target-1"},
+        ),
         ("DELETE", "/v1/checkpoints/checkpoint-1?force=true", None),
         ("DELETE", "/v1/checkpoints/checkpoint-1", None),
         ("DELETE", "/v1/checkpoints/checkpoint-1", None),
         ("POST", "/v1/checkpoints", {"source_box_id": "source-1"}),
-        ("POST", "/v1/boxes", {"checkpoint_id": "checkpoint-1"}),
+        ("POST", "/v1/boxes/import", {"checkpoint_id": "checkpoint-1"}),
     ]
 
 
@@ -108,10 +127,11 @@ def test_checkpoint_sync_bridge_returns_managed_box_handles(checkpoint_server):
     url, requests = checkpoint_server
     with boxlite.SyncBoxlite.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
         assert runtime.checkpoints.list()[0].id == "checkpoint-1"
-        target = runtime.checkpoints.create_box("checkpoint-1", "worker")
+        target = runtime.checkpoints.import_box("checkpoint-1", "worker")
         assert isinstance(target, boxlite.SyncBox)
         assert target.id == "target-1"
         assert (
-            runtime.checkpoints.recover_box("checkpoint-1", target.id).id == target.id
+            runtime.checkpoints.import_box("checkpoint-1", box_id=target.id).id
+            == target.id
         )
     assert requests[1][2] == {"checkpoint_id": "checkpoint-1", "name": "worker"}

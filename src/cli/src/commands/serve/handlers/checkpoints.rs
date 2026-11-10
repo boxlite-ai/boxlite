@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, Query, State, rejection::JsonRejection},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 
 use super::super::types::{
-    CheckpointBoxRequest, CreateBoxRequest, CreateCheckpointRequest, RecoverCheckpointRequest,
-    RemoveQuery,
+    CreateCheckpointRequest, ImportCheckpointRequest, ImportQuery, RemoveQuery,
 };
 use super::super::{AppState, error_from_boxlite};
 
@@ -33,10 +33,26 @@ pub(in crate::commands::serve) async fn create(
         Ok(request) => request,
         Err(error) => return error,
     };
+    let source = match state.runtime.get_info(&request.source_box_id).await {
+        Ok(Some(info)) => info.id.to_string(),
+        Ok(None) => {
+            return error_from_boxlite(&boxlite::BoxliteError::NotFound(request.source_box_id));
+        }
+        Err(error) => return error_from_boxlite(&error),
+    };
+    // Local archives cannot encode serve's in-memory deadlines. Keep the read
+    // guard through capture so a concurrent policy update cannot bypass this check.
+    let policies = state.lifecycle.read().await;
+    if policies
+        .get(&source)
+        .is_some_and(|policy| !policy.is_empty())
+    {
+        return invalid_request("Disable auto_stop and auto_delete before capturing a local checkpoint; their deadlines cannot be preserved in the archive".into());
+    }
     match state
         .runtime
         .checkpoints()
-        .create(&request.source_box_id, request.name)
+        .create(&source, request.name)
         .await
     {
         Ok(info) => (StatusCode::CREATED, Json(info)).into_response(),
@@ -77,45 +93,52 @@ pub(in crate::commands::serve) async fn remove(
     }
 }
 
-pub(in crate::commands::serve) async fn create_box(
+pub(in crate::commands::serve) async fn import_box(
     State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
+    Query(query): Query<ImportQuery>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
-    // Select by the discriminator before decoding: invalid checkpoint options
-    // must never fall through to ordinary image creation.
-    if body.get("checkpoint_id").is_some() {
-        match serde_json::from_value::<CheckpointBoxRequest>(body) {
-            Err(error) => invalid_request(error.to_string()),
-            Ok(request) => {
-                match state
-                    .runtime
-                    .checkpoints()
-                    .create_box(&request.checkpoint_id, request.name)
-                    .await
-                {
-                    Ok(bx) => box_response(&state, bx, StatusCode::CREATED).await,
-                    Err(error) => error_from_boxlite(&error),
-                }
-            }
-        }
-    } else {
-        match serde_json::from_value::<CreateBoxRequest>(body) {
-            Ok(request) => super::boxes::create_box(State(state), Json(request)).await,
-            // Keep the pre-checkpoint image endpoint's deserialization status.
-            Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()).into_response(),
-        }
+    let media_type = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("application/octet-stream")
+        .trim();
+    if media_type.eq_ignore_ascii_case("application/octet-stream") {
+        return super::advanced::import_box(State(state), Query(query), body).await;
     }
-}
-
-pub(in crate::commands::serve) async fn recover_box(
-    State(state): State<Arc<AppState>>,
-    Path(target): Path<String>,
-    body: Result<Json<RecoverCheckpointRequest>, JsonRejection>,
-) -> Response {
-    let request = match checkpoint_body(body) {
+    if !media_type.eq_ignore_ascii_case("application/json") {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Expected JSON or a .boxlite archive",
+        )
+            .into_response();
+    }
+    if query.name.is_some() {
+        return invalid_request("JSON import accepts name in the body only".into());
+    }
+    let request: ImportCheckpointRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
-        Err(error) => return error,
+        Err(error) => return invalid_request(error.to_string()),
     };
+    if request.name.is_some() && request.box_id.is_some() {
+        return invalid_request("name and box_id are mutually exclusive".into());
+    }
+    let Some(target) = request.box_id else {
+        return match state
+            .runtime
+            .checkpoints()
+            .import_box(&request.checkpoint_id, request.name, None)
+            .await
+        {
+            Ok(bx) => box_response(&state, bx, StatusCode::CREATED).await,
+            Err(error) => error_from_boxlite(&error),
+        };
+    };
+    // A second named replacement must resolve the result of the first one,
+    // otherwise it evicts the original ID while leaving the intermediate handle.
+    let _replacement = state.checkpoint_replacements.lock().await;
     let old_id = match state.runtime.get_info(&target).await {
         Ok(info) => info.map(|info| info.id.to_string()),
         Err(error) => return error_from_boxlite(&error),
@@ -123,7 +146,7 @@ pub(in crate::commands::serve) async fn recover_box(
     let result = state
         .runtime
         .checkpoints()
-        .recover_box(&request.checkpoint_id, &target)
+        .import_box(&request.checkpoint_id, None, Some(&target))
         .await;
     // An old handle is invalid after replacement, including an import failure
     // after removal. Evict it even on failure; a surviving box is fetched anew.

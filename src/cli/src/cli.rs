@@ -316,7 +316,7 @@ const COMMAND_SCOPES: &[CommandScope] = &[
             box_command_scope("delete", &[]),
         ],
     ),
-    box_command_scope("recover", &[]),
+    box_command_scope("import", &[]),
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -758,8 +758,8 @@ pub enum Commands {
     Create(crate::commands::create::CreateArgs),
     /// Manage disk checkpoints locally or on the selected REST server.
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
-    /// Replace a stopped or failed box from a checkpoint.
-    Recover(crate::commands::recover::RecoverArgs),
+    /// Import an archive or checkpoint; optionally replace an existing box.
+    Import(crate::commands::import::ImportArgs),
 
     /// List boxes
     #[command(visible_alias = "ls", visible_alias = "ps")]

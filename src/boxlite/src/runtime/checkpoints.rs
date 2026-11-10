@@ -27,6 +27,8 @@ pub struct CheckpointInfo {
     pub size_bytes: u64,
     #[serde(default)]
     pub state: CheckpointState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reason: Option<String>,
 }
 
 /// Ready means the entire archive is available, including upload on REST.
@@ -49,7 +51,7 @@ pub struct CheckpointArchiveSource {
     pub pinned_image: String,
 }
 
-#[expect(
+#[allow(
     clippy::double_must_use,
     reason = "async_trait generates a must-use boxed future"
 )]
@@ -122,23 +124,35 @@ impl CheckpointHandle {
         self.backend.remove(key, force).await
     }
 
-    /// Create a stopped local box, or submit the corresponding REST create.
-    /// The checkpoint retains its archive and can be used again.
-    pub async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox> {
+    /// Import into a new box, or replace an idle target selected by `box_id`.
+    /// Name and target are mutually exclusive. Local replacement preserves
+    /// the target name but assigns a new ID; REST keeps the public identity.
+    /// Import retains the checkpoint archive for subsequent uses.
+    pub async fn import_box(
+        &self,
+        key: &str,
+        name: Option<String>,
+        box_id: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
         checked_name(key)?;
-        self.backend.create_box(key, name).await
-    }
-
-    /// Replace an idle box from this checkpoint. Local import preserves the
-    /// target name but assigns a new ID; failures retain the checkpoint.
-    pub async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox> {
-        checked_name(key)?;
-        if target.is_empty() || target.contains('\0') {
+        if name.is_some() && box_id.is_some() {
             return Err(BoxliteError::InvalidArgument(
-                "recovery target must be a box ID or name".into(),
+                "name and box_id are mutually exclusive".into(),
             ));
         }
-        self.backend.recover_box(key, target).await
+        if let Some(target) = box_id {
+            if target.is_empty() || target.contains('\0') {
+                return Err(BoxliteError::InvalidArgument(
+                    "import target must be a box ID or name".into(),
+                ));
+            }
+            self.backend.recover_box(key, target).await
+        } else {
+            if let Some(name) = &name {
+                checked_name(name)?;
+            }
+            self.backend.create_box(key, name).await
+        }
     }
 
     /// Validate an archive and its pinned startup image before replacing a box.

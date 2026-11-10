@@ -170,6 +170,12 @@ export const handlers = [
   // The Box API's create, which the New Box dialog calls on the page's own
   // origin. The box pulls for a moment, then starts; reaching STARTED is what
   // puts its image in the catalog, as the API's registrar does.
+  http.post('*/v1/:organizationId/boxes/import', async ({ params, request }) => {
+    const body = (await request.json()) as { checkpoint_id?: string; name?: string }
+    if (!body.checkpoint_id || Object.keys(body).some((key) => key !== 'checkpoint_id' && key !== 'name'))
+      return HttpResponse.json({ message: 'Expected a checkpoint selector and optional name' }, { status: 400 })
+    return createMockCheckpointBox(String(params.organizationId), body.checkpoint_id, body.name)
+  }),
   http.post('*/v1/:organizationId/boxes', async ({ params, request }) => {
     const body = (await request.json()) as {
       checkpoint_id?: string
@@ -178,11 +184,8 @@ export const handlers = [
       cpus?: number
       memory_mib?: number
     }
-    if (body.checkpoint_id !== undefined) {
-      if (Object.keys(body).some((key) => key !== 'checkpoint_id' && key !== 'name'))
-        return HttpResponse.json({ message: 'Checkpoint configuration overrides are not supported' }, { status: 400 })
-      return createMockCheckpointBox(String(params.organizationId), body.checkpoint_id, body.name)
-    }
+    if (body.checkpoint_id !== undefined)
+      return HttpResponse.json({ message: 'Use /boxes/import for checkpoints' }, { status: 400 })
     const image = body.image || 'ghcr.io/boxlite-ai/boxlite-agent-base:mock'
     const id = `mock-box-${Math.abs(Date.now() % 100000000)}`
     const box = buildBox({

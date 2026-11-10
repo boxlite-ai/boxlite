@@ -191,7 +191,7 @@ func (a Artifacts) lock(ctx context.Context, ref Reference) (string, func(), err
 	}
 	directory := filepath.Join(a.Root, ref.CheckpointID, ref.ExportJobID)
 	locks := filepath.Join(a.Root, ".locks")
-	if err := os.MkdirAll(a.Root, 0700); err != nil {
+	if err := durableDirectories(a.Root); err != nil {
 		return "", nil, err
 	}
 	if err := privateDirectory(locks); err != nil {
@@ -247,7 +247,34 @@ func privateDirectory(path string) error {
 	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("checkpoint directory must be private and cannot be a symlink")
 	}
-	return nil
+	return syncDirectory(filepath.Dir(path))
+}
+
+// Commit each new ancestor before creating children. Retrying a directory
+// whose first parent sync failed must repeat that barrier before capture.
+func durableDirectories(path string) error {
+	err := os.Mkdir(path, 0700)
+	if errors.Is(err, os.ErrNotExist) {
+		parent := filepath.Dir(path)
+		if parent == path {
+			return err
+		}
+		if err := durableDirectories(parent); err != nil {
+			return err
+		}
+		err = os.Mkdir(path, 0700)
+	}
+	if err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("checkpoint work path is not a directory")
+	}
+	return syncDirectory(filepath.Dir(path))
 }
 
 func (a Artifacts) read(directory string, expected Reference) (Artifact, error) {

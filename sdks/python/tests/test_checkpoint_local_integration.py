@@ -50,14 +50,17 @@ async def test_checkpoint_local_vm_capture_import_and_recover(test_registries):
             await shell(
                 source, "mkdir -p /data; printf captured > /data/checkpoint.txt; sync"
             )
+            await source.stop()
             checkpoint = await runtime.checkpoints.create(source.id, "base")
             assert checkpoint.state == "ready"
             assert checkpoint.size_bytes > 0
             assert list((root / "archives").glob("*/archive.boxlite"))
+            source = await runtime.get(source.id)
+            await source.start()
             await shell(source, "printf changed-later > /data/checkpoint.txt; sync")
             await runtime.remove(source.id, force=True)
 
-            copy = await runtime.checkpoints.create_box(checkpoint.id, "copy")
+            copy = await runtime.checkpoints.import_box(checkpoint.id, "copy")
             assert copy.id != source.id
             assert (
                 await shell(
@@ -80,7 +83,9 @@ async def test_checkpoint_local_vm_capture_import_and_recover(test_registries):
             )
             await target.stop()
             old_id = target.id
-            recovered = await runtime.checkpoints.recover_box(checkpoint.id, old_id)
+            recovered = await runtime.checkpoints.import_box(
+                checkpoint.id, box_id=old_id
+            )
             assert recovered.id != old_id
             assert recovered.name == "target"
             assert await runtime.get_info(old_id) is None

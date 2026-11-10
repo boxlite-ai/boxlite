@@ -26,7 +26,7 @@ pub(super) struct Catalog {
     root: PathBuf,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Record {
     version: u32,
     pub info: CheckpointInfo,
@@ -94,6 +94,7 @@ impl Catalog {
                 created_at: Utc::now(),
                 size_bytes,
                 state: super::CheckpointState::Ready,
+                error_reason: None,
             },
             pinned_image,
             archive_sha256: sha256_file(&Self::archive_path(&stage))?,
@@ -117,11 +118,11 @@ impl Catalog {
         // Export does not hold this lease. Publication rechecks uniqueness after
         // the slow export, including writers using another BOXLITE_HOME.
         let _catalog = self.catalog_lock(true)?;
-        if self
-            .records()?
-            .iter()
-            .any(|existing| existing.info.name == record.info.name)
-        {
+        if self.records()?.iter().any(|existing| {
+            existing.info.name == record.info.name
+                || existing.info.id == record.info.name
+                || existing.info.name == record.info.id
+        }) {
             return Err(BoxliteError::InvalidState(format!(
                 "checkpoint '{}' already exists",
                 record.info.name
@@ -283,9 +284,12 @@ impl Catalog {
     }
 
     fn find(&self, key: &str) -> BoxliteResult<Record> {
-        self.records()?
-            .into_iter()
-            .find(|record| record.info.id == key || record.info.name == key)
+        let records = self.records()?;
+        records
+            .iter()
+            .find(|record| record.info.id == key)
+            .or_else(|| records.iter().find(|record| record.info.name == key))
+            .cloned()
             .ok_or_else(|| missing(key))
     }
 

@@ -108,7 +108,7 @@ export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: (
             )}
             {(box ? source.isSuccess : boxes.isSuccess) && eligible.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                No eligible boxes. Choose an idle running or stopped box without volumes or secrets.
+                No eligible boxes. Stop a box without volumes or secrets before creating a checkpoint.
               </p>
             )}
             <label className="flex flex-col gap-[9px]">

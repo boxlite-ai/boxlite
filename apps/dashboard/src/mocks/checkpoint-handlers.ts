@@ -87,10 +87,14 @@ export const checkpointHandlers = [
   }),
   http.post('*/v1/:organizationId/checkpoints', async ({ params, request }) => {
     const body = (await request.json()) as { source_box_id: string; name?: string }
-    const source = MOCK_BOXES.find((box) => box.id === body.source_box_id || box.name === body.source_box_id)
+    const source = MOCK_BOXES.find(
+      (box) =>
+        box.organizationId === String(params.organizationId) &&
+        (box.id === body.source_box_id || box.name === body.source_box_id),
+    )
     if (!source) return HttpResponse.json({ message: 'Source Box not found' }, { status: 404 })
-    if (source.state !== BoxState.STARTED && source.state !== BoxState.STOPPED)
-      return HttpResponse.json({ message: 'Source Box must be idle and started or stopped' }, { status: 409 })
+    if (source.state !== BoxState.STOPPED)
+      return HttpResponse.json({ message: 'Source Box must be idle and stopped' }, { status: 409 })
     if (source.volumes?.length)
       return HttpResponse.json({ message: 'Sources with volumes cannot be captured' }, { status: 400 })
     const rows = recordsFor(String(params.organizationId))

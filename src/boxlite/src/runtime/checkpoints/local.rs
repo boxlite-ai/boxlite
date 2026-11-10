@@ -9,7 +9,7 @@ use super::{
     CheckpointArchiveSource, CheckpointBackend, CheckpointInfo, PreparedCheckpointArchive, archive,
     catalog::{Catalog, Recovery},
 };
-use crate::runtime::options::{BoxArchive, ExportOptions};
+use crate::runtime::options::BoxArchive;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::{BoxliteError, BoxliteResult, LiteBox};
 
@@ -26,6 +26,15 @@ impl LocalCheckpoints {
             catalog: Catalog::new(directory),
         }
     }
+
+    fn ensure_running(&self) -> BoxliteResult<()> {
+        if self.runtime.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot use checkpoints: runtime has been shut down".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -35,6 +44,7 @@ impl CheckpointBackend for LocalCheckpoints {
         source: CheckpointArchiveSource,
         platform_env: Option<std::collections::BTreeMap<String, String>>,
     ) -> BoxliteResult<PreparedCheckpointArchive> {
+        self.ensure_running()?;
         let runtime = Arc::clone(&self.runtime);
         tokio::spawn(async move {
             let directory = runtime.layout.temp_dir();
@@ -48,6 +58,7 @@ impl CheckpointBackend for LocalCheckpoints {
         .map_err(task_error)?
     }
     async fn create(&self, source: &str, name: Option<String>) -> BoxliteResult<CheckpointInfo> {
+        self.ensure_running()?;
         let runtime = Arc::clone(&self.runtime);
         let catalog = self.catalog.clone();
         let source = source.to_owned();
@@ -58,6 +69,12 @@ impl CheckpointBackend for LocalCheckpoints {
                 .get_info(&source)
                 .await?
                 .ok_or_else(|| BoxliteError::NotFound(format!("box '{source}'")))?;
+            if info.status != crate::BoxStatus::Stopped {
+                return Err(BoxliteError::InvalidState(
+                    "checkpoint source must be stopped; stop the Box before creating a checkpoint"
+                        .into(),
+                ));
+            }
             let (config, _) = runtime
                 .box_manager
                 .box_by_id(&info.id)?
@@ -77,11 +94,13 @@ impl CheckpointBackend for LocalCheckpoints {
             let stage_catalog = catalog.clone();
             let stage = blocking(move || stage_catalog.stage()).await?;
             let destination = Catalog::archive_path(&stage);
-            let bx = runtime
-                .get(&source)
-                .await?
+            let (config, state) = runtime
+                .box_manager
+                .box_by_id(&info.id)?
                 .ok_or_else(|| BoxliteError::NotFound(format!("box '{source}'")))?;
-            bx.export(ExportOptions::default(), &destination).await?;
+            let (bx, _) = runtime.get_or_create_box_impl(config, state);
+            drop(_ownership);
+            bx.export_checkpoint(&destination).await?;
             blocking(move || catalog.publish(stage, name, info.id.to_string(), pinned)).await
         })
         .await
@@ -106,6 +125,7 @@ impl CheckpointBackend for LocalCheckpoints {
     }
 
     async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox> {
+        self.ensure_running()?;
         let catalog = self.catalog.clone();
         let key = key.to_owned();
         let directory = self.runtime.layout.temp_dir();
@@ -126,6 +146,7 @@ impl CheckpointBackend for LocalCheckpoints {
     }
 
     async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox> {
+        self.ensure_running()?;
         let runtime = Arc::clone(&self.runtime);
         let catalog = self.catalog.clone();
         let key = key.to_owned();

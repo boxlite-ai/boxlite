@@ -52,7 +52,18 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       : request.method === "GET" && request.url === "/v1/checkpoints"
         ? { checkpoints: [checkpoint] }
         : checkpoint;
-    response.end(JSON.stringify(body));
+    response.end(
+      JSON.stringify(
+        request.method === "GET" &&
+          request.url === "/v1/checkpoints/checkpoint-1"
+          ? {
+              ...checkpoint,
+              state: "failed",
+              error_reason: "archive upload failed",
+            }
+          : body,
+      ),
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -66,20 +77,30 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       state: "ready",
     });
     expect((await runtime.checkpoints.list())[0].id).toBe("checkpoint-1");
-    expect((await runtime.checkpoints.get("checkpoint-1")).name).toBe("base");
-    const target = await runtime.checkpoints.createBox(
+    expect(await runtime.checkpoints.get("checkpoint-1")).toMatchObject({
+      name: "base",
+      state: "failed",
+      errorReason: "archive upload failed",
+    });
+    const target = await runtime.checkpoints.importBox(
       "checkpoint-1",
       "worker",
     );
     expect(target.id).toBe("target-1");
     expect(
-      (await runtime.checkpoints.recoverBox("checkpoint-1", target.id)).id,
+      (
+        await runtime.checkpoints.importBox(
+          "checkpoint-1",
+          undefined,
+          target.id,
+        )
+      ).id,
     ).toBe(target.id);
     await runtime.checkpoints.remove("checkpoint-1", true);
     await runtime.checkpoints.remove("checkpoint-1");
     await runtime.checkpoints.remove("checkpoint-1", false);
     await runtime.checkpoints.create("source-1");
-    await runtime.checkpoints.createBox("checkpoint-1");
+    await runtime.checkpoints.importBox("checkpoint-1");
     expect(requests).toEqual([
       {
         method: "POST",
@@ -90,13 +111,13 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       { method: "GET", path: "/v1/checkpoints/checkpoint-1", body: undefined },
       {
         method: "POST",
-        path: "/v1/boxes",
+        path: "/v1/boxes/import",
         body: { checkpoint_id: "checkpoint-1", name: "worker" },
       },
       {
         method: "POST",
-        path: "/v1/boxes/target-1/recover",
-        body: { checkpoint_id: "checkpoint-1" },
+        path: "/v1/boxes/import",
+        body: { checkpoint_id: "checkpoint-1", box_id: "target-1" },
       },
       {
         method: "DELETE",
@@ -120,7 +141,7 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       },
       {
         method: "POST",
-        path: "/v1/boxes",
+        path: "/v1/boxes/import",
         body: { checkpoint_id: "checkpoint-1" },
       },
     ]);

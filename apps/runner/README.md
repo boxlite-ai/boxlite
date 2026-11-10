@@ -665,7 +665,7 @@ Supported job types:
 CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
 EXPORT_BOX, IMPORT_BOX,
 ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX
-EXPORT_CHECKPOINT, UPLOAD_CHECKPOINT
+EXPORT_CHECKPOINT, UPLOAD_CHECKPOINT, IMPORT_CHECKPOINT
 ```
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
@@ -682,6 +682,10 @@ job execution.
 The [checkpoint design](https://github.com/boxlite-ai/boxlite/issues/2367)
 defines the capture, transfer and recovery contracts; the transfer helper alone
 does not provide target recovery ownership.
+
+Checkpoint creation requires an idle, stopped source; running and transitional
+sources are refused without stopping them. The runner rechecks `stopped` while
+holding the source operation lease, so a concurrent start cannot race export.
 
 Checkpoint capture separates native export from upload. `EXPORT_CHECKPOINT`
 owns the source `BOX` job slot; it reports an immutable archive record and never

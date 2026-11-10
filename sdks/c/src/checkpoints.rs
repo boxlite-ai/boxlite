@@ -30,10 +30,19 @@ pub struct CCheckpointInfo {
     pub size_bytes: u64,
     /// Lowercase creating, ready, failed, or deleting.
     pub state: *mut c_char,
+    /// Null unless the server reports a failure reason.
+    pub error_reason: *mut c_char,
 }
 
 impl CCheckpointInfo {
     fn new(info: CheckpointInfo) -> BoxliteResult<Self> {
+        let reason = info
+            .error_reason
+            .map(CString::new)
+            .transpose()
+            .map_err(|_| {
+                BoxliteError::Internal("checkpoint failure reason contains a NUL byte".into())
+            })?;
         let values = [
             info.id,
             info.name,
@@ -58,6 +67,7 @@ impl CCheckpointInfo {
             created_at: strings.next().unwrap().into_raw(),
             size_bytes: info.size_bytes,
             state: strings.next().unwrap().into_raw(),
+            error_reason: reason.map_or(std::ptr::null_mut(), CString::into_raw),
         })
     }
 }
@@ -70,6 +80,7 @@ impl Drop for CCheckpointInfo {
             self.source_box_id,
             self.created_at,
             self.state,
+            self.error_reason,
         ] {
             if !value.is_null() {
                 unsafe {
@@ -258,12 +269,14 @@ pub unsafe extern "C" fn boxlite_checkpoint_remove(
     }
 }
 
-/// Queue creation with inherited settings. Name may be null; callback owns Box.
+/// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
+/// A non-null box_id replaces an idle target; the callback owns the Box handle.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_checkpoint_create_box(
+pub unsafe extern "C" fn boxlite_checkpoint_import_box(
     runtime: *mut CBoxliteRuntime,
     key: *const c_char,
     name: *const c_char,
+    box_id: *const c_char,
     cb: CRuntimeImportCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
@@ -271,6 +284,7 @@ pub unsafe extern "C" fn boxlite_checkpoint_create_box(
     let cb = crate::unwrap_cb_or_return!(cb, out_error);
     let key = input_or_return!(unsafe { required(key) }, out_error);
     let name = input_or_return!(unsafe { optional(name) }, out_error);
+    let box_id = input_or_return!(unsafe { optional(box_id) }, out_error);
     let user_data = user_data as usize;
     unsafe {
         submit(
@@ -279,41 +293,7 @@ pub unsafe extern "C" fn boxlite_checkpoint_create_box(
             move |runtime, tokio_rt, queue| async move {
                 let result = runtime
                     .checkpoints()
-                    .create_box(&key, name)
-                    .await
-                    .map(|handle| boxed_result(handle, tokio_rt, queue));
-                RuntimeEvent::RuntimeImport {
-                    cb,
-                    user_data,
-                    result,
-                }
-            },
-        )
-    }
-}
-
-/// Queue recovery. Target must be idle; local result has a new native ID.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_checkpoint_recover_box(
-    runtime: *mut CBoxliteRuntime,
-    key: *const c_char,
-    target: *const c_char,
-    cb: CRuntimeImportCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    let cb = crate::unwrap_cb_or_return!(cb, out_error);
-    let key = input_or_return!(unsafe { required(key) }, out_error);
-    let target = input_or_return!(unsafe { required(target) }, out_error);
-    let user_data = user_data as usize;
-    unsafe {
-        submit(
-            runtime,
-            out_error,
-            move |runtime, tokio_rt, queue| async move {
-                let result = runtime
-                    .checkpoints()
-                    .recover_box(&key, &target)
+                    .import_box(&key, name, box_id.as_deref())
                     .await
                     .map(|handle| boxed_result(handle, tokio_rt, queue));
                 RuntimeEvent::RuntimeImport {

@@ -92,14 +92,17 @@ async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_i
         "mkdir -p /workspace; "
         "printf '%s' \"$CHECKPOINT_E2E\" > /workspace/checkpoint-e2e.txt; sync",
     )
+    await source.stop()
     checkpoint = await rt.checkpoints.create(source.id, names["archive"])
     checkpoint = await ready_checkpoint(rt.checkpoints, checkpoint.id)
     # The immutable archive must retain the captured disk, not this later write.
+    source = await rt.get(source.id)
+    await source.start()
     await shell(source, "printf changed-after-capture > /workspace/checkpoint-e2e.txt; sync")
     await rt.remove(source.id, force=True)
     assert (await rt.checkpoints.get(checkpoint.id)).state == "ready"
 
-    copy = await rt.checkpoints.create_box(checkpoint.id, names["copy"])
+    copy = await rt.checkpoints.import_box(checkpoint.id, names["copy"])
     assert copy.id != source.id
     read_captured = (
         "printf '%s\n%s\n' \"$CHECKPOINT_E2E\" \"$BOXLITE_BOX_ID\"; "
@@ -117,7 +120,7 @@ async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_i
     await shell(target, "mkdir -p /workspace; printf old-target > /workspace/checkpoint-e2e.txt")
     await target.stop()
     public_id = target.id
-    recovered = await rt.checkpoints.recover_box(checkpoint.id, public_id)
+    recovered = await rt.checkpoints.import_box(checkpoint.id, box_id=public_id)
     assert recovered.id == public_id
     assert recovered.name == names["target"]
     info = await recovered.info()

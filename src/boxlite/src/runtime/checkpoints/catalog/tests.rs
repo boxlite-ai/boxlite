@@ -1,6 +1,20 @@
 //! New catalog contract checks; native capture/import are exercised separately.
 
 use super::*;
+
+#[test]
+fn checkpoint_metadata_preserves_a_remote_failure_reason() {
+    let info: CheckpointInfo = serde_json::from_value(serde_json::json!({
+        "id": "checkpoint-failed", "name": "failed", "source_box_id": "source",
+        "created_at": "2026-11-06T00:00:00Z", "size_bytes": 0,
+        "state": "failed", "error_reason": "Checkpoint upload failed"
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(info).unwrap()["error_reason"],
+        "Checkpoint upload failed"
+    );
+}
 use std::sync::{Arc, Barrier};
 
 fn catalog() -> (Catalog, TempDir) {
@@ -69,6 +83,20 @@ fn published_records_round_trip_and_keep_the_archive_private() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn checkpoint_name_cannot_shadow_an_existing_id() {
+    let (catalog, _temporary) = catalog();
+    let original = publish(&catalog, "original");
+    let result = catalog.publish(
+        staged(&catalog),
+        Some(original.id.clone()),
+        "other-source".into(),
+        format!("example/image@sha256:{}", "a".repeat(64)),
+    );
+    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+    assert_eq!(catalog.info(&original.id).unwrap(), original);
 }
 
 #[test]

@@ -39,6 +39,7 @@ import { RegistryCredential } from '../../registry/entities/registry-credential.
 import { RegistriesService } from '../../registry/services/registries.service'
 import { BoxService } from './box.service'
 import { Context } from '../../common/context/context'
+import { BoxManager } from '../managers/box.manager'
 
 const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `checkpoint_api_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -62,8 +63,9 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   const imageAdmission = { assert: jest.fn() }
   const runnerSelection = { getRandomAvailableRunner: jest.fn() }
   const archiveStore = { remove: jest.fn() }
-  let settings: { archivePrefix?: string; maxPerOrganization: number }
+  let settings: { archivePrefix?: string; maxPerOrganization: number; enabled?: boolean }
   const cache = { invalidate: jest.fn() }
+  const uploadNotifications = { lpush: jest.fn() }
 
   beforeAll(async () => {
     dataSource = await new DataSource({
@@ -103,7 +105,12 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const jobService = new JobService(jobs, { lpush: jest.fn().mockResolvedValue(1) } as any, {} as any)
     const config = { get: (key: string) => (key === 'checkpoint' ? settings : undefined) } as ConfigService
     service = new CheckpointService(dataSource, config, jobService, cache as any, archiveStore as never)
-    receiver = new CheckpointJobReceiver(dataSource, cache as any, events as unknown as EventEmitter2)
+    receiver = new CheckpointJobReceiver(
+      dataSource,
+      cache as never,
+      events as unknown as EventEmitter2,
+      uploadNotifications as never,
+    )
     repository = new BoxRepository(dataSource, events as unknown as EventEmitter2, cache as any)
     recovery = new CheckpointRecoverService(
       dataSource,
@@ -128,10 +135,11 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   })
 
   beforeEach(async () => {
+    uploadNotifications.lpush.mockReset().mockResolvedValue(1)
     await dataSource.query(
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
     )
-    settings = { archivePrefix: 'gs://checkpoint-tests/checkpoints/', maxPerOrganization: 10 }
+    settings = { archivePrefix: 'gs://checkpoint-tests/checkpoints/', maxPerOrganization: 10, enabled: true }
     runner = new Runner({
       region: 'us',
       name: 'runner',
@@ -162,6 +170,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       findOneByIdOrName: (id: string, organizationId: string) => boxes.findOneByOrFail({ id, organizationId }),
       boxRepository: repository,
       eventEmitter: events,
+      logger: { debug: jest.fn() },
     })
   }
 
@@ -218,6 +227,36 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  it('requires a stopped source before accepting checkpoint capture', async () => {
+    const box = await source()
+    await boxes.update(box.id, { state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED })
+    await expect(service.create(organizationId, box.id, 'running-source')).rejects.toMatchObject({ status: 409 })
+    expect(await checkpoints.count()).toBe(0)
+    expect(await jobs.count()).toBe(0)
+    expect(await states.count()).toBe(0)
+    expect((await boxes.findOneByOrFail({ id: box.id })).pending).toBe(false)
+    await boxes.update(box.id, { state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED })
+    await expect(service.create(organizationId, box.id, 'stopped-source')).resolves.toMatchObject({ state: 'creating' })
+  })
+
+  it('refuses new checkpoint work until rollout is explicitly enabled despite provisioned storage', async () => {
+    const checkpoint = await readyCheckpoint()
+    const target = await source('rollout-target')
+    settings.enabled = false
+    const priorJobs = await jobs.count()
+    await expect(service.create(organizationId, target.id, 'must-not-capture')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    )
+    await expect(recovery.createBox(organization, checkpoint.id, 'must-not-import', undefined)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    )
+    await expect(recovery.recover(organization, checkpoint.id, target.id, undefined)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    )
+    expect(await jobs.count()).toBe(priorJobs)
+    expect((await service.get(organizationId, checkpoint.id)).state).toBe('ready')
+  })
 
   it('keeps ordinary Box reads independent and loads coordination only when requested', async () => {
     const target = await source()
@@ -827,6 +866,61 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await checkpoints.count()).toBe(0)
   })
 
+  it('retries native destruction of a cancelled checkpoint target through periodic reconciliation', async () => {
+    const checkpoint = await readyCheckpoint()
+    const target = await recovery.createBox(organization, checkpoint.id, 'delete-reconcile', undefined)
+    await lifecycleService().destroy(target.id, organizationId, Context.user())
+    let destroyed: () => void
+    const attempted = new Promise<void>((resolve) => {
+      destroyed = resolve
+    })
+    const destroy = {
+      run: jest.fn().mockImplementation(async () => {
+        destroyed()
+        return false
+      }),
+    }
+    const locks = {
+      lock: jest.fn().mockResolvedValue(true),
+      unlock: jest.fn(),
+      isLocked: jest.fn().mockResolvedValue(false),
+    }
+    const manager = new BoxManager(
+      repository,
+      { getRunnerApiVersion: async () => '2' } as never,
+      {} as never,
+      locks as never,
+      {} as never,
+      {} as never,
+      destroy as never,
+      {} as never,
+    )
+    await manager.syncStates()
+    expect(
+      await new Promise<boolean>((resolve) => {
+        const deadline = setTimeout(() => resolve(false), 2000)
+        void attempted.then(() => {
+          clearTimeout(deadline)
+          resolve(true)
+        })
+      }),
+    ).toBe(true)
+    expect(destroy.run).toHaveBeenCalledWith(expect.objectContaining({ id: target.id }), expect.anything())
+  })
+
+  it('retains cancelled checkpoint targets until native destruction is confirmed', async () => {
+    const checkpoint = await readyCheckpoint()
+    const target = await recovery.createBox(organization, checkpoint.id, 'delete-retained', undefined)
+    await lifecycleService().destroy(target.id, organizationId, Context.user())
+    const ordinary = await source('ordinary-error')
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
+    await boxes.update(target.id, { updatedAt: old })
+    await boxes.update(ordinary.id, { state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: old })
+    await lifecycleService().cleanupStaleErrorBoxes()
+    expect(await boxes.findOneBy({ id: target.id })).not.toBeNull()
+    expect(await boxes.findOneBy({ id: ordinary.id })).toBeNull()
+  })
+
   it('protects the selected registry login through a checkpoint without blocking a shadowed prefix', async () => {
     const previousProxy = process.env.REGISTRY_PROXY_HOST
     process.env.REGISTRY_PROXY_HOST = 'checkpoint-proxy.example'
@@ -1073,6 +1167,45 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
   })
 
+  it('wakes the runner for upload only after the export transaction commits', async () => {
+    const box = await source()
+    const checkpoint = await service.create(organizationId, box.id, 'notify-upload')
+    const observed: unknown[] = []
+    uploadNotifications.lpush.mockImplementation(async (queue: string, jobId: string) => {
+      // This repository uses a separate connection from the transaction.
+      observed.push({
+        queue,
+        jobId,
+        job: await jobs.findOneBy({ id: jobId }),
+        checkpoint: await checkpoints.findOneBy({ id: checkpoint.id }),
+      })
+      return 1
+    })
+    const completed = await finish(checkpoint.exportJobId!, archive(checkpoint))
+    expect(uploadNotifications.lpush).toHaveBeenCalledTimes(1)
+    const jobId = uploadNotifications.lpush.mock.calls[0][1]
+    expect(observed).toEqual([
+      {
+        queue: `runner:jobs:${runner.id}`,
+        jobId,
+        job: expect.objectContaining({ id: jobId, type: JobType.UPLOAD_CHECKPOINT }),
+        checkpoint: expect.objectContaining({ activeJobId: jobId }),
+      },
+    ])
+    await receiver.handleJobCompletion(completed)
+    expect(uploadNotifications.lpush).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a committed upload available for polling when its Redis wakeup fails', async () => {
+    const box = await source()
+    const checkpoint = await service.create(organizationId, box.id, 'notify-unavailable')
+    uploadNotifications.lpush.mockRejectedValue(new Error('Redis temporarily unavailable'))
+    await finish(checkpoint.exportJobId!, archive(checkpoint))
+    const pending = await checkpoints.findOneByOrFail({ id: checkpoint.id })
+    expect(await jobs.findOneByOrFail({ id: pending.activeJobId! })).toMatchObject({ type: JobType.UPLOAD_CHECKPOINT })
+    expect(uploadNotifications.lpush).toHaveBeenCalledTimes(1)
+  })
+
   it('releases the source after export and becomes ready only after upload', async () => {
     const box = await source()
     const created = await new BoxliteCheckpointController(service).create({ organizationId } as never, {
@@ -1276,14 +1409,13 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await jobs.count()).toBe(1)
   })
 
-  it('keeps a started source started when export releases its busy flag', async () => {
+  it('keeps the source stopped when export releases its busy flag', async () => {
     const box = await source()
-    await boxes.update(box.id, { state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED })
     const checkpoint = await service.create(organizationId, box.id)
     await finish(checkpoint.exportJobId!, archive(checkpoint))
     expect(await boxes.findOneByOrFail({ id: box.id }).then(withCheckpointState)).toMatchObject({
-      state: BoxState.STARTED,
-      desiredState: BoxDesiredState.STARTED,
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STOPPED,
       pending: false,
       activeJobId: null,
     })
