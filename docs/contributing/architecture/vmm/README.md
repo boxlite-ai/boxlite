@@ -19,6 +19,7 @@ Diagrams of this design:
 - [Linux KVM](./kvm.md)
 - [Windows Hypervisor Platform](./whp.md)
 - [Guest memory](./memory.md)
+- [Linux virtio-fs data flow](./virtio-fs.md) traces share configuration, FUSE requests, object ownership and cleanup, with observed acceptance results.
 
 BoxLite line references are to commit `42ec1a2a6`. External citations name
 their project; their revisions are pinned under [References](#references).

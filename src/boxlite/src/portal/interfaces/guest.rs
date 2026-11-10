@@ -143,6 +143,31 @@ mod tests {
     const MINIMUM: GuestVersion = (0, 9, 8);
 
     #[test]
+    fn aggregate_mount_identity_survives_proto_conversion() {
+        let config = VolumeConfig::Virtiofs {
+            tag: "BoxLiteShared".into(),
+            device_tag: "boxlite".into(),
+            export_key: "shared".into(),
+            mount_point: String::new(),
+            read_only: true,
+            container_id: None,
+        };
+        let encoded = config.into_proto();
+        let Some(boxlite_shared::volume::Source::Virtiofs(fs)) = encoded.source else {
+            panic!("filesystem source")
+        };
+        assert_eq!(fs.tag, "BoxLiteShared");
+        assert_eq!(fs.device_tag, "boxlite");
+        assert_eq!(fs.export_key, "shared");
+        assert!(fs.read_only);
+        let legacy = VolumeConfig::virtiofs("BoxLiteShared", "", false, None).into_proto();
+        let Some(boxlite_shared::volume::Source::Virtiofs(fs)) = legacy.source else {
+            panic!("filesystem source")
+        };
+        assert!(fs.device_tag.is_empty() && fs.export_key.is_empty());
+    }
+
+    #[test]
     fn guest_older_than_the_minimum_is_rejected() {
         for version in ["0.9.7", "0.8.9", "0.9.7-rc1"] {
             let error = ensure_guest_version(version, MINIMUM)
@@ -191,6 +216,9 @@ pub enum VolumeConfig {
     Virtiofs {
         /// Virtiofs tag
         tag: String,
+        /// Aggregate device tag and export key; empty for legacy mounts.
+        device_tag: String,
+        export_key: String,
         /// Mount point in guest
         mount_point: String,
         read_only: bool,
@@ -222,6 +250,8 @@ impl VolumeConfig {
     ) -> Self {
         Self::Virtiofs {
             tag: tag.into(),
+            device_tag: String::new(),
+            export_key: String::new(),
             mount_point: mount_point.into(),
             read_only,
             container_id,
@@ -249,6 +279,8 @@ impl VolumeConfig {
         match self {
             VolumeConfig::Virtiofs {
                 tag,
+                device_tag,
+                export_key,
                 mount_point,
                 read_only,
                 container_id,
@@ -257,6 +289,8 @@ impl VolumeConfig {
                 source: Some(boxlite_shared::volume::Source::Virtiofs(VirtiofsSource {
                     tag,
                     read_only,
+                    device_tag,
+                    export_key,
                 })),
                 container_id: container_id.unwrap_or_default(),
             },

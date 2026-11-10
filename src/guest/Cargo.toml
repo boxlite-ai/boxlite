@@ -11,6 +11,10 @@ edition = "2021"
 name = "boxlite-guest"
 path = "src/main.rs"
 
+[features]
+# Run the production mount adapter as initramfs PID 1 for native VMM acceptance.
+integration-test-init = []
+
 [dependencies]
 boxlite-shared.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
