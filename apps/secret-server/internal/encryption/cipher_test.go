@@ -206,6 +206,9 @@ func TestEnvelopeTampering(t *testing.T) {
 			if err == nil || plain != nil {
 				t.Fatalf("accepted modified %s byte %d", field, i)
 			}
+			if !errors.Is(err, ErrAuthentication) && !errors.Is(err, ErrInvalidInput) && !errors.Is(err, ErrUnknownKey) {
+				t.Fatalf("modified %s byte %d returned unexpected error: %v", field, i, err)
+			}
 		}
 		for n := 0; n < size; n++ {
 			e := original
@@ -214,8 +217,12 @@ func TestEnvelopeTampering(t *testing.T) {
 			} else {
 				e.WrappedDEK.Ciphertext = e.WrappedDEK.Ciphertext[:n]
 			}
-			if plain, err := c.Decrypt(context.Background(), fixtureContext(), e); err == nil || plain != nil {
+			plain, err := c.Decrypt(context.Background(), fixtureContext(), e)
+			if err == nil || plain != nil {
 				t.Fatalf("accepted truncated %s length %d", field, n)
+			}
+			if !errors.Is(err, ErrAuthentication) && !errors.Is(err, ErrInvalidInput) && !errors.Is(err, ErrUnknownKey) {
+				t.Fatalf("truncated %s length %d returned unexpected error: %v", field, n, err)
 			}
 		}
 	}

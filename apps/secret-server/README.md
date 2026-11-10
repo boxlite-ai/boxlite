@@ -105,11 +105,17 @@ without a guarantee that every Go runtime copy is erased.
 
 Each DEK encrypts one value. The environment master key wraps many DEKs; Go's
 random-nonce GCM limit is 2^32 encryptions per key across all uses. There is no MVP
-usage counter. Preserve old keys while data still depends on them.
+usage counter.
 
-Future KMS migration unwraps with the old provider, wraps with the new provider,
-and atomically replaces `encrypted_dek` and `key_id`. Value ciphertext stays unchanged.
-KMS, provider routing, and migration jobs are not implemented here.
+Master-key rotation is not supported yet. Once encrypted data exists, do not change
+`SECRET_MASTER_KEY_ID` or `SECRET_MASTER_KEY_BASE64`: changing the ID makes existing
+versions fail with `ErrUnknownKey`; changing only the key material makes them fail
+with `ErrAuthentication`. `EnvKeyProvider` holds only one key, and the package does
+not expose a rewrap operation.
+
+A future change will add a rewrap API or a keyring provider that routes by key ID.
+The envelope format allows rewrapping a DEK without changing the value ciphertext,
+but KMS, provider routing, and migration jobs are not implemented here.
 
 ## Verification
 
@@ -126,7 +132,8 @@ The test target runs with the race detector and `GOWORK=off`, so it needs no VM,
 native SDK library, Node installation, cloud permissions, or external Go modules.
 The Nx test target delegates to the same make target for workspace test discovery.
 Tests cover real environment-key encryption, tampering, policy canonicalization,
-key selection, provider errors, cancellation, rewrapping, and concurrent use.
+key selection, provider errors, cancellation, and concurrent use. An internal test
+checks the envelope format's rewrap compatibility; it does not expose rotation to callers.
 Fuzzing covers malformed envelope decoding; it is not a cryptographic proof.
 
 This is a new contract with no equivalent on the base branch. Full-revert defect
