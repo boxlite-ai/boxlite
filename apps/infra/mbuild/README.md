@@ -38,6 +38,21 @@ Use the deployment workflow to resolve a ref and prepare the matching source tre
 | GCP | Artifact Registry | Declared project, region and repository |
 | AWS | ECR | Account from credentials, declared region and repository |
 
+### Reading release images in GHCR
+
+Verify release artifacts without loading a cloud stage file:
+
+```bash
+npm run mbuild verify -- --ghcr boxlite-ai/boxlite --version vX.Y.Z --tag <full-commit-sha>
+```
+
+The address is `ghcr.io/<owner>/<repository>/<artifact>:vX.Y.Z-<full-sha>`, matching AR's artifact/tag names.
+Set `GHCR_USERNAME` and `GHCR_TOKEN`, or `GITHUB_ACTOR` and `GH_TOKEN` in Actions; reads need package read access.
+HTTP Content-Type identifies single-platform OCI or Docker schema 2 manifests; an embedded media type may be omitted but must agree when present.
+Indexes are refused, and digests are computed from the original manifest bytes.
+Confirmed missing images exit `66`; authentication, transport and malformed responses fail separately.
+This tooling layer exposes GHCR verification only; GHCR publication and import are refused before external commands.
+
 Promotion copies existing image bytes within one registry kind. Cross-cloud promotion is refused.
 The caller needs source read and destination write access; `promoteFrom` lets bootstrap prepare
 those permissions. On AWS, the current CLI uses one resolved account for both registry addresses.

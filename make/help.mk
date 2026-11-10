@@ -109,6 +109,7 @@ help:
 	@echo "    make test:apps:github-ci-runner - Run standalone Listener boundary tests"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
+	@echo "    make test:apps:mbuild       - Type-check and test image publication scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make fmt:proxy              - Format the proxy package"

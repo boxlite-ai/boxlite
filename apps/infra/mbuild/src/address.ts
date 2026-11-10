@@ -36,7 +36,7 @@ export const RELEASE_VERSION = new RegExp(`^${VERSION}$`)
  *
  * The two builds are different bytes. A commit build is whatever the deploy
  * path needed at the time; a release build is the image a version was cut
- * from, and `.github/workflows/mbuild-release.yml` refuses to write one twice.
+ * from; release publication reuses existing images without overwriting them.
  * Sharing one address would leave a stage that means to admit only released
  * images with nothing to read — the registry cannot say which run produced the
  * bytes it holds.
@@ -60,6 +60,7 @@ export const IMAGE_TAG = new RegExp(`^(?:${VERSION}-)?[0-9a-f]{40}$`)
  * address two stages at once — which is what promoting between them is.
  */
 export type Registry =
+  | { kind: 'ghcr'; host: 'ghcr.io'; repository: string }
   | {
       kind: 'ecr'
       /** `<account>.dkr.ecr.<region>.amazonaws.com`. */
@@ -146,11 +147,23 @@ export const addressFor = ({
   assertArtifact(config, artifact)
   assertTag(tag)
   switch (registry.kind) {
+    case 'ghcr':
+      if (!tag.startsWith('v')) throw new ImageAddressError('GHCR requires a version-qualified release tag')
+      return `${registry.host}/${registry.repository}/${artifact}:${tag}`
     case 'ecr':
       return `${registry.host}/${registry.repository}:${tag}-${artifact}`
     case 'artifact-registry':
       return `${registry.host}/${registry.project}/${registry.repository}/${artifact}:${tag}`
   }
+}
+
+/** GHCR mirrors Artifact Registry's artifact/tag layout without a deployment stage. */
+export const ghcrRegistryFor = (repository: string): Extract<Registry, { kind: 'ghcr' }> => {
+  const normalized = repository.toLowerCase()
+  if (normalized.trim() !== normalized || !/^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*$/.test(normalized)) {
+    throw new ImageAddressError('GHCR repository must be a GitHub owner/repository')
+  }
+  return { kind: 'ghcr', host: 'ghcr.io', repository: normalized }
 }
 
 /** Every artifact at one commit, which is what a publish iterates over. */

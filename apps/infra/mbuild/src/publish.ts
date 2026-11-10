@@ -28,6 +28,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { AuditConfig, BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
 import { addressFor, assertTag, type Registry } from './address.ts'
+import { ghcrRegistrar } from './ghcr.ts'
 
 export class PublishError extends Error {
   constructor(message: string) {
@@ -402,6 +403,8 @@ const registrarFor = ({
   registry: Registry
 }): Registrar => {
   switch (registry.kind) {
+    case 'ghcr':
+      return ghcrRegistrar({ run, config, registry })
     case 'ecr':
       return ecrRegistrar({ run, config, stage, registry })
     case 'artifact-registry':
@@ -609,6 +612,7 @@ export const publish = async ({
   clock?: Clock
 }): Promise<PublishOutcome[]> => {
   assertTag(tag)
+  if (registry.kind === 'ghcr') throw new PublishError('GHCR publication is not supported by this tooling version')
   /*
    * Audited once, the first time a build is actually going to happen. Not up
    * front: a re-publish whose artifacts are all present builds nothing, and
@@ -723,6 +727,7 @@ export const promote = async ({
   clock?: Clock
 }): Promise<PromoteOutcome[]> => {
   assertTag(tag)
+  if (from.registry.kind === 'ghcr' || to.registry.kind === 'ghcr') throw new PublishError('GHCR import is not supported by this tooling version')
   if (from.stage === to.stage) throw new PublishError(`Promoting "${from.stage}" to itself would do nothing`)
 
   const source = registrarFor({ run, config, stage: from.stage, registry: from.registry })
