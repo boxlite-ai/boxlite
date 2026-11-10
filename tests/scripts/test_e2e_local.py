@@ -115,6 +115,18 @@ class LocalE2ETest(unittest.TestCase):
             local.compose(["down"], {"DOCKER_HOST": "unix:///different.sock"})
         self.assertNotIn("DOCKER_HOST", run.call_args.kwargs["env"])
 
+    def test_failed_compose_connection_does_not_pin_engine(self):
+        with patch.object(local.shutil, "which", return_value="/bin/docker-compose"), \
+                patch.object(local, "run", side_effect=subprocess.CalledProcessError(1, "compose")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                local.compose(["ps"], {})
+        self.assertFalse((self.state / "compose-engine.json").exists(),
+                         "failed connection pinned an unusable engine")
+        with patch.object(local.shutil, "which", return_value="/bin/docker-compose"), \
+                patch.object(local, "run") as run:
+            local.compose(["ps"], {"DOCKER_HOST": "unix:///podman.sock"})
+        self.assertEqual(run.call_args.kwargs["env"]["DOCKER_HOST"], "unix:///podman.sock")
+
     def test_failed_start_preserves_preexisting_guest_processes(self):
         with patch.object(local, "write_files"), patch.object(local, "build"), \
                 patch.object(local, "compose_services", return_value=set()), \
@@ -354,6 +366,17 @@ class LocalE2ETest(unittest.TestCase):
                 with self.assertRaises(local.Failure):
                     local.up({"BOXLITE_LISTEN_HOST": "changed"})
             self.assertFalse((self.state / "stack-inputs.json").exists())
+
+    def test_input_digest_handles_uninitialized_submodule(self):
+        root = self.state / "repo"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "update-index", "--add", "--cacheinfo",
+                        "160000,1111111111111111111111111111111111111111,vendor"], check=True)
+        (root / "vendor").mkdir()
+        with patch.object(local, "ROOT", root):
+            identity = local.input_digest({})
+        self.assertEqual(len(identity), 64)
 
     def test_build_skips_unchanged_dependencies_and_retries_failed_sync(self):
         root = self.state / "repo"

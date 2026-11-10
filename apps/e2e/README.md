@@ -104,9 +104,14 @@ make test:e2e E2E_ARGS='cases/test_lifecycle.py -x'
 Stacks created before checkout-specific Compose projects used the shared `boxlite-e2e` project and fixed encryption keys. Stop those stacks with the old launcher before upgrading. Their volumes are not adopted or deleted automatically; keep their original state and keys if data must be migrated. The new launcher creates a separate project and must not be used to clean up an old project's resources.
 
 Compose uses the configured Docker connection; Podman users must explicitly set
-`DOCKER_HOST=unix:///path/to/podman.sock`. The launcher saves Docker connection
-environment variables in `target/e2e/compose-engine.json` and reuses them for all
-lifecycle commands. Keep the selected Docker context unchanged until teardown;
+`DOCKER_HOST=unix:///path/to/podman.sock`. Only one engine is needed: a `docker`
+command supplied by Podman does not imply a Docker daemon at `/var/run/docker.sock`.
+For rootless Podman, use `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
+with its API socket running. The launcher saves Docker connection environment
+variables in `target/e2e/compose-engine.json` after the first successful Compose
+command and reuses them for all lifecycle commands. Failed initial connections
+leave no selection, so correcting `DOCKER_HOST` and retrying works. Keep the
+selected Docker context unchanged until teardown;
 a newly available Podman socket never changes the selected engine automatically.
 
 The launcher script tests keep real `/proc` process checks Linux-only and mock process discovery in platform-independent lifecycle tests. Runtime process tests resolve `sleep` through `PATH`, preserving its executable name for multicall coreutils on NixOS; neither `/bin/sleep` nor a renamed sleep applet is required.

@@ -78,17 +78,21 @@ def compose(args, env, *, capture=False):
     # Keep connection settings stable even if the caller's environment changes.
     selection = STATE / "compose-engine.json"
     keys = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
-    if not selection.exists():
-        atomic_json(selection, {key: env[key] for key in keys if key in env})
-    engine = json.loads(selection.read_text())
+    selected = selection.exists()
+    engine = (json.loads(selection.read_text()) if selected
+              else {key: env[key] for key in keys if key in env})
     for key in keys:
         env.pop(key, None)
     env.update(engine)
     command = [*argv, "-p", PROJECT, "--project-directory", str(ROOT), "-f", str(COMPOSE),
                "--env-file", str(STATE / ".env"), *args]
     if capture:
-        return subprocess.check_output(command, env=env, text=True)
-    run(command, env=env)
+        output = subprocess.check_output(command, env=env, text=True)
+    else:
+        output = run(command, env=env)
+    if not selected:
+        atomic_json(selection, engine)
+    return output
 
 
 def base_env():
@@ -268,8 +272,12 @@ def input_digest(env, *, dependencies=False):
                     or (ROOT in STATE.parents and (path == STATE or STATE in path.parents))):
                 continue
             if path.is_dir() and not path.is_symlink():
-                if not dependencies:
-                    scan(path, relative)
+                digest.update(str(relative).encode() + b"\0")
+                if (path / ".git").exists():
+                    if not dependencies:
+                        scan(path, relative)
+                else:
+                    digest.update(b"<uninitialized-submodule>\0")
                 continue
             if dependencies and path.name not in (
                     "package.json", "package-lock.json", "yarn.lock", ".yarnrc.yml",
