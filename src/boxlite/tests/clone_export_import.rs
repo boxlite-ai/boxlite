@@ -11,7 +11,8 @@ mod common;
 
 use boxlite::runtime::options::{BoxliteOptions, CloneOptions, ExportOptions};
 use boxlite::runtime::types::BoxStatus;
-use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
+use boxlite::{BoxCommand, LiteBox};
+use common::TestRuntime as BoxliteRuntime;
 use tempfile::TempDir;
 
 // ============================================================================

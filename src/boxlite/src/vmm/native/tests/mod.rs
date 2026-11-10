@@ -6,8 +6,7 @@ use std::{fs, io, path::PathBuf, time::Duration};
 use boxlite_shared::{BoxTransport, errors::BoxliteError};
 
 use super::engine::{
-    build_cmdline, build_config, map_vmm_error, needs_vsock_bridge, transitional_unattached,
-    unsupported_requests,
+    build_cmdline, build_config, map_vmm_error, needs_vsock_bridge, unsupported_requests,
 };
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::jailer::SecurityOptions;
@@ -219,10 +218,12 @@ fn a_non_elf_kernel_is_unsupported() {
 }
 
 #[test]
-fn shares_network_and_the_agent_bridge_are_transitional() {
+fn shares_network_and_the_agent_bridge_reach_the_vm_config() {
     let test_box = TestBox::new();
     let kernel = test_box.stage_kernel(&fake_kernel(), None);
     let mut spec = runtime_like_spec(&test_box, Some(kernel));
+    spec.fs_shares
+        .add("readonly", PathBuf::from("/read-only"), true);
     spec.network_backend_endpoint = Some(crate::net::NetworkBackendEndpoint::UnixSocket {
         path: PathBuf::from("/sockets/net.sock"),
         connection_type: crate::net::ConnectionType::UnixStream,
@@ -230,15 +231,57 @@ fn shares_network_and_the_agent_bridge_are_transitional() {
     });
 
     assert!(unsupported_requests(&spec).is_empty());
+    let config = build_config(&spec).unwrap();
+    let filesystem = config.filesystem.unwrap();
     assert_eq!(
-        transitional_unattached(&spec),
+        filesystem.tag,
+        boxlite_shared::constants::mount_tags::AGGREGATE
+    );
+    assert_eq!(
+        filesystem.shares,
         [
-            "virtio-fs shares",
-            "virtio-net",
-            "the vsock bridge for the guest agent"
+            boxlite_vmm::FsShareConfig {
+                name: "BoxLiteShared".into(),
+                path: "/shared".into(),
+                read_only: false
+            },
+            boxlite_vmm::FsShareConfig {
+                name: "readonly".into(),
+                path: "/read-only".into(),
+                read_only: true
+            },
         ]
     );
-    assert!(transitional_unattached(&test_box.spec(None)).is_empty());
+    let vsock = config.vsock.unwrap();
+    assert_eq!(vsock.cid, 3);
+    assert_eq!(vsock.listen, [(2695, test_box.layout.socket_path())]);
+    assert_eq!(vsock.connect, [(2696, test_box.layout.ready_socket_path())]);
+    let network = config.network.unwrap();
+    assert_eq!(network.mac, [0x02, 0, 0, 0, 0, 1]);
+    assert_eq!(network.path, PathBuf::from("/sockets/net.sock"));
+    assert!(config.virtio_console);
+
+    spec.network_backend_endpoint = Some(crate::net::NetworkBackendEndpoint::UnixSocket {
+        path: PathBuf::from("/sockets/net.sock"),
+        connection_type: crate::net::ConnectionType::UnixDgram,
+        mac_address: [0x02, 0, 0, 0, 0, 1],
+    });
+    assert_eq!(unsupported_requests(&spec), ["datagram network backends"]);
+}
+
+#[test]
+fn optional_devices_stay_absent_and_non_unix_agent_bridges_are_rejected() {
+    let test_box = TestBox::new();
+    let kernel = test_box.stage_kernel(&fake_kernel(), None);
+    let config = build_config(&test_box.spec(Some(kernel.clone()))).unwrap();
+    assert!(config.filesystem.is_none());
+    assert!(config.vsock.is_none());
+    assert!(config.network.is_none());
+    let mut spec = runtime_like_spec(&test_box, Some(kernel));
+    spec.ready_transport = BoxTransport::Vsock { port: 2696 };
+    assert!(
+        matches!(build_config(&spec), Err(BoxliteError::Unsupported(message)) if message.contains("non-Unix host bridges"))
+    );
 }
 
 #[test]
@@ -260,7 +303,7 @@ fn the_command_line_names_the_root_disk_the_agent_and_its_vsock_ports() {
 
     assert_eq!(
         build_cmdline(&spec, None),
-        "console=ttyS0 panic=-1 reboot=k root=/dev/vdb rootfstype=ext4 ro \
+        "console=hvc0 panic=-1 reboot=k root=/dev/vdb rootfstype=ext4 ro \
          init=/boxlite/bin/boxlite-guest \"RUST_LOG=info\" \
          -- --listen vsock://2695 --notify vsock://2696"
     );
@@ -291,7 +334,7 @@ fn each_environment_entry_stays_one_kernel_parameter() {
     assert!(!cmdline.contains("BAD="), "{cmdline}");
     assert_eq!(
         cmdline,
-        "console=ttyS0 panic=-1 reboot=k root=/dev/vdb rootfstype=ext4 ro \
+        "console=hvc0 panic=-1 reboot=k root=/dev/vdb rootfstype=ext4 ro \
          init=/boxlite/bin/boxlite-guest \"FOO=hello root=/dev/vda\" \
          -- --listen vsock://2695 --notify vsock://2696"
     );

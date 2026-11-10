@@ -17,14 +17,17 @@ use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 
 /// Non-VM suites use the existing test constructor on hosted runners. VM
 /// integration builds retain the public constructor and its host validation.
-pub fn non_vm_runtime(options: BoxliteOptions) -> boxlite::BoxliteResult<boxlite::BoxliteRuntime> {
+pub fn non_vm_runtime(options: BoxliteOptions) -> boxlite::BoxliteResult<TestRuntime> {
+    if std::env::var("BOXLITE_TEST_ENGINE").as_deref() == Ok("native") {
+        return TestRuntime::new(options);
+    }
     #[cfg(feature = "test-support")]
     {
-        boxlite::BoxliteRuntime::new_for_test(options)
+        boxlite::BoxliteRuntime::new_for_test(options).map(TestRuntime::from_runtime)
     }
     #[cfg(not(feature = "test-support"))]
     {
-        boxlite::BoxliteRuntime::new(options)
+        TestRuntime::new(options)
     }
 }
 
@@ -49,3 +52,6 @@ pub fn alpine_opts_auto() -> BoxOptions {
         ..Default::default()
     }
 }
+
+mod engine;
+pub use engine::TestRuntime;

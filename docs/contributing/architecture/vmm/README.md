@@ -539,14 +539,12 @@ logged.
 - **The native adapter** (`src/boxlite/src/vmm/native/`, Linux x86_64, feature
   `native`, registered through `inventory` like `krun/`) is strict like libkrun:
   a request it cannot serve fails `create` with `Unsupported` (no kernel, a
-  non-ELF kernel, a virtio-fs root, nested virtualization). Three transitional
-  requests log one warning and boot anyway until their devices land: virtio-fs
-  shares, the gvproxy endpoint for virtio-net, and the guest agent's vsock
-  bridge. It takes its kernel from `InstanceSpec.kernel` (the custom-kernel
-  channel) until the runtime bundles one, attaches the disks in attach order
-  (`vda` container disk, `vdb` guest root) and composes the command line of the
-  boot contract below. Until virtio-console is wired into `Vm`, that command
-  line names the 8250 (`console=ttyS0`) instead of `hvc0`.
+  non-ELF kernel, a virtio-fs root, nested virtualization). It converts filesystem
+  shares, the Linux gvproxy endpoint and host Unix RPC/ready sockets into device
+  configuration. It takes its kernel from `InstanceSpec.kernel`, preserves disk
+  attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
+  The single filesystem device exports logical shares below its aggregate root;
+  matching mount instructions are sent only for the native engine.
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).

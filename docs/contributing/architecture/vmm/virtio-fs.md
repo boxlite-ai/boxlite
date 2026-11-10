@@ -1,6 +1,6 @@
 # Linux virtio-fs data flow
 
-The experimental native VMM exposes multiple host directories through one virtio-fs device. The runtime still selects libkrun: the native engine adapter and full Box acceptance remain pending. The diagrams distinguish implemented configuration builders from the production engine integration still required.
+The experimental native VMM exposes multiple host directories through one virtio-fs device. The opt-in native adapter translates runtime shares into `VmConfig.filesystem` and sends matching aggregate guest mount instructions; libkrun remains the default engine. The [Linux M2/M3 qualification report](../../investigations/2026-11-10-native-m2-m3-qualification.md) records whole-Box results and remaining failures.
 
 ## Configuration and mounting
 
@@ -18,11 +18,12 @@ flowchart TD
     H --> I["GuestVolumeManager: FsShareEntry + BlockDeviceEntry"]
     H --> J["ContainerMount: target, subpath, ownership"]
     I --> K["build_vmm_config: FsShares + BlockDevices"]
-    K --> L["InstanceSpec: current libkrun engine"]
+    K --> L["InstanceSpec: selected runtime engine"]
     I --> M["build_aggregate_mounts: AggregateMountConfig"]
     M --> N["exports: FsShares; device_tag"]
     M --> O["guest_mounts: Vec<VolumeConfig>"]
-    N -. "Native engine adapter pending" .-> P["VmConfig.filesystem: FsConfig"]
+    L -->|Native adapter| P["VmConfig.filesystem: FsConfig"]
+    L -->|Libkrun| X["Per-tag filesystem devices"]
     P --> Q["Vec<FsShareConfig>: name, path, read_only"]
     Q --> R["add_all → add_filesystem → Fs"]
     O --> S["protobuf Volume / VirtiofsSource"]
@@ -58,11 +59,11 @@ staging migration, sandbox grants or runtime stop/cleanup changes.
 ## Data structures and ownership
 
 Solid lines in the diagram below represent ownership; dashed lines represent
-ID-based lookup. The aggregate layer and Linux backend maintain separate ID
+ID-based lookup or configuration translation. The aggregate layer and Linux backend maintain separate ID
 spaces. Requests acquire an `Arc` and release the mapping lock before performing
-host I/O. A native engine adapter is still missing between configuration
-conversion and device registration; this diagram does not establish that normal
-Boxes use the native engine.
+host I/O. The native adapter converts `InstanceSpec.fs_shares` into `FsConfig`
+before VM device registration. Engine selection remains explicit; the ownership
+diagram does not imply that native is the product default.
 
 ```mermaid
 classDiagram
@@ -154,7 +155,7 @@ classDiagram
         bool writable
         Mutex position
     }
-    AggregateMountConfig ..> FsConfig : "Engine adapter pending"
+    FsShares ..> FsConfig : "Native adapter copies exports"
     FsConfig *-- FsShareConfig
     FsConfig ..> Fs : "Build device"
     Fs *-- AggregateFs : "Owned by Server"
@@ -407,8 +408,10 @@ contract. The producer workload has exposed a reproducible reset timeout under
 concurrent replenishment. Sustained-load shutdown is an explicitly deferred
 common-framework optimization and does not block this functional delivery.
 The failure remains reproducible, rather than being counted as a pass.
-Full Box exit.json, copy RPC and normal lifecycle acceptance still need
-a native engine adapter and whole-machine Guest.Init integration. BSD source attribution has been checked; existing packaging is unchanged and real release
+At this earlier verification stage, whole-Box Guest.Init and lifecycle integration
+had not been exercised. Current adapter and matrix evidence is recorded in the
+[Linux M2/M3 report](../../investigations/2026-11-10-native-m2-m3-qualification.md).
+BSD source attribution has been checked; existing packaging is unchanged and real release
 archive builds and inspection remain outstanding. A local `make runtime` release
 attempt failed first because Go was absent from PATH. Retrying with the installed
 Go toolchain built libgvproxy, then failed in libkrunfw install-name adjustment
@@ -425,7 +428,7 @@ These are open acceptance items, not passing results.
 | F08–F10 | Real symlink/hardlink/xattr, cross-share EXDEV and host moves outside directory boundaries | Unsupported operations retain explicit errno values |
 | F11–F12 | Actual WRITE counts; real FSYNC/FSYNCDIR; worker FSYNC/FDATASYNC gates verify reply waiting and EIO; READ after three FLUSH operations and RELEASE/FORGET fd regressions | Gates inject timing; successful synchronization executes real syscalls; FLUSH does not promise durability |
 | F13–F17 | Protocol tests for statfs, allocation, seek, rename flags, INIT and unsupported operations | Does not extend to DAX, locks or special-file data access |
-| B01–B03 | Mixed exports on one device, same-name routing, independent identities, read-only mutation entry points and real guest combined mounts | Normal Box native path still needs an engine adapter |
+| B01–B03 | Mixed exports on one device, same-name routing, independent identities, read-only mutation entry points and real guest combined mounts | Whole-Box native results and remaining failures are recorded in the M2/M3 qualification report |
 | B04/B07/B12 | Out-of-boundary and renamed objects, host identity, writable write-through, read-only snapshots and EXDEV | Full jailed native Box acceptance not performed |
 | B05 | Separate lookup/open/inflight ownership, FORGET/PLUS and real fd reclamation | IDs are not reused within a session |
 | B06 | DIRECT_IO and zero-timeout contract; coordinated host rewrite through the same guest fd; initial MAP_PRIVATE faults and MAP_SHARED ENODEV | Later changes are not guaranteed visible through an existing private mmap |
@@ -465,7 +468,7 @@ that other bundled components have been audited.
 Legacy-only Guest.Init batches now call the original `volume::mount_volumes`
 loop and return an empty guard. Their input order, first-error behavior and
 post-initialization failure semantics remain unchanged. Aggregate identity fields
-are empty in existing builders; the new builder is opt-in. Existing staging,
+are empty in legacy builders; native Guest.Init selects the aggregate builder. Existing staging,
 sandbox, block mounting, shutdown and artifact packaging files match main.
 
 After this correction, `BOXLITE_DEPS_STUB=1 make test:unit:guest FILTER=storage::`

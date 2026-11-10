@@ -13,11 +13,11 @@ use crate::vmm::{
     guest_args, registry::EngineFactoryRegistration,
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use boxlite_vmm::{DiskConfig, Vm, VmConfig};
+use boxlite_vmm::{DiskConfig, FsConfig, FsShareConfig, NetConfig, Vm, VmConfig, VsockConfig};
 
-/// The command line when the box brings no custom one: the 8250 console, a
+/// The command line when the box brings no custom one: the virtio console, a
 /// reset on panic and on `reboot`, as the VMM's own boot tests use.
-const DEFAULT_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";
+const DEFAULT_CMDLINE: &str = "console=hvc0 panic=-1 reboot=k";
 
 /// The native engine. Stateless: everything lives in the instance.
 #[derive(Debug)]
@@ -65,27 +65,19 @@ pub(crate) fn unsupported_requests(spec: &InstanceSpec) -> Vec<&'static str> {
     if !matches!(spec.guest_rootfs.strategy, Strategy::Disk { .. }) {
         requests.push("a virtio-fs root");
     }
+    if matches!(
+        spec.network_backend_endpoint,
+        Some(crate::net::NetworkBackendEndpoint::UnixSocket {
+            connection_type: crate::net::ConnectionType::UnixDgram,
+            ..
+        })
+    ) {
+        requests.push("datagram network backends");
+    }
     if spec.nested_virtualization {
         requests.push("nested virtualization");
     }
     requests
-}
-
-/// Requests the engine drops with a warning until their devices land. Each
-/// entry goes when its device attaches: virtio-fs shares, virtio-net (the
-/// device exists, but `Vm` does not attach it yet) and the vsock bridge.
-pub(crate) fn transitional_unattached(spec: &InstanceSpec) -> Vec<&'static str> {
-    let mut unattached = Vec::new();
-    if !spec.fs_shares.shares().is_empty() {
-        unattached.push("virtio-fs shares");
-    }
-    if spec.network_backend_endpoint.is_some() {
-        unattached.push("virtio-net");
-    }
-    if needs_vsock_bridge(&spec.guest_entrypoint.args) {
-        unattached.push("the vsock bridge for the guest agent");
-    }
-    unattached
 }
 
 /// Whether `guest_args` still names a Unix socket for `--listen` or `--notify`,
@@ -128,7 +120,44 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
         cmdline: build_cmdline(spec, kernel.command_line.as_deref()),
         initramfs: kernel.initramfs.clone(),
         disks,
-        filesystem: None,
+        filesystem: (!spec.fs_shares.shares().is_empty()).then(|| FsConfig {
+            tag: boxlite_shared::constants::mount_tags::AGGREGATE.into(),
+            shares: spec
+                .fs_shares
+                .shares()
+                .iter()
+                .map(|share| FsShareConfig {
+                    name: share.tag.clone(),
+                    path: share.host_path.clone(),
+                    read_only: share.read_only,
+                })
+                .collect(),
+        }),
+        vsock: if needs_vsock_bridge(&spec.guest_entrypoint.args) {
+            use boxlite_shared::{BoxTransport, constants::network};
+            let (BoxTransport::Unix { socket_path }, BoxTransport::Unix { socket_path: ready }) =
+                (&spec.transport, &spec.ready_transport)
+            else {
+                return Err(unsupported(&["non-Unix host bridges"]));
+            };
+            Some(VsockConfig {
+                cid: 3,
+                listen: vec![(network::GUEST_AGENT_PORT, socket_path.clone())],
+                connect: vec![(network::GUEST_READY_PORT, ready.clone())],
+            })
+        } else {
+            None
+        },
+        network: spec.network_backend_endpoint.as_ref().map(|endpoint| {
+            let crate::net::NetworkBackendEndpoint::UnixSocket {
+                path, mac_address, ..
+            } = endpoint;
+            NetConfig {
+                path: path.clone(),
+                mac: *mac_address,
+            }
+        }),
+        virtio_console: true,
     })
 }
 
@@ -228,13 +257,6 @@ impl Vmm for Native {
         let requests = unsupported_requests(&config);
         if !requests.is_empty() {
             return Err(unsupported(&requests));
-        }
-        let unattached = transitional_unattached(&config);
-        if !unattached.is_empty() {
-            tracing::warn!(
-                unattached = %unattached.join(", "),
-                "native engine boots without these requested devices until they land"
-            );
         }
         let vm_config = build_config(&config)?;
         tracing::info!(
