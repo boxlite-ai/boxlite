@@ -361,10 +361,10 @@ delivery stays pending.
 Queued jobs are selected by platform tenant, then GitHub account, then job; a
 large repository list earns no extra turns. The controller processes at most one
 job per account in a round, up to 32 accounts. Capacity exhaustion retains the
-notice and skips GitHub job reads and compensation scans while the durable account
-or tenant quota is full. Skipping a scan does not advance its deadline or settle
-pending jobs; other tenants with capacity can still scan. The final reservation
-rechecks the same usage atomically.
+notice and skips admission-time GitHub job reads while the durable account or
+tenant quota is full. Independent compensation scans continue recording pending
+jobs without reading or reserving capacity. Other tenants can still admit jobs;
+the final reservation rechecks the same usage atomically.
 A recovery error blocks that scope's new admissions while other accounts
 can proceed; corrupt shared journal state still blocks admission. Invalid discovered
 scope definitions withhold that binding without restoring old authority or blocking
