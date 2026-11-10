@@ -293,6 +293,11 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    // Authentication caches organizations; admission must use the current policy.
+    const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
+    organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
+      nestedVirtualizationEnabled,
+    })
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)

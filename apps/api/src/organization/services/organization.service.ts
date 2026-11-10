@@ -131,6 +131,18 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     }
   }
 
+  async isNestedVirtualizationEnabled(organizationId: string): Promise<boolean> {
+    const organization = await this.organizationRepository.findOne({
+      where: { id: organizationId },
+      select: { id: true, nestedVirtualizationEnabled: true },
+      cache: false,
+    })
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+    return organization.nestedVirtualizationEnabled === true
+  }
+
   async getReferralCode(organizationId: string): Promise<OrganizationReferralCodeDto> {
     for (let attempt = 0; attempt < MAX_REFERRAL_CODE_ATTEMPTS; attempt++) {
       try {

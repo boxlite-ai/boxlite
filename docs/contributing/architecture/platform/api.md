@@ -40,7 +40,12 @@ versions retain their previous reuse behavior.
 
 Allowlisted creates bypass ordinary warm boxes because their VM options are
 already fixed. The saved box decision survives replay, restart and recovery;
-changing the organization switch affects future creates only. Nested boxes do
+changing the organization switch changes future creates and whether an existing
+ordinary box can satisfy `get_or_create`, without changing its saved configuration.
+Creation and detail GET read the current policy directly from the database,
+bypassing the authentication cache; a failed policy read rejects the operation.
+Each operation uses the policy observed by its own query, so concurrent later
+switch changes apply to subsequent operations. Nested boxes do
 not support archive migration. The internal Runner recovery request carries the
 saved value and checks authorization before deleting an existing box.
 The API first confirms the original Runner's capability under the health deadline,

@@ -19,8 +19,55 @@ import { Context } from '../common/context/context'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { Box } from '../box/entities/box.entity'
 import { Organization } from '../organization/entities/organization.entity'
+import { OrganizationService } from '../organization/services/organization.service'
 
 describe('BoxliteBoxController nested policy reuse', () => {
+  it.each([null, new Error('policy database unavailable')])(
+    'rejects detail lookup when policy lookup returns %p',
+    async (failure) => {
+      const box = new Box('region-1', 'ordinary')
+      const organizationRepository = {
+        findOne: failure instanceof Error ? jest.fn().mockRejectedValue(failure) : jest.fn().mockResolvedValue(null),
+      }
+      const organizationService = Object.create(OrganizationService.prototype)
+      Object.assign(organizationService, { organizationRepository })
+      const boxService = {
+        findOneByIdOrName: jest.fn().mockResolvedValue(box),
+        toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
+      }
+      const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, organizationService)
+      await expect(controller.getBox({ organizationId: 'org-1', organization: {} } as any, box.name)).rejects.toThrow(
+        failure instanceof Error ? failure : /Organization.*not found/,
+      )
+    },
+  )
+
+  it.each([true, false])('ignores stale organization policy when reusing with current policy=%s', async (enabled) => {
+    const box = new Box('region-1', 'ordinary')
+    box.nestedVirtualization = false
+    const organization = Object.assign(new Organization(), { nestedVirtualizationEnabled: !enabled })
+    const organizationRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: organization.id, nestedVirtualizationEnabled: enabled }),
+    }
+    const organizationService = Object.create(OrganizationService.prototype)
+    Object.assign(organizationService, { organizationRepository })
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue(box),
+      toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
+    }
+    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, organizationService)
+
+    const response = await controller.getBox({ organizationId: organization.id, organization } as any, box.name)
+
+    expect(Boolean(response.reuse_error)).toBe(enabled)
+    expect(organizationRepository.findOne).toHaveBeenCalledWith({
+      where: { id: organization.id },
+      select: { id: true, nestedVirtualizationEnabled: true },
+      cache: false,
+    })
+    expect(organization.nestedVirtualizationEnabled).toBe(!enabled)
+  })
+
   it.each([
     [false, false],
     [false, true],
@@ -35,7 +82,12 @@ describe('BoxliteBoxController nested policy reuse', () => {
       findOneByIdOrName: jest.fn().mockResolvedValue(box),
       toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
     }
-    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any)
+    const controller = new BoxliteBoxController(
+      boxService as any,
+      {} as any,
+      {} as any,
+      { isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(enabled) } as any,
+    )
     const response = JSON.parse(
       JSON.stringify(await controller.getBox({ organizationId: organization.id, organization } as any, box.name)),
     )
@@ -219,6 +271,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxService as any,
       boxStateWaiter as any,
       commerceBoxLimitService as any,
+      {} as any,
     )
     return { controller, boxService }
   }

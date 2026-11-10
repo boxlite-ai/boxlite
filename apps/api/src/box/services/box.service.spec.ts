@@ -21,6 +21,7 @@ import { RegistryCredentialService } from '../../registry/services/registry-cred
 import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-box.dto'
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
+import { OrganizationService } from '../../organization/services/organization.service'
 
 /** Records every reason as it came, which is what a failure it cannot explain gets. */
 const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
@@ -375,7 +376,10 @@ describe('BoxService inbound defaults', () => {
     Object.assign(service as any, {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationService: {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      },
       organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
       redis: { exists: jest.fn().mockResolvedValue(1) },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -404,19 +408,82 @@ describe('BoxService inbound defaults', () => {
    * caller typed. Which ref the resolver picks is its own specification's job.
    */
   describe('organization nesting default', () => {
-    function fixture(value: unknown, apiVersion = '0') {
+    it.each([null, new Error('policy database unavailable')])(
+      'rejects creation when policy lookup returns %p',
+      async (failure) => {
+        const organizationRepository = {
+          findOne: failure instanceof Error ? jest.fn().mockRejectedValue(failure) : jest.fn().mockResolvedValue(null),
+        }
+        const organizationService = Object.create(OrganizationService.prototype)
+        Object.assign(organizationService, { organizationRepository, assertOrganizationIsNotSuspended: jest.fn() })
+        const { service, boxRepository } = makeCreateService({ organizationService })
+        await expect(
+          service.create({ name: 'missing-policy', image: 'alpine' } as any, { id: 'org-1' } as any, Context.user()),
+        ).rejects.toThrow(failure instanceof Error ? failure : /Organization.*not found/)
+        expect(boxRepository.insert).not.toHaveBeenCalled()
+      },
+    )
+
+    it.each([true, false])(
+      'ignores stale organization policy when creating with current policy=%s',
+      async (enabled) => {
+        const organization = { id: 'org-1', nestedVirtualizationEnabled: !enabled }
+        const organizationRepository = {
+          findOne: jest.fn().mockResolvedValue({ id: organization.id, nestedVirtualizationEnabled: enabled }),
+        }
+        const organizationService = Object.create(OrganizationService.prototype)
+        Object.assign(organizationService, { organizationRepository, assertOrganizationIsNotSuspended: jest.fn() })
+        const { service, boxRepository, warmPoolService } = makeCreateService({
+          organizationService,
+          runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1', apiVersion: '0' }) },
+          runnerAdapterFactory: {
+            create: jest
+              .fn()
+              .mockResolvedValue({ runnerInfo: jest.fn().mockResolvedValue({ nestedVirtualizationEnabled: true }) }),
+          },
+          configService: { getOrThrow: () => 1 },
+        })
+        ;(service as any).imageResolverService.resolve.mockResolvedValue({ ref: 'curated', isOrgOwned: false })
+        ;(service as any).redis.exists.mockResolvedValue(0)
+
+        const box = await service.create(
+          { name: 'fresh-policy', image: 'curated' } as any,
+          organization as any,
+          Context.user(),
+        )
+
+        expect((box as any).nestedVirtualization).toBe(enabled)
+        expect(boxRepository.insert).toHaveBeenCalledWith(
+          expect.objectContaining({ nestedVirtualization: enabled }),
+          undefined,
+        )
+        expect(warmPoolService.fetchWarmPoolBox).toHaveBeenCalledTimes(enabled ? 0 : 1)
+        expect(organization.nestedVirtualizationEnabled).toBe(!enabled)
+        expect(organizationRepository.findOne).toHaveBeenCalledWith({
+          where: { id: organization.id },
+          select: { id: true, nestedVirtualizationEnabled: true },
+          cache: false,
+        })
+      },
+    )
+
+    function fixture(value: unknown, apiVersion = '0', enabled = true) {
       const runner = { id: 'chosen-runner', apiVersion }
       const info = jest.fn().mockResolvedValue({ nestedVirtualizationEnabled: value })
       const factory = { create: jest.fn().mockResolvedValue({ runnerInfo: info }) }
       const result = makeCreateService({
         runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue(runner) },
         runnerAdapterFactory: factory,
+        organizationService: {
+          assertOrganizationIsNotSuspended: jest.fn(),
+          isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(enabled),
+        },
         configService: { getOrThrow: () => 0.02 },
       })
       return { ...result, runnerService: (result.service as any).runnerService, runner, info, factory }
     }
     it('leaves non-allowlisted organizations ordinary without probing or logging', async () => {
-      const { service, factory } = fixture(true)
+      const { service, factory } = fixture(true, '0', false)
       const box = await service.create(
         { name: 'ordinary', image: 'alpine' } as any,
         { id: 'org-1' } as any,
