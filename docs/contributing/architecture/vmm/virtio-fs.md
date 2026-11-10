@@ -1,6 +1,6 @@
 # Linux virtio-fs data flow
 
-The experimental native VMM exposes multiple host directories through one virtio-fs device. The opt-in native adapter translates runtime shares into `VmConfig.filesystem` and sends matching aggregate guest mount instructions; libkrun remains the default engine. The [Linux M2/M3 qualification report](../../investigations/2026-11-10-native-m2-m3-qualification.md) records whole-Box results and remaining failures.
+The experimental native VMM exposes multiple host directories through one virtio-fs device. The opt-in native adapter translates runtime shares into `VmConfig.filesystem` and sends matching aggregate guest mount instructions; libkrun remains the default engine.
 
 ## Configuration and mounting
 
@@ -409,8 +409,9 @@ concurrent replenishment. Sustained-load shutdown is an explicitly deferred
 common-framework optimization and does not block this functional delivery.
 The failure remains reproducible, rather than being counted as a pass.
 At this earlier verification stage, whole-Box Guest.Init and lifecycle integration
-had not been exercised. Current adapter and matrix evidence is recorded in the
-[Linux M2/M3 report](../../investigations/2026-11-10-native-m2-m3-qualification.md).
+had not been exercised. The
+[native engine guide](../../../guides/native-vmm.md#linux-x86_64-m2-and-m3-matrices)
+describes the current integration, matrix commands and qualification limits.
 BSD source attribution has been checked; existing packaging is unchanged and real release
 archive builds and inspection remain outstanding. A local `make runtime` release
 attempt failed first because Go was absent from PATH. Retrying with the installed
@@ -428,7 +429,7 @@ These are open acceptance items, not passing results.
 | F08–F10 | Real symlink/hardlink/xattr, cross-share EXDEV and host moves outside directory boundaries | Unsupported operations retain explicit errno values |
 | F11–F12 | Actual WRITE counts; real FSYNC/FSYNCDIR; worker FSYNC/FDATASYNC gates verify reply waiting and EIO; READ after three FLUSH operations and RELEASE/FORGET fd regressions | Gates inject timing; successful synchronization executes real syscalls; FLUSH does not promise durability |
 | F13–F17 | Protocol tests for statfs, allocation, seek, rename flags, INIT and unsupported operations | Does not extend to DAX, locks or special-file data access |
-| B01–B03 | Mixed exports on one device, same-name routing, independent identities, read-only mutation entry points and real guest combined mounts | Whole-Box native results and remaining failures are recorded in the M2/M3 qualification report |
+| B01–B03 | Mixed exports on one device, same-name routing, independent identities, read-only mutation entry points and real guest combined mounts | Whole-Box integration remains experimental; full filesystem conformance and other platforms remain unqualified |
 | B04/B07/B12 | Out-of-boundary and renamed objects, host identity, writable write-through, read-only snapshots and EXDEV | Full jailed native Box acceptance not performed |
 | B05 | Separate lookup/open/inflight ownership, FORGET/PLUS and real fd reclamation | IDs are not reused within a session |
 | B06 | DIRECT_IO and zero-timeout contract; coordinated host rewrite through the same guest fd; initial MAP_PRIVATE faults and MAP_SHARED ENODEV | Later changes are not guaranteed visible through an existing private mmap |

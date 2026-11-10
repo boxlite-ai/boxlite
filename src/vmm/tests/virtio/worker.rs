@@ -28,7 +28,7 @@ use mio::{
 use virtio_queue::{Queue, QueueT as _};
 use vm_memory::GuestAddress;
 
-use super::{SharedRuntime, SlotId, Timeouts, VirtioWorkers, WorkerRuntime};
+use super::{SharedRuntime, ShutdownError, SlotId, Timeouts, VirtioWorkers, WorkerRuntime};
 use crate::{
     bus::BusDevice,
     error::Error,
@@ -60,6 +60,7 @@ const QUEUES: &[u16] = &[8, 8, 8];
 
 /// What a probe does with one event.
 type Hook = Box<dyn FnMut(&ActivationContext, DeviceEvent) -> Result<(), DeviceError> + Send>;
+type QuiesceHook = Box<dyn FnMut() -> Result<(), DeviceError> + Send>;
 
 fn ok() -> Hook {
     Box::new(|_, _| Ok(()))
@@ -157,6 +158,7 @@ struct Probe {
     activations: VecDeque<Result<(), DeviceError>>,
     resets: usize,
     quiesces: usize,
+    shutdown_hook: Option<QuiesceHook>,
 }
 
 impl VirtioDevice for Probe {
@@ -201,7 +203,7 @@ impl VirtioDevice for Probe {
 
     fn quiesce(&mut self) -> Result<(), DeviceError> {
         self.quiesces += 1;
-        Ok(())
+        self.shutdown_hook.as_mut().map_or(Ok(()), |hook| hook())
     }
 }
 
@@ -303,6 +305,15 @@ impl Rig {
     }
 
     fn device(&self, name: &'static str, hook: Hook) -> Dev {
+        self.device_with_shutdown(name, hook, None)
+    }
+
+    fn device_with_shutdown(
+        &self,
+        name: &'static str,
+        hook: Hook,
+        shutdown_hook: Option<QuiesceHook>,
+    ) -> Dev {
         let seen = Arc::new(Seen::default());
         let device = Arc::new(Mutex::new(Probe {
             spec: spec(name),
@@ -312,6 +323,7 @@ impl Rig {
             activations: VecDeque::new(),
             resets: 0,
             quiesces: 0,
+            shutdown_hook,
         }));
         let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
         let shared: Arc<Mutex<dyn VirtioDevice>> = device.clone();
@@ -906,6 +918,7 @@ fn a_driver_status_write_cannot_clear_needs_reset() {
         activations: VecDeque::new(),
         resets: 0,
         quiesces: 0,
+        shutdown_hook: None,
     }));
     let shared: Arc<Mutex<dyn VirtioDevice>> = device.clone();
     let worker = workers.add(shared, Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>);
@@ -1023,24 +1036,34 @@ fn a_shutdown_that_outlives_its_timeout_reports_it_and_retries() {
     let rig = Rig::new();
     let gate = Arc::new(Gate::default());
     let device_gate = Arc::clone(&gate);
-    let dev = rig.device(
+    let quiesced = Arc::new(AtomicBool::new(false));
+    let hook_quiesced = Arc::clone(&quiesced);
+    let dev = rig.device_with_shutdown(
         "probe",
         Box::new(move |_, _| {
             device_gate.pass();
             Ok(())
         }),
+        Some(Box::new(move || {
+            hook_quiesced.store(true, Ordering::SeqCst);
+            Ok(())
+        })),
     );
     dev.start();
     dev.worker.kick(0);
     gate.wait_entered(1);
 
-    let error = rig.workers.shutdown().unwrap_err();
+    let error = rig.workers.shutdown().map_err(Error::from).unwrap_err();
     match &error {
         Error::VirtioWorker(source) => assert_eq!(source.kind(), io::ErrorKind::TimedOut),
         other => panic!("unexpected error: {other:?}"),
     }
+    assert!(!quiesced.load(Ordering::SeqCst), "no hook before join");
     gate.open();
     rig.workers.shutdown().unwrap();
+    assert!(quiesced.load(Ordering::SeqCst));
+    rig.workers.shutdown().unwrap();
+    assert_eq!(dev.device.lock().unwrap().quiesces, 1);
 }
 
 #[test]
@@ -1051,12 +1074,18 @@ fn shutdown_joins_the_thread_once_and_closes_everything() {
     let rig = Rig::new();
     let token = Arc::new(());
     let thread_token = Arc::clone(&token);
-    let dev = rig.device(
+    let quiesce_token = Arc::clone(&token);
+    let dev = rig.device_with_shutdown(
         "probe",
         Box::new(move |_, _| {
             HELD.with(|held| *held.borrow_mut() = Some(Arc::clone(&thread_token)));
             Ok(())
         }),
+        Some(Box::new(move || {
+            // The thread-local token must be gone before the hook runs.
+            assert_eq!(Arc::strong_count(&quiesce_token), 3);
+            Ok(())
+        })),
     );
     let events = dev.start();
     let pipe = Pipe::new();
@@ -1067,14 +1096,93 @@ fn shutdown_joins_the_thread_once_and_closes_everything() {
     rig.workers.shutdown().unwrap();
 
     // The thread-local copy dies with the thread, so the join completed.
-    assert_eq!(Arc::strong_count(&token), 2);
+    assert_eq!(Arc::strong_count(&token), 3);
     assert_eq!(pipe.log(), ["register", "deregister", "drop"]);
     rig.workers.shutdown().unwrap();
+    assert_eq!(dev.device.lock().unwrap().quiesces, 1);
     assert!(matches!(dev.worker.prepare(), Err(DeviceError::Fatal(_))));
     assert_eq!(
         events.register(Pipe::new().source()),
         Err(EventError::Closed)
     );
+}
+
+#[test]
+fn shutdown_quiesces_every_device_even_without_a_started_thread() {
+    let rig = Rig::new();
+    let first = rig.device("first", ok());
+    let second = rig.device_with_shutdown("second", ok(), Some(Box::new(|| Ok(()))));
+
+    rig.workers.shutdown().unwrap();
+    rig.workers.shutdown().unwrap();
+
+    assert_eq!(first.device.lock().unwrap().quiesces, 1);
+    assert_eq!(second.device.lock().unwrap().quiesces, 1);
+}
+
+#[test]
+fn shutdown_continues_after_hook_error_and_caches_it() {
+    check_shutdown_failure("error");
+}
+
+#[test]
+fn shutdown_continues_after_hook_panic_and_caches_it() {
+    check_shutdown_failure("panic");
+}
+
+#[test]
+fn shutdown_quiesce_continues_after_poisoned_device_and_caches_it() {
+    check_shutdown_failure("poison");
+}
+
+fn check_shutdown_failure(failure: &'static str) {
+    let rig = Rig::new();
+    let hook: Option<QuiesceHook> = if failure == "poison" {
+        None
+    } else {
+        Some(Box::new(move || match failure {
+            "error" => Err(DeviceError::Fatal("quiesce failed")),
+            "panic" => panic!("quiesce panicked"),
+            _ => unreachable!(),
+        }))
+    };
+    let first = rig.device_with_shutdown("first", ok(), hook);
+    let second = rig.device_with_shutdown(
+        "second",
+        ok(),
+        Some(Box::new(|| Err(DeviceError::Fatal("second failure")))),
+    );
+    let last = rig.device_with_shutdown("last", ok(), Some(Box::new(|| Ok(()))));
+    if failure == "poison" {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = first.device.lock().unwrap();
+            panic!("poison before shutdown");
+        }));
+    }
+
+    for _ in 0..2 {
+        let error = rig.workers.shutdown().map_err(Error::from).unwrap_err();
+        let expected = match failure {
+            "error" => "quiesce failed",
+            "panic" => "quiesce panicked",
+            _ => "device lock is poisoned",
+        };
+        assert!(
+            matches!(error, Error::VirtioDevice { device: "first", reason }
+                if reason == expected),
+            "{error:?}"
+        );
+    }
+    assert_eq!(
+        first
+            .device
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .quiesces,
+        usize::from(failure != "poison")
+    );
+    assert_eq!(second.device.lock().unwrap().quiesces, 1);
+    assert_eq!(last.device.lock().unwrap().quiesces, 1);
 }
 
 #[test]
@@ -1143,10 +1251,10 @@ impl WorkerRuntime for FakeRuntime {
         self.record(format!("cancel {}", slot.0));
     }
 
-    fn shutdown(&self) -> io::Result<()> {
+    fn shutdown(&self) -> Result<(), ShutdownError> {
         self.record("shutdown".to_owned());
         match *self.shutdown_error.lock().unwrap() {
-            Some(kind) => Err(io::Error::from(kind)),
+            Some(kind) => Err(ShutdownError::Join(io::Error::from(kind))),
             None => Ok(()),
         }
     }
@@ -1176,6 +1284,7 @@ fn a_fake_runtime_drives_the_transport() {
         activations: VecDeque::new(),
         resets: 0,
         quiesces: 0,
+        shutdown_hook: None,
     }));
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
     let shared: Arc<Mutex<dyn VirtioDevice>> = device.clone();
@@ -1199,7 +1308,7 @@ fn a_fake_runtime_drives_the_transport() {
     write(&mut transport, 0x070, 0);
     workers.shutdown().unwrap();
     *fake.shutdown_error.lock().unwrap() = Some(io::ErrorKind::TimedOut);
-    let error = workers.shutdown().unwrap_err();
+    let error = workers.shutdown().map_err(Error::from).unwrap_err();
 
     assert_eq!(
         *fake.calls.lock().unwrap(),

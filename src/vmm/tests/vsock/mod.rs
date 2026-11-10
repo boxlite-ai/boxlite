@@ -1146,7 +1146,7 @@ fn activation_requires_three_ready_queues_and_preserves_the_active_backend() {
 }
 
 #[test]
-fn snapshots_stay_unsupported_and_event_buffers_remain_available() {
+fn quiesce_succeeds_while_snapshots_stay_unsupported_and_event_buffers_remain_available() {
     use crate::virtio::{DeviceSnapshot, RestoreContext, SnapshotError};
     let mut h = Harness::new(vec![]);
     let mut event = Driver::new(2);
@@ -1168,7 +1168,7 @@ fn snapshots_stay_unsupported_and_event_buffers_remain_available() {
         }
         assert_eq!(h.device.spec().snapshot, SnapshotSupport::Unsupported);
         assert_eq!(h.device.save_state(), Err(SnapshotError::Unsupported));
-        assert_eq!(h.device.quiesce(), Err(DeviceError::Unsupported("quiesce")));
+        assert_eq!(h.device.quiesce(), Ok(()));
         assert_eq!(
             h.device.restore_state(
                 DeviceSnapshot {

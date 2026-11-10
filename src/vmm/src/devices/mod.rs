@@ -34,15 +34,14 @@ use crate::{
 
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
-/// vsock, network and console. The returned console stays available for the
-/// final TX drain after the device workers stop.
+/// vsock, network and console.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
     ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
-) -> Result<Option<Arc<Mutex<virtio_console::VirtioConsole>>>> {
+) -> Result<()> {
     add_legacy_devices(chipset, console.clone())?;
 
     let mut slots = Slots::new();
@@ -81,18 +80,15 @@ pub(crate) fn add_all(
             )
         })?;
     }
-    let mut console_device = None;
     if config.virtio_console {
         let device = Arc::new(Mutex::new(virtio_console::VirtioConsole::new(console)));
-        console_device = Some(device.clone());
         add_slot_device(&mut slots, &mut used, |slot| {
             mmio::add_device(chipset, &ctx, "virtio-console", slot, device)
         })?;
     }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.
-    mmio::announce(&mut config.cmdline, &used)?;
-    Ok(console_device)
+    mmio::announce(&mut config.cmdline, &used)
 }
 
 /// Takes the next slot, runs `attach` with it, and records it for

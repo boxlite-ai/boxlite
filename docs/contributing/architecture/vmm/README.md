@@ -453,8 +453,17 @@ worker slot synchronously.
   - A reclaim syscall may still block. Count bounds are not syscall-time,
     total CPU or throughput guarantees; stop timeout is Fatal and retains RAM.
   - Status=0 closes admission and waits for the old generation before reset.
-    VM exit and Drop stop/join before unmap. `WorkerRuntime` preserves the
-    future per-device seam without adding a second runtime in M2.
+    VM exit and Drop stop/join before unmap; after joining, the framework
+    quiesces every device while RAM remains registered. The default is a
+    successful no-op; console drains published TX before the host console worker
+    finishes, and block flushes/syncs its backend.
+  - Shutdown hook failures are cached separately from join failures, so later hooks
+    still run and a completed join still permits RAM unmapping.
+    `WorkerRuntime` preserves the future per-device seam without adding a
+    second runtime in M2; [shutdown details](../../../../src/vmm/README.md#virtio-workers)
+    live with the implementation. Other devices retain their existing reset/drop
+    cleanup; quiesce success does not imply snapshot support or delivery of
+    buffered network traffic.
 - **The `run()` thread.**
   - It waits on one poller for stop requests, vCPU outcomes and device
     failures.
