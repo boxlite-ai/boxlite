@@ -342,7 +342,7 @@ class LocalE2ETest(unittest.TestCase):
             cases = root / "apps/e2e/cases"
             cases.mkdir(parents=True)
             (cases / "test_example.py").write_text("changed test")
-            local.up({})
+            local.up({"TMPDIR": "/tmp/new-nix-shell", "DELTA_SCRATCH_DIR": "/tmp/new-turn"})
             self.assertEqual(build.call_count, 1, "test-only changes rebuilt the stack")
             self.assertEqual(start.call_count, 1, "test-only changes restarted services")
             source.write_text("changed product")

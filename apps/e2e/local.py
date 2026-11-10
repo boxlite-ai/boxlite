@@ -296,9 +296,12 @@ def input_digest(env, *, dependencies=False):
             digest.update(b"\0")
 
     scan(ROOT)
-    ignored = {"FILTER", "E2E_ARGS", "MAKEFLAGS", "MFLAGS", "MAKELEVEL"}
+    ignored = {"FILTER", "E2E_ARGS", "MAKEFLAGS", "MFLAGS", "MAKELEVEL",
+               "TMPDIR", "TMP", "TEMP", "TEMPDIR", "NIX_BUILD_TOP", "SHLVL", "_",
+               "PWD", "OLDPWD", "TERM", "COLUMNS", "LINES"}
     digest.update(json.dumps({key: value for key, value in env.items()
-                              if key not in ignored}, sort_keys=True).encode())
+                              if key not in ignored and not key.startswith("DELTA_")},
+                             sort_keys=True).encode())
     digest.update(str(PYTHON).encode())
     return digest.hexdigest()
 
