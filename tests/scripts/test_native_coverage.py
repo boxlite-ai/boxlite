@@ -89,7 +89,7 @@ class NativeCoveragePathsTest(unittest.TestCase):
 
         repo = COLLECTOR.parents[2]
         boundary_tool = '''#!/usr/bin/env python3
-import json, os, sys
+import json, os, shlex, sys
 from pathlib import Path
 
 root = Path(os.environ["NATIVE_MAKE_ROOT"])
@@ -100,7 +100,12 @@ if not target.is_absolute():
     target = root / target
 library = target / "debug/libboxlite.a"
 entry = {"tool": tool, "args": args}
-if tool == "cargo":
+if tool == "rustc":
+    library_dir = root / "profile runtime"
+    library_dir.mkdir(exist_ok=True)
+    (library_dir / "libprofiler_builtins-fixture.rlib").write_text("profile runtime")
+    print(library_dir)
+elif tool == "cargo":
     library.parent.mkdir(parents=True, exist_ok=True)
     library.write_text("native library produced by Cargo")
 elif tool == "bash":
@@ -108,9 +113,12 @@ elif tool == "bash":
     entry.update(library=str(selected), exists=selected.is_file())
 elif tool == "go" and args[0] == "test":
     selected = Path(os.environ["CGO_LDFLAGS"])
+    if args[-1].endswith("/internal/nativeprofile"):
+        selected = Path(shlex.split(os.environ["CGO_LDFLAGS"])[0])
     entry.update(library=str(selected), exists=selected.is_file())
-    profile = next(value.split("=", 1)[1] for value in args if value.startswith("-coverprofile="))
-    Path(profile).write_text(selected.read_text())
+    for value in args:
+        if value.startswith("-coverprofile="):
+            Path(value.split("=", 1)[1]).write_text(selected.read_text())
 with (root / "calls.jsonl").open("a") as output:
     output.write(json.dumps(entry) + "\\n")
 '''
@@ -120,7 +128,7 @@ with (root / "calls.jsonl").open("a") as output:
                 (root / "sdks/go").mkdir(parents=True)
                 tools = root / "bin"
                 tools.mkdir()
-                for name in ("cargo", "go", "bash"):
+                for name in ("cargo", "go", "bash", "rustc"):
                     executable = tools / name
                     executable.write_text(boundary_tool)
                     executable.chmod(0o755)
@@ -147,7 +155,7 @@ with (root / "calls.jsonl").open("a") as output:
                 self.assertFalse((root / "target/debug/libboxlite.a").exists())
                 rewrites = [call for call in calls if call["tool"] == "bash"]
                 self.assertTrue(all(call["exists"] for call in rewrites), rewrites)
-                native_tests = [call for call in calls if call["tool"] == "go" and call["args"][0] == "test"]
+                native_tests = [call for call in calls if call["tool"] == "go" and call["args"][-1] == "./integration/archive"]
                 self.assertEqual(len(native_tests), 1)
                 self.assertTrue(native_tests[0]["exists"], native_tests[0])
                 self.assertIn("-tags=boxlite_dev,boxlite_integration,boxlite_coverage", native_tests[0]["args"])
