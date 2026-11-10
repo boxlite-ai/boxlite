@@ -320,6 +320,20 @@ impl Locker for FileLock {
         let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
         result == 0
     }
+
+    fn read_lock(&self) {
+        let fd = self.file.as_raw_fd();
+        let result = unsafe { libc::flock(fd, libc::LOCK_SH) };
+        if result != 0 {
+            panic!("flock(LOCK_SH) failed: {}", std::io::Error::last_os_error());
+        }
+    }
+
+    fn try_read_lock(&self) -> bool {
+        let fd = self.file.as_raw_fd();
+        let result = unsafe { libc::flock(fd, libc::LOCK_SH | libc::LOCK_NB) };
+        result == 0
+    }
 }
 
 // SAFETY: File handles are thread-safe for flock operations
