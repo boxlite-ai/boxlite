@@ -168,6 +168,15 @@ runs outside the database transaction after persisting `deleting`; failures
 retain that state and quota for retry. Checkpoints also protect their referenced
 organization image and matching registry credential after source deletion.
 
+Box source/target selectors and checkpoint selectors resolve an exact ID before
+falling back to a name within the organization. An existing name cannot shadow
+an ID during capture, import or deletion. Checkpoint creation rejects names that
+match an existing checkpoint ID in that organization.
+
+Checkpoint imports that create a new Box emit the ordinary `BoxEvents.CREATED`
+notification after the Box, import job and operation commit. Failed admission
+does not emit it; listener failures are logged without repeating creation.
+
 `POST /api/v1/boxes/import` with JSON `checkpoint_id` and `box_id` replaces an
 existing idle target and requires Box write permission. `name` and `box_id` are
 mutually exclusive; ordinary `POST /boxes` no longer accepts checkpoint selectors. Recovery rechecks organization admission,

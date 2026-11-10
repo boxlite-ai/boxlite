@@ -56,13 +56,18 @@ export class CheckpointService {
     try {
       const checkpoint = await this.dataSource.transaction(async (manager) => {
         await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`checkpoint-quota:${organizationId}`])
-        const box = await manager.findOne(Box, {
-          where: [
-            { organizationId, id: source },
-            { organizationId, name: source },
-          ],
+        if (name && isUUID(name) && (await manager.exists(Checkpoint, { where: { organizationId, id: name } })))
+          throw new ConflictException('Checkpoint name conflicts with an existing checkpoint ID')
+        const byId = await manager.findOne(Box, {
+          where: { organizationId, id: source },
           lock: { mode: 'pessimistic_write' },
         })
+        const box =
+          byId ??
+          (await manager.findOne(Box, {
+            where: { organizationId, name: source },
+            lock: { mode: 'pessimistic_write' },
+          }))
         if (!box) throw new NotFoundException('Source box not found')
         // The parent lock also serializes first use, when no coordination row exists yet.
         const checkpointState =
@@ -145,13 +150,9 @@ export class CheckpointService {
   }
 
   async get(organizationId: string, key: string): Promise<Checkpoint> {
-    const where = isUUID(key)
-      ? [
-          { organizationId, id: key },
-          { organizationId, name: key },
-        ]
-      : { organizationId, name: key }
-    const checkpoint = await this.dataSource.getRepository(Checkpoint).findOne({ where })
+    const repository = this.dataSource.getRepository(Checkpoint)
+    const byId = isUUID(key) ? await repository.findOneBy({ organizationId, id: key }) : null
+    const checkpoint = byId ?? (await repository.findOneBy({ organizationId, name: key }))
     if (!checkpoint) throw new NotFoundException('Checkpoint not found')
     return checkpoint
   }

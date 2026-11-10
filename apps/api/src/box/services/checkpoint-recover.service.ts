@@ -1,7 +1,8 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { EventEmitter2 } from '@nestjs/event-emitter'
 import { randomUUID } from 'node:crypto'
 import { DataSource, EntityManager, In, IsNull, Not } from 'typeorm'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -30,9 +31,13 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { RunnerService } from './runner.service'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
+import { BoxEvents } from '../constants/box-events.constants'
+import { BoxCreatedEvent } from '../events/box-create.event'
 
 @Injectable()
 export class CheckpointRecoverService {
+  private readonly logger = new Logger(CheckpointRecoverService.name)
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly checkpoints: CheckpointService,
@@ -43,6 +48,7 @@ export class CheckpointRecoverService {
     private readonly cache: BoxLookupCacheInvalidationService,
     private readonly boxes: BoxRepository,
     private readonly runners: RunnerService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async createBox(
@@ -95,7 +101,11 @@ export class CheckpointRecoverService {
       )
     }
     try {
-      return name === undefined ? await persistWithGeneratedBoxName(box.id, persist) : await persist(name)
+      const created = name === undefined ? await persistWithGeneratedBoxName(box.id, persist) : await persist(name)
+      this.eventEmitter
+        .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(created))
+        .catch((error) => this.logger.error('Failed to emit BoxCreatedEvent', error))
+      return created
     } catch (error) {
       if (error?.code === '23505') throw new ConflictException('Box name already exists')
       throw error
@@ -109,12 +119,9 @@ export class CheckpointRecoverService {
     maxCreatedBoxes: number | undefined,
   ): Promise<Box> {
     const selected = await this.admit(organization, checkpointKey)
-    const selectedTarget = await this.dataSource.getRepository(Box).findOne({
-      where: [
-        { id: target, organizationId: organization.id },
-        { name: target, organizationId: organization.id },
-      ],
-    })
+    const repository = this.dataSource.getRepository(Box)
+    const byId = await repository.findOneBy({ id: target, organizationId: organization.id })
+    const selectedTarget = byId ?? (await repository.findOneBy({ name: target, organizationId: organization.id }))
     if (!selectedTarget) throw new NotFoundException('Recovery target not found')
     const box = await this.boxes.withCheckpointRestoreAdmission(
       organization.id,

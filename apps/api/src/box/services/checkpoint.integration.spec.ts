@@ -40,6 +40,8 @@ import { RegistriesService } from '../../registry/services/registries.service'
 import { BoxService } from './box.service'
 import { Context } from '../../common/context/context'
 import { BoxManager } from '../managers/box.manager'
+import { BoxEvents } from '../constants/box-events.constants'
+import { BoxCreatedEvent } from '../events/box-create.event'
 
 const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `checkpoint_api_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -57,7 +59,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   let receiver: CheckpointJobReceiver
   let recovery: CheckpointRecoverService
   let repository: BoxRepository
-  const events = { emit: jest.fn() }
+  const events = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) }
   const organization = { id: organizationId } as Organization
   const resourceLimits = { resolve: jest.fn() }
   const imageAdmission = { assert: jest.fn() }
@@ -122,6 +124,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       cache as any,
       repository,
       runnerSelection as never,
+      events as unknown as EventEmitter2,
     )
   })
 
@@ -153,6 +156,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await dataSource.getRepository(Runner).save(runner)
     cache.invalidate.mockClear()
     events.emit.mockClear()
+    events.emitAsync.mockReset().mockResolvedValue([])
     resourceLimits.resolve.mockReset().mockResolvedValue({ maxCpuPerBox: 16, maxMemoryPerBox: 128, maxDiskPerBox: 100 })
     imageAdmission.assert.mockReset().mockResolvedValue(undefined)
     runnerSelection.getRandomAvailableRunner.mockReset().mockImplementation(async () => runner)
@@ -227,6 +231,111 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  it('prefers the exact Box ID over a colliding name during capture', async () => {
+    const target = await source('exact-source')
+    const shadow = await source(target.id)
+    await boxes.update(target.id, { name: 'updated-exact-source', env: { ROLE: 'exact-source' } })
+    const captured = await service.create(organizationId, target.id, 'id-selected-source')
+    expect(captured.sourceBoxId).toBe(target.id)
+    expect(captured.environment.env).toEqual({ ROLE: 'exact-source' })
+    expect(await jobs.findOneByOrFail({ id: captured.exportJobId! })).toMatchObject({ resourceId: target.id })
+    expect((await boxes.findOneByOrFail({ id: shadow.id })).pending).toBe(false)
+  })
+
+  it('prefers the exact Box ID over a colliding name during replacement', async () => {
+    const checkpoint = await readyCheckpoint()
+    const target = await source('exact-target')
+    const shadow = await source(target.id)
+    await boxes.update(target.id, { name: 'updated-exact-target', env: { ROLE: 'exact-target' } })
+    const recovered = await recovery.recover(organization, checkpoint.id, target.id, undefined)
+    expect(recovered.id).toBe(target.id)
+    const operation = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ boxId: target.id })
+    expect(await jobs.findOneByOrFail({ id: operation.jobId })).toMatchObject({ resourceId: target.id })
+    expect((await boxes.findOneByOrFail({ id: shadow.id })).pending).toBe(false)
+  })
+
+  async function legacyCheckpointNameCollision() {
+    const checkpoint = await readyCheckpoint()
+    const id = randomUUID()
+    const arcPath = `${settings.archivePrefix}${organizationId}/${id}/archive.boxlite`
+    const shadow = await checkpoints.save(
+      checkpoints.create({
+        ...checkpoint,
+        id,
+        name: checkpoint.id,
+        arcPath,
+        archive: { ...checkpoint.archive!, checkpointId: id, arcPath },
+      }),
+    )
+    // A normal update changes heap order; identifier precedence must not depend on it.
+    await checkpoints.update(checkpoint.id, { updatedAt: new Date() })
+    return { checkpoint, shadow }
+  }
+
+  it('prefers the exact checkpoint ID over a legacy colliding name when reading', async () => {
+    const { checkpoint } = await legacyCheckpointNameCollision()
+    expect((await service.get(organizationId, checkpoint.id)).id).toBe(checkpoint.id)
+  })
+
+  it('prefers the exact checkpoint ID over a legacy colliding name when importing', async () => {
+    const { checkpoint } = await legacyCheckpointNameCollision()
+    const created = await recovery.createBox(organization, checkpoint.id, 'exact-import', undefined)
+    expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ boxId: created.id })).toMatchObject({
+      checkpointId: checkpoint.id,
+    })
+  })
+
+  it('prefers the exact checkpoint ID over a legacy colliding name when deleting', async () => {
+    const { checkpoint, shadow } = await legacyCheckpointNameCollision()
+    await service.remove(organizationId, checkpoint.id)
+    expect(archiveStore.remove).toHaveBeenCalledWith(expect.objectContaining({ id: checkpoint.id }))
+    expect(await checkpoints.findOneBy({ id: checkpoint.id })).toBeNull()
+    expect(await checkpoints.findOneBy({ id: shadow.id })).not.toBeNull()
+  })
+
+  it('rejects a checkpoint name that collides with an existing checkpoint ID', async () => {
+    const checkpoint = await readyCheckpoint()
+    const box = await source('name-collision-source')
+    const previousJobs = await jobs.count()
+    await expect(service.create(organizationId, box.id, checkpoint.id)).rejects.toMatchObject({ status: 409 })
+    expect(await checkpoints.count()).toBe(1)
+    expect(await jobs.count()).toBe(previousJobs)
+    expect((await boxes.findOneByOrFail({ id: box.id })).pending).toBe(false)
+  })
+
+  it('emits BoxCreatedEvent only after checkpoint import admission commits', async () => {
+    const checkpoint = await readyCheckpoint()
+    events.emitAsync.mockImplementation(async (type: string, event: BoxCreatedEvent) => {
+      expect(type).toBe(BoxEvents.CREATED)
+      expect(event).toBeInstanceOf(BoxCreatedEvent)
+      const operation = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ boxId: event.box.id })
+      expect(await boxes.findOneByOrFail({ id: event.box.id })).toMatchObject({ state: BoxState.RESTORING })
+      expect(await jobs.findOneByOrFail({ id: operation.jobId })).toMatchObject({ resourceId: event.box.id })
+      return []
+    })
+    const created = await recovery.createBox(organization, checkpoint.id, 'announced-import', undefined)
+    expect(events.emitAsync).toHaveBeenCalledTimes(1)
+    expect(events.emitAsync).toHaveBeenCalledWith(BoxEvents.CREATED, expect.objectContaining({ box: created }))
+    await events.emitAsync.mock.results[0].value
+  })
+
+  it('keeps a committed checkpoint import successful when a creation listener fails', async () => {
+    const checkpoint = await readyCheckpoint()
+    events.emitAsync.mockRejectedValueOnce(new Error('creation listener unavailable'))
+    const created = await recovery.createBox(organization, checkpoint.id, 'listener-failure-import', undefined)
+    expect(events.emitAsync).toHaveBeenCalledTimes(1)
+    expect(await boxes.findOneByOrFail({ id: created.id })).toMatchObject({ name: 'listener-failure-import' })
+    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(1)
+  })
+
+  it('allows a UUID-shaped checkpoint name when no checkpoint owns that ID', async () => {
+    const box = await source()
+    const name = randomUUID()
+    const checkpoint = await service.create(organizationId, box.id, name)
+    expect((await service.get(organizationId, name)).id).toBe(checkpoint.id)
+    await expect(service.get(otherOrganizationId, name)).rejects.toMatchObject({ status: 404 })
+  })
 
   it('requires a stopped source before accepting checkpoint capture', async () => {
     const box = await source()
@@ -396,6 +505,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       expect(await states.count()).toBe(initialStates)
       expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
       expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
+      expect(events.emitAsync).not.toHaveBeenCalled()
     } finally {
       await dataSource.query('DROP TRIGGER reject_checkpoint_state ON "box_checkpoint_state"')
       await dataSource.query(`DROP FUNCTION "${schema}".reject_checkpoint_state()`)
