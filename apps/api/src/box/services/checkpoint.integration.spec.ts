@@ -1437,6 +1437,106 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await jobs.countBy({ type: JobType.UPLOAD_CHECKPOINT })).toBe(0)
   })
 
+  it.each(['', '-base', 'base/name', 'a'.repeat(129)])(
+    'rejects invalid capture name %j before reserving the source',
+    async (name) => {
+      const box = await source()
+      await expect(service.create(organizationId, box.id, name)).rejects.toMatchObject({ status: 400 })
+      expect(await checkpoints.count()).toBe(0)
+      expect(await jobs.count()).toBe(0)
+      expect(await boxes.findOneByOrFail({ id: box.id })).toMatchObject({ pending: false })
+    },
+  )
+
+  it('does not accept a completion notification before the persisted job is terminal', async () => {
+    const box = await source()
+    const checkpoint = await service.create(organizationId, box.id)
+    const notification = await jobs.findOneByOrFail({ id: checkpoint.exportJobId! })
+    notification.status = JobStatus.COMPLETED
+    notification.resultMetadata = JSON.stringify(archive(checkpoint))
+    await receiver.handleJobCompletion(notification)
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({
+      state: 'creating',
+      activeJobId: checkpoint.exportJobId,
+    })
+    expect(await jobs.countBy({ type: JobType.UPLOAD_CHECKPOINT })).toBe(0)
+    expect(await boxes.findOneByOrFail({ id: box.id }).then(withCheckpointState)).toMatchObject({ pending: true })
+  })
+
+  it.each([{ resourceType: ResourceType.CHECKPOINT }, { resourceId: randomUUID() }])(
+    'ignores an export receipt with the wrong resource: %j',
+    async (resource) => {
+      const box = await source()
+      const checkpoint = await service.create(organizationId, box.id)
+      await jobs.update(checkpoint.exportJobId!, resource)
+      await finish(checkpoint.exportJobId!, archive(checkpoint))
+      expect(await service.get(organizationId, checkpoint.id)).toMatchObject({
+        state: 'creating',
+        activeJobId: checkpoint.exportJobId,
+      })
+      expect(await jobs.countBy({ type: JobType.UPLOAD_CHECKPOINT })).toBe(0)
+      expect(await boxes.findOneByOrFail({ id: box.id }).then(withCheckpointState)).toMatchObject({ pending: true })
+    },
+  )
+
+  it('cancels import completion after a persisted destruction intent', async () => {
+    const checkpoint = await readyCheckpoint()
+    const target = await recovery.createBox(organization, checkpoint.id, 'destroy-before-completion', undefined)
+    const coordination = await states.findOneByOrFail({ boxId: target.id })
+    await boxes.update(target.id, { desiredState: BoxDesiredState.DESTROYED })
+    await finish(coordination.activeJobId!, { nativeId: 'late-native-result' })
+    expect(
+      await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ jobId: coordination.activeJobId! }),
+    ).toMatchObject({ state: 'cancelled' })
+    expect(await boxes.findOneByOrFail({ id: target.id })).toMatchObject({ desiredState: BoxDesiredState.DESTROYED })
+  })
+
+  it('continues reconciling other captures when one callback fails', async () => {
+    const first = await service.create(organizationId, (await source('first')).id)
+    const second = await service.create(organizationId, (await source('second')).id)
+    for (const [index, checkpoint] of [first, second].entries()) {
+      await jobs.update(checkpoint.exportJobId!, {
+        status: JobStatus.COMPLETED,
+        completedAt: new Date(1000 + index),
+        resultMetadata: JSON.stringify(archive(checkpoint)),
+      })
+    }
+    const completion = jest.spyOn(receiver, 'handleJobCompletion').mockRejectedValueOnce(new Error('Temporary failure'))
+    try {
+      await receiver.reconcile()
+      expect(completion).toHaveBeenCalledTimes(2)
+      expect(await service.get(organizationId, first.id)).toMatchObject({ activeJobId: first.exportJobId })
+      expect((await service.get(organizationId, second.id)).activeJobId).not.toBe(second.exportJobId)
+      expect(await jobs.countBy({ type: JobType.UPLOAD_CHECKPOINT })).toBe(1)
+    } finally {
+      completion.mockRestore()
+    }
+  })
+
+  it('reports a missing checkpoint on ordinary deletion', async () => {
+    await expect(service.remove(organizationId, randomUUID())).rejects.toMatchObject({ status: 404 })
+    expect(archiveStore.remove).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('handles a checkpoint removed between lookup and locking with force=%s', async (force) => {
+    const checkpoint = await readyCheckpoint()
+    const get = service.get.bind(service)
+    const lookup = jest.spyOn(service, 'get').mockImplementationOnce(async (...args) => {
+      const selected = await get(...args)
+      await checkpoints.delete(selected.id)
+      return selected
+    })
+    try {
+      const removal = service.remove(organizationId, checkpoint.id, force)
+      if (force) await expect(removal).resolves.toBeUndefined()
+      else await expect(removal).rejects.toMatchObject({ status: 404 })
+      expect(await checkpoints.count()).toBe(0)
+      expect(archiveStore.remove).not.toHaveBeenCalled()
+    } finally {
+      lookup.mockRestore()
+    }
+  })
+
   it('pages retained records without dropping rows or reading another organization', async () => {
     const box = await source()
     const first = await service.create(organizationId, box.id)

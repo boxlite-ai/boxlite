@@ -1,5 +1,6 @@
 """Exercise checkpoint serialization and result ownership through native REST."""
 
+import importlib.util
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -7,6 +8,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 import boxlite
+
+# Unit jobs do not build the extension; the native coverage job requires it.
+# A present but unloadable extension must still fail rather than be skipped.
+pytestmark = pytest.mark.skipif(
+    importlib.util.find_spec("boxlite.boxlite") is None,
+    reason="native extension module not built",
+)
 
 INFO = {
     "id": "checkpoint-1",

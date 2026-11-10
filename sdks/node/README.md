@@ -686,7 +686,12 @@ The SDK uses a dual-layer architecture:
 
 See [../../CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
 
-### Agent binding tests
+### Native binding tests
+
+Checkpoint native REST tests run with
+`make test:integration:node FILTER='checkpoint native'`. They use loopback HTTP
+without a VM and are included in native binding coverage. Ordinary unit jobs
+do not build the native module and exclude these integration tests.
 
 From the repository root, run
 `make test:integration:node FILTER='agent namespace'`. The native Box getter test
