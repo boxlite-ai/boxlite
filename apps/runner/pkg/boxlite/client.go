@@ -629,7 +629,10 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 }
 
 // Start starts a stopped box and returns the runtime version.
-func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string, nestedVirtualization bool) (string, error) {
+	if nestedVirtualization && !c.NestedVirtualizationEnabled() {
+		return "", fmt.Errorf("nested virtualization is not authorized on this Runner")
+	}
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
@@ -638,7 +641,7 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	if err != nil {
 		return "", err
 	}
-	if err := bx.Start(ctx); err != nil {
+	if err := bx.StartRunner(ctx, nestedVirtualization); err != nil {
 		return "", err
 	}
 	// The other place a box is first started: one created with SkipStart has

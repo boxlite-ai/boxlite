@@ -194,7 +194,7 @@ impl BoxBuilder {
     /// # Arguments
     ///
     /// * `runtime` - Runtime providing resources (layout, guest_rootfs, etc.)
-    /// * `config` - Box configuration (immutable after creation)
+    /// * `config` - Saved configuration refreshed under the initialization lock
     /// * `state` - Current box state (determines init mode)
     pub(crate) fn new(
         runtime: SharedRuntimeImpl,
@@ -315,7 +315,7 @@ impl BoxBuilder {
             let published_ports = ctx.published_ports.take();
 
             // Build LiveState
-            let live_state = LiveState::new(
+            let mut live_state = LiveState::new(
                 handler,
                 guest_session,
                 network,
@@ -326,6 +326,7 @@ impl BoxBuilder {
                 #[cfg(target_os = "linux")]
                 bind_mount,
             );
+            live_state.nested_virtualization = ctx.config.options.advanced.nested_virtualization;
 
             Ok::<BuiltBox, BoxliteError>(BuiltBox {
                 live: live_state,

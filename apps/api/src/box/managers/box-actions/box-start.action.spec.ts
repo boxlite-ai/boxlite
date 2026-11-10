@@ -64,6 +64,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     }
     const organizationService = {
       findOne: jest.fn(async () => ({ boxMetadata: {} })),
+      isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
     }
 
     const action = new BoxStartAction(
@@ -81,7 +82,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
 
     // The action started the box on its OWN runner, not a different one.
     expect(runnerUsedForStart?.id).toBe(ownRunnerId)
-    expect(startBox).toHaveBeenCalledWith(box.id, box.authToken, expect.any(Object))
+    expect(startBox).toHaveBeenCalledWith(box.id, box.authToken, expect.any(Object), false)
     // findOneOrFail was only ever asked about the box's own runner.
     for (const call of runnerService.findOneOrFail.mock.calls) {
       expect(call[0]).toBe(ownRunnerId)

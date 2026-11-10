@@ -52,6 +52,8 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 /// Contains all resources related to a running VM instance.
 /// Separated from BoxImpl to allow operations like `info()` without initializing LiveState.
 pub(crate) struct LiveState {
+    /// The configuration actually used for this VM, including an adopted VM.
+    pub(crate) nested_virtualization: bool,
     // VM process control
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
     guest_session: GuestSession,
@@ -106,6 +108,7 @@ impl LiveState {
         #[cfg(target_os = "linux")] bind_mount: Option<BindMountHandle>,
     ) -> Self {
         Self {
+            nested_virtualization: false,
             handler: std::sync::Mutex::new(handler),
             guest_session,
             network: network.map(Arc::from),
@@ -299,6 +302,24 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        self.start_with_nested_upgrade(false).await
+    }
+
+    pub(crate) async fn runner_start(&self, nested_virtualization: bool) -> BoxliteResult<()> {
+        if !self.runtime.runner_managed {
+            return Err(BoxliteError::Unsupported(
+                "Runner start requires a managed runtime".into(),
+            ));
+        }
+        if nested_virtualization {
+            self.runtime
+                .experimental_features
+                .require(crate::experimental::ExperimentalFeature::NestedVirtualization)?;
+        }
+        self.start_with_nested_upgrade(nested_virtualization).await
+    }
+
+    async fn start_with_nested_upgrade(&self, nested_virtualization: bool) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -324,7 +345,9 @@ impl BoxImpl {
         // Boot creates the container; running its init is the separate step that
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
-        let live = self.ensure_booted().await?;
+        let live = self
+            .ensure_booted_with_nested_upgrade(nested_virtualization)
+            .await?;
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
@@ -715,7 +738,7 @@ impl BoxImpl {
             )));
         }
         self.live
-            .get_or_try_init(|| self.init_live_state(false))
+            .get_or_try_init(|| self.init_live_state(false, false))
             .await
     }
 
@@ -1198,6 +1221,10 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        self.ensure_booted_with_nested_upgrade(false).await
+    }
+
+    async fn ensure_booted_with_nested_upgrade(&self, upgrade: bool) -> BoxliteResult<&LiveState> {
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1208,9 +1235,17 @@ impl BoxImpl {
             )));
         }
 
-        self.live
-            .get_or_try_init(|| self.init_live_state(true))
-            .await
+        let live = self
+            .live
+            .get_or_try_init(|| self.init_live_state(true, upgrade))
+            .await?;
+        // An ordinary start or attach may have won OnceCell initialization.
+        if upgrade && !live.nested_virtualization {
+            return Err(BoxliteError::InvalidState(
+                "Stop the ordinary VM before enabling nested virtualization".into(),
+            ));
+        }
+        Ok(live)
     }
 
     /// Hold the agent-install lock of this VM run, booting the Box if needed.
@@ -1320,6 +1355,37 @@ impl BoxImpl {
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))
     }
 
+    /// Called while holding the box initialization lock. Persist before spawning
+    /// so a failed boot or a replay cannot discard the accepted requirement.
+    fn start_config(&self, upgrade: bool) -> BoxliteResult<(BoxConfig, BoxState)> {
+        let (mut config, state) = self
+            .runtime
+            .box_manager
+            .box_by_id(self.id())?
+            .ok_or_else(|| BoxliteError::NotFound(self.id().to_string()))?;
+        if upgrade && !config.options.advanced.nested_virtualization {
+            if !self.runtime.runner_managed {
+                return Err(BoxliteError::Unsupported(
+                    "Runner upgrade requires a managed runtime".into(),
+                ));
+            }
+            if !matches!(state.status, BoxStatus::Configured | BoxStatus::Stopped) {
+                return Err(BoxliteError::InvalidState(
+                    "Stop the ordinary VM before enabling nested virtualization".into(),
+                ));
+            }
+            config.options.advanced.nested_virtualization = true;
+            self.runtime
+                .experimental_features
+                .require_for_options(&config.options)?;
+            config.options.sanitize_persisted()?;
+            self.runtime
+                .box_manager
+                .enable_nested_virtualization(self.id())?;
+        }
+        Ok((config, state))
+    }
+
     /// Initialize LiveState via BoxBuilder.
     ///
     /// BoxBuilder handles all status types with different execution plans:
@@ -1329,7 +1395,7 @@ impl BoxImpl {
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
-    async fn init_live_state(&self, allow_start: bool) -> BoxliteResult<LiveState> {
+    async fn init_live_state(&self, allow_start: bool, upgrade: bool) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
@@ -1340,12 +1406,6 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        let is_first_start = state.status == BoxStatus::Configured;
-        // Reattaching to a live box: its init is already running, so mark the
-        // container-start done up front — `ensure_container_started` must not try
-        // to run it a second time.
-        let adopting_running = state.status == BoxStatus::Running;
-
         // Retrieve the lock (allocated in create())
         let lock_id = state.lock_id.ok_or_else(|| {
             BoxliteError::Internal(format!(
@@ -1357,8 +1417,7 @@ impl BoxImpl {
         tracing::debug!(
             box_id = %self.config.id,
             lock_id = %lock_id,
-            "Acquired lock for box (first_start={})",
-            is_first_start
+            "Acquired lock for box"
         );
 
         // Hold the lock for the duration of build operations.
@@ -1368,13 +1427,16 @@ impl BoxImpl {
         // Build the box (lock is held)
         // New and restarted VMs remain guarded until DB persistence succeeds.
         // Running adoption disarms cleanup before reconnecting to the live VM.
-        let mut state = state;
-        state.outbound_policy = self
-            .runtime
-            .box_manager
-            .update_box(&self.config.id)?
-            .outbound_policy;
-        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
+        let (config, state) = self.start_config(upgrade)?;
+        if !allow_start && state.status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "Box {} is not running",
+                self.id()
+            )));
+        }
+        let is_first_start = state.status == BoxStatus::Configured;
+        let adopting_running = state.status == BoxStatus::Running;
+        let builder = BoxBuilder::new(Arc::clone(&self.runtime), config, state)?;
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
@@ -1880,6 +1942,116 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     mod execution_recovery;
+
+    #[tokio::test]
+    async fn runner_cold_start_upgrade_preserves_identity_and_saved_true() {
+        let dir = TempDir::new().unwrap();
+        let mut runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: dir.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let inner = Arc::get_mut(&mut runtime).unwrap();
+        inner.runner_managed = true;
+        inner.experimental_features =
+            crate::experimental::ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        let handle = runtime
+            .create(BoxOptions::default(), Some("upgrade".into()))
+            .await
+            .unwrap();
+        let (config, state) = runtime.box_manager.box_by_id(handle.id()).unwrap().unwrap();
+        assert!(!config.options.advanced.nested_virtualization);
+        let original = config.clone();
+        let implementation = BoxImpl::new(
+            config,
+            state,
+            runtime.clone(),
+            runtime.shutdown_token.child_token(),
+        );
+        let (upgraded, _) = implementation.start_config(true).unwrap();
+        assert!(upgraded.options.advanced.nested_virtualization);
+        assert_eq!(upgraded.id, original.id);
+        assert_eq!(upgraded.container.id, original.container.id);
+        assert_eq!(upgraded.box_home, original.box_home);
+        // The same stale handle and a retry without an upgrade request use DB truth.
+        assert!(!implementation.config.options.advanced.nested_virtualization);
+        assert!(
+            implementation
+                .start_config(false)
+                .unwrap()
+                .0
+                .options
+                .advanced
+                .nested_virtualization
+        );
+        assert!(
+            runtime
+                .box_manager
+                .box_by_id(handle.id())
+                .unwrap()
+                .unwrap()
+                .0
+                .options
+                .advanced
+                .nested_virtualization
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_cold_start_upgrade_requires_managed_authorization() {
+        for managed in [false, true] {
+            let dir = TempDir::new().unwrap();
+            let mut runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: dir.path().into(),
+                ..Default::default()
+            })
+            .unwrap();
+            let inner = Arc::get_mut(&mut runtime).unwrap();
+            inner.runner_managed = managed;
+            inner.experimental_features = crate::experimental::ExperimentalFeatures::default();
+            let handle = runtime.create(BoxOptions::default(), None).await.unwrap();
+            let (config, state) = runtime.box_manager.box_by_id(handle.id()).unwrap().unwrap();
+            let implementation = BoxImpl::new(
+                config,
+                state,
+                runtime.clone(),
+                runtime.shutdown_token.child_token(),
+            );
+            assert!(
+                !implementation
+                    .start_config(false)
+                    .unwrap()
+                    .0
+                    .options
+                    .advanced
+                    .nested_virtualization
+            );
+            assert!(implementation.start_config(true).is_err());
+            assert!(
+                !runtime
+                    .box_manager
+                    .box_by_id(handle.id())
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .options
+                    .advanced
+                    .nested_virtualization
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_cold_start_upgrade_refuses_an_already_booted_ordinary_vm() {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let error = fixture
+            .box_impl
+            .ensure_booted_with_nested_upgrade(true)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Stop the ordinary VM"));
+    }
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

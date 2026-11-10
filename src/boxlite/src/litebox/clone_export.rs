@@ -17,13 +17,13 @@ use crate::runtime::types::BoxStatus;
 
 impl BoxImpl {
     fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
-        let mut options = self.config.options.clone();
-        if let Some(policy) = self
+        let (config, state) = self
             .runtime
             .box_manager
-            .update_box(self.id())?
-            .outbound_policy
-        {
+            .box_by_id(self.id())?
+            .ok_or_else(|| BoxliteError::NotFound(self.id().to_string()))?;
+        let mut options = config.options;
+        if let Some(policy) = state.outbound_policy {
             options.network = policy.try_into()?;
         }
         Ok(options)
@@ -344,4 +344,45 @@ fn do_export_finalize(
     );
 
     Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::rt_impl::RuntimeImpl;
+    use crate::{BoxOptions, BoxliteOptions};
+
+    #[tokio::test]
+    async fn copy_options_preserve_a_saved_nesting_upgrade_with_a_stale_handle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: dir.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let handle = runtime
+            .create(
+                BoxOptions {
+                    working_dir: Some("/work".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let implementation = handle
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .ok()
+            .unwrap();
+        runtime
+            .box_manager
+            .enable_nested_virtualization(handle.id())
+            .unwrap();
+        let copied = implementation.options_for_copy().unwrap();
+        assert!(copied.advanced.nested_virtualization);
+        assert_eq!(copied.working_dir.as_deref(), Some("/work"));
+    }
 }

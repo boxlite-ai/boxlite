@@ -13,6 +13,8 @@ extern enum BoxliteErrorCode boxlite_internal_runtime_new_runner(
     CBoxliteRuntime **, CBoxliteError *);
 extern enum BoxliteErrorCode boxlite_internal_advanced_options_set_nested_virtualization(
     CAdvancedBoxOptions *, int);
+extern enum BoxliteErrorCode boxlite_internal_runner_start_box(
+    CBoxHandle *, int, CBoxStartBoxCb, void *, CBoxliteError *);
 
 extern CBoxStdoutCb cbStdout(void);
 extern CBoxStderrCb cbStderr(void);

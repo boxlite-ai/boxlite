@@ -315,11 +315,13 @@ const configuration = new Configuration();
 const apiInstance = new BoxApi(configuration);
 
 let boxId: string; //Box ID (default to undefined)
+let nestedVirtualization: boolean; //Preserve saved nesting or upgrade on authorized cold start (optional) (default to undefined)
 let token: string; //Auth token (optional) (default to undefined)
 let metadata: object; //Metadata (optional)
 
 const { status, data } = await apiInstance.start(
     boxId,
+    nestedVirtualization,
     token,
     metadata
 );
@@ -331,6 +333,7 @@ const { status, data } = await apiInstance.start(
 |------------- | ------------- | ------------- | -------------|
 | **metadata** | **object**| Metadata | |
 | **boxId** | [**string**] | Box ID | defaults to undefined|
+| **nestedVirtualization** | [**boolean**] | Preserve saved nesting or upgrade on authorized cold start | (optional) defaults to undefined|
 | **token** | [**string**] | Auth token | (optional) defaults to undefined|
 
 

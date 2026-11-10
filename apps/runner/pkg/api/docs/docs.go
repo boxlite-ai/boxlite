@@ -420,6 +420,12 @@ const docTemplate = `{
                 "operationId": "Start",
                 "parameters": [
                     {
+                        "type": "boolean",
+                        "description": "Preserve saved nesting or upgrade on authorized cold start",
+                        "name": "nestedVirtualization",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "description": "Box ID",
                         "name": "boxId",
@@ -902,6 +908,9 @@ const docTemplate = `{
                     "$ref": "#/definitions/RunnerMetrics"
                 },
                 "nestedVirtualizationEnabled": {
+                    "type": "boolean"
+                },
+                "nestedVirtualizationStartEnabled": {
                     "type": "boolean"
                 },
                 "serviceHealth": {

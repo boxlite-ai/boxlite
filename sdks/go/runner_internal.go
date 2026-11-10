@@ -7,7 +7,11 @@ package boxlite
 */
 import "C"
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"runtime/cgo"
+)
 
 // WithRunnerManagedPolicy is the internal Runner's validated startup policy.
 // The control plane supplies each saved box decision; ENV cannot override it.
@@ -28,4 +32,28 @@ func (a *AdvancedBoxOptions) SetRunnerNestedVirtualization(enabled bool) error {
 		return fmt.Errorf("boxlite: could not set Runner nested virtualization")
 	}
 	return nil
+}
+
+// StartRunner applies the control plane's sticky cold-start policy.
+// It is available only to Runner builds and requires a managed runtime.
+func (b *Box) StartRunner(ctx context.Context, nestedVirtualization bool) error {
+	b.runtime.ensureDrainRunning()
+	ch := make(chan error, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+	var cerr C.CBoxliteError
+	code := C.boxlite_internal_runner_start_box(b.handle, boolToCInt(nestedVirtualization), C.cbStartBox(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return freeError(&cerr)
+	}
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		abandonAsyncErr(ch, h, b.runtime.closing)
+		return ctx.Err()
+	case <-b.runtime.closing:
+		abandonAsyncErr(ch, h, b.runtime.closing)
+		return ErrRuntimeClosed
+	}
 }

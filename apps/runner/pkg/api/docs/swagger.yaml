@@ -209,6 +209,8 @@ definitions:
         $ref: '#/definitions/RunnerMetrics'
       nestedVirtualizationEnabled:
         type: boolean
+      nestedVirtualizationStartEnabled:
+        type: boolean
       serviceHealth:
         items:
           $ref: '#/definitions/RunnerServiceInfo'
@@ -591,6 +593,10 @@ paths:
       description: Start box
       operationId: Start
       parameters:
+        - description: Preserve saved nesting or upgrade on authorized cold start
+          in: query
+          name: nestedVirtualization
+          type: boolean
         - description: Box ID
           in: path
           name: boxId

@@ -149,7 +149,7 @@ pub struct RuntimeImpl {
 
     /// Immutable release-candidate capability opt-ins for this runtime.
     pub(crate) experimental_features: ExperimentalFeatures,
-    runner_managed: bool,
+    pub(crate) runner_managed: bool,
 
     /// Base disk manager for clone base lifecycle and ref-count tracking.
     pub(crate) base_disk_mgr: crate::disk::BaseDiskManager,

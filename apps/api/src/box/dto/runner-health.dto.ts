@@ -5,7 +5,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator'
+import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateIf, ValidateNested } from 'class-validator'
 import { Type } from 'class-transformer'
 
 @ApiSchema({ name: 'RunnerHealthMetrics' })
@@ -115,6 +115,16 @@ export class RunnerServiceHealthDto {
 
 @ApiSchema({ name: 'RunnerHealthcheck' })
 export class RunnerHealthcheckDto {
+  @ApiPropertyOptional({ description: 'Runner runtime authorizes nested virtualization' })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsBoolean()
+  nestedVirtualizationEnabled?: boolean
+
+  @ApiPropertyOptional({ description: 'Runner supports authorized nested virtualization on cold start' })
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsBoolean()
+  nestedVirtualizationStartEnabled?: boolean
+
   @ApiPropertyOptional({ description: 'Runner preserves the guest privileged creation option' })
   @IsOptional()
   @IsBoolean()

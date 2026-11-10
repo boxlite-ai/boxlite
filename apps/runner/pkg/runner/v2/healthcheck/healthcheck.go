@@ -97,6 +97,8 @@ func (s *Service) newHealthcheck() *apiclient.RunnerHealthcheck {
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
 	healthcheck.SetDomain(s.domain)
 	healthcheck.SetSupportsPrivileged(true)
+	healthcheck.SetNestedVirtualizationEnabled(s.boxlite.NestedVirtualizationEnabled())
+	healthcheck.SetNestedVirtualizationStartEnabled(s.boxlite.NestedVirtualizationEnabled())
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)
 	apiUrl := fmt.Sprintf("http://%s:%d", s.domain, s.apiPort)

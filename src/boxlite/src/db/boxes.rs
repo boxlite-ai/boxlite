@@ -38,7 +38,7 @@ impl BoxStore {
     }
 
     // ========================================================================
-    // BoxConfig operations (immutable after creation)
+    // BoxConfig operations (Runner cold-start nesting may upgrade false to true)
     // ========================================================================
 
     /// Load box configuration by ID.
@@ -64,6 +64,18 @@ impl BoxStore {
             }
             None => Ok(None),
         }
+    }
+
+    /// Preserve all other saved options while making the Runner's upgrade sticky.
+    pub(crate) fn enable_nested_virtualization(&self, box_id: &str) -> BoxliteResult<()> {
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_config SET json = json_set(json, '$.options.advanced.nested_virtualization', json('true')) WHERE id = ?1",
+            params![box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
     }
 
     /// Delete box configuration (and state via CASCADE).

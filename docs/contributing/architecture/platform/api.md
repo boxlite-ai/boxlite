@@ -22,8 +22,11 @@ updates; the actor remains the administrator. Other organization updates write
 only their own fields, so a stale owner update cannot restore a revoked grant.
 
 The default is false. Existing scheduling selects a Runner first; allowlisted
-creates query only that Runner under the normal health deadline. V0 `/info`
-returns `nestedVirtualizationEnabled` from its validated startup feature set.
+creates query only that Runner under the normal health deadline. V0 `/info` returns `nestedVirtualizationEnabled` from its validated startup feature
+set. V2 reports it through the authenticated heartbeat; admission reads the
+current database report without the Runner lookup cache and requires a READY
+Runner with a report no older than 60 seconds. Missing and false reports clear
+prior support; failed V0 info reads do not manufacture a new capability.
 This declaration is independent of `supportsPrivileged`; create and recovery
 preserve both saved options when they are enabled together.
 Missing or non-true values, failed requests and timeouts refuse creation before
@@ -32,7 +35,7 @@ inserting or dispatching a box. The rejection log includes
 
 Allowlisted creates bypass ordinary warm boxes because their VM options are
 already fixed. The saved box decision survives replay, restart and recovery;
-changing the organization switch affects future creates only. `get_or_create`
+changing the organization switch affects future creates and cold-start upgrades. `get_or_create`
 reuses an existing box with its saved nesting decision; it does not upgrade or
 downgrade that configuration. Other security and engine compatibility checks
 still apply.
@@ -46,9 +49,33 @@ The API first confirms the original Runner's capability under the health deadlin
 even after the organization's grant is revoked. Missing, false, invalid or unavailable
 capability rejects nested recovery before dispatch; ordinary recovery does not probe.
 Pending nested archive imports roll back without waiting for destination capacity.
-Nested V0 create dispatches also confirm capability immediately before sending
+Nested V0 and V2 create dispatches also confirm capability immediately before sending
 the saved request, including UNKNOWN-state replay. A Runner rollback cannot
 silently turn a saved nested box into an ordinary box.
+
+Cloud's shared stopped-box start action reads the current allowlist directly
+from the database, covering manual start and proxy auto-resume. It computes
+`saved nested || allowlisted`, confirms Runner support, saves any false-to-true
+upgrade, then dispatches start. Running boxes are unchanged; UNKNOWN-state create
+replay retains its previously saved choice.
+
+Start requires both `nestedVirtualizationEnabled` and
+`nestedVirtualizationStartEnabled`. The second report distinguishes upgraded
+binaries from creation-only Runners; missing, malformed, stale or false support
+fails without dispatching an ordinary start. V0 uses the optional
+`nestedVirtualization` query parameter with its existing metadata body; V2
+CREATE_BOX and START_BOX jobs carry the saved boolean.
+
+The managed Runner validates its own startup authorization and refreshes saved
+configuration under the VM initialization lock before a cold-start upgrade.
+Only the nesting field changes; identity and disks remain. Its live state records
+the VM's actual choice, so an ordinary boot that wins a concurrent request cannot
+be reported as nested. Startup and clone/export read the saved configuration.
+
+A dispatch or boot failure after persisting true keeps that requirement for
+retry. Removing the organization from the allowlist never downgrades an existing
+nested box. Local start remains governed by its saved configuration, and
+get_or_create remains a lookup without an upgrade side effect.
 
 Deploy the additive migration, compatible API/workers and Runners while every
 organization remains disabled, then enable selected organizations. During

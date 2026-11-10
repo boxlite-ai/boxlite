@@ -24,6 +24,7 @@ export interface RunnerInfoResponseDTO {
     'appVersion'?: string;
     'metrics'?: RunnerMetrics;
     'nestedVirtualizationEnabled'?: boolean;
+    'nestedVirtualizationStartEnabled'?: boolean;
     'serviceHealth'?: Array<RunnerServiceInfo>;
     'supportsPrivileged'?: boolean;
 }

@@ -16,10 +16,10 @@ pub struct ContainerRuntimeConfig {
     pub id: ContainerID,
 }
 
-/// Static box configuration (set once at creation, never changes).
+/// Saved box configuration, normally fixed at creation.
 ///
-/// This is persisted to database and remains immutable throughout the box lifecycle.
-/// Separates static configuration from dynamic state.
+/// A managed Runner may upgrade nesting before cold start. Handles keep a snapshot;
+/// startup and copying load the saved configuration so that upgrade survives reuse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxConfig {
     // === Identity & Timestamps ===

@@ -7425,6 +7425,8 @@ components:
       type: object
     RunnerHealthcheck:
       example:
+        nestedVirtualizationEnabled: true
+        nestedVirtualizationStartEnabled: true
         supportsPrivileged: true
         metrics: ""
         serviceHealth:
@@ -7439,6 +7441,12 @@ components:
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        nestedVirtualizationEnabled:
+          description: Runner runtime authorizes nested virtualization
+          type: boolean
+        nestedVirtualizationStartEnabled:
+          description: Runner supports authorized nested virtualization on cold start
+          type: boolean
         supportsPrivileged:
           description: Runner preserves the guest privileged creation option
           type: boolean

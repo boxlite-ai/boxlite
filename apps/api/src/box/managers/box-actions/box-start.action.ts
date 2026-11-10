@@ -19,6 +19,7 @@ import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
+import { getStateChangeLockKey } from '../../utils/lock-key.util'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -115,7 +116,28 @@ export class BoxStartAction extends BoxAction {
       )
     }
 
-    await runnerAdapter.startBox(box.id, box.authToken, metadata)
+    const allowlisted = await this.organizationService.isNestedVirtualizationEnabled(box.organizationId)
+    const nestedVirtualization = box.nestedVirtualization === true || allowlisted
+    if (nestedVirtualization) {
+      const signal = AbortSignal.timeout(this.configService.getOrThrow('runnerHealthTimeout') * 1000)
+      const info = await Promise.race([
+        runnerAdapter.runnerInfo(signal),
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+      ])
+      if (info.nestedVirtualizationEnabled !== true || info.nestedVirtualizationStartEnabled !== true) {
+        throw new Error(`Runner ${runner.id} cannot confirm nested virtualization start support`)
+      }
+    }
+    const currentLock = await this.redisLockProvider.getCode(getStateChangeLockKey(box.id))
+    if (currentLock?.getCode() !== lockCode.getCode()) return DONT_SYNC_AGAIN
+    if (nestedVirtualization && box.nestedVirtualization !== true) {
+      await this.boxRepository.update(box.id, { updateData: { nestedVirtualization: true }, entity: box })
+      box.nestedVirtualization = true
+    }
+
+    await runnerAdapter.startBox(box.id, box.authToken, metadata, nestedVirtualization)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN

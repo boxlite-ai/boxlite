@@ -114,6 +114,23 @@ impl LiteBox {
         self.box_backend.start().await
     }
 
+    pub(crate) fn runner_start(
+        &self,
+        nested_virtualization: bool,
+    ) -> futures::future::BoxFuture<'static, BoxliteResult<()>> {
+        let backend = self
+            .box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>();
+        Box::pin(async move {
+            let backend = backend.map_err(|_| {
+                BoxliteError::Unsupported("Runner start requires the local backend".into())
+            })?;
+            backend.runner_start(nested_virtualization).await
+        })
+    }
+
     pub async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         self.box_backend.exec(command).await
     }

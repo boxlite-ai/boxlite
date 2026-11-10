@@ -88,7 +88,7 @@ func TestIntegrationRunnerExternalKernel(t *testing.T) {
 					Privileged: privileged, OutboundEnabled: boolPtr(true),
 				})
 			} else {
-				_, err = client.Start(ctx, name, nil, nil)
+				_, err = client.Start(ctx, name, nil, nil, false)
 			}
 			defer func() {
 				cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -178,7 +178,7 @@ func TestIntegrationRunnerExternalKernel(t *testing.T) {
 			if err := client.Stop(ctx, name, false); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := client.Start(ctx, name, nil, nil); err != nil {
+			if _, err := client.Start(ctx, name, nil, nil, false); err != nil {
 				t.Fatal(err)
 			}
 			box, err = client.getOrFetchBox(ctx, name)

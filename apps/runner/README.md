@@ -7,14 +7,17 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 ## Nested virtualization capability
 
 `BOXLITE_EXPERIMENTAL=nested-virtualization` authorizes the Runner runtime.
-Its V0 `/info` reports `nestedVirtualizationEnabled` from the feature set parsed
+Its V0 `/info` and V2 authenticated heartbeat report `nestedVirtualizationEnabled`
+and `nestedVirtualizationStartEnabled` from the feature set parsed
 and validated when the runtime starts. It reuses the saved authorization flag;
 it does not re-read process ENV or run an additional hardware probe.
 Physical host support remains checked by the existing native VM startup path,
 and startup errors retain their existing behavior.
 
 The control plane's [organization allowlist](../../docs/contributing/architecture/platform/api.md#organization-nested-virtualization-allowlist-rc)
-decides whether a new box should use that capability. Saved requirements travel
+decides whether a new box or a stopped ordinary box should use that capability.
+Cold-start upgrades require the separate start capability, so a creation-only
+binary cannot silently ignore an upgrade request. Saved requirements travel
 through create replay and recovery; recovery checks runtime authorization before
 destruction. The Runner flag does not establish hardware availability or L2 execution.
 
@@ -34,7 +37,7 @@ startup. The Runner enables the local `custom-kernel` RC capability through
 the Go/C SDK and preserves the guest privilege policy separately. An unset
 path keeps the bundled default. Cloud deployment downloads and verifies the
 file; the Runner itself performs no download. Existing Boxes retain their
-saved boot configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
+saved kernel configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
 custom-kernel Boxes: clearing it removes the feature opt-in needed to restart them.
 The `--kernel` flag belongs to the local CLI; the Runner uses the environment
 variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
@@ -46,8 +49,8 @@ checks the running process's kernel environment and listening socket.
 ## Nested virtualization
 
 Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
-authorize this release-candidate capability. The control plane decides each new box;
-an internal Runner create payload carries the saved `"nestedVirtualization":true`.
+authorize this release-candidate capability. The control plane decides new boxes
+and sticky cold-start upgrades; internal create/start requests carry the saved `"nestedVirtualization":true`.
 The Runner uses an internal managed Go/C bridge to preserve each saved decision.
 Every Runner build, including dev artifacts and E2E bootstrap, needs
 `-tags boxlite_runner`. Local host builds also use `boxlite_dev` to select this

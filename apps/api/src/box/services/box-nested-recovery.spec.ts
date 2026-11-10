@@ -56,7 +56,9 @@ describe('Saved nested box recovery', () => {
 
   it('rejects nested recovery on V2 before dispatch', async () => {
     const h = fixture(true, true, '2')
-    await expect(h.service.recover(h.box.id, h.organization as any)).rejects.toThrow('Nested boxes require')
+    await expect(h.service.recover(h.box.id, h.organization as any)).rejects.toThrow(
+      'Recovering boxes with runner API version 2 is not supported',
+    )
     expect(h.recoverBox).not.toHaveBeenCalled()
   })
 })

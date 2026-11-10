@@ -22,7 +22,7 @@ parse_deps = false
 # exported.
 [export]
 include = ["BoxliteCopySourceKind", "BoxliteDomainTargetType"]
-exclude = ["sockaddr_storage", "boxlite_internal_advanced_options_set_nested_virtualization", "boxlite_internal_runtime_new_runner"]
+exclude = ["sockaddr_storage", "boxlite_internal_advanced_options_set_nested_virtualization", "boxlite_internal_runtime_new_runner", "boxlite_internal_runner_start_box"]
 
 [export.rename]
 sockaddr_storage = "struct sockaddr_storage"

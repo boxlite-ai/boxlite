@@ -30,6 +30,7 @@ export interface RunnerMetrics {
 
 export interface RunnerInfo {
   nestedVirtualizationEnabled?: boolean
+  nestedVirtualizationStartEnabled?: boolean
   serviceHealth?: RunnerServiceInfo[]
   metrics?: RunnerMetrics
   appVersion?: string
@@ -54,6 +55,7 @@ export interface RunnerAdapter {
     boxId: string,
     authToken: string,
     metadata?: { [key: string]: string },
+    nestedVirtualization?: boolean,
     skipStart?: boolean,
   ): Promise<StartBoxResponse | undefined>
   stopBox(boxId: string, force?: boolean): Promise<void>

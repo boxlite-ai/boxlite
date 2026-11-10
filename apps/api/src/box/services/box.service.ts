@@ -208,7 +208,7 @@ export class BoxService {
     boxId: string,
   ): Promise<boolean> {
     let reason = 'unsupported_runner_api'
-    if (runner.apiVersion === '0') {
+    if (runner.apiVersion === '0' || runner.apiVersion === '2') {
       const controller = new AbortController()
       let timeout: ReturnType<typeof setTimeout>
       try {

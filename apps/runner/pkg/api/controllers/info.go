@@ -41,6 +41,7 @@ func RunnerInfo(ctx *gin.Context) {
 
 	response := runnerInfoResponse(metrics, servicesInfo)
 	response.NestedVirtualizationEnabled = runnerInstance.Boxlite.NestedVirtualizationEnabled()
+	response.NestedVirtualizationStartEnabled = runnerInstance.Boxlite.NestedVirtualizationEnabled()
 	ctx.JSON(http.StatusOK, response)
 }
 

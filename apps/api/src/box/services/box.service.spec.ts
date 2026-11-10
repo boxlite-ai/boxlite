@@ -493,19 +493,26 @@ describe('BoxService inbound defaults', () => {
       expect(factory.create).not.toHaveBeenCalled()
       expect((service as any).logger.warn).not.toHaveBeenCalled()
     })
-    it('enables the saved box decision only for an allowlisted org and its selected capable Runner', async () => {
-      const { service, runnerService, factory, runner, boxRepository } = fixture(true)
-      const organization = { id: 'org-1', nestedVirtualizationEnabled: true }
-      const box = await service.create({ name: 'nested', image: 'alpine' } as any, organization as any, Context.user())
-      expect(factory.create).toHaveBeenCalledWith(runner)
-      expect(runnerService.getRandomAvailableRunner).toHaveBeenCalledTimes(1)
-      expect(boxRepository.insert).toHaveBeenCalledWith(
-        expect.objectContaining({ runnerId: runner.id, nestedVirtualization: true }),
-        undefined,
-      )
-      organization.nestedVirtualizationEnabled = false
-      expect((box as any).nestedVirtualization).toBe(true)
-    })
+    it.each(['0', '2'])(
+      'enables the saved decision for an allowlisted org and capable V%s Runner',
+      async (apiVersion) => {
+        const { service, runnerService, factory, runner, boxRepository } = fixture(true, apiVersion)
+        const organization = { id: 'org-1', nestedVirtualizationEnabled: true }
+        const box = await service.create(
+          { name: 'nested', image: 'alpine' } as any,
+          organization as any,
+          Context.user(),
+        )
+        expect(factory.create).toHaveBeenCalledWith(runner)
+        expect(runnerService.getRandomAvailableRunner).toHaveBeenCalledTimes(1)
+        expect(boxRepository.insert).toHaveBeenCalledWith(
+          expect.objectContaining({ runnerId: runner.id, nestedVirtualization: true }),
+          undefined,
+        )
+        organization.nestedVirtualizationEnabled = false
+        expect((box as any).nestedVirtualization).toBe(true)
+      },
+    )
     it.each([false, undefined, null, 'true', 1])(
       'rejects unconfirmed capability %p without inserting a box',
       async (value) => {
@@ -527,8 +534,8 @@ describe('BoxService inbound defaults', () => {
         )
       },
     )
-    it('refuses an old V2 Runner without probing or inserting a box', async () => {
-      const { service, factory, boxRepository } = fixture(true, '2')
+    it('refuses an unsupported Runner API without probing or inserting a box', async () => {
+      const { service, factory, boxRepository } = fixture(true, '9')
       await expect(
         service.create(
           { name: 'old-runner', image: 'alpine' } as any,
@@ -539,7 +546,7 @@ describe('BoxService inbound defaults', () => {
       expect(boxRepository.insert).not.toHaveBeenCalled()
       expect(factory.create).not.toHaveBeenCalled()
       expect((service as any).logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ runnerId: 'chosen-runner', apiVersion: '2', reason: 'unsupported_runner_api' }),
+        expect.objectContaining({ runnerId: 'chosen-runner', apiVersion: '9', reason: 'unsupported_runner_api' }),
       )
     })
     it.each(['error', 'timeout'])('rejects creation when discovery ends in %s', async (mode) => {

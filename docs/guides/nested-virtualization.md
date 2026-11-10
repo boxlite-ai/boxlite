@@ -39,11 +39,20 @@ software emulation or disabling nesting.
 
 ## Existing boxes
 
-The creation-time decision is saved and immutable. Changing the environment or
-organization setting affects future creates; existing boxes retain their saved
-configuration. A nested box still requires current runtime/Runner authorization
-when it starts or restarts. Replay and recovery preserve the saved requirement
-and cannot downgrade it.
+Local runtimes capture ENV at startup and apply it only to new boxes; local
+start continues to use the saved configuration. Cloud also checks the current
+organization allowlist when starting a stopped box, including proxy auto-resume.
+An ordinary box upgrades on that cold start without changing its ID or disks.
+
+```text
+ordinary -> org allowlisted -> stop -> start -> nested
+nested -> org removed from allowlist -> stop -> start -> nested
+```
+
+Cloud upgrades are sticky: removing the organization from the allowlist never
+changes saved true to false. A nested start requires a Runner that confirms both
+authorization and the cold-start protocol; an old or disabled Runner fails
+explicitly. Replay and recovery preserve the saved requirement and cannot downgrade it.
 
 `get_or_create` reuses a same-name box with its saved nesting decision and returns
 `created=false`. A missing name creates a box using the current runtime policy.
@@ -80,5 +89,6 @@ An `Unsupported` error on macOS usually means the Mac or operating system is too
 old. On Linux, check that `/dev/kvm` is usable, that the applicable KVM module
 reports nesting, and that any outer hypervisor exposes the feature.
 
-To change an existing box's nesting configuration, explicitly remove and
-recreate it, or use a new name. Enabling the policy does not upgrade a reused box.
+For Cloud, allowlist the organization and stop/start an existing ordinary box.
+Local boxes require removal and recreation, or a new name, to change their saved
+nesting decision. A lookup or get_or_create never upgrades a box.

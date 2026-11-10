@@ -31,8 +31,9 @@ func TestHealthcheckReportsPrivilegedSupport(t *testing.T) {
 	config := apiclient.NewConfiguration()
 	config.Servers = apiclient.ServerConfigurations{{URL: server.URL}}
 	service := &Service{
-		client: apiclient.NewAPIClient(config),
-		domain: "runner.test", apiPort: 8080, proxyPort: 8081,
+		client:  apiclient.NewAPIClient(config),
+		boxlite: healthcheckRuntime(t, false),
+		domain:  "runner.test", apiPort: 8080, proxyPort: 8081,
 	}
 	for _, scheme := range []string{"http", "https"} {
 		t.Run(scheme, func(t *testing.T) {

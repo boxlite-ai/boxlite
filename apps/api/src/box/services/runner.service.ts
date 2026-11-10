@@ -367,7 +367,12 @@ export class RunnerService {
     },
     appVersion?: string,
     supportsPrivileged?: boolean,
-    context?: { signal?: AbortSignal; infoFailed?: boolean },
+    context?: {
+      signal?: AbortSignal
+      infoFailed?: boolean
+      nestedVirtualizationEnabled?: boolean
+      nestedVirtualizationStartEnabled?: boolean
+    },
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     // A timed-out attempt can resume here after its retry has committed.
@@ -389,6 +394,8 @@ export class RunnerService {
 
     if (!context?.infoFailed) {
       updateData.supportsPrivileged = supportsPrivileged === true
+      updateData.nestedVirtualizationEnabled = context?.nestedVirtualizationEnabled === true
+      updateData.nestedVirtualizationStartEnabled = context?.nestedVirtualizationStartEnabled === true
     }
 
     if (domain) {
@@ -567,7 +574,12 @@ export class RunnerService {
                     runnerInfo?.metrics,
                     runnerInfo?.appVersion,
                     runnerInfo?.supportsPrivileged,
-                    { signal: abortController.signal, infoFailed: runnerInfoFailed },
+                    {
+                      signal: abortController.signal,
+                      infoFailed: runnerInfoFailed,
+                      nestedVirtualizationEnabled: runnerInfo?.nestedVirtualizationEnabled,
+                      nestedVirtualizationStartEnabled: runnerInfo?.nestedVirtualizationStartEnabled,
+                    },
                   )
                 })(),
                 new Promise((_, reject) => {

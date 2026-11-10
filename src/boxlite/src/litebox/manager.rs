@@ -174,6 +174,10 @@ impl BoxManager {
         self.store.update_outbound(id.as_str(), policy)
     }
 
+    pub(crate) fn enable_nested_virtualization(&self, id: &BoxID) -> BoxliteResult<()> {
+        self.store.enable_nested_virtualization(id.as_str())
+    }
+
     /// Load box state from the database.
     ///
     /// Returns the latest state from DB.

@@ -245,6 +245,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       appVersion: response.data.appVersion,
       supportsPrivileged: response.data.supportsPrivileged,
       nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
+      nestedVirtualizationStartEnabled: response.data.nestedVirtualizationStartEnabled,
     }
   }
 
@@ -313,8 +314,16 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     boxId: string,
     authToken: string,
     metadata?: { [key: string]: string },
+    nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
-    const response = await this.boxApiClient.start(boxId, authToken, metadata)
+    if (nestedVirtualization) {
+      const signal = AbortSignal.timeout(this.configService.getOrThrow('runnerHealthTimeout') * 1000)
+      const info = await this.runnerInfo(signal)
+      if (info.nestedVirtualizationEnabled !== true || info.nestedVirtualizationStartEnabled !== true) {
+        throw new Error(`Runner ${this.runner.id} cannot confirm nested virtualization start support`)
+      }
+    }
+    const response = await this.boxApiClient.start(boxId, nestedVirtualization ? true : undefined, authToken, metadata)
 
     if (!response?.data?.daemonVersion) {
       return undefined

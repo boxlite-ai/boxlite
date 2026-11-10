@@ -6,8 +6,9 @@
 package executor
 
 type StartBoxPayload struct {
-	AuthToken *string           `json:"authToken,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	NestedVirtualization bool              `json:"nestedVirtualization,omitempty"`
+	AuthToken            *string           `json:"authToken,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
 }
 
 // MigrateArchivePayload carries the object key of the migration archive. The
