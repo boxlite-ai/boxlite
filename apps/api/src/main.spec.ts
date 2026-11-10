@@ -51,8 +51,14 @@ describe('API bootstrap listener', () => {
     jest.resetModules()
   })
 
-  it.each([undefined, '', '127.0.0.1'])('binds host=%s and disables request body timeout', async (host) => {
+  it.each([
+    [undefined, undefined],
+    ['', undefined],
+    ['127.0.0.1', '/repo/openapi'],
+  ])('binds host=%s with specs=%s and disables request body timeout', async (host, specs) => {
     process.env = { ...environment, OTEL_ENABLED: 'false', CERT_PATH: '', CERT_KEY_PATH: '' }
+    delete process.env.BOXLITE_OPENAPI_DIR
+    if (specs) process.env.BOXLITE_OPENAPI_DIR = specs
     delete process.env.BOXLITE_LISTEN_HOST
     if (host !== undefined) process.env.BOXLITE_LISTEN_HOST = host
     process.argv = ['node', 'main.js']
@@ -87,5 +93,13 @@ describe('API bootstrap listener', () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(listen).toHaveBeenCalledWith(3300, host || '0.0.0.0')
     expect(httpServer.requestTimeout).toBe(0)
+    const { readFileSync } = require('node:fs')
+    expect(readFileSync).toHaveBeenCalledWith(expect.stringContaining('/openapi/box.openapi.yaml'), 'utf8')
+    if (specs) {
+      expect(readFileSync).toHaveBeenCalledWith('/repo/openapi/box.openapi.yaml', 'utf8')
+      expect(readFileSync).not.toHaveBeenCalledWith(expect.stringContaining('/src/assets/openapi/'), 'utf8')
+    } else {
+      expect(readFileSync).toHaveBeenCalledWith(expect.stringContaining('/assets/openapi/box.openapi.yaml'), 'utf8')
+    }
   })
 })

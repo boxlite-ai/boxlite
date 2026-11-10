@@ -103,6 +103,7 @@ def base_env():
     api = endpoint("API") + "/api"
     env.update({
         "BOXLITE_LISTEN_HOST": "127.0.0.1",
+        "BOXLITE_OPENAPI_DIR": str(ROOT / "openapi"),
         "NODE_ENV": "development", "ENVIRONMENT": "development",
         "PORT": str(PORTS["API"]), "VERSION": "0.0.0-e2e", "RUN_MIGRATIONS": "true",
         "SKIP_CONNECTIONS": "false", "DISABLE_CRON_JOBS": "false",

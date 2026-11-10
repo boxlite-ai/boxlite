@@ -188,7 +188,8 @@ async function bootstrap() {
     // MCP tools come from the v1 specs (bundled as assets) and the dashboard document,
     // limited to the routes this app registered, so init() runs first.
     await app.init()
-    const openapi = (name: string) => parseYaml(readFileSync(join(__dirname, 'assets', 'openapi', name), 'utf8'))
+    const specDirectory = process.env.BOXLITE_OPENAPI_DIR || join(__dirname, 'assets', 'openapi')
+    const openapi = (name: string) => parseYaml(readFileSync(join(specDirectory, name), 'utf8'))
     const wsProxy = app.get(BoxliteWsProxyService)
     app.get(McpTools).register({
       box: openapi('box.openapi.yaml'),
