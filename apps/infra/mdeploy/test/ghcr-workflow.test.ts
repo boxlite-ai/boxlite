@@ -9,8 +9,8 @@ import { load } from 'js-yaml'
 const workflow = load(readFileSync(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url), 'utf8')) as any
 
 for (const stage of ['dev', 'prod']) {
-  for (const cloudPresent of [false, true]) {
-    test(`${stage} refuses a missing GHCR release even when cloud images are ${cloudPresent ? 'present' : 'absent'}`, (t) => {
+  for (const [cloudPresent, ghcrStatus] of [[false, 66], [true, 66], [false, 1], [true, 1]] as const) {
+    test(`${stage} refuses GHCR status ${ghcrStatus} when cloud images are ${cloudPresent ? 'present' : 'absent'}`, (t) => {
       const directory = mkdtempSync(join(tmpdir(), 'ghcr-plan-'))
       t.after(() => rmSync(directory, { recursive: true, force: true }))
       writeFileSync(join(directory, 'calls'), '')
@@ -18,7 +18,7 @@ for (const stage of ['dev', 'prod']) {
       writeFileSync(join(directory, 'summary'), '')
       writeFileSync(join(directory, 'npm'), `#!/bin/bash
 echo "$*" >> "$PLAN_CALLS"
-if [[ "$*" == *"--ghcr"* ]]; then exit 66; fi
+if [[ "$*" == *"--ghcr"* ]]; then exit ${ghcrStatus}; fi
 exit ${cloudPresent ? 0 : 66}
 `, { mode: 0o755 })
       const step = workflow.jobs.plan.steps.find((candidate: any) => candidate.id === 'plan')
@@ -33,8 +33,12 @@ exit ${cloudPresent ? 0 : 66}
           IMAGE_TAG: `v1.2.3-${'a'.repeat(40)}`, LINE: 'release v1.2.3', STAGE: stage, COMPONENTS: 'api',
         },
       })
-      assert.equal(result.status, 1, `missing GHCR images must stop planning:\n${result.stdout}\n${result.stderr}`)
-      assert.match(result.stdout + result.stderr, /mbuild-release\.yml/)
+      assert.equal(result.status, 1, `GHCR verification errors must stop planning:\n${result.stdout}\n${result.stderr}`)
+      if (ghcrStatus === 66) assert.match(result.stdout + result.stderr, /Run manually: gh workflow run mbuild-release\.yml/)
+      else {
+        assert.match(result.stdout + result.stderr, /could not read GHCR images/)
+        assert.doesNotMatch(result.stdout + result.stderr, /Run manually|gh workflow run/)
+      }
       const calls = readFileSync(join(directory, 'calls'), 'utf8')
       assert.match(calls, /mbuild verify .*--ghcr/)
       assert.doesNotMatch(calls, /publish|promote|workflow run/)

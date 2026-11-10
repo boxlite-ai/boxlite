@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { load } from 'js-yaml'
 
@@ -29,6 +32,25 @@ test('the tag must exist and resolve to a commit on main before any package is p
   assert.equal(ref.with.ref, '${{ steps.version.outputs.ref }}')
   assert.equal(ref.with.branch, '${{ github.ref_name }}')
   assert.ok(workflow.jobs.publish.needs.includes('resolve'))
+})
+
+test('release validation accepts stable tags and rejects leading zeros and prereleases', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'release-tag-validation-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  // Every queried ref exists, so only the production version check can reject a tag.
+  writeFileSync(join(directory, 'git'), '#!/bin/bash\nexit 0\n', { mode: 0o755 })
+  const validation = workflow.jobs.resolve.steps.find((step: any) => step.id === 'version')
+  for (const [tag, status] of [['v1.2.3', 0], ['v0.0.0', 0], ['v01.2.3', 1], ['v1.02.3', 1], ['v1.2.03', 1], ['v1.2.3-rc.1', 1]] as const) {
+    const output = join(directory, 'output')
+    writeFileSync(output, '')
+    const result = spawnSync('bash', ['-c', validation.run], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, TAG: tag, GITHUB_OUTPUT: output },
+    })
+    assert.equal(result.status, status, `${tag}: ${result.stdout}\n${result.stderr}`)
+    if (status === 0) assert.equal(readFileSync(output, 'utf8'), `ref=refs/tags/${tag}\n`)
+    else assert.match(result.stdout + result.stderr, /must be a release tag/)
+  }
 })
 
 test('release artifacts come from the tagged declaration and fan out without cancelling siblings', () => {
