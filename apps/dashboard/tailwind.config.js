@@ -109,7 +109,11 @@ module.exports = {
           background: 'hsl(var(--info-background))',
           separator: 'hsl(var(--info-separator))',
         },
-        border: 'hsl(var(--border))',
+        border: {
+          DEFAULT: 'hsl(var(--border))',
+          hover: 'hsl(var(--border-hover))',
+          selected: 'hsl(var(--border-selected))',
+        },
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
         chart: {

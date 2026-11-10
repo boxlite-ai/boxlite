@@ -57,7 +57,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   }
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <div className="resource-page-header">
         <h1 className="font-display text-page font-semibold text-foreground">Domains</h1>
         <p className="mt-2 text-body leading-relaxed text-muted-foreground">
@@ -74,7 +74,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           disabled={!canManage || !query.isSuccess}
         />
         {canManage && query.isSuccess && data && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-label text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground">
             <span className="font-mono tabular-nums">
               {data.used} / {data.limit} domains held · {data.remaining} available
             </span>
@@ -108,11 +108,13 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         data && (
           <>
             {data.domains.length === 0 ? (
-              <ResourceEmptyState
-                title="No domains yet"
-                icon={<Globe className="size-6" />}
-                description="Request a name, then connect it to your Box using the CLI or SDK."
-              />
+              <div className="mt-[14px]">
+                <ResourceEmptyState
+                  title="No domains yet"
+                  icon={<Globe className="size-6" />}
+                  description="Request a name, then connect it to your Box using the CLI or SDK."
+                />
+              </div>
             ) : (
               <div className="mt-[14px] min-h-0 flex-1 overflow-auto">
                 <table className="w-full min-w-[640px] table-fixed text-left font-mono text-body">
@@ -142,7 +144,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                         key={domain.hostname}
                         className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
                       >
-                        <td className="px-4 py-3 font-medium text-foreground">
+                        <td className="px-4 py-3 font-semibold text-foreground">
                           <div className="flex items-center gap-3">
                             <Globe className="size-6 shrink-0 text-muted-foreground" />
                             <span className="min-w-0 break-all">{domain.hostname}</span>

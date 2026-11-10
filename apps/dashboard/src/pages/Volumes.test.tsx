@@ -64,7 +64,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 /**
  * Finds a row action by its text label, matching both buttons and links.
- * Searches both element types because the "+ Box" action was previously a link.
+ * Searches both element types because the "New Box" action was previously a link.
  */
 function rowAction(label: string): HTMLElement | undefined {
   return Array.from(document.querySelectorAll<HTMLElement>('button, a')).find(
@@ -72,7 +72,7 @@ function rowAction(label: string): HTMLElement | undefined {
   )
 }
 
-describe('Volumes row action "+ Box"', () => {
+describe('Volumes row action "New Box"', () => {
   let root: Root | null = null
 
   beforeAll(() => {
@@ -114,7 +114,7 @@ describe('Volumes row action "+ Box"', () => {
       renderPage()
       const deletion = document.querySelector<HTMLButtonElement>('[aria-label="Delete subtitle-models"]')!
       expect(deletion.disabled).toBe(volumeState !== 'error')
-      expect(rowAction('+ Box')).toBeUndefined()
+      expect(rowAction('New Box')).toBeUndefined()
       if (volumeState === 'error') expect(document.querySelector('[title="Storage unavailable"]')).not.toBeNull()
       if (volumeState.includes('delet')) expect(document.querySelector('[title^="Reclaiming"]')).not.toBeNull()
       expect(document.querySelector('.resource-status')?.textContent).toBe(
@@ -179,7 +179,7 @@ describe('Volumes row action "+ Box"', () => {
     // user was reading and started a second copy of the app.
     expect(document.querySelector('a[target="_blank"]')).toBeNull()
 
-    const action = rowAction('+ Box')
+    const action = rowAction('New Box')
     expect(action).toBeDefined()
 
     act(() => {
@@ -249,7 +249,7 @@ describe('Volumes row action "+ Box"', () => {
     renderPage()
 
     act(() => {
-      rowAction('+ Box')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      rowAction('New Box')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
     // A name is only unique inside one organization; the id is the selector
@@ -267,7 +267,7 @@ describe('Volumes row action "+ Box"', () => {
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES]
     renderPage()
 
-    expect(rowAction('+ Box')).toBeUndefined()
+    expect(rowAction('New Box')).toBeUndefined()
     expect(document.querySelector('[data-testid="create-box-dialog"]')).toBeNull()
     // The volume-scoped controls are still there — the row was not hidden
     // wholesale.

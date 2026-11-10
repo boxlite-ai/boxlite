@@ -19,7 +19,7 @@ function SidebarContext({ children }: { children: ReactNode }) {
       <div className="mb-[10px] mt-0 flex items-center gap-[9px]">
         <span className="text-label leading-none text-brand">▸</span>
         <span className="text-[11px] uppercase tracking-[2px]">general</span>
-        <span className="flex-1 border-t border-dashed border-border" />
+        <span className="flex-1" />
       </div>
       {[
         ['box id', 'aB3cD4eF5gH6'],
@@ -28,7 +28,7 @@ function SidebarContext({ children }: { children: ReactNode }) {
       ].map(([label, value]) => (
         <div key={label} className="mb-[6px] flex items-baseline gap-2">
           <span className="whitespace-nowrap text-muted-foreground">{label}</span>
-          <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
+          <span className="flex-1" />
           <span className="min-w-0 max-w-[66%] truncate text-right">{value}</span>
         </div>
       ))}
@@ -36,11 +36,11 @@ function SidebarContext({ children }: { children: ReactNode }) {
       <div className="mb-[10px] mt-[34px] flex items-center gap-[9px]">
         <span className="text-label leading-none text-brand">▸</span>
         <span className="text-[11px] uppercase tracking-[2px]">activity</span>
-        <span className="flex-1 border-t border-dashed border-border" />
+        <span className="flex-1" />
       </div>
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">created</span>
-        <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
+        <span className="flex-1" />
         <span className="text-right">2 hours ago</span>
       </div>
     </div>

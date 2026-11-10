@@ -34,7 +34,7 @@ function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
     <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
       <span className="text-label leading-none text-brand">▸</span>
       <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
-      <span className="flex-1 border-t border-dashed border-border" />
+      <span className="flex-1" />
       {right}
     </div>
   )
@@ -147,7 +147,7 @@ export function BoxNetworkPanel({
           route changes it after create. */}
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">outbound</span>
-        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
+        <span className="min-w-[8px] flex-1" />
         <span className="min-w-0 max-w-[66%] break-words text-right">
           {network ? outboundLabel(network.outbound) : 'unknown'}
         </span>
@@ -156,7 +156,7 @@ export function BoxNetworkPanel({
       {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">inbound</span>
-        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
+        <span className="min-w-[8px] flex-1" />
         <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
           {network ? (inboundEnabled ? 'enabled' : 'disabled') : 'unknown'}
         </span>

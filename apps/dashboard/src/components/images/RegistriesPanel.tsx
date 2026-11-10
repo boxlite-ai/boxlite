@@ -324,7 +324,13 @@ export function RegistriesPanel() {
           </div>
         ) : (
           <>
-            <div className={cn(ROW_GRID, 'resource-list-head')}>
+            <div
+              className={cn(
+                ROW_GRID,
+                'resource-list-head',
+                !isLoading && !listError && credentials.length === 0 && 'hidden',
+              )}
+            >
               <span>Registry</span>
               <span>Covers</span>
               <span>Username</span>
@@ -357,7 +363,6 @@ export function RegistriesPanel() {
                       }}
                       disabled={saving || updateRegistry.isPending || deleteRegistry.isPending}
                       title={`Update the credential for ${credential.registryHost}`}
-                      className="uppercase"
                     >
                       Update
                     </AsciiButton>

@@ -24,7 +24,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Dialog, DialogTitle } from '@/components/ui/dialog'
-import { Database, Plus, Trash } from '@/components/ui/icon'
+import { HardDrive, Plus, Trash } from '@/components/ui/icon'
 import { useCreateVolumeMutation } from '@/hooks/mutations/useCreateVolumeMutation'
 import { useDeleteVolumeMutation } from '@/hooks/mutations/useDeleteVolumeMutation'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -176,7 +176,7 @@ const Volumes: React.FC = () => {
   const showEmpty = !isLoading && volumes.length === 0
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <div className="resource-page-header flex items-end justify-between">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Volumes</h1>
@@ -201,7 +201,7 @@ const Volumes: React.FC = () => {
       </div>
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className={cn(ROW_GRID, 'resource-list-head')}>
+        <div className={cn(ROW_GRID, 'resource-list-head', showEmpty && 'hidden')}>
           <span>Name</span>
           <span>Volume ID</span>
           <span>Status</span>
@@ -231,7 +231,7 @@ const Volumes: React.FC = () => {
             <div key={volume.id}>
               <div className={cn(ROW_GRID, 'resource-list-row')}>
                 <span className="flex min-w-0 items-center gap-3">
-                  <Database className="size-6 shrink-0 text-muted-foreground" />
+                  <HardDrive className="size-6 shrink-0 text-muted-foreground" />
                   <span className="resource-name">{volume.name}</span>
                 </span>
                 <button
@@ -267,7 +267,7 @@ const Volumes: React.FC = () => {
                       onClick={() => setBoxVolumeId(volume.id)}
                       title={`Create a box with ${volume.name} mounted`}
                     >
-                      + Box
+                      New Box
                     </AsciiButton>
                   )}
                   {canDelete && (
@@ -443,7 +443,7 @@ function EmptyState() {
   return (
     <ResourceEmptyState
       title="No volumes yet"
-      icon={<Database className="size-6" />}
+      icon={<HardDrive className="size-6" />}
       description="Create a volume, then mount it when creating a Box."
     />
   )

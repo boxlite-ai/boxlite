@@ -101,9 +101,9 @@ export function OrganizationMemberTable({
   return (
     <>
       <div>
-        <div className="border-t border-border">
+        <div>
           <Table>
-            <TableHeader>
+            <TableHeader className={!loadingData && table.getRowModel().rows.length === 0 ? 'hidden' : undefined}>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
@@ -146,7 +146,7 @@ export function OrganizationMemberTable({
             </TableBody>
           </Table>
         </div>
-        <Pagination table={table} className="mt-4" entityName="Members" />
+        <Pagination table={table} entityName="Members" />
       </div>
 
       {action?.kind === 'member' && (

@@ -707,7 +707,7 @@ const Boxes: React.FC = () => {
   const stoppedBoxesDisplay = stoppedBoxesQuery.data != null ? stoppedBoxesQuery.data.toLocaleString('en-US') : '…'
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       {/* header */}
       <div className="resource-page-header flex items-end justify-between">
         <div>

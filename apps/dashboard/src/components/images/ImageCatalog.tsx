@@ -227,9 +227,9 @@ export function ImageCatalog() {
                     onClick={() =>
                       image.templateId ? openTemplate(image.templateId) : setNewBoxImage(imageStartRef(image))
                     }
-                    title={`New box from ${imageStartRef(image)}`}
+                    title={`New Box from ${imageStartRef(image)}`}
                   >
-                    New box
+                    New Box
                   </AsciiButton>
                 )}
                 {canDelete && !image.curated && image.id && (

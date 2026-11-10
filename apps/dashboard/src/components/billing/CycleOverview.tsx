@@ -57,6 +57,7 @@ export function billingMode(
   return { kind: 'payg' }
 }
 
+/** Selects subscription, trial-credit or pay-as-you-go figures without changing their billing semantics. */
 export function CycleOverview({
   wallet,
   organizationPlan,
@@ -80,40 +81,45 @@ export function CycleOverview({
     <section>
       <SectionTitle title={TITLE[mode.kind]} />
       <Panel>
-        <div className="flex flex-wrap items-center gap-4 px-[22px] py-5">
-          <div className="flex items-center gap-3">
-            {/* The section heading above already says this is the active
+        <div className="grid lg:grid-cols-[minmax(220px,1fr)_2fr]">
+          <div className="flex flex-wrap items-center gap-4 px-[22px] py-5">
+            <div className="flex items-center gap-3">
+              {/* The section heading above already says this is the active
                 plan, so the row states the plan and what it costs — the two
                 facts the heading does not carry — and the price sits beside
                 the name rather than pushed to the far edge, where at 11px it
                 read as a footnote to the largest figure on the page. */}
-            <span className="font-mono text-[18px] font-semibold tracking-tight text-foreground">
-              {mode.kind === 'plan' ? mode.plan.planName : mode.kind === 'free-trial' ? 'Free trial' : 'Pay as you go'}
-            </span>
-            {mode.kind === 'plan' && catalogPlan?.priceMonthlyCents != null && (
-              <span className="font-mono text-em text-muted-foreground">
-                {formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo
+              <span className="font-mono text-[18px] font-semibold tracking-tight text-foreground">
+                {mode.kind === 'plan'
+                  ? mode.plan.planName
+                  : mode.kind === 'free-trial'
+                    ? 'Free trial'
+                    : 'Pay as you go'}
               </span>
-            )}
-            {mode.kind === 'plan' && mode.plan.status.toLowerCase() !== 'active' && (
-              <span className="border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                {mode.plan.status}
-              </span>
-            )}
+              {mode.kind === 'plan' && catalogPlan?.priceMonthlyCents != null && (
+                <span className="font-mono text-em text-muted-foreground">
+                  {formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo
+                </span>
+              )}
+              {mode.kind === 'plan' && mode.plan.status.toLowerCase() !== 'active' && (
+                <span className="border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                  {mode.plan.status}
+                </span>
+              )}
+            </div>
+            {mode.kind !== 'plan' ? (
+              <span className="ml-auto font-mono text-[11px] text-muted-foreground">no subscription</span>
+            ) : null}
           </div>
-          {mode.kind !== 'plan' ? (
-            <span className="ml-auto font-mono text-[11px] text-muted-foreground">no subscription</span>
-          ) : null}
+
+          {mode.kind === 'plan' ? (
+            <PlanFigures plan={mode.plan} wallet={wallet} />
+          ) : mode.kind === 'free-trial' ? (
+            <FreeTrialFigures mode={mode} wallet={wallet} />
+          ) : (
+            <PaygFigures wallet={wallet} />
+          )}
         </div>
-
-        {mode.kind === 'plan' ? (
-          <PlanFigures plan={mode.plan} wallet={wallet} />
-        ) : mode.kind === 'free-trial' ? (
-          <FreeTrialFigures mode={mode} wallet={wallet} />
-        ) : (
-          <PaygFigures wallet={wallet} />
-        )}
-
         {mode.kind !== 'plan' && <UnsubscribedNote mode={mode} plansAnchorId={plansAnchorId} />}
         {scheduled && organizationPlan && (
           <ScheduledChangeNote scheduled={scheduled} organizationId={organizationId} planId={organizationPlan.planId} />
@@ -178,7 +184,8 @@ function ScheduledChangeNote({
   )
 }
 
-const FIGURES = 'grid grid-cols-2 gap-5 border-t border-border px-[22px] py-5 sm:flex sm:flex-row sm:gap-14'
+const FIGURES =
+  'grid grid-cols-2 gap-5 border-t border-border px-[22px] py-5 sm:flex sm:flex-row sm:gap-14 lg:border-t-0 lg:border-l'
 
 function PlanFigures({ plan, wallet }: { plan: OrganizationPlan; wallet: OrganizationWallet }) {
   return (
@@ -193,6 +200,7 @@ function PlanFigures({ plan, wallet }: { plan: OrganizationPlan; wallet: Organiz
   )
 }
 
+/** Places grant progress below both summary columns while retaining the post-credit wallet balance. */
 function FreeTrialFigures({
   mode,
   wallet,
@@ -211,7 +219,7 @@ function FreeTrialFigures({
         />
         <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="used after credits" />
       </div>
-      <div className="border-t border-border px-[22px] py-4">
+      <div className="border-t border-border px-[22px] py-4 lg:col-span-2">
         <div className="flex items-center gap-4 font-mono text-[12px]">
           <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Credits used</span>
           <span className="w-[140px] shrink-0 tabular-nums text-foreground">
