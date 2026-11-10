@@ -9,6 +9,7 @@ import axiosDebug from 'axios-debug-log'
 import axiosRetry from 'axios-retry'
 
 import { Injectable, Logger } from '@nestjs/common'
+import { requireNestedStartSupport } from './nested-start-preflight'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import {
@@ -318,10 +319,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   ): Promise<StartBoxResponse | undefined> {
     if (nestedVirtualization) {
       const signal = AbortSignal.timeout(this.configService.getOrThrow('runnerHealthTimeout') * 1000)
-      const info = await this.runnerInfo(signal)
-      if (info.nestedVirtualizationEnabled !== true || info.nestedVirtualizationStartEnabled !== true) {
-        throw new Error(`Runner ${this.runner.id} cannot confirm nested virtualization start support`)
-      }
+      await requireNestedStartSupport(this.runner.id, () => this.runnerInfo(signal))
     }
     const response = await this.boxApiClient.start(boxId, nestedVirtualization ? true : undefined, authToken, metadata)
 

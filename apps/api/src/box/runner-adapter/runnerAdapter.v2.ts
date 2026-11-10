@@ -5,6 +5,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common'
+import { requireNestedStartSupport } from './nested-start-preflight'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, IsNull } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
@@ -190,10 +191,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
     if (nestedVirtualization) {
-      const info = await this.runnerInfo()
-      if (info.nestedVirtualizationEnabled !== true || info.nestedVirtualizationStartEnabled !== true) {
-        throw new Error(`Runner ${this.runner.id} cannot confirm nested virtualization start support`)
-      }
+      await requireNestedStartSupport(this.runner.id, () => this.runnerInfo())
     }
     await this.jobService.createJob(null, JobType.START_BOX, this.runner.id, ResourceType.BOX, boxId, {
       authToken,

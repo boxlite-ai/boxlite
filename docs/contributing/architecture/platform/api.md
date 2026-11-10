@@ -66,6 +66,18 @@ fails without dispatching an ordinary start. V0 uses the optional
 `nestedVirtualization` query parameter with its existing metadata body; V2
 CREATE_BOX and START_BOX jobs carry the saved boolean.
 
+A stopped box whose start capability preflight fails keeps its stopped state and
+pending start intent, records the reason, and retries through the existing
+ten-second sync loop. No start is dispatched until support is confirmed; success
+clears the preflight reason. This also covers the adapter's final check after a
+sticky upgrade was saved. Actual dispatch and boot errors retain their existing
+error handling.
+
+Permanent capability denial remains pending; another manual start does not
+replace the active intent. Restore the assigned Runner's compatible binary,
+authorization and fresh heartbeat to resume it. Removing the allowlist entry
+cannot downgrade an already saved nested requirement.
+
 The managed Runner validates its own startup authorization and refreshes saved
 configuration under the VM initialization lock before a cold-start upgrade.
 Only the nesting field changes; identity and disks remain. Its live state records

@@ -2499,6 +2499,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_start_facade_rechecks_the_saved_running_state_before_upgrade() {
+        let dir = TempDir::new().unwrap();
+        let runtime = RuntimeImpl::initialize(
+            BoxliteOptions {
+                home_dir: dir.path().into(),
+                ..Default::default()
+            },
+            ExperimentalFeatures::parse("nested-virtualization").unwrap(),
+            true,
+        )
+        .unwrap();
+        let handle = runtime
+            .create(
+                BoxOptions {
+                    detach: true,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let (_, mut state) = runtime.box_manager.box_by_id(handle.id()).unwrap().unwrap();
+        state.status = BoxStatus::Running;
+        runtime.box_manager.save_box(handle.id(), &state).unwrap();
+
+        let error = crate::experimental::runner::start(&handle, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::InvalidState(_)));
+        assert!(error.to_string().contains("Stop the ordinary VM"));
+        let (saved, _) = runtime.box_manager.box_by_id(handle.id()).unwrap().unwrap();
+        assert!(!saved.options.advanced.nested_virtualization);
+
+        state.status = BoxStatus::Configured;
+        runtime.box_manager.save_box(handle.id(), &state).unwrap();
+    }
+
+    #[tokio::test]
     async fn privileged_options_do_not_require_experimental_features() {
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         advanced.privileged = true;

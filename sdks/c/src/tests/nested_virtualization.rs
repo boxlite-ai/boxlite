@@ -1,5 +1,132 @@
 use super::*;
 
+extern "C" fn record_runner_start(err: *mut FFIError, data: *mut c_void) {
+    unsafe {
+        let message = if err.is_null() || (*err).message.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr((*err).message)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let code = if err.is_null() {
+            BoxliteErrorCode::Ok
+        } else {
+            (*err).code
+        };
+        *(data as *mut Option<(BoxliteErrorCode, String)>) = Some((code, message));
+    }
+}
+
+#[test]
+fn runner_start_ffi_checks_policy_and_delivers_errors_without_booting() {
+    for (managed, authorized, requested) in [
+        (false, false, false),
+        (true, false, false),
+        (true, false, true),
+        (true, true, false),
+        (true, true, true),
+    ] {
+        unsafe {
+            let home = unique_test_home("runner-start");
+            let c_home = CString::new(home.to_str().unwrap()).unwrap();
+            let mut runtime = ptr::null_mut();
+            let mut error = FFIError::default();
+            let code = if managed {
+                boxlite_internal_runtime_new_runner(
+                    c_home.as_ptr(),
+                    ptr::null(),
+                    0,
+                    if authorized {
+                        c"nested-virtualization".as_ptr()
+                    } else {
+                        ptr::null()
+                    },
+                    &mut runtime,
+                    &mut error,
+                )
+            } else {
+                boxlite_runtime_new(c_home.as_ptr(), ptr::null(), 0, &mut runtime, &mut error)
+            };
+            assert_eq!(code, BoxliteErrorCode::Ok);
+            let owner = runtime.as_ref().unwrap();
+            let lite = owner.tokio_rt.block_on(async {
+                let lite = owner
+                    .runtime
+                    .create(boxlite::BoxOptions::default(), None)
+                    .await
+                    .unwrap();
+                // Spend a configured handle before calling the bridge: no VM can boot.
+                lite.stop().await.unwrap();
+                lite
+            });
+            let mut handle = crate::box_handle::BoxHandle {
+                box_id: lite.id().clone(),
+                handle: Arc::new(lite),
+                tokio_rt: owner.tokio_rt.clone(),
+                queue: owner.queue.clone(),
+            };
+            let mut outcome: Option<(BoxliteErrorCode, String)> = None;
+            let slot: *mut Option<(BoxliteErrorCode, String)> = &mut outcome;
+            assert_eq!(
+                boxlite_internal_runner_start_box(
+                    &mut handle,
+                    i32::from(requested),
+                    Some(record_runner_start),
+                    slot.cast(),
+                    &mut error,
+                ),
+                BoxliteErrorCode::Ok
+            );
+            for _ in 0..10 {
+                if (*slot).is_some() {
+                    break;
+                }
+                assert!(boxlite_runtime_drain(runtime, 500, &mut error) >= 0);
+            }
+            let (code, message) = outcome.expect("start completion must reach the drain callback");
+            if !managed {
+                assert_eq!(code, BoxliteErrorCode::Unsupported);
+                assert!(message.contains("managed runtime"));
+            } else if requested && !authorized {
+                assert_eq!(code, BoxliteErrorCode::Config);
+                assert!(message.contains("nested-virtualization"));
+            } else {
+                assert_eq!(code, BoxliteErrorCode::Stopped);
+                assert!(message.contains("Handle invalidated after stop()"));
+            }
+            assert_eq!(
+                boxlite_internal_runner_start_box(
+                    &mut handle,
+                    0,
+                    None,
+                    ptr::null_mut(),
+                    &mut error,
+                ),
+                BoxliteErrorCode::InvalidArgument
+            );
+            boxlite_error_free(&mut error);
+            drop(handle);
+            boxlite_runtime_free(runtime);
+            std::fs::remove_dir_all(home).unwrap();
+        }
+    }
+    unsafe {
+        let mut error = FFIError::default();
+        assert_eq!(
+            boxlite_internal_runner_start_box(
+                ptr::null_mut(),
+                1,
+                Some(record_runner_start),
+                ptr::null_mut(),
+                &mut error,
+            ),
+            BoxliteErrorCode::InvalidArgument
+        );
+        boxlite_error_free(&mut error);
+    }
+}
+
 #[test]
 fn nested_virtualization_environment_allows_ffi_creation_and_reuse() {
     const CHILD: &str = "BOXLITE_NESTED_FFI_CHILD";

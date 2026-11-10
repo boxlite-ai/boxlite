@@ -14,6 +14,13 @@ it does not re-read process ENV or run an additional hardware probe.
 Physical host support remains checked by the existing native VM startup path,
 and startup errors retain their existing behavior.
 
+Heartbeat request tests pass the captured authorization to the private request
+builder and send it through the generated client without constructing a VM
+runtime. Run `make coverage:go` for the full Go contract suite, including the
+pulled-image ordering check for create and managed start. Rust/C bridge tests use
+the existing test-support runtime and reject invalid policy or spent handles
+before VM work; hardware boot requires separate integration checks.
+
 The control plane's [organization allowlist](../../docs/contributing/architecture/platform/api.md#organization-nested-virtualization-allowlist-rc)
 decides whether a new box or a stopped ordinary box should use that capability.
 Cold-start upgrades require the separate start capability, so a creation-only

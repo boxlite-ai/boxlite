@@ -35,7 +35,7 @@ export abstract class BoxAction {
     state: BoxState,
     expectedLockCode: LockCode,
     runnerId?: string | null | undefined,
-    errorReason?: string,
+    errorReason?: string | null,
     daemonVersion?: string,
     recoverable?: boolean,
   ) {

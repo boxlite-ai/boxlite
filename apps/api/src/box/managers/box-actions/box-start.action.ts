@@ -20,6 +20,7 @@ import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 import { getStateChangeLockKey } from '../../utils/lock-key.util'
+import { NestedStartPreflightError, requireNestedStartSupport } from '../../runner-adapter/nested-start-preflight'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -44,7 +45,15 @@ export class BoxStartAction extends BoxAction {
         return this.handleRunnerBoxUnknownStateOnDesiredStateStart(box, lockCode)
       }
       case BoxState.STOPPED: {
-        return this.handleRunnerBoxStoppedStateOnDesiredStateStart(box, lockCode)
+        try {
+          return await this.handleRunnerBoxStoppedStateOnDesiredStateStart(box, lockCode)
+        } catch (error) {
+          if (!(error instanceof NestedStartPreflightError)) throw error
+          this.logger.warn(error.message)
+          // No start was dispatched; preserve the intent for the next sync pass.
+          await this.updateBoxState(box, BoxState.STOPPED, lockCode, undefined, error.message)
+          return DONT_SYNC_AGAIN
+        }
       }
       case BoxState.RESTORING:
       case BoxState.CREATING:
@@ -120,15 +129,14 @@ export class BoxStartAction extends BoxAction {
     const nestedVirtualization = box.nestedVirtualization === true || allowlisted
     if (nestedVirtualization) {
       const signal = AbortSignal.timeout(this.configService.getOrThrow('runnerHealthTimeout') * 1000)
-      const info = await Promise.race([
-        runnerAdapter.runnerInfo(signal),
-        new Promise<never>((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-        }),
-      ])
-      if (info.nestedVirtualizationEnabled !== true || info.nestedVirtualizationStartEnabled !== true) {
-        throw new Error(`Runner ${runner.id} cannot confirm nested virtualization start support`)
-      }
+      await requireNestedStartSupport(runner.id, () =>
+        Promise.race([
+          runnerAdapter.runnerInfo(signal),
+          new Promise<never>((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          }),
+        ]),
+      )
     }
     const currentLock = await this.redisLockProvider.getCode(getStateChangeLockKey(box.id))
     if (currentLock?.getCode() !== lockCode.getCode()) return DONT_SYNC_AGAIN
@@ -139,7 +147,7 @@ export class BoxStartAction extends BoxAction {
 
     await runnerAdapter.startBox(box.id, box.authToken, metadata, nestedVirtualization)
 
-    await this.updateBoxState(box, BoxState.STARTING, lockCode)
+    await this.updateBoxState(box, BoxState.STARTING, lockCode, undefined, null)
     return SYNC_AGAIN
   }
 

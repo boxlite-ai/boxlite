@@ -3,35 +3,14 @@ package healthcheck
 import (
 	"encoding/json"
 	"testing"
-
-	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 )
 
-func healthcheckRuntime(t *testing.T, enabled bool) *blclient.Client {
-	t.Helper()
-	cfg := blclient.ClientConfig{HomeDir: t.TempDir()}
-	if enabled {
-		cfg.ExperimentalFeatures = "nested-virtualization"
-	}
-	client, err := blclient.NewClient(t.Context(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := client.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	return client
-}
-
-func TestNestedVirtualizationHealthcheckUsesRuntimeSnapshot(t *testing.T) {
+func TestNestedVirtualizationHealthcheckFormatsAuthorization(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		client := healthcheckRuntime(t, enabled)
-		// A later ENV change cannot grant or revoke the validated runtime policy.
+		// Formatting uses its captured input without creating a runtime or reading ENV.
 		t.Setenv("BOXLITE_EXPERIMENTAL", "unknown")
-		service := &Service{boxlite: client}
-		report := service.newHealthcheck()
+		service := &Service{}
+		report := service.newHealthcheck(enabled)
 		body, err := json.Marshal(report)
 		if err != nil {
 			t.Fatal(err)

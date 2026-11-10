@@ -24,7 +24,7 @@ describe('AuditInterceptor', () => {
         createLog: jest.fn().mockResolvedValue({ id: 'allowlist-audit' }),
         updateLog: jest.fn().mockResolvedValue(undefined),
       }
-      const interceptor = new AuditInterceptor(new Reflector(), auditService as any, { get: jest.fn() } as any)
+      const interceptor = new AuditInterceptor(new Reflector(), auditService as any)
       const request = {
         url: '/admin/organizations/target-org/nested-virtualization',
         params: { organizationId: 'target-org' },

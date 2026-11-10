@@ -93,12 +93,12 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-func (s *Service) newHealthcheck() *apiclient.RunnerHealthcheck {
+func (s *Service) newHealthcheck(nestedVirtualizationEnabled bool) *apiclient.RunnerHealthcheck {
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
 	healthcheck.SetDomain(s.domain)
 	healthcheck.SetSupportsPrivileged(true)
-	healthcheck.SetNestedVirtualizationEnabled(s.boxlite.NestedVirtualizationEnabled())
-	healthcheck.SetNestedVirtualizationStartEnabled(s.boxlite.NestedVirtualizationEnabled())
+	healthcheck.SetNestedVirtualizationEnabled(nestedVirtualizationEnabled)
+	healthcheck.SetNestedVirtualizationStartEnabled(nestedVirtualizationEnabled)
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)
 	apiUrl := fmt.Sprintf("http://%s:%d", s.domain, s.apiPort)
@@ -117,7 +117,7 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	healthcheck := s.newHealthcheck()
+	healthcheck := s.newHealthcheck(s.boxlite.NestedVirtualizationEnabled())
 
 	runtimeHealth := apiclient.RunnerServiceHealth{
 		ServiceName: "boxlite",

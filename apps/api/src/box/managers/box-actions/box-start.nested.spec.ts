@@ -4,6 +4,7 @@ import { BoxState } from '../../enums/box-state.enum'
 import { BoxDesiredState } from '../../enums/box-desired-state.enum'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { LockCode } from '../../common/redis-lock.provider'
+import { DONT_SYNC_AGAIN } from './box.action'
 
 describe('Cloud cold-start nesting', () => {
   function fixture(saved: boolean, allowlisted: boolean, supported: unknown) {
@@ -58,9 +59,14 @@ describe('Cloud cold-start nesting', () => {
 
   it.each([undefined, false, 'true'])('does not persist or dispatch an unconfirmed upgrade (%p)', async (supported) => {
     const f = fixture(false, true, supported)
-    await expect(f.action.run(f.box, f.lock)).rejects.toThrow(/nested virtualization/i)
+    await expect(f.action.run(f.box, f.lock)).resolves.toBe(DONT_SYNC_AGAIN)
     expect(f.startBox).not.toHaveBeenCalled()
-    expect(f.update).not.toHaveBeenCalled()
+    expect(f.update).toHaveBeenCalledWith(
+      f.box.id,
+      expect.objectContaining({
+        updateData: { state: BoxState.STOPPED, errorReason: expect.stringMatching(/nested virtualization/i) },
+      }),
+    )
     expect(f.box.nestedVirtualization).toBe(false)
   })
 
@@ -77,8 +83,9 @@ describe('Cloud cold-start nesting', () => {
   it('bounds a stalled capability lookup before saving or dispatching', async () => {
     const f = fixture(false, true, true)
     f.runnerInfo.mockImplementation(() => new Promise(() => {}))
-    await expect(f.action.run(f.box, f.lock)).rejects.toThrow()
-    expect(f.update).not.toHaveBeenCalled()
+    await expect(f.action.run(f.box, f.lock)).resolves.toBe(DONT_SYNC_AGAIN)
+    expect(f.box.state).toBe(BoxState.STOPPED)
+    expect(f.box.errorReason).toMatch(/nested virtualization/i)
     expect(f.startBox).not.toHaveBeenCalled()
   })
 
