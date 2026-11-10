@@ -757,7 +757,7 @@ CodeBox(
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `run()` | `(code: str, timeout: int = None) -> str` | Execute Python code (async) |
+| `run()` | `(code: str, timeout: float = None) -> str` | Execute Python code (async); after `timeout` seconds the process is terminated and the stdout it flushed so far is returned (use `print(..., flush=True)` for partial output) |
 | `run_script()` | `(script_path: str) -> str` | Execute Python script file (async) |
 | `install_package()` | `(package: str) -> str` | Install package with pip (async) |
 | `install_packages()` | `(*packages: str) -> str` | Install multiple packages (async) |
