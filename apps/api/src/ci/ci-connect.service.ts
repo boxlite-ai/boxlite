@@ -422,6 +422,7 @@ export class CiConnectService {
       return { ...current, state: 'polling', lease_id: lease }
     })
     if (row.lease_id !== lease) return this.response(row, actor)
+    let targetSaved = false
     try {
       const token = this.secrets.open(row.oauth_token_ciphertext!, this.aad(row) + ':web-selection')
       const signal = AbortSignal.timeout(45_000)
@@ -449,6 +450,7 @@ export class CiConnectService {
           [id, lease, row.web_target_ciphertext, row.allow_private],
         )
         if (!saved.length) return this.getWeb(actor, id)
+        targetSaved = true
       }
       if (
         !identity.accounts.some(
@@ -480,9 +482,10 @@ export class CiConnectService {
         await this.query(
           this.db,
           `UPDATE ci_connect_attempt SET state='selecting',oauth_token_ciphertext=$3,
+          web_target_ciphertext=CASE WHEN $4::boolean THEN NULL ELSE web_target_ciphertext END,
           lease_id=NULL,lease_until=NULL WHERE id=$1 AND state='polling' AND lease_id=$2
           AND expires_at>clock_timestamp() AND lease_until>clock_timestamp()`,
-          [id, lease, row.oauth_token_ciphertext],
+          [id, lease, row.oauth_token_ciphertext, targetSaved],
         )
       } else await this.terminal(id, lease, 'failed')
       throw error

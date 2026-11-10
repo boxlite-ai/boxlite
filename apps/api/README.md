@@ -295,6 +295,10 @@ and boolean `allow_private_repositories`. Existing connection policy is preserve
 use Update to change it. Legacy `/select` still accepts installation IDs and
 consumes its original App-specific grant once.
 
+Transient upstream failures leave the grant retryable without extending its expiry.
+Clear a newly saved target after failure so it does not produce an Install prompt.
+Preserve an earlier pending target if verification failed before replacement.
+
 OAuth-visible memberships are not a complete organization inventory. Organization
 OAuth approval or an active SAML session may be required even if the CI App is
 installed. The picker retains a **Missing organization?** recovery action linking
@@ -1275,11 +1279,14 @@ delivery enforce the same decision. Managed runner groups permit Public and
 select only eligible authorized repositories. A policy update advances generation;
 already delivered workers keep their original cleanup identities.
 
-This development-only schema/scope change requires a clean CI state. Use the old
-version to finish worker/runner cleanup, stop its Listeners, then reset CI bindings,
-attempts and journal state before applying the guarded column rename. Nonempty
-legacy state is rejected; old Public consent is never converted into Private
-consent. Reconnect the existing GitHub installations afterward. Standalone users
+The initial CI schema creates `allow_private` with a false default; there is no
+Public-to-Private conversion migration because CI has not shipped. For existing
+dev installations, use the old version to finish worker/runner cleanup and stop
+its Listeners, then explicitly recreate the CI tables and start a fresh journal.
+Clearing rows alone does not update the old column layout. Reconnect existing
+GitHub installations afterward.
+
+Standalone users
 also need old-resource cleanup followed by a fresh journal because scope hashes
 now include Private eligibility; their existing Public environment setting retains
 its meaning and Private remains allowed. No cleanup across a discarded journal is

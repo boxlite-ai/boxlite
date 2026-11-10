@@ -16,11 +16,12 @@ Install the platform GitHub App on the repositories you want to run, then use th
 existing remote BoxLite context to bind their owning GitHub account:
 
 ```sh
-boxlite --context YOUR_CONTEXT ci connect GITHUB_ACCOUNT --allow-public-repositories
+boxlite --context YOUR_CONTEXT ci connect GITHUB_ACCOUNT --allow-private-repositories
 ```
 
-Omit the public-repository flag for private repositories only. Complete GitHub's
-device authorization as that personal account owner or an organization admin.
+Authorized public repositories are always eligible; omit the private-repository
+flag to exclude private repositories. Complete GitHub's device authorization as
+that personal account owner or an organization owner.
 Connect also checks your current BoxLite organization owner/admin authority and
 prevents another platform tenant from claiming the same installation. Configure
 eligible workflow jobs with `runs-on: boxlite-ci-runner`.

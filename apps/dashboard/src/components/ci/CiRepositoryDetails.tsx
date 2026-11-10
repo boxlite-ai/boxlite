@@ -94,6 +94,7 @@ export function CiRepositoryDetails({
   const href = settingsUrl(managementUrl ?? query.data?.installation_settings_url, installation, account)
   return (
     <div
+      role="region"
       className="space-y-3 border-l border-border py-3 pl-4 font-mono text-meta"
       aria-label={`Installed repositories for ${account}`}
     >
