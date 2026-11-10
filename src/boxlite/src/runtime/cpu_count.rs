@@ -123,13 +123,11 @@ mod tests {
     }
 
     #[test]
-    fn fractional_cpus_platform_and_reuse() {
+    fn fractional_cpus_platform_and_serialization() {
         let mut options = BoxOptions {
             cpus: Some(1.5),
             ..Default::default()
         };
-        assert!(options.check_reused_cpus(1.5).is_ok());
-        assert!(options.check_reused_cpus(2.0).is_err());
         if cfg!(target_os = "linux") {
             options.sanitize_common().unwrap();
         } else {
@@ -145,7 +143,6 @@ mod tests {
         ));
         options.cpus = Some(2.0);
         options.sanitize_common().unwrap();
-        options.check_reused_cpus(0.5).unwrap();
         assert_eq!(
             serde_json::to_value(&options).unwrap()["cpus"],
             serde_json::json!(2)

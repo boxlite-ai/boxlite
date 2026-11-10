@@ -18,6 +18,11 @@ async fn create_response(
     let port = listener.local_addr().unwrap().port();
     let (stop, mut stopped) = oneshot::channel();
     let expect_created = lookup_response.is_none_or(str::is_empty);
+    let saved_cpus = lookup_response.filter(|body| !body.is_empty()).map(|body| {
+        serde_json::from_str::<Value>(body).unwrap()["cpus"]
+            .as_f64()
+            .unwrap()
+    });
     let lookup_response = lookup_response.map(str::to_owned);
     let lookup = lookup_response.is_some();
     let body = body.to_owned();
@@ -77,12 +82,13 @@ async fn create_response(
     };
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         if lookup {
-            RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
-                .await
-                .map(|(b, created)| {
-                    assert_eq!(created, expect_created);
-                    b
-                })
+            let (b, created) =
+                RuntimeBackend::get_or_create(&runtime, options, Some("named".into())).await?;
+            assert_eq!(created, expect_created);
+            if let Some(cpus) = saved_cpus {
+                assert_eq!(b.info().await?.cpus, cpus);
+            }
+            Ok(b)
         } else {
             RuntimeBackend::create(&runtime, options, None).await
         }
@@ -154,20 +160,25 @@ async fn fractional_cpus_get_or_create_posts_after_missing_name() {
     let (result, requests) = create_response(201, BOX_RESPONSE, Some(0.125), Some("")).await;
     assert!(result.is_ok());
     assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].0, "GET /v1/boxes/named HTTP/1.1");
     assert_eq!(requests[1].0, "POST /v1/boxes HTTP/1.1");
+    assert_eq!(requests[1].1["cpus"], 0.125);
 }
 
 #[tokio::test]
-async fn fractional_cpus_named_reuse_checks_only_explicit_fractions() {
-    let existing = BOX_RESPONSE.replace("\"status\":", "\"privileged\":false,\"status\":");
-    for cpus in [Some(0.125), Some(1.5), Some(2.0), None] {
-        let (result, requests) = create_response(201, BOX_RESPONSE, cpus, Some(&existing)).await;
-        if cpus == Some(1.5) {
-            assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
-        } else {
-            assert!(result.is_ok(), "{:?}", result.err());
+async fn fractional_cpus_named_reuse_preserves_saved_allocation() {
+    for saved_cpus in [2.0, 0.5] {
+        let existing = BOX_RESPONSE
+            .replace("0.125", &saved_cpus.to_string())
+            .replace("\"status\":", "\"privileged\":false,\"status\":");
+        for cpus in [Some(1.0), Some(2.0), Some(0.5), Some(1.5), None] {
+            let (result, requests) =
+                create_response(201, BOX_RESPONSE, cpus, Some(&existing)).await;
+            assert_eq!(result.unwrap().id().as_str(), "fractional-box");
+            // The first GET reuses the Box; the second explicitly reads its info.
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].0, "GET /v1/boxes/named HTTP/1.1");
+            assert_eq!(requests[1].0, "GET /v1/boxes/fractional-box HTTP/1.1");
         }
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].0, "GET /v1/boxes/named HTTP/1.1");
     }
 }

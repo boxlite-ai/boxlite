@@ -535,7 +535,6 @@ impl RuntimeImpl {
         config: BoxConfig,
         state: BoxState,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        requested.check_reused_cpus(config.options.cpus.unwrap_or(1.0))?;
         Self::check_options_compatibility(requested, &config)?;
         let (box_impl, _) = self.get_or_create_box_impl(config, state);
         Ok((litebox_from_impl(box_impl), false))
@@ -2133,7 +2132,7 @@ mod tests {
         }
     }
 
-    /// Reuse ignores general options, integer cpus included. A box persisted with more
+    /// Reuse ignores general options, cpus included. A box persisted with more
     /// vCPUs than the guest kernel supports (created before the ceiling) must
     /// still be returned by `get_or_create`, while a new one is refused.
     #[tokio::test]
@@ -3932,49 +3931,57 @@ mod tests {
     }
     #[tokio::test]
     #[cfg(target_os = "linux")]
-    async fn fractional_cpus_persist_and_require_exact_named_reuse() {
-        let (runtime, _dir) = create_test_runtime();
-        let local = LocalRuntime(Arc::clone(&runtime));
-        let options = BoxOptions {
-            cpus: Some(1.5),
-            ..Default::default()
-        };
-        let created = RuntimeBackend::create(&local, options.clone(), Some("fractional".into()))
-            .await
-            .unwrap();
-        let (config, _) = runtime
-            .box_manager
-            .lookup_box("fractional")
-            .unwrap()
-            .unwrap();
-        assert_eq!(config.options.cpus, Some(1.5));
-        assert_eq!(created.info().await.unwrap().cpus, 1.5);
-        for cpus in [Some(1.5), Some(2.0), None] {
-            let (_, is_new) = RuntimeBackend::get_or_create(
+    async fn fractional_cpus_named_reuse_preserves_saved_allocation() {
+        for saved_cpus in [2.0, 0.5] {
+            let (runtime, _dir) = create_test_runtime();
+            let local = LocalRuntime(Arc::clone(&runtime));
+            let options = BoxOptions {
+                cpus: Some(saved_cpus),
+                ..Default::default()
+            };
+            let (created, is_new) =
+                RuntimeBackend::get_or_create(&local, options.clone(), Some("fractional".into()))
+                    .await
+                    .unwrap();
+            assert!(is_new);
+            assert_eq!(created.info().await.unwrap().cpus, saved_cpus);
+
+            for cpus in [Some(1.0), Some(2.0), Some(0.5), Some(1.5), None] {
+                let (reused, is_new) = RuntimeBackend::get_or_create(
+                    &local,
+                    BoxOptions {
+                        cpus,
+                        ..options.clone()
+                    },
+                    Some("fractional".into()),
+                )
+                .await
+                .unwrap();
+                assert!(!is_new);
+                assert_eq!(reused.id(), created.id());
+                assert_eq!(reused.info().await.unwrap().cpus, saved_cpus);
+                let (config, _) = runtime
+                    .box_manager
+                    .lookup_box("fractional")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(config.options.cpus, Some(saved_cpus));
+            }
+
+            let error = RuntimeBackend::create(
                 &local,
                 BoxOptions {
-                    cpus,
-                    ..options.clone()
+                    cpus: Some(1.5),
+                    ..options
                 },
                 Some("fractional".into()),
             )
             .await
-            .unwrap();
-            assert!(!is_new);
+            .err()
+            .expect("create must reject a duplicate name instead of reusing it");
+            assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+            assert!(error.to_string().contains("already exists"));
         }
-        let error = RuntimeBackend::get_or_create(
-            &local,
-            BoxOptions {
-                cpus: Some(0.5),
-                ..options
-            },
-            Some("fractional".into()),
-        )
-        .await
-        .err()
-        .unwrap();
-        assert!(matches!(error, BoxliteError::InvalidArgument(_)));
-        assert!(error.to_string().contains("cpus"));
     }
 
     #[test]

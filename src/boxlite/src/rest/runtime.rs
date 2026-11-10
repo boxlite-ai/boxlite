@@ -386,7 +386,6 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
-                    options.check_reused_cpus(response.cpus)?;
                     let actual = response.privileged.ok_or_else(|| {
                         BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the server did not report its \

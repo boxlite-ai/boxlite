@@ -909,19 +909,6 @@ impl BoxOptions {
         self.cpus.map(super::cpu_count::CpuCount::new).transpose()
     }
 
-    /// An explicit fractional allocation must survive named-box reuse unchanged.
-    pub(crate) fn check_reused_cpus(&self, actual: f64) -> BoxliteResult<()> {
-        if let Some(requested) = self.cpu_count()?.filter(|cpu| cpu.is_fractional())
-            && requested != super::cpu_count::CpuCount::new(actual)?
-        {
-            return Err(BoxliteError::InvalidArgument(
-                "existing box has different cpus; create a new box to change fractional cpus"
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
-
     /// The requested vCPU count when the bundled guest kernel cannot bring
     /// all of them online. A custom kernel sets its own ceiling, so it never
     /// exceeds this one.

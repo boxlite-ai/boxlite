@@ -98,7 +98,10 @@ Boot and device I/O also consume this budget; very small allocations can hit exi
 CPU configuration is immutable after creation.
 Restart, reconnect, disk snapshot restore, clone, and archive import retain it.
 Disk-only `restore_from_archive` retains the destination Box's CPU configuration.
-An explicitly fractional `get_or_create` request must equal the saved allocation; integer or omitted values retain ordinary reuse behavior.
+
+After option, platform, and security compatibility checks, `get_or_create` keeps an existing named Box's saved `cpus` for integer, fractional, and omitted requests.
+For example, an existing `cpus=2` Box stays at `2` when requested with `cpus=0.5`, and returns `created=false`.
+The requested allocation applies only when creating a new Box; `create` still rejects duplicate names.
 
 | Interface | Creation | Query |
 | --- | --- | --- |
