@@ -103,7 +103,11 @@ coverage\:go: dev\:go
 coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
 	@mkdir -p target/coverage
 	@native_tags=boxlite_dev,boxlite_integration; \
-	if [ -n "$$CARGO_LLVM_COV" ]; then native_tags=$$native_tags,boxlite_coverage; fi; \
+	if [ -n "$$CARGO_LLVM_COV" ]; then \
+		native_tags=$$native_tags,boxlite_coverage; \
+		native_profile_runtime=("$$(rustc --print target-libdir)"/libprofiler_builtins-*.rlib); \
+		(cd sdks/go && CGO_LDFLAGS="\"$${native_profile_runtime[0]}\"" go test -count=1 -tags=$$native_tags ./integration/archive/internal/nativeprofile) || exit $$?; \
+	fi; \
 	cd sdks/go && go test -count=1 -tags=$$native_tags \
 		-o "$(PROJECT_ROOT)/target/coverage/checkpoint-native.test" \
 		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \

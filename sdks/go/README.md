@@ -508,6 +508,8 @@ runtime. A coverage-only integration test entry point flushes native counters
 before Go exits, so the report includes the C ABI archive preparation path.
 LLVM collection builds the C library in the collector's Cargo target directory
 before compiling the tagged Go tests.
+The flush helper explicitly initializes `LLVM_PROFILE_FILE` handling, including
+when the Go executable has not run LLVM's native startup hook.
 
 ## License
 
