@@ -883,7 +883,7 @@ export type PromotionSource = {
 }
 
 /**
- * Source projects this stage's accounts have to be let into.
+ * Which stage's project this one's accounts have to be let into, if any.
  *
  * `mstage/config` checks that `promoteFrom` does not name its own stage and,
  * when the named stage is present, that it lives in the same cloud. What it
@@ -893,11 +893,11 @@ export type PromotionSource = {
  * is a mistake and is refused — left to pass it would be a bootstrap that
  * silently granted nothing, discovered when prod promotes.
  *
- * Omit sources sharing this project: the accounts already hold
+ * `undefined` when the source shares this project: the accounts already hold
  * the project roles there, and a second binding saying so reads as a boundary
  * that is not one.
  */
-export const promotionSourcesFor = ({
+export const promotionSourceFor = ({
   config,
   stage,
 }: {
@@ -905,30 +905,26 @@ export const promotionSourcesFor = ({
     app: string
     /** The file the refusals name, so an operator knows which one to edit. */
     path: string
-    stages: Record<string, { project?: string | null; promoteFrom?: string | string[] | null }>
+    stages: Record<string, { project?: string | null; promoteFrom?: string | null }>
   }
   stage: string
-}): PromotionSource[] => {
+}): PromotionSource | undefined => {
   const from = config.stages[stage]?.promoteFrom
-  if (!from) return []
-  return (Array.isArray(from) ? from : [from]).flatMap((name) => {
-    const source = Object.hasOwn(config.stages, name) ? config.stages[name] : undefined
-    if (!source) {
-      throw new GcpBootstrapError(
-        `Stage "${stage}" promotes from "${name}" in ${config.path}, which declares no such stage. ` +
-          'A promotion needs both ends declared in one file.',
-      )
-    }
-    if (!source.project) throw new GcpBootstrapError(`Stage "${name}" declares no project in ${config.path}`)
-    if (source.project === config.stages[stage]?.project) return []
-    return [
-      {
-        stage: name,
-        project: source.project,
-        bucket: gcpRunnerArtifactsBucket({ app: config.app, stage: name, project: source.project }),
-      },
-    ]
-  })
+  if (!from) return undefined
+  const source = config.stages[from]
+  if (!source) {
+    throw new GcpBootstrapError(
+      `Stage "${stage}" promotes from "${from}" in ${config.path}, which declares no such stage. ` +
+        'A promotion needs both ends declared in one file.',
+    )
+  }
+  if (!source.project) throw new GcpBootstrapError(`Stage "${from}" declares no project in ${config.path}`)
+  if (source.project === config.stages[stage]?.project) return undefined
+  return {
+    stage: from,
+    project: source.project,
+    bucket: gcpRunnerArtifactsBucket({ app: config.app, stage: from, project: source.project }),
+  }
 }
 
 /**
@@ -948,80 +944,83 @@ export const promotionSourcesFor = ({
  *
  * Reported rather than fatal when the source refuses the write. An operator who
  * administers this stage and not the source is an ordinary situation, and
- * failing here would throw away a bootstrap that otherwise completed; the
+ * failing here would throw away a bootstrap that otherwise completed; the two
  * commands are printed so whoever does hold that project can run them.
  */
 const grantPromotionReads = async ({
   run,
   wait,
-  sources,
+  source,
   deployerEmail,
   publisherEmail,
   log,
 }: {
   run: Run
   wait: (milliseconds: number) => Promise<unknown>
-  sources: PromotionSource[]
+  source: PromotionSource
   deployerEmail: string
   publisherEmail: string
   log: (line: string) => void
 }): Promise<void> => {
-  const projects = new Set<string>()
-  const buckets = new Set<string>()
-  const grants: { project: string; what: string; args: string[] }[] = []
-  for (const source of sources) {
-    log(`==> ${source.stage} in ${source.project}, what a promotion reads`)
-    // Retain the existing project-wide registry read. Sources sharing that
-    // project still need separate object reads on their runner buckets.
-    if (!projects.has(source.project)) {
-      projects.add(source.project)
-      grants.push({
-        project: source.project,
-        what: `grant ${publisherEmail} read on ${source.project}`,
-        args: [
-          'projects',
-          'add-iam-policy-binding',
-          source.project,
-          `--member=serviceAccount:${publisherEmail}`,
-          '--role=roles/artifactregistry.reader',
-          UNCONDITIONAL,
-        ],
-      })
-    }
-    if (!buckets.has(source.bucket)) {
-      buckets.add(source.bucket)
-      // Runner promotion lists/copies objects without reading bucket metadata.
-      grants.push({
-        project: source.project,
-        what: `grant ${deployerEmail} read on gs://${source.bucket}`,
-        args: [
-          'storage',
-          'buckets',
-          'add-iam-policy-binding',
-          `gs://${source.bucket}`,
-          `--member=serviceAccount:${deployerEmail}`,
-          '--role=roles/storage.objectViewer',
-          UNCONDITIONAL,
-        ],
-      })
-    }
-  }
+  log(`==> ${source.stage} in ${source.project}, what a promotion reads`)
+  // Its own client: `gcloudFor` puts `--project` on every call, and these are
+  // the only calls this run makes against a project that is not the stage's.
+  const gcloud = gcloudFor({ run, project: source.project, wait })
+  const grants: { what: string; args: string[] }[] = [
+    {
+      /*
+       * Project-wide, which is wider than the bucket grant below and stays that
+       * way deliberately. This is the grant `mbuild promote` is known to work
+       * under — the pull, and the `artifacts docker images list` that decides
+       * whether there is anything to pull — and narrowing it to the one
+       * repository is a change that has to be proved against a real registry
+       * rather than assumed here.
+       */
+      what: `grant ${publisherEmail} read on ${source.project}`,
+      args: [
+        'projects',
+        'add-iam-policy-binding',
+        source.project,
+        `--member=serviceAccount:${publisherEmail}`,
+        '--role=roles/artifactregistry.reader',
+        UNCONDITIONAL,
+      ],
+    },
+    {
+      /*
+       * One bucket, not the project: this is the whole of what `runner:promote`
+       * touches at the source. Object reads only — `runner:promote` lists the
+       * prefix and copies what is under it, and asks the bucket itself nothing,
+       * which is what keeps this off `storage.buckets.get` and so off every
+       * role wider than this one.
+       */
+      what: `grant ${deployerEmail} read on gs://${source.bucket}`,
+      args: [
+        'storage',
+        'buckets',
+        'add-iam-policy-binding',
+        `gs://${source.bucket}`,
+        `--member=serviceAccount:${deployerEmail}`,
+        '--role=roles/storage.objectViewer',
+        UNCONDITIONAL,
+      ],
+    },
+  ]
 
   const refused: string[] = []
   for (const grant of grants) {
-    const gcloud = gcloudFor({ run, project: grant.project, wait })
     try {
       await gcloud.applyPolicy(`Could not ${grant.what}`, grant.args)
     } catch (error) {
-      refused.push(`gcloud ${grant.args.join(' ')} --project ${grant.project}`)
+      refused.push(`gcloud ${grant.args.join(' ')} --project ${source.project}`)
       log(`    ${(error as Error).message}`)
     }
   }
   if (refused.length === 0) {
-    log(`    ${grants.length} grants applied`)
+    log('    both grants applied')
     return
   }
-  log(`    ${refused.length} of ${grants.length} refused. Run these where their source projects can be administered:`)
+  log(`    ${refused.length} of ${grants.length} refused. Run these where ${source.project} can be administered:`)
   for (const command of refused) log(`      ${command}`)
 }
 
@@ -1078,10 +1077,12 @@ export type GcpBootstrapInput = {
   github: GitHubRepository
   log: (line: string) => void
   /**
-   * Sources in other projects. Registry projects and runner buckets are
-   * granted separately; same-destination-project sources need no extra roles.
+   * The stage a promotion into this one reads from, when it lives in another
+   * project. Absent for a stage nothing is promoted into, and absent when the
+   * source shares this project — there the accounts already hold what they
+   * need, and a second binding would say nothing.
    */
-  promotionSources?: PromotionSource[]
+  promotionSource?: PromotionSource
   /**
    * How this waits out a propagation window. Injected for the same reason
    * `run` is: a test proves the retry happens without spending the seconds.
@@ -1117,7 +1118,7 @@ export const bootstrapGcp = async ({
   immutableTags,
   github,
   log,
-  promotionSources = [],
+  promotionSource,
   wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }: GcpBootstrapInput): Promise<GcpBootstrapResult> => {
   const gcloud = gcloudFor({ run, project, wait })
@@ -1198,8 +1199,8 @@ export const bootstrapGcp = async ({
 
   // Last, because it is the only step that reaches outside this project and
   // both accounts it names have to exist before anything can be granted to them.
-  if (promotionSources.length > 0) {
-    await grantPromotionReads({ run, wait, sources: promotionSources, deployerEmail, publisherEmail, log })
+  if (promotionSource) {
+    await grantPromotionReads({ run, wait, source: promotionSource, deployerEmail, publisherEmail, log })
   }
 
   log('')
