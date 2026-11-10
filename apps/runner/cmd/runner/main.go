@@ -20,6 +20,7 @@ import (
 	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/internal/cpumonitor"
+	"github.com/boxlite-ai/runner/internal/diskresize"
 	"github.com/boxlite-ai/runner/internal/memorymonitor"
 	"github.com/boxlite-ai/runner/internal/metrics"
 	"github.com/boxlite-ai/runner/pkg/api"
@@ -214,6 +215,17 @@ func run() int {
 	})
 	metricsCollector.Start(ctx)
 
+	// Grow the data disk filesystem whenever the block device gets larger
+	// (hyperdisk LLD §5.1). No-op on hosts without the data disk device.
+	dataDiskResizer := diskresize.New(diskresize.Config{
+		Logger:     logger,
+		DevicePath: cfg.DataDiskDevice,
+	})
+	go func() {
+		logger.Info("Starting data disk resize ticker")
+		dataDiskResizer.Run(ctx)
+	}()
+
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
 		Logger:           logger,
 		Boxlite:          boxliteClient,
@@ -229,15 +241,19 @@ func run() int {
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
-			Interval:   cfg.HealthcheckInterval,
-			Timeout:    cfg.HealthcheckTimeout,
-			Collector:  metricsCollector,
-			Logger:     logger,
-			Domain:     cfg.Domain,
-			ApiPort:    cfg.ApiPort,
-			ProxyPort:  cfg.ApiPort,
-			TlsEnabled: cfg.EnableTLS,
-			Boxlite:    boxliteClient,
+			Interval:           cfg.HealthcheckInterval,
+			Timeout:            cfg.HealthcheckTimeout,
+			Collector:          metricsCollector,
+			Logger:             logger,
+			Domain:             cfg.Domain,
+			ApiPort:            cfg.ApiPort,
+			ProxyPort:          cfg.ApiPort,
+			TlsEnabled:         cfg.EnableTLS,
+			Boxlite:            boxliteClient,
+			GCPProjectID:       cfg.GCPProjectID,
+			GCPZone:            cfg.GCPZone,
+			RunnerDataDiskName: cfg.RunnerDataDiskName,
+			RunnerDataDiskType: cfg.RunnerDataDiskType,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)
