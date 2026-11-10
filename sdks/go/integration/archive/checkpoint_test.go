@@ -3,7 +3,6 @@
 package archive_test
 
 import (
-	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"archive/tar"
 	"context"
 	"crypto/sha256"
@@ -21,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
 type checkpointPreparationFixture struct {
