@@ -1,7 +1,13 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { BadGatewayException, ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common'
+import {
+  BadGatewayException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { createPrivateKey } from 'node:crypto'
-import { CiGitHubApp, CiGitHubOAuth } from '@boxlite-ai/ci-listener'
+import { CiGitHubApp, CiGitHubOAuth, InstallationRepositoryReader, VerifiedInstallation } from '@boxlite-ai/ci-listener'
 import { TypedConfigService } from '../config/typed-config.service'
 export { CiInstallationRequired } from '@boxlite-ai/ci-listener'
 export type { VerifiedInstallation } from '@boxlite-ai/ci-listener'
@@ -9,9 +15,26 @@ export type { VerifiedInstallation } from '@boxlite-ai/ci-listener'
 /** App instances share algorithms; neither a webhook nor a browser chooses another App's secrets. */
 @Injectable()
 export class CiGitHubService {
+  private readonly logger = new Logger(CiGitHubService.name)
+  private readonly repositories = new InstallationRepositoryReader(() =>
+    this.logger.warn('CI metadata credential retirement deferred'),
+  )
   private oauth?: CiGitHubOAuth
   private readonly instances = new Map<string, CiGitHubApp>()
   constructor(private readonly config: TypedConfigService) {}
+  onApplicationShutdown(): Promise<void> {
+    return this.repositories.close()
+  }
+  async repositoryPage(clientId: string, installation: VerifiedInstallation, page: number, limit: number) {
+    const app = this.byClientId(clientId)
+    if (app.accountType !== installation.accountType)
+      throw new ForbiddenException('Original CI App account type changed')
+    try {
+      return await this.repositories.page(app.appSource(), installation, page, limit)
+    } catch {
+      throw new BadGatewayException('Unable to read GitHub repositories; retry later')
+    }
+  }
   get ids(): string[] {
     return ['ci.githubClientId', 'ci.githubOrgClientId']
       .map((key) => this.config.get(key as any) as string)

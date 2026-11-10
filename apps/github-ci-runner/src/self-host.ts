@@ -186,7 +186,7 @@ export class SelfHost implements ListenerHost {
           binding: 'personal-token',
           generation: 1,
           installation: { id: 0, account: { ...repository.owner, type: raw.owner.type } },
-          runners: { kind: 'repository', repository, allowPublic: this.config.allowPublic },
+          runners: { kind: 'repository', repository, allowPrivate: true, allowPublic: this.config.allowPublic },
         }),
       )
     } finally {
@@ -243,7 +243,7 @@ export class SelfHost implements ListenerHost {
       application: originalApps.get(installation.id),
       binding: 'installation:' + installation.id,
       generation: 1,
-      policy: { allowPublic: this.config.allowPublic, group: this.config.group },
+      policy: { allowPrivate: true, allowPublic: this.config.allowPublic, group: this.config.group },
     }))
   }
   private async catalog(
@@ -418,7 +418,8 @@ export class SelfHost implements ListenerHost {
       if (
         scope.organization !== owner.organization ||
         scope.actor !== owner.actor ||
-        scope.runners.allowPublic !== this.config.allowPublic
+        scope.runners.allowPublic !== this.config.allowPublic ||
+        scope.runners.allowPrivate !== true
       )
         throw new Error('Original scan tenant authority changed')
       const [root] = await this.state.read(['backend/github'])

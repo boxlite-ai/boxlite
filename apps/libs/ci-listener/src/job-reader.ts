@@ -22,10 +22,10 @@ export async function readRepositoryJobs<T>(
   await authorize(signal)
   const borrow = await credentials.open({ kind: 'jobs', repository: repositoryId }, signal)
   try {
-    let repository: GitHubRepository
-    if (scope.runners.kind === 'repository') repository = scope.runners.repository
-    else {
-      repository = decodeRepository(await borrow.credential.request(`/repositories/${repositoryId}`, { signal }))
+    const repository: GitHubRepository = decodeRepository(
+      await borrow.credential.request(`/repositories/${repositoryId}`, { signal }),
+    )
+    {
       const account = scope.installation.account
       if (
         repository.id !== repositoryId ||
@@ -33,8 +33,15 @@ export async function readRepositoryJobs<T>(
         repository.owner.login.toLowerCase() !== account.login
       )
         throw new Error('GitHub job repository authority changed')
+      if (
+        scope.runners.kind === 'repository' &&
+        (repository.name.toLowerCase() !== scope.runners.repository.name.toLowerCase() ||
+          repository.private !== scope.runners.repository.private)
+      )
+        throw new Error('Original job repository changed')
     }
-    if (!repository.private && !scope.runners.allowPublic) throw new Error('Public repository runners are disabled')
+    if (repository.private ? !scope.runners.allowPrivate : !scope.runners.allowPublic)
+      throw new Error('Repository visibility is disabled')
     const result = await read(new GitHubJobs(borrow.credential, repository))
     await authorize(signal)
     return result

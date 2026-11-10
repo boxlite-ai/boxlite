@@ -6,6 +6,8 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  ParseIntPipe,
+  Query,
   Post,
   UseGuards,
   UsePipes,
@@ -23,6 +25,7 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { CiConnectService } from './ci-connect.service'
+import { CiRepositoryQuery } from './ci-management.controller'
 
 export class CiConnectInput {
   @IsString()
@@ -32,7 +35,7 @@ export class CiConnectInput {
   @Equals(true)
   follow_installation: true
   @IsBoolean()
-  allow_public_repositories: boolean
+  allow_private_repositories: boolean
 }
 
 export class CiWebConnectInput {
@@ -45,7 +48,7 @@ export class CiWebConnectInput {
   @Equals(true)
   follow_installation: true
   @IsBoolean()
-  allow_public_repositories: boolean
+  allow_private_repositories: boolean
 }
 export class CiWebAccountInput {
   @IsInt()
@@ -53,7 +56,7 @@ export class CiWebAccountInput {
   @Max(Number.MAX_SAFE_INTEGER)
   account_id: number
   @IsBoolean()
-  allow_public_repositories: boolean
+  allow_private_repositories: boolean
 }
 export class CiWebSelectInput {
   @IsInt()
@@ -119,6 +122,16 @@ export class CiConnectController {
     @Body() body: CiWebAccountInput,
   ) {
     return this.service.selectAccount(actor, id, body)
+  }
+  @Get(':id/accounts/:account/repositories')
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  repositories(
+    @AuthContext() actor: OrganizationAuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('account', ParseIntPipe) account: number,
+    @Query() query: CiRepositoryQuery,
+  ) {
+    return this.service.repositories(actor, id, account, query.page, query.limit)
   }
 
   @Post(':id/complete')

@@ -41,7 +41,7 @@ type Binding = {
   account_type: 'User' | 'Organization'
   organization_id: string
   actor_id: string
-  allow_public: boolean
+  allow_private: boolean
 }
 const authority = (row: Binding): CiNativeAuthority => ({
   binding: row.id,
@@ -52,7 +52,7 @@ const authority = (row: Binding): CiNativeAuthority => ({
     id: Number(row.installation_id),
     account: { id: Number(row.account_id), login: row.account_login.toLowerCase(), type: row.account_type },
   },
-  runners: { allowPublic: row.allow_public },
+  runners: { allowPublic: true, allowPrivate: row.allow_private },
 })
 
 /** Stored connect bindings choose tenants; a webhook never supplies execution identity. */
@@ -158,7 +158,11 @@ export class CiNativeHost implements ListenerHost {
         organization: original.organization,
         actor: original.actor,
         installation: { ...original.installation, permissions: {}, suspended: false },
-        policy: { allowPublic: row.allow_public, group: this.config.get('ci.workerGroup') || 'boxlite-ci-runner' },
+        policy: {
+          allowPublic: true,
+          allowPrivate: row.allow_private,
+          group: this.config.get('ci.workerGroup') || 'boxlite-ci-runner',
+        },
       }
     })
   }
@@ -169,7 +173,10 @@ export class CiNativeHost implements ListenerHost {
   ): Promise<ExecutionScope[]> {
     const client = (binding as DirectoryBinding & { application: string }).application
     const app = this.github.byClientId(client)
-    const original = { ...binding, runners: { allowPublic: binding.policy.allowPublic } },
+    const original = {
+        ...binding,
+        runners: { allowPublic: binding.policy.allowPublic, allowPrivate: binding.policy.allowPrivate },
+      },
       id = binding.installation.id,
       previous = this.pending.get(id)
     if (previous) {

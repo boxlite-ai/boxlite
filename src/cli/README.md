@@ -37,7 +37,7 @@ for commands, grouped options and error behavior.
 
 `boxlite --context dev ci connect GITHUB_ACCOUNT` binds a GitHub App installation
 using the selected remote BoxLite context and a browser device authorization.
-Use `--allow-public-repositories` to include public repositories, and `--no-browser`
+Public repositories are enabled by default. Use `--allow-private-repositories` to include private repositories, and `--no-browser`
 to print the authorization URL without opening it. The account may be a personal
 GitHub account or organization.
 

@@ -185,7 +185,7 @@ export function CiConnectionFlow({
       clearCiConnectSession()
       const attempt = await api.startCiConnect(organization, {
         follow_installation: true,
-        allow_public_repositories: false,
+        allow_private_repositories: false,
         select_account: selectAccount,
       })
       if (request !== startGeneration.current) {

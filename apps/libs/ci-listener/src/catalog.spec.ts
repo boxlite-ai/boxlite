@@ -34,13 +34,18 @@ describe('CI shared installation directory', () => {
     failAfterWrite: string | undefined,
     authorize: jest.Mock<Promise<void>, [unknown]>
   let gate: { entered(): void; wait: Promise<void> } | undefined
-  const make = (allowPublic = false) => {
+  const make = (allowPublic = false, allowPrivate = true) => {
     provider = new ListenerCredentials(state, lease, 'catalog/1', {
       kind: 'app',
       app,
       installation: binding.installation,
     })
-    return new InstallationCatalog(provider, binding, { allowPublic, group: 'boxlite-ci-runner' }, authorize)
+    return new InstallationCatalog(
+      provider,
+      binding,
+      { allowPrivate, allowPublic, group: 'boxlite-ci-runner' },
+      authorize,
+    )
   }
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), 'ci-catalog-'))
@@ -158,6 +163,15 @@ describe('CI shared installation directory', () => {
     repositories[1].private = false
     expect(await catalog.load()).toHaveLength(1)
   })
+  it('keeps Public eligible while Private requires its explicit separate decision', async () => {
+    repositories[0].private = false
+    catalog = make(true, false)
+    const publicOnly = await catalog.load()
+    expect(publicOnly.map((scope) => scope.runners.kind === 'repository' && scope.runners.repository.id)).toEqual([21])
+    await provider.close()
+    catalog = make(true, true)
+    expect(await catalog.load()).toHaveLength(2)
+  })
   it('shares one selected organization group across its installed repositories', async () => {
     binding.installation.account.type = 'Organization'
     catalog = make()
@@ -168,6 +182,7 @@ describe('CI shared installation directory', () => {
       account: { id: 7, login: 'owner' },
       group: 5,
       repositories: [21, 22],
+      allowPrivate: true,
       allowPublic: false,
     })
     expect(calls.filter((call) => call.path.endsWith('/access_tokens')).map((call) => call.body)).toEqual([

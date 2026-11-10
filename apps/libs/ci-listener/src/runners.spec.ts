@@ -8,12 +8,13 @@ describe('CI shared GitHub JIT runners', () => {
     name = 'ci-jit-' + 'a'.repeat(32),
     other = 'ci-jit-' + 'b'.repeat(32)
   const repository = { id: 21, owner: { id: 7, login: 'owner' }, name: 'repo', private: true }
-  const repoScope: RunnerScope = { kind: 'repository', repository, allowPublic: false }
+  const repoScope: RunnerScope = { kind: 'repository', repository, allowPrivate: true, allowPublic: false }
   const orgScope: RunnerScope = {
     kind: 'organization',
     account: { id: 7, login: 'owner' },
     group: 4,
     repositories: [21],
+    allowPrivate: true,
     allowPublic: false,
   }
   const group = {
@@ -137,7 +138,7 @@ describe('CI shared GitHub JIT runners', () => {
     expect(journal).not.toHaveBeenCalled()
   })
   it('denies private-only group admission when public repositories are enabled', async () => {
-    await expect(registry({ ...orgScope, allowPublic: true }).create(name)).rejects.toThrow(
+    await expect(registry({ ...orgScope, allowPrivate: true, allowPublic: true }).create(name)).rejects.toThrow(
       'selected-repository policy',
     )
     expect(journal).not.toHaveBeenCalled()
@@ -147,10 +148,15 @@ describe('CI shared GitHub JIT runners', () => {
     const previous = reply
     reply = (url, method) =>
       url.pathname.endsWith('/runner-groups/4') ? { ...group, allows_public_repositories: true } : previous(url, method)
-    expect((await registry({ ...orgScope, allowPublic: true }).create(name)).id).toBe(91)
+    expect((await registry({ ...orgScope, allowPrivate: true, allowPublic: true }).create(name)).id).toBe(91)
   })
   it('requires opt-in for a public repository', async () => {
-    const scope: RunnerScope = { kind: 'repository', repository: { ...repository, private: false }, allowPublic: false }
+    const scope: RunnerScope = {
+      kind: 'repository',
+      repository: { ...repository, private: false },
+      allowPrivate: true,
+      allowPublic: false,
+    }
     reply = () => ({ ...repository, private: false })
     await expect(registry(scope).create(name)).rejects.toThrow('Public repository')
     expect(journal).not.toHaveBeenCalled()

@@ -1,6 +1,6 @@
 ## TL;DR
 
-Add Registries-style UPDATE for a CI connection's public-repository policy without deleting its binding or stopping a running job.
+Add Registries-style UPDATE for a CI connection's private-repository policy without deleting its binding or stopping a running job.
 
 ## Problem and scope
 
@@ -11,7 +11,7 @@ Use current React/Nest/PostgreSQL; add no dependencies, schema, background proce
 ## Approach
 
 Add PATCH /api/v1/{prefix}/ci/connections/{bindingId}, also the authenticated-organization form.
-Accept only a required boolean `allow_public_repositories`; reject unknown identity, generation or policy fields.
+Accept only a required boolean `allow_private_repositories`; reject unknown identity, generation or policy fields.
 Use the same current-owner and delegated Box write/delete checks as existing CI settings.
 Lock authority rows, then the organization/App-scoped binding FOR UPDATE. Unknown or foreign IDs return 404; disabled bindings return 409.
 A changed boolean advances generation once, sets provisioning and writes the existing durable installation inventory wake in the same transaction. A repeated same-value update is a no-op returning 204.
@@ -25,7 +25,7 @@ Workers that have not received JIT may be retired on fresh admission denial. Thi
 No new demand may use a stale allow-public catalog. Existing backend generation and policy comparisons remain strict.
 
 Each connection row gets the same `AsciiButton size=sm`, uppercase Update, and adjacent trash layout as Registries.
-The dialog fixes account/type identity and edits only public-repository permission.
+The dialog fixes account/type identity and edits only private-repository permission.
 Capture the original organization, prevent duplicate writes, retain failed edits, and refresh only its settings after acknowledgment.
 No Refresh button or polling is added to Connects.
 

@@ -398,7 +398,7 @@ describe('Standalone App binding and HTTP ingress', () => {
       const view = await discover((value) => value.ready || reports.mock.calls.length > 0)
       expect(view.scopes).toHaveLength(1)
       expect(reports).not.toHaveBeenCalled()
-      expect(view.scopes[0].runners).toMatchObject({ repositories: [21], allowPublic: false })
+      expect(view.scopes[0].runners).toMatchObject({ repositories: [21], allowPrivate: true, allowPublic: false })
       expect(writes).toEqual(['PATCH', 'PUT'])
       expect(group.allows_public_repositories).toBe(false)
     } finally {

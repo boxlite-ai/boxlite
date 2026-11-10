@@ -31,6 +31,7 @@ describe('CI connect HTTP authorization boundary', () => {
     completeInstallation: jest.fn(),
     selectAccount: jest.fn(),
     getWeb: jest.fn(),
+    repositories: jest.fn(),
   }
   const settings = {
     get: jest.fn(),
@@ -38,6 +39,7 @@ describe('CI connect HTTP authorization boundary', () => {
     deleteConnection: jest.fn(),
     updateConnection: jest.fn(),
     capacity: jest.fn(),
+    repositories: jest.fn(),
   }
   const workers = { list: jest.fn() }
   const permissions = ['write:boxes', 'delete:boxes']
@@ -135,7 +137,7 @@ describe('CI connect HTTP authorization boundary', () => {
     body: unknown = {
       github_account: 'alice',
       follow_installation: true,
-      allow_public_repositories: false,
+      allow_private_repositories: false,
     },
   ) {
     return fetch(base + path, {
@@ -172,6 +174,33 @@ describe('CI connect HTTP authorization boundary', () => {
     expect(workers.list).toHaveBeenCalledTimes(4)
     expect(settings.capacity).toHaveBeenCalledTimes(4)
   })
+  it('requires owner Box permissions for both repository contexts and bounds a page to 100', async () => {
+    const id = randomUUID()
+    for (const path of [
+      `/${org}/ci/connections/${id}/repositories`,
+      `/${org}/ci/connect/${id}/accounts/789/repositories`,
+    ]) {
+      expect((await request('member-reader', path, 'GET')).status).toBe(403)
+      expect((await request('owner-limited', path, 'GET')).status).toBe(403)
+      for (const query of ['page=0', 'limit=0', 'limit=101', 'installation_id=11', 'limit=bad']) {
+        expect((await request('owner', `${path}?${query}`, 'GET')).status).toBe(400)
+      }
+      expect((await request('owner', `${path}?page=2&limit=100`, 'GET')).status).toBe(200)
+    }
+    expect(settings.repositories).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: org, userId: 'owner' }),
+      id,
+      2,
+      100,
+    )
+    expect(service.repositories).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: org, userId: 'owner' }),
+      id,
+      789,
+      2,
+      100,
+    )
+  })
   it('requires owner and both write/delete scopes before disconnecting a validated binding', async () => {
     const binding = randomUUID()
     expect((await request('owner', `/${org}/ci/connections/${binding}`, 'DELETE')).status).toBe(204)
@@ -189,11 +218,11 @@ describe('CI connect HTTP authorization boundary', () => {
   it('updates only validated connection policy with owner and delegated-scope authorization', async () => {
     const binding = randomUUID()
     expect(
-      (await request('owner', `/${org}/ci/connections/${binding}`, 'PATCH', { allow_public_repositories: true }))
+      (await request('owner', `/${org}/ci/connections/${binding}`, 'PATCH', { allow_private_repositories: true }))
         .status,
     ).toBe(204)
     expect(
-      (await request('owner', `/ci/connections/${binding}`, 'PATCH', { allow_public_repositories: false })).status,
+      (await request('owner', `/ci/connections/${binding}`, 'PATCH', { allow_private_repositories: false })).status,
     ).toBe(204)
     expect(settings.updateConnection).toHaveBeenLastCalledWith(
       expect.objectContaining({ organizationId: org, userId: 'owner' }),
@@ -202,26 +231,26 @@ describe('CI connect HTTP authorization boundary', () => {
     )
     for (const actor of ['member', 'member-reader', 'owner-limited', 'admin-limited'])
       expect(
-        (await request(actor, `/${org}/ci/connections/${binding}`, 'PATCH', { allow_public_repositories: true }))
+        (await request(actor, `/${org}/ci/connections/${binding}`, 'PATCH', { allow_private_repositories: true }))
           .status,
       ).toBe(403)
     for (const body of [
       {},
-      { allow_public_repositories: 'true' },
-      { allow_public_repositories: null },
-      { allow_public_repositories: true, generation: 2 },
-      { allow_public_repositories: false, account_type: 'Organization' },
+      { allow_private_repositories: 'true' },
+      { allow_private_repositories: null },
+      { allow_private_repositories: true, generation: 2 },
+      { allow_private_repositories: false, account_type: 'Organization' },
     ])
       expect((await request('owner', `/${org}/ci/connections/${binding}`, 'PATCH', body)).status).toBe(400)
     expect(
       (
         await request('owner', `/${randomUUID()}/ci/connections/${binding}`, 'PATCH', {
-          allow_public_repositories: true,
+          allow_private_repositories: true,
         })
       ).status,
     ).toBe(403)
     expect(
-      (await request('owner', `/${org}/ci/connections/invalid`, 'PATCH', { allow_public_repositories: true })).status,
+      (await request('owner', `/${org}/ci/connections/invalid`, 'PATCH', { allow_private_repositories: true })).status,
     ).toBe(400)
     expect(settings.updateConnection).toHaveBeenCalledTimes(2)
   })
@@ -264,7 +293,7 @@ describe('CI connect HTTP authorization boundary', () => {
         await request('owner', `/${org}/ci/connect/web`, 'POST', {
           account_type: 'User',
           follow_installation: true,
-          allow_public_repositories: false,
+          allow_private_repositories: false,
         })
       ).status,
     ).toBe(201)
@@ -287,7 +316,7 @@ describe('CI connect HTTP authorization boundary', () => {
   })
   it('protects authenticated resume and account selection with the existing owner and key guards', async () => {
     const id = randomUUID(),
-      body = { account_id: 789, allow_public_repositories: false }
+      body = { account_id: 789, allow_private_repositories: false }
     expect((await request('owner', `/${org}/ci/connect/${id}`, 'GET')).status).toBe(200)
     expect((await request('owner', `/${org}/ci/connect/${id}/accounts`, 'POST', body)).status).toBe(201)
     expect(service.selectAccount).toHaveBeenCalledWith(
@@ -305,7 +334,7 @@ describe('CI connect HTTP authorization boundary', () => {
       { ...body, account_id: -1 },
       { ...body, account_id: 1.5 },
       { ...body, account_id: Number.MAX_SAFE_INTEGER + 1 },
-      { ...body, allow_public_repositories: 'false' },
+      { ...body, allow_private_repositories: 'false' },
       { ...body, app_client_id: 'foreign' },
       { ...body, installation_id: 321 },
     ])
@@ -315,14 +344,14 @@ describe('CI connect HTTP authorization boundary', () => {
       (
         await request('owner', `/${org}/ci/connect/web`, 'POST', {
           follow_installation: true,
-          allow_public_repositories: false,
+          allow_private_repositories: false,
           select_account: true,
         })
       ).status,
     ).toBe(201)
     expect(service.startWeb).toHaveBeenLastCalledWith(expect.objectContaining({ organizationId: org }), {
       follow_installation: true,
-      allow_public_repositories: false,
+      allow_private_repositories: false,
       select_account: true,
     })
   })
@@ -380,9 +409,9 @@ describe('CI connect HTTP authorization boundary', () => {
   })
   it('rejects forged policy and unknown fields before reaching the service', async () => {
     for (const body of [
-      { github_account: '../other', follow_installation: true, allow_public_repositories: false },
-      { github_account: 'alice', follow_installation: false, allow_public_repositories: false },
-      { github_account: 'alice', follow_installation: true, allow_public_repositories: false, installation_id: 123 },
+      { github_account: '../other', follow_installation: true, allow_private_repositories: false },
+      { github_account: 'alice', follow_installation: false, allow_private_repositories: false },
+      { github_account: 'alice', follow_installation: true, allow_private_repositories: false, installation_id: 123 },
     ]) {
       expect((await request('owner', undefined, 'POST', body)).status).toBe(400)
     }

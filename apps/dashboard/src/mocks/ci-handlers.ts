@@ -33,17 +33,21 @@ export function ciHandlers() {
     connections: [
       {
         binding_id: '7a71466e-cfaa-432a-95a5-c257114d9a05',
+        installation_id: 11,
+        installation_settings_url: 'https://github.com/settings/installations/11',
         github_account: 'demo-developer',
         account_type: 'User',
         listener_status: 'ready',
-        allow_public_repositories: false,
+        allow_private_repositories: false,
       },
       {
         binding_id: '6811d928-552b-4583-8766-44fcba0a3749',
+        installation_id: 11,
+        installation_settings_url: 'https://github.com/settings/installations/11',
         github_account: 'demo-organization',
         account_type: 'Organization',
         listener_status: 'provisioning',
-        allow_public_repositories: false,
+        allow_private_repositories: false,
       },
     ],
   }
@@ -98,10 +102,10 @@ export function ciHandlers() {
       if (!own(params.organizationId)) return missing()
       const row = settings.connections.find((connection) => connection.binding_id === params.bindingId)
       if (!row) return missing()
-      const body = (await request.json()) as { allow_public_repositories: boolean }
-      if (typeof body.allow_public_repositories !== 'boolean') return new HttpResponse(null, { status: 400 })
-      if (row.allow_public_repositories !== body.allow_public_repositories) {
-        row.allow_public_repositories = body.allow_public_repositories
+      const body = (await request.json()) as { allow_private_repositories: boolean }
+      if (typeof body.allow_private_repositories !== 'boolean') return new HttpResponse(null, { status: 400 })
+      if (row.allow_private_repositories !== body.allow_private_repositories) {
+        row.allow_private_repositories = body.allow_private_repositories
         row.listener_status = 'provisioning'
       }
       return new HttpResponse(null, { status: 204 })

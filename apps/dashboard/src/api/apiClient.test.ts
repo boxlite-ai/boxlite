@@ -120,7 +120,7 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     await api.startCiConnect('original-org', {
       account_type: 'User',
       follow_installation: true,
-      allow_public_repositories: true,
+      allow_private_repositories: true,
     })
     await api.completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
     expect(requests.map((request) => request.url)).toEqual([
@@ -157,7 +157,7 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(requests[0].url).toBe('/v1/org%2Fone/ci/connections/binding%2Fid')
     expect(requests[0].method).toBe('patch')
     expect(requests[0].headers.Authorization).toBe('Bearer current-token')
-    expect(JSON.parse(requests[0].data)).toEqual({ allow_public_repositories: false })
+    expect(JSON.parse(requests[0].data)).toEqual({ allow_private_repositories: false })
   })
   it('CI completion discards Axios request bodies from surfaced errors', async () => {
     const api = await makeClient(vi.fn(), 403, { message: 'private-code private-token' })

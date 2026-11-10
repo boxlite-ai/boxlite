@@ -27,14 +27,16 @@ export interface CiSettings {
     github_account: string
     account_type: string
     listener_status: string
-    allow_public_repositories: boolean
+    allow_private_repositories: boolean
+    installation_id: number
+    installation_settings_url: string
   }[]
 }
 export interface CiConnectInput {
   account_type?: 'User' | 'Organization'
   select_account?: boolean
   follow_installation: true
-  allow_public_repositories: boolean
+  allow_private_repositories: boolean
 }
 export interface CiWebStart {
   id: string
@@ -47,6 +49,7 @@ export interface CiConnectResult {
   expires_at?: string
   accounts?: {
     installation_id: number | null
+    installation_settings_url?: string
     account_id: number
     github_account: string
     account_type: 'User' | 'Organization'
@@ -59,6 +62,15 @@ export interface CiConnectResult {
   listener_status?: string
   installation_url?: string
   github_account?: string
+}
+export type CiRepositoryContext = { kind: 'binding'; id: string } | { kind: 'grant'; id: string; account: number }
+export interface CiRepositoryPage {
+  repositories: { id: number; name: string; private: boolean; owner: { id: number; login: string } }[]
+  total: number
+  page: number
+  next_page: number | null
+  repository_selection: 'all' | 'selected'
+  installation_settings_url: string
 }
 export interface CiConnectConfiguration {
   web_connect_available?: boolean

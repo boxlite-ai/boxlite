@@ -11,7 +11,7 @@ describe('CI account state picker', () => {
   let root: Root
   const organization = '12345678-1234-4234-8234-123456789def',
     id = '12345678-1234-4234-8234-123456789abc'
-  const api = { selectCiAccount: vi.fn() },
+  const api = { selectCiAccount: vi.fn(), getCiRepositories: vi.fn() },
     changed = vi.fn(),
     switched = vi.fn()
   const result: CiConnectResult = {
@@ -83,17 +83,25 @@ describe('CI account state picker', () => {
     )
   }
   const action = (account: number) =>
-    document.querySelector<HTMLButtonElement>(`[data-account-id="${account}"] button`)!
+    [...document.querySelectorAll<HTMLButtonElement>(`[data-account-id="${account}"] button`)].find(
+      (button) => button.textContent === 'Connect' || button.textContent === 'Install',
+    )!
   it('shows Install, Connect and completed pixel checks according to server account state', async () => {
     await render()
     expect(action(1).textContent).toBe('Connect')
     expect(action(2).textContent).toBe('Connect')
     expect(action(3).textContent).toBe('Install')
-    expect(action(4)).toBeNull()
+    expect(action(4)).toBeUndefined()
     expect(document.querySelector('[data-account-id="4"] .text-success')?.textContent).toContain('Connected')
     expect(document.querySelectorAll('input[type=radio]')).toHaveLength(0)
     expect(document.body.textContent).toContain('Signed in as alice')
     expect(document.querySelector('summary')?.textContent).toBe('Missing an organization?')
+  })
+  it('offers repository disclosure for installed accounts without connecting them', async () => {
+    await render()
+    expect(document.querySelector('[data-account-id="2"] button[aria-label="Repositories for owned"]')).not.toBeNull()
+    expect(document.querySelector('[data-account-id="3"] button[aria-label="Repositories for new-team"]')).toBeNull()
+    expect(api.selectCiAccount).not.toHaveBeenCalled()
   })
   it('submits the chosen numeric account and policy once and displays the server acknowledgment', async () => {
     let finish!: (value: CiConnectResult) => void

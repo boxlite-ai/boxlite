@@ -19,7 +19,7 @@ const binding = (id: number): DirectoryBinding => ({
   organization: 'tenant' + id,
   actor: 'actor' + id,
   installation: { id, account: { id: id + 6, login: 'owner' + id, type: 'User' }, permissions: {}, suspended: false },
-  policy: { allowPublic: false, group: 'boxlite-ci-runner' },
+  policy: { allowPrivate: true, allowPublic: false, group: 'boxlite-ci-runner' },
 })
 const scope = (value: DirectoryBinding): ExecutionScope => ({
   binding: value.binding,
@@ -35,6 +35,7 @@ const scope = (value: DirectoryBinding): ExecutionScope => ({
       owner: { id: value.installation.account.id, login: value.installation.account.login },
       private: true,
     },
+    allowPrivate: true,
     allowPublic: false,
   },
 })
@@ -96,7 +97,7 @@ describe('CI installation directory protocol', () => {
                 ...binding(1),
                 ...(scenario === 'generation'
                   ? { generation: 0 }
-                  : { policy: { group: 'ci', allowPublic: null as any } }),
+                  : { policy: { group: 'ci', allowPrivate: true, allowPublic: null as any } }),
               },
             ],
       )
@@ -289,6 +290,7 @@ describe('CI installation directory protocol', () => {
           account: item.installation.account,
           group: item.installation.id + 90,
           repositories: Array.from({ length: 50001 }, (_, i) => item.installation.id * 100000 + i),
+          allowPrivate: true,
           allowPublic: false,
         },
       },

@@ -17,6 +17,7 @@ import {
   ListenerState,
   StateCorrupt,
   StateRecord,
+  installationSettingsUrl,
 } from '@boxlite-ai/ci-listener'
 import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.service'
 import { BOX_CREATION_LIMIT_EXCLUDED_STATES } from '../box/repositories/box.repository'
@@ -187,26 +188,26 @@ export class CiSettingsService implements CapacityProvider {
     })
   }
 
-  async updateConnection(actor: CiActor, id: string, allowPublic: boolean): Promise<void> {
+  async updateConnection(actor: CiActor, id: string, allowPrivate: boolean): Promise<void> {
     const captured = this.actor(actor)
-    if (typeof allowPublic !== 'boolean') throw new BadRequestException('Explicit public repository policy required')
+    if (typeof allowPrivate !== 'boolean') throw new BadRequestException('Explicit private repository policy required')
     await this.native.transaction(async (tx, state) => {
       await lockCiAuthority(tx, captured)
       await this.native.root(state)
       const [binding] = await tx.query(
-        `SELECT state,allow_public,app_client_id,installation_id,account_id FROM ci_installation_binding WHERE id=$1 AND organization_id=$2
+        `SELECT state,allow_private,app_client_id,installation_id,account_id FROM ci_installation_binding WHERE id=$1 AND organization_id=$2
         AND github_host='github.com' AND app_client_id=ANY($3::text[]) FOR UPDATE`,
         [id, captured.organizationId, this.native.apps],
       )
       if (!binding) throw new NotFoundException('CI connection not found')
       if (binding.state === 'disabled')
         throw new ConflictException('Reconnect this disabled CI connection before updating it')
-      if (binding.allow_public !== allowPublic) {
+      if (binding.allow_private !== allowPrivate) {
         // New work uses a fresh catalog; historical scopes retain original cleanup identities.
         await tx.query(
-          `UPDATE ci_installation_binding SET allow_public=$3,generation=generation+1,state='provisioning'
+          `UPDATE ci_installation_binding SET allow_private=$3,generation=generation+1,state='provisioning'
           WHERE id=$1 AND organization_id=$2`,
-          [id, captured.organizationId, allowPublic],
+          [id, captured.organizationId, allowPrivate],
         )
         await this.native.wakeInventory(tx, binding.app_client_id, {
           installationId: Number(binding.installation_id),
@@ -312,14 +313,55 @@ export class CiSettingsService implements CapacityProvider {
       [this.native.namespace, key, randomUUID(), JSON.stringify(payload)],
     )
   }
-  private connections(tx: EntityManager, organization: string) {
-    return tx.query(
+  async repositories(actor: CiActor, id: string, page: number, limit: number) {
+    const captured = this.actor(actor)
+    const capture = () =>
+      this.native.transaction(async (tx) => {
+        await lockCiAuthority(tx, captured)
+        const [row] = await tx.query(
+          `SELECT app_client_id,installation_id,account_id,account_login,account_type,generation
+        FROM ci_installation_binding WHERE id=$1 AND organization_id=$2 AND github_host='github.com'
+        AND app_client_id=ANY($3::text[]) AND state<>'disabled' FOR SHARE`,
+          [id, captured.organizationId, this.native.apps],
+        )
+        if (!row) throw new NotFoundException('CI connection not found')
+        await assertCiKeyFresh(tx, captured)
+        return row
+      })
+    const original = await capture()
+    const result = await this.native.registry.repositoryPage(
+      original.app_client_id,
+      {
+        installationId: Number(original.installation_id),
+        accountId: Number(original.account_id),
+        accountLogin: original.account_login,
+        accountType: original.account_type,
+      },
+      page,
+      limit,
+    )
+    if (JSON.stringify(await capture()) !== JSON.stringify(original))
+      throw new ConflictException('CI connection changed; reload repositories')
+    return result
+  }
+  private async connections(tx: EntityManager, organization: string) {
+    const rows = await tx.query(
       `SELECT id AS binding_id,account_login AS github_account,account_type,state AS listener_status,
-      allow_public AS allow_public_repositories FROM ci_installation_binding
+      installation_id,allow_private AS allow_private_repositories FROM ci_installation_binding
       WHERE organization_id=$1 AND github_host='github.com' AND app_client_id=ANY($2::text[])
       AND state<>'disabled' ORDER BY account_login,id`,
       [organization, this.native.apps],
     )
+    return rows.map((row) => ({
+      ...row,
+      installation_id: Number(row.installation_id),
+      installation_settings_url: installationSettingsUrl({
+        installationId: Number(row.installation_id),
+        accountId: 0,
+        accountLogin: row.github_account,
+        accountType: row.account_type,
+      }),
+    }))
   }
   private actor(actor: CiActor): CiActor {
     if (!actor.organizationId || !actor.userId) throw new BadRequestException('Original organization actor required')

@@ -11,8 +11,8 @@ in the worker image; this library does not execute CI steps.
 The API connect service also uses the shared GitHub App JWT signer and HTTP
 transport. Requests use fixed GitHub.com origins, reject redirects, bound JSON
 responses to 1 MiB and keep credentials out of errors. Mutation errors distinguish
-a known HTTP denial from an outcome that may have produced a remote effect; the
-controller must persist its intent before calling a mutation. Key loading remains
+a known HTTP denial from an outcome that may have produced a remote effect; execution
+controllers must persist intents before execution mutations. Key loading remains
 with the host.
 
 `CiGitHubApp` owns one App identity and private loaders for its signing key, OAuth
@@ -382,9 +382,10 @@ webhooks persist an exact job ID, so their admission does not wait for that scan
 `InstallationCatalog` enumerates a complete, bounded installation inventory using
 a metadata-only token. Personal accounts receive one repository scope per eligible
 repository. Organization accounts share a configured selected, non-inherited
-runner group managed by BoxLite. The public-repository option includes installed
-private and public repositories when enabled, and only installed private
-repositories when disabled. Both hosts authorize and journal each group write
+runner group managed by BoxLite. Hosted scopes always permit installed Public
+repositories and additionally permit Private repositories only with explicit
+`allowPrivate` consent. Standalone retains its Public switch and permits Private
+repositories independently. Both hosts authorize and journal each group write
 before the catalog creates or synchronizes the configured group. Membership is
 exactly the eligible installed set; public access is enabled only after membership
 converges. Existing default or inherited groups cannot be adopted, and other group
@@ -726,3 +727,19 @@ Compensation scans can race a verified webhook inserting the same queued notice.
 On an insertion conflict, the Listener rereads that notice and accepts it only if
 installation, account, repository and run still match; identity conflicts remain
 errors. This keeps ordinary duplicate delivery from aborting the cleanup cycle.
+
+## Interactive repository metadata
+
+`InstallationRepositoryReader` owns metadata-only credentials for bounded UI page
+reads. Unlike execution controllers, it reserves in-memory ownership before
+issuance, independent of scheduler leases and worker capacity. Its 32-slot bound
+includes in-flight issuance and failed retirement. A returned invalid handle is
+still revoked; cancellation cannot skip finally cleanup. Uncertain issuance waits
+60 seconds before another attempt for that installation. Failed retirement is
+retained for retry and shutdown, and only verified expiry permits forgetting a
+known handle. Shutdown refuses new reads and drains late issuance before retirement.
+
+Scopes carry explicit Public and Private decisions. Standalone configuration keeps
+its Public switch and always permits Private, while hosted policy always permits
+Public and requires explicit Private consent. Existing scope hashes are incompatible:
+finish cleanup with the old Listener and start a fresh journal before upgrading.

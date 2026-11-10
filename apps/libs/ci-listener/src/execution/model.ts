@@ -53,7 +53,8 @@ export function decodeScope(value: unknown): ExecutionScope {
     !login(value.installation.account.login) ||
     !['User', 'Organization'].includes(value.installation.account.type as string) ||
     !object(value.runners) ||
-    typeof value.runners.allowPublic !== 'boolean'
+    typeof value.runners.allowPublic !== 'boolean' ||
+    typeof value.runners.allowPrivate !== 'boolean'
   )
     throw new StateCorrupt()
   const account = {
@@ -69,6 +70,7 @@ export function decodeScope(value: unknown): ExecutionScope {
       kind: 'repository',
       repository: { ...repo, name: repo.name.toLowerCase(), owner: { ...repo.owner, login: account.login } },
       allowPublic: value.runners.allowPublic,
+      allowPrivate: value.runners.allowPrivate,
     }
   } else {
     if (
@@ -93,6 +95,7 @@ export function decodeScope(value: unknown): ExecutionScope {
       group: value.runners.group,
       repositories: [...value.runners.repositories].sort((a, b) => a - b),
       allowPublic: value.runners.allowPublic,
+      allowPrivate: value.runners.allowPrivate,
     }
   }
   return {

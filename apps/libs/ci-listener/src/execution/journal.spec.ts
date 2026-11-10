@@ -23,6 +23,7 @@ const definition: ExecutionScope = {
   runners: {
     kind: 'repository',
     repository: { id: 21, owner: { id: 7, login: 'owner' }, name: 'repo', private: true },
+    allowPrivate: true,
     allowPublic: false,
   },
 }
@@ -390,6 +391,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       other.installation = { id: 2, account: { id: 8, login: 'other', type: 'User' } }
       other.runners = {
         kind: 'repository',
+        allowPrivate: true,
         allowPublic: false,
         repository: { id: 22, name: 'other-repo', private: true, owner: { id: 8, login: 'other' } },
       }

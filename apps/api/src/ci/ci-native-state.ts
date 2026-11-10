@@ -17,7 +17,7 @@ export type CiNativeAuthority = Pick<
   ExecutionScope,
   'binding' | 'generation' | 'organization' | 'actor' | 'installation'
 > & {
-  runners: { allowPublic: boolean }
+  runners: { allowPublic: boolean; allowPrivate: boolean }
 }
 
 /** One PostgreSQL namespace for all bindings of the configured hosted App. */
@@ -48,6 +48,9 @@ export class CiNativeState {
       }),
       this.namespace,
     )
+  }
+  onApplicationShutdown(): Promise<void> {
+    return this.registry.onApplicationShutdown()
   }
   async initialize(): Promise<void> {
     if (!this.app) throw new ServiceUnavailableException('Hosted CI App is not configured')
@@ -147,6 +150,8 @@ export class CiNativeState {
     return this.applications().application(lease, scope)
   }
   async admit(tx: EntityManager, scope: CiNativeAuthority, originalApp?: string): Promise<void> {
+    if (scope.runners.allowPublic !== true || typeof scope.runners.allowPrivate !== 'boolean')
+      throw new ForbiddenException('Explicit hosted repository policy required')
     const state = this.inside(tx)
     const [mapping] = originalApp ? [] : await state.read(['app-scope/' + scopeKey(scope as ExecutionScope).slice(6)])
     const application = originalApp ?? (mapping?.payload as { application?: string })?.application
@@ -160,7 +165,7 @@ export class CiNativeState {
       `SELECT id FROM ci_installation_binding
       WHERE id=$1 AND generation=$2 AND github_host='github.com' AND app_client_id=$3
       AND installation_id=$4 AND account_id=$5 AND lower(account_login)=$6 AND account_type=$7
-      AND organization_id=$8 AND actor_id=$9 AND allow_public=$10 AND follow_installation=true
+      AND organization_id=$8 AND actor_id=$9 AND allow_private=$10 AND follow_installation=true
       AND state IN ('provisioning','ready') FOR SHARE`,
       [
         scope.binding,
@@ -172,7 +177,7 @@ export class CiNativeState {
         account.type,
         scope.organization,
         scope.actor,
-        scope.runners.allowPublic,
+        scope.runners.allowPrivate,
       ],
     )
     if (rows.length !== 1) throw new ForbiddenException('Original hosted CI binding is no longer active')

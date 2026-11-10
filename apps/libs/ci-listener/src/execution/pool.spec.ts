@@ -24,6 +24,7 @@ describe('CI shared worker lifecycle', () => {
     runners: {
       kind: 'repository',
       repository: { id: 21, owner: { id: 7, login: 'owner' }, name: 'repo', private: true },
+      allowPrivate: true,
       allowPublic: false,
     },
   }

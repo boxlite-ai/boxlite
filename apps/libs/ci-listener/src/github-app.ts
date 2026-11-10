@@ -9,6 +9,7 @@ export interface GitHubInstallation {
   account: { id: number; login: string; type: 'User' | 'Organization' }
   permissions: Record<string, string>
   suspended: boolean
+  repositorySelection?: 'all' | 'selected'
 }
 export type GitHubTokenPurpose =
   | { kind: 'catalog' }
@@ -98,7 +99,7 @@ export class GitHubCredential {
   }
 }
 
-/** The controller records issuance intent before issue(); it retains returned handles until close() succeeds. */
+/** Execution controllers persist issuance intents; metadata readers reserve bounded request-owned handles before issue(). */
 export class GitHubAppSource {
   constructor(
     private readonly config: { issuer: string; privateKey: () => KeyLike | Promise<KeyLike>; now?: () => number },
@@ -199,7 +200,8 @@ export class GitHubAppSource {
       !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(value.account.login) ||
       (value.account.type !== 'User' && value.account.type !== 'Organization') ||
       !object(value.permissions) ||
-      (value.suspended_at !== null && typeof value.suspended_at !== 'string')
+      (value.suspended_at !== null && typeof value.suspended_at !== 'string') ||
+      (value.repository_selection !== undefined && !['all', 'selected'].includes(value.repository_selection as string))
     )
       throw new Error('Invalid GitHub installation metadata')
     const permissions: Record<string, string> = Object.create(null)
@@ -212,6 +214,7 @@ export class GitHubAppSource {
       account: { id: value.account.id, login: value.account.login, type: value.account.type },
       permissions,
       suspended: value.suspended_at !== null,
+      ...(value.repository_selection ? { repositorySelection: value.repository_selection as 'all' | 'selected' } : {}),
     }
   }
 }

@@ -153,6 +153,25 @@ export class ApiClient {
     ).data
   }
 
+  public async getCiRepositories(
+    organization: string,
+    context: import('./ci-types').CiRepositoryContext,
+    page: number,
+    signal?: AbortSignal,
+  ): Promise<import('./ci-types').CiRepositoryPage> {
+    const route =
+      context.kind === 'binding'
+        ? `connections/${encodeURIComponent(context.id)}/repositories`
+        : `connect/${encodeURIComponent(context.id)}/accounts/${context.account}/repositories`
+    return (
+      await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/${route}`, {
+        ...this.v1Config(),
+        params: { page, limit: 25 },
+        signal,
+      })
+    ).data
+  }
+
   public async getCiRunners(organization: string, page: number, limit: number, name?: string): Promise<CiRunners> {
     return (
       await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/runners`, {
@@ -161,10 +180,10 @@ export class ApiClient {
       })
     ).data
   }
-  public async updateCiConnection(organization: string, binding: string, allowPublic: boolean): Promise<void> {
+  public async updateCiConnection(organization: string, binding: string, allowPrivate: boolean): Promise<void> {
     await this.http.patch(
       `/v1/${encodeURIComponent(organization)}/ci/connections/${encodeURIComponent(binding)}`,
-      { allow_public_repositories: allowPublic },
+      { allow_private_repositories: allowPrivate },
       this.v1Config(),
     )
   }
@@ -213,12 +232,12 @@ export class ApiClient {
     organization: string,
     id: string,
     account: number,
-    allowPublic: boolean,
+    allowPrivate: boolean,
   ): Promise<CiConnectResult> {
     return (
       await this.http.post(
         `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/accounts`,
-        { account_id: account, allow_public_repositories: allowPublic },
+        { account_id: account, allow_private_repositories: allowPrivate },
         this.v1Config(),
       )
     ).data

@@ -192,13 +192,13 @@ Use `AsciiButton` from `components/ascii` for console actions. It delegates to
 styles; raw buttons remain appropriate for tabs and custom choices. Use native
 links for route navigation.
 
-| Purpose | Variant / size | Appearance |
-| --- | --- | --- |
-| Main create or submit action | `primary` / default | 36px high, monochrome fill |
-| Row action | `secondary` / `sm` | 28px high, neutral border |
-| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
-| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
-| Final destructive confirmation | `dangerSolid` | Solid red |
+| Purpose                        | Variant / size            | Appearance                                |
+| ------------------------------ | ------------------------- | ----------------------------------------- |
+| Main create or submit action   | `primary` / default       | 36px high, monochrome fill                |
+| Row action                     | `secondary` / `sm`        | 28px high, neutral border                 |
+| Icon action or overflow menu   | `secondary` / `icon`      | 28px square; `icon-lg` is 40px for mobile |
+| Destructive row action         | `danger` / `sm` or `icon` | Red text/icon, red border on hover        |
+| Final destructive confirmation | `dangerSolid`             | Solid red                                 |
 
 Keep square corners and the shared monospace font. Secondary actions use a cyan
 border with a neutral surface on hover/open; they do not turn solid cyan.
@@ -720,7 +720,7 @@ to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcemen
 height consistently. Preserve `min-w-0` on the content region when adding routes.
 
 Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
-section label. Management remains a separate primary entry. Compact navigation
+section label. Applications contains CI → Runners / Connects, including compact-rail expansion, hover preview, active-child highlighting and mobile menu destinations. Management remains a separate primary entry. Compact navigation
 keeps the group accessible name without squeezing in a visual label.
 
 Expanded navigation highlights only the current child, using the same full row
@@ -781,12 +781,12 @@ Other Boxes consume the same commercial account allowance. Repository limits are
 not exposed. GitHub owns job logs; use existing Box tools for worker inspection.
 
 Each connection has a Registries-style **UPDATE** action beside its trash control.
-It edits public-repository permission on the existing verified binding; changing
+It edits private-repository permission on the existing verified binding; changing
 GitHub account identity still requires authorization. A changed policy refreshes
 the listener catalog. Delivered jobs continue and original cleanup remains available;
 workers awaiting JIT configuration may be retired under the new policy.
-The option includes installed private and public repositories when enabled, and
-only installed private repositories when disabled. For Organization accounts,
+Public repositories authorized for the App are enabled by default. **Allow private
+repositories** additionally permits installed private repositories; it starts unchecked. For Organization accounts,
 BoxLite automatically creates or synchronizes its dedicated GitHub runner group;
 users do not repeat the setting in GitHub. The existing inventory wake performs
 this asynchronously; the connection remains provisioning until remote policy and
@@ -854,7 +854,7 @@ sequenceDiagram
     participant P as PostgreSQL
     participant G as Identity OAuth App
     participant C as Selected CI GitHub App
-    U->>D: Connect GitHub account and public-repository policy
+    U->>D: Connect GitHub account and private-repository policy
     D->>A: Authenticated web start under original account
     A->>P: Store actor, App, state hash and encrypted verifier
     A-->>D: Fixed authorize URL with S256 challenge
@@ -887,3 +887,15 @@ organizations stops those checks. A failed status request pauses polling and off
 
 CI tabs expose their corresponding tab panels to assistive technology. A failed
 later Runners page keeps Previous available so the user can return to loaded rows.
+
+### CI repository access
+
+Expand an installed account in Connect GitHub, or a connected row in Connects,
+to view repositories authorized for its original Personal or Org App. Lists load
+one page on demand and show both Public and Private repositories, independently
+of CI eligibility. Update and expanded rows offer **Install app for repos**, opening
+the existing installation configuration in GitHub. For example, add `acme/api`
+there, return to BoxLite, and the account refreshes to page one without deleting
+its connection or discarding an unsaved Private checkbox. Ordinary focus does
+not poll repository lists. Errors retain Retry and the settings link; a failed
+later page retains Previous. CI URLs and OAuth callback routes remain unchanged.

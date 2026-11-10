@@ -71,6 +71,7 @@ export class GitHubExecutionBackend implements PoolBackend {
         }
         try {
           await this.check('admission')
+          await this.repositoryPolicy(originalLaunch.name)
         } catch (error) {
           if (effect) await host.rejectUndispatchedCreate!(originalLaunch.name, effect)
           throw error
@@ -91,9 +92,25 @@ export class GitHubExecutionBackend implements PoolBackend {
       },
       deliverJit: async (name, configuration, signal) => {
         await this.check('admission', signal)
+        await this.repositoryPolicy(name, signal)
         return host.workers.deliverJit(name, configuration, signal)
       },
     }
+  }
+  private async repositoryPolicy(name: string, signal?: AbortSignal): Promise<void> {
+    const repository =
+      this.scope.runners.kind === 'repository'
+        ? this.scope.runners.repository.id
+        : (await this.journal.allocation(this.lease, 'worker/' + name.slice(7)))?.value.job.repository
+    if (repository === undefined) throw new Error('Original worker repository required')
+    await readRepositoryJobs(
+      this.scope,
+      this.credentials,
+      (signal) => this.check('admission', signal),
+      repository,
+      async () => undefined,
+      signal,
+    )
   }
   private async check(operation: 'admission' | 'cleanup', signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()

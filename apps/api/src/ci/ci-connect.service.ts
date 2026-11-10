@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common'
 import { createHash, randomUUID } from 'node:crypto'
-import type { GitHubAccount } from '@boxlite-ai/ci-listener'
+import { installationSettingsUrl, type GitHubAccount } from '@boxlite-ai/ci-listener'
 import { DataSource, EntityManager } from 'typeorm'
 import { CiGitHubService, CiInstallationRequired, VerifiedInstallation } from './ci-github.service'
 import { CiSecretsService } from './ci-secrets.service'
@@ -22,16 +22,16 @@ export type WebConnectInput = {
   account_type?: 'User' | 'Organization'
   select_account?: boolean
   follow_installation: true
-  allow_public_repositories: boolean
+  allow_private_repositories: boolean
 }
-export type ConnectInput = { github_account: string; follow_installation: true; allow_public_repositories: boolean }
+export type ConnectInput = { github_account: string; follow_installation: true; allow_private_repositories: boolean }
 type WebTarget = { clientId: string; account: GitHubAccount; state: string }
 type Attempt = {
   id: string
   organization_id: string
   user_id: string
   github_account: string
-  allow_public: boolean
+  allow_private: boolean
   app_client_id: string
   flow: 'device' | 'web'
   oauth_state_hash: string | null
@@ -95,14 +95,14 @@ export class CiConnectService {
     await this.query(
       this.db,
       `INSERT INTO ci_connect_attempt
-      (id,organization_id,user_id,github_account,allow_public,app_client_id,device_ciphertext,expires_at,next_poll_at,interval_seconds)
+      (id,organization_id,user_id,github_account,allow_private,app_client_id,device_ciphertext,expires_at,next_poll_at,interval_seconds)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+($9*interval '1 second'),$9)`,
       [
         id,
         actor.organizationId,
         actor.userId,
         input.github_account,
-        input.allow_public_repositories,
+        input.allow_private_repositories,
         settings.clientId,
         ciphertext,
         expires,
@@ -169,7 +169,7 @@ export class CiConnectService {
     )
     await this.query(
       this.db,
-      `INSERT INTO ci_connect_attempt(id,organization_id,user_id,github_account,allow_public,app_client_id,
+      `INSERT INTO ci_connect_attempt(id,organization_id,user_id,github_account,allow_private,app_client_id,
       flow,oauth_state_hash,oauth_verifier_ciphertext,expires_at,next_poll_at,interval_seconds)
       VALUES($1,$2,$3,$4,$5,$6,'web',$7,$8,$9,now(),1)`,
       [
@@ -177,7 +177,7 @@ export class CiConnectService {
         actor.organizationId,
         actor.userId,
         '',
-        input.allow_public_repositories,
+        input.allow_private_repositories,
         settings.clientId,
         authorization.stateHash,
         ciphertext,
@@ -312,6 +312,41 @@ export class CiConnectService {
     this.actor(actor)
     return this.response(await this.webAttempt(actor, id), actor)
   }
+  async repositories(actor: Actor, id: string, accountId: number, page: number, limit: number) {
+    this.actor(actor)
+    actor = { ...actor, apiKey: actor.apiKey ? { ...actor.apiKey } : undefined }
+    if (!Number.isSafeInteger(accountId) || accountId <= 0) throw new ForbiddenException('Invalid GitHub account')
+    const original = await this.webAttempt(actor, id)
+    if (
+      original.state !== 'selecting' ||
+      !original.oauth_token_ciphertext ||
+      !this.github.isIdentityClient(original.app_client_id)
+    )
+      throw new ForbiddenException('An active account selection is required')
+    const token = this.secrets.open(original.oauth_token_ciphertext, this.aad(original) + ':web-selection')
+    const inventory = await this.github.availableAccounts(original.app_client_id, token)
+    const account = inventory.accounts.find((item) => item.accountId === accountId)
+    if (!account?.installationId) throw new ForbiddenException('Installed owned GitHub account required')
+    const result = await this.github.repositoryPage(
+      account.clientId,
+      {
+        installationId: account.installationId,
+        accountId: account.accountId,
+        accountLogin: account.accountLogin,
+        accountType: account.accountType,
+      },
+      page,
+      limit,
+    )
+    const current = await this.webAttempt(actor, id)
+    if (
+      current.state !== 'selecting' ||
+      current.app_client_id !== original.app_client_id ||
+      current.oauth_token_ciphertext !== original.oauth_token_ciphertext
+    )
+      throw new ForbiddenException('GitHub authorization changed; restart connect')
+    return result
+  }
   private targetAad(row: Attempt) {
     return this.aad(row) + ':web-target:' + row.app_client_id
   }
@@ -344,14 +379,14 @@ export class CiConnectService {
     if (!this.github.isIdentityClient(row.app_client_id)) return this.selectWeb(actor, id, installation, state)
     return this.chooseAccount(actor, id, undefined, { installation, state })
   }
-  async selectAccount(actor: Actor, id: string, input: { account_id: number; allow_public_repositories: boolean }) {
+  async selectAccount(actor: Actor, id: string, input: { account_id: number; allow_private_repositories: boolean }) {
     this.actor(actor)
     return this.chooseAccount(actor, id, { ...input })
   }
   private async chooseAccount(
     actor: Actor,
     id: string,
-    input?: { account_id: number; allow_public_repositories: boolean },
+    input?: { account_id: number; allow_private_repositories: boolean },
     callback?: { installation: number; state: string },
   ) {
     actor = { ...actor, apiKey: actor.apiKey ? { ...actor.apiKey } : undefined }
@@ -359,7 +394,7 @@ export class CiConnectService {
       input &&
       (!Number.isSafeInteger(input.account_id) ||
         input.account_id <= 0 ||
-        typeof input.allow_public_repositories !== 'boolean')
+        typeof input.allow_private_repositories !== 'boolean')
     )
       throw new ForbiddenException('Invalid GitHub account selection')
     const lease = randomUUID()
@@ -403,15 +438,15 @@ export class CiConnectService {
         }
         row = {
           ...row,
-          allow_public: input!.allow_public_repositories,
+          allow_private: input!.allow_private_repositories,
           web_target_ciphertext: this.secrets.seal(JSON.stringify(target), this.targetAad(row)),
         }
         const saved = await this.query(
           this.db,
-          `UPDATE ci_connect_attempt SET web_target_ciphertext=$3,allow_public=$4
+          `UPDATE ci_connect_attempt SET web_target_ciphertext=$3,allow_private=$4
           WHERE id=$1 AND state='polling' AND lease_id=$2 AND expires_at>clock_timestamp()
           AND lease_until>clock_timestamp() RETURNING id`,
-          [id, lease, row.web_target_ciphertext, row.allow_public],
+          [id, lease, row.web_target_ciphertext, row.allow_private],
         )
         if (!saved.length) return this.getWeb(actor, id)
       }
@@ -667,7 +702,7 @@ export class CiConnectService {
       await this.query(
         tx,
         `INSERT INTO ci_installation_binding
-        (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_public)
+        (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_private)
         VALUES ($1,'github.com',$2,$3,$4,$5,$6,$7,$8,true,$9)
         ON CONFLICT (github_host,app_client_id,installation_id) DO NOTHING`,
         [
@@ -679,7 +714,7 @@ export class CiConnectService {
           verified.accountType,
           attempt.organization_id,
           attempt.user_id,
-          attempt.allow_public,
+          attempt.allow_private,
         ],
       )
       const [binding] = await this.query(
@@ -699,10 +734,10 @@ export class CiConnectService {
         await this.query(
           tx,
           `UPDATE ci_installation_binding SET state='provisioning',generation=generation+1,
-          actor_id=$2,allow_public=$3,account_login=$4 WHERE id=$1`,
-          [binding.id, attempt.user_id, attempt.allow_public, verified.accountLogin],
+          actor_id=$2,allow_private=$3,account_login=$4 WHERE id=$1`,
+          [binding.id, attempt.user_id, attempt.allow_private, verified.accountLogin],
         )
-      } else if (!selection && binding.allow_public !== attempt.allow_public) {
+      } else if (!selection && binding.allow_private !== attempt.allow_private) {
         throw new ConflictException('Installation is already bound with a different owner or policy')
       }
       if (binding.state !== 'disabled' && binding.account_login !== verified.accountLogin) {
@@ -779,6 +814,9 @@ export class CiConnectService {
             github_account: account.accountLogin,
             account_type: account.accountType,
             installation_id: account.installationId,
+            installation_settings_url: account.installationId
+              ? installationSettingsUrl({ ...account, installationId: account.installationId })
+              : undefined,
             installed: account.installationId !== null,
             connected: bindings.some(
               (binding) =>
@@ -811,7 +849,7 @@ export class CiConnectService {
     if (row.state === 'done') {
       const [binding] = await this.query(
         this.db,
-        'SELECT id,state,account_login,allow_public FROM ci_installation_binding WHERE id=$1 AND organization_id=$2',
+        'SELECT id,state,account_login,allow_private FROM ci_installation_binding WHERE id=$1 AND organization_id=$2',
         [row.binding_id, row.organization_id],
       )
       if (!binding) throw new NotFoundException('CI binding unavailable')
@@ -822,7 +860,7 @@ export class CiConnectService {
         listener_status: binding.state,
         github_account: binding.account_login,
         runs_on: 'boxlite-ci-runner',
-        allow_public_repositories: binding.allow_public,
+        allow_private_repositories: binding.allow_private,
       }
     }
     return {

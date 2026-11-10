@@ -24,9 +24,9 @@ enum CiCommand {
 struct ConnectArgs {
     /// GitHub personal account or organization owning the installation.
     github_account: String,
-    /// Permit CI from public repositories in this installation.
+    /// Permit CI from private repositories in this installation.
     #[arg(long)]
-    allow_public_repositories: bool,
+    allow_private_repositories: bool,
     /// Print the GitHub authorization URL without opening a browser.
     #[arg(long)]
     no_browser: bool,
@@ -59,8 +59,8 @@ pub async fn execute(args: CiArgs, global: &GlobalFlags) -> anyhow::Result<()> {
         args.github_account
     );
     eprintln!(
-        "Public repositories: {}.",
-        if args.allow_public_repositories {
+        "Private repositories: {}.",
+        if args.allow_private_repositories {
             "allowed"
         } else {
             "disabled"
@@ -74,7 +74,7 @@ pub async fn execute(args: CiArgs, global: &GlobalFlags) -> anyhow::Result<()> {
         Some(json!({
             "github_account": args.github_account,
             "follow_installation": true,
-            "allow_public_repositories": args.allow_public_repositories,
+            "allow_private_repositories": args.allow_private_repositories,
         })),
     )
     .await?;
@@ -280,6 +280,32 @@ fn field<'a>(value: &'a Value, name: &str) -> anyhow::Result<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ci_private_repository_access_requires_an_explicit_flag() {
+        use clap::Parser;
+        for enabled in [false, true] {
+            let mut input = vec!["boxlite", "ci", "connect", "owner"];
+            if enabled {
+                input.push("--allow-private-repositories");
+            }
+            let cli = crate::cli::Cli::try_parse_from(input).unwrap();
+            let crate::cli::Commands::Ci(args) = cli.command else {
+                panic!("CI command required");
+            };
+            let CiCommand::Connect(args) = args.command;
+            assert_eq!(args.allow_private_repositories, enabled);
+        }
+        assert!(
+            crate::cli::Cli::try_parse_from([
+                "boxlite",
+                "ci",
+                "connect",
+                "owner",
+                "--allow-public-repositories"
+            ])
+            .is_err()
+        );
+    }
     #[tokio::test]
     async fn ci_rejects_invalid_accounts_before_loading_remote_credentials() {
         use clap::Parser;
@@ -289,7 +315,7 @@ mod tests {
             let args = CiArgs {
                 command: CiCommand::Connect(ConnectArgs {
                     github_account: account.to_owned(),
-                    allow_public_repositories: false,
+                    allow_private_repositories: false,
                     no_browser: true,
                 }),
             };

@@ -205,7 +205,7 @@ describe('CI browser connection lifecycle', () => {
     await act(async () => button('Connect GitHub').click())
     expect(api.startCiConnect).toHaveBeenCalledExactlyOnceWith(organization, {
       follow_installation: true,
-      allow_public_repositories: false,
+      allow_private_repositories: false,
       select_account: false,
     })
     expect(document.querySelector('[role=dialog]')).toBeNull()
