@@ -122,7 +122,9 @@ A successful fractional create must return exactly the requested allocation.
 Missing, rounded, or changed values produce an `Unsupported` error containing the created Box ID; inspect or remove that Box before retrying.
 The SDK never retries creation by rounding or dropping the value; ordinary HTTP failures retain their original error classification.
 Other features may still use `/config`.
-This feature does not add fractional scheduling, capacity accounting, or billing to BoxLite Cloud; older Cloud servers may reject fractional values.
+BoxLite Cloud accepts `cpus` from `0.01` to `16` in increments of `0.001`, subject to the organization's per-Box limit.
+The dashboard's Custom CPU input accepts three decimal places and adjusts by `0.1`; invalid input blocks creation.
+Older Cloud servers may reject fractional values.
 
 **Compatibility (breaking change):** `Box.cpus` responses may contain fractions that older integer-only clients cannot decode, including in list responses.
 Follow the [client migration steps](../reference/README.md#unreleased-fractional-cpu-allocation-breaking-change) before creating fractional Boxes in shared environments.

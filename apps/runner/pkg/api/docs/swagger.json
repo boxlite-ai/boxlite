@@ -595,8 +595,10 @@
           }
         },
         "cpuQuota": {
-          "type": "integer",
-          "minimum": 1
+          "description": "CPU allocation in cores (0.01–16), in increments of 0.001; omitted means 1.",
+          "type": "number",
+          "maximum": 16,
+          "minimum": 0.01
         },
         "entrypoint": {
           "type": "array",
@@ -742,8 +744,10 @@
       "required": ["errorReason", "osUser", "outboundEnabled"],
       "properties": {
         "cpuQuota": {
-          "type": "integer",
-          "minimum": 1
+          "description": "CPU allocation in cores (0.01–16), in increments of 0.001; omitted means 1.",
+          "type": "number",
+          "maximum": 16,
+          "minimum": 0.01
         },
         "env": {
           "type": "object",

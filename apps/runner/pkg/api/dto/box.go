@@ -10,11 +10,12 @@ package dto
 // RunAsUser is the OCI process.user override (docker `-u`), empty when the
 // caller did not ask for one so the image's own USER directive stands.
 type CreateBoxDTO struct {
-	Id           string            `json:"id" validate:"required"`
-	FromVolumeId string            `json:"fromVolumeId,omitempty"`
-	Image        string            `json:"image" validate:"required"`
-	OsUser       string            `json:"osUser" validate:"required"`
-	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
+	Id           string `json:"id" validate:"required"`
+	FromVolumeId string `json:"fromVolumeId,omitempty"`
+	Image        string `json:"image" validate:"required"`
+	OsUser       string `json:"osUser" validate:"required"`
+	// CPU allocation in cores (0.01–16), in increments of 0.001; omitted means 1.
+	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.01,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
@@ -49,9 +50,10 @@ type UpdateNetworkSettingsDTO struct {
 } //	@name	UpdateNetworkSettingsDTO
 
 type RecoverBoxDTO struct {
-	FromVolumeId string            `json:"fromVolumeId,omitempty"`
-	OsUser       string            `json:"osUser" validate:"required"`
-	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
+	FromVolumeId string `json:"fromVolumeId,omitempty"`
+	OsUser       string `json:"osUser" validate:"required"`
+	// CPU allocation in cores (0.01–16), in increments of 0.001; omitted means 1.
+	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.01,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`

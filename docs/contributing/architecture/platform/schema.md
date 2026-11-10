@@ -433,7 +433,7 @@ or `archived`.
 | `pending` | `boolean` | default `false` |
 | `recoverable` | `boolean` | default `false` |
 | `errorReason` | `character varying` | nullable |
-| `cpu` | `integer` | default `2` |
+| `cpu` | `double precision` | default `2`; CPU allocation in cores, precision `0.001` |
 | `gpu` | `integer` | default `0` |
 | `mem` | `integer` | default `4` |
 | `disk` | `integer` | default `10` |
@@ -901,7 +901,8 @@ the pool by shape, which is why one index covers every shape column at once.
 | `image` | `character varying` | |
 | `target` | `character varying` | |
 | `class` | `enum` | default `small` |
-| `cpu` / `mem` / `disk` / `gpu` | `integer` | |
+| `cpu` | `double precision` | allocation in cores, precision `0.001` |
+| `mem` / `disk` / `gpu` | `integer` | |
 | `gpuType` | `character varying` | |
 | `osUser` | `character varying` | |
 | `env` | `simple-json` | default `{}` |
@@ -909,6 +910,16 @@ the pool by shape, which is why one index covers every shape column at once.
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
 **Index:** `warm_pool_find_idx (image, target, class, cpu, mem, disk, gpu, osUser, env)`.
+
+### Fractional CPU allocations
+
+Creation, query responses, warm-pool matching, Runner requests, and usage periods retain the requested CPU allocation.
+Runner allocation telemetry and usage exports count configured cores, not the rounded guest vCPU topology.
+For example, `0.5` CPU for one hour records `1800` vCPU-seconds.
+
+The existing availability-score scheduler does not reserve CPU capacity per request.
+The CPU-column migration preserves defaults and indexes; rollback refuses fractional or out-of-range rows rather than rounding allocations.
+See the [deployment sequence and rollback constraints](../../../../apps/infra/docs/deployment.md#fractional-cpu-upgrade) before enabling fractional requests.
 
 ## Metering
 

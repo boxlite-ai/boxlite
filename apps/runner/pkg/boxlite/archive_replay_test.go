@@ -41,7 +41,7 @@ func TestIntegrationImportBoxAdoptsBoxAlreadyPresentOnReplay(t *testing.T) {
 		Id:           boxId,
 		Image:        "alpine:latest",
 		OsUser:       "root",
-		CpuQuota:     1,
+		CpuQuota:     cpuQuota(1),
 		MemoryQuota:  1,
 		StorageQuota: 1,
 		SkipStart:    boolPtr(true),

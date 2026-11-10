@@ -60,11 +60,9 @@ describe('CreateBoxDto resource minimums', () => {
   })
 })
 
-// Resource sizes are integers end to end (integer DB columns); pin the
-// boundary so fractions never reach the warm-pool integer query.
+// Memory and disk retain integer storage; CPU allocations may be fractional.
 describe('CreateBoxDto resource integrality', () => {
   it.each([
-    ['cpus', { cpus: 1.5 }],
     ['memory_mib', { memory_mib: 256.5 }],
     ['disk_size_gb', { disk_size_gb: 1.5 }],
   ])('rejects fractional %s with an isInt constraint', async (field, body) => {
@@ -494,7 +492,9 @@ describe('CreateBoxDto secrets', () => {
   })
 
   it('rejects a secret missing its name', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test', hosts: ['api.openai.com'] }] }))
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).not.toHaveLength(0)
     // @ValidateNested({ each: true }) reports one child per array slot, and the
@@ -504,14 +504,18 @@ describe('CreateBoxDto secrets', () => {
   })
 
   it('rejects a secret missing its value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }))
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
   })
 
   it('rejects a secret with an empty value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }))
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')

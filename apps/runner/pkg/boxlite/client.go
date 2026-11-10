@@ -419,6 +419,10 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
+	if err != nil {
+		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
@@ -426,18 +430,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		return "", "", err
 	}
 
-	// API sends cores / GB / GB as small integers (see apps/api Box entity).
-	cpus := int(boxDto.CpuQuota)
-	if cpus < 1 {
-		cpus = 1
-	}
 	memoryMiB := int(boxDto.MemoryQuota * 1024)
 	if memoryMiB < 128 {
 		memoryMiB = 128
 	}
 	opts := []boxlite.BoxOption{
 		boxlite.WithName(boxDto.Id),
-		boxlite.WithCPUs(float64(cpus)),
+		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),

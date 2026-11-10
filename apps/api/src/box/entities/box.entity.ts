@@ -165,7 +165,7 @@ export class Box {
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 
-  @Column({ type: 'int', default: 2 })
+  @Column({ type: 'double precision', default: 2 })
   cpu = 2
 
   @Column({ type: 'int', default: 0 })
