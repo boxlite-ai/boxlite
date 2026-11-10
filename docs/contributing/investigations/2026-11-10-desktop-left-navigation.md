@@ -37,11 +37,11 @@ Image library, Server for Private registries, CreditCard for Billing and Buildin
 for Organization. Their 28px inset and 8px icon gap are shared; backgrounds stay
 full-width, without a stepped parent/child selection.
 
-The resource/group area scrolls separately. Quickstart is pinned to the footer. Collapse
-sits to the right of the expanded wordmark and disappears when compact. Clicking
-the compact logo expands the rail without navigating; toggle focus is retained.
-API Keys is in the header. Profile retains
-organization switching, theme and logout. Selected items use the neutral accent
+The resource/group area scrolls separately. Quickstart is pinned to the footer.
+Collapse sits beside the wordmark in both pinned expansion and hover preview;
+it is hidden only in the compact rail with no preview. Clicking the compact
+logo expands the rail without navigating; toggle focus is retained. API Keys
+is in the header. Profile retains organization switching, theme and logout. Selected items use the neutral accent
 surface (#1f1f1f dark), against #0a0a0a sidebar, with quieter hover and visible
 keyboard focus. Expansion is saved under boxlite-navigation-expanded; unavailable
 storage falls back to in-memory interaction. No speculative routes or dependencies.

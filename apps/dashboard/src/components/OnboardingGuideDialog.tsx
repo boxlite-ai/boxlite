@@ -431,6 +431,7 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
 
 type CopyTarget = 'api-key' | 'install' | 'code' | 'creation' | 'execution' | 'preview'
 
+/** Keeps short examples at their natural height and bounds scrolling for examples over 35 lines. */
 function QuickstartCode({ code, language }: { code: string; language: string }) {
   return (
     <Suspense fallback={<pre className="quickstart-code overflow-auto whitespace-pre p-4">{code}</pre>}>

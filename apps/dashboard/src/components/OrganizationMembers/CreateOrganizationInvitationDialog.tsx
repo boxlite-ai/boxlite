@@ -25,6 +25,7 @@ interface CreateOrganizationInvitationDialogProps {
   className?: string
 }
 
+/** Collects an invite email; the caller sends it and returns whether the dialog can close. */
 export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvitationDialogProps> = ({
   onCreateInvitation,
   className,

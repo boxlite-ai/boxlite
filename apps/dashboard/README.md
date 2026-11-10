@@ -643,12 +643,12 @@ Hover the compact logo for 350ms to preview the full sidebar as an overlay;
 content keeps its position. Moving into the menu keeps it open; leaving closes it
 after 150ms, unless a child has keyboard focus. Escape dismisses the preview and
 returns focus to the logo. The top Collapse button also dismisses the preview;
-clicking the logo pins the expanded sidebar. Hover
-never changes the saved preference, and touch uses the explicit click control.
+clicking the logo pins the expanded sidebar.
+Hover never changes the saved preference; touch uses the explicit click control.
 Images has an independent disclosure for its existing Images and Private
-registries routes. Child links use 14px thin-line icons, a shared inset and full-width
-selection; primary icons remain 18px. Navigation data accepts second-level children without adding
-speculative destinations. Entering a child route reveals its group; the active
+registries routes. Child links use 14px thin-line icons, a shared inset and
+full-width selection; primary icons remain 18px. Navigation data accepts
+second-level children without adding speculative destinations. Entering a child route reveals its group; the active
 route remains highlighted when the whole sidebar collapses.
 
 The desktop sidebar spans the viewport height (minus any announcement). Its logo
@@ -664,9 +664,10 @@ Organization switching, theme and logout remain in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
-Quickstart as the last action. Collapse sits beside the logo only while expanded;
-clicking the compact logo expands navigation without changing the route. Keyboard
-focus moves to the replacement toggle. Selected navigation uses the
+Quickstart as the last action. Collapse sits beside the logo in both pinned
+expansion and hover preview, and is hidden in the compact rail without a preview.
+Clicking the compact logo expands navigation without changing the route.
+Keyboard focus moves to the replacement toggle. Selected navigation uses the
 accent surface, distinct from the quieter hover surface.
 
 Dashboard owns `--app-header-height`, `--app-banner-height` and
@@ -682,8 +683,8 @@ Expanded navigation highlights only the current child, using the same full row
 width as primary items. Active parents retain foreground emphasis without a
 second selection rectangle. Child indentation comes from padding, with no tree line.
 
-Sidebar branding always renders the same 43.2px-high wordmark asset (20% above the original 36px). Compact mode
-clips the text area instead of substituting a differently padded icon image, so
+Sidebar branding always renders the same 43.2px-high wordmark asset
+(20% above the original 36px). Compact mode clips the text area instead of substituting a differently padded icon image, so
 the visible symbol keeps the same size and position across expansion.
 
 Neutral outlines use border, border-hover and border-selected tokens. In dark mode
