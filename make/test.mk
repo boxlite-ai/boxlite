@@ -555,7 +555,14 @@ test\:unit\:gvproxy:
 #
 # Run the dependency-backed server contract suite as well as the stdlib-only
 # error mapping checks. The server target supplies its own Python dependencies.
-test\:unit\:openapi:
+generate\:openapi:
+	@python3 openapi/generate_version_rules.py
+
+check\:openapi:
+	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
+
+test\:unit\:openapi: check\:openapi
+	@python3 -m unittest discover -s openapi/tests -v
 	@$(MAKE) test:unit:openapi:server
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v

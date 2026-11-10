@@ -6,6 +6,7 @@ use super::super::types::{ServerCapabilities, ServerConfig};
 
 pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
     Json(ServerConfig {
+        api_version: env!("CARGO_PKG_VERSION"),
         capabilities: ServerCapabilities {
             checkpoints_enabled: false,
             linux_capabilities_enabled: true,
@@ -23,11 +24,12 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
 mod tests {
     use super::*;
 
-    /// The client gates per-exec `user` on this flag (#2116): a serve that
-    /// supports the field must advertise it, or clients refuse to send users.
+    /// Legacy consumers still read flags; new clients use the product release.
     #[tokio::test]
     async fn config_advertises_exec_user() {
-        assert!(get_config().await.0.capabilities.exec_user_enabled);
+        let config = get_config().await.0;
+        assert_eq!(config.api_version, env!("CARGO_PKG_VERSION"));
+        assert!(config.capabilities.exec_user_enabled);
     }
 
     #[tokio::test]

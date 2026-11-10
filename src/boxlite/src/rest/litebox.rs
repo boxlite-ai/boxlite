@@ -305,9 +305,6 @@ impl BoxBackend for RestBox {
     }
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
-        if command.user.is_some() {
-            self.client.require_exec_user_enabled().await?;
-        }
 
         // 1. Create execution on remote server
         let path = format!("/boxes/{}/exec", box_id);
@@ -489,14 +486,10 @@ impl BoxBackend for RestBox {
         // Upload tar to server; its first entry tells the guest how it lands.
         let encoded_dst = urlencoding::encode(container_dst);
         let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
-        let builder = self
+        let resp = self
             .client
-            .authorized_request(Method::PUT, &path)
-            .await?
-            .header("Content-Type", "application/x-tar")
-            .body(body);
-
-        let resp = builder.send().await.map_err(transport_error)?;
+            .send_file(Method::PUT, &path, Some(body))
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -517,13 +510,7 @@ impl BoxBackend for RestBox {
         // Download tar from server
         let encoded_src = urlencoding::encode(container_src);
         let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
-        let builder = self
-            .client
-            .authorized_request(Method::GET, &path)
-            .await?
-            .header("Accept", "application/x-tar");
-
-        let resp = builder.send().await.map_err(transport_error)?;
+        let resp = self.client.send_file(Method::GET, &path, None).await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -578,8 +565,6 @@ impl BoxBackend for RestBox {
         options: CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<crate::LiteBox> {
-        self.client.require_clone_enabled().await?;
-
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/clone", box_id);
         let req = CloneBoxRequest::from_options(&options, name.as_deref());
@@ -617,8 +602,6 @@ impl BoxBackend for RestBox {
         options: ExportOptions,
         dest: &Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
-        self.client.require_export_enabled().await?;
-
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/export", box_id);
         let req = ExportBoxRequest::from_options(&options);
@@ -742,8 +725,6 @@ impl RestBox {
 #[async_trait]
 impl SnapshotBackend for RestBox {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        self.client.require_snapshots_enabled().await?;
-
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/snapshots", box_id);
         let req = CreateSnapshotRequest::from_options(&options, name);
@@ -752,8 +733,6 @@ impl SnapshotBackend for RestBox {
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {
-        self.client.require_snapshots_enabled().await?;
-
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/snapshots", box_id);
         let resp: ListSnapshotsResponse = self.client.get(&path).await?;
@@ -765,8 +744,6 @@ impl SnapshotBackend for RestBox {
     }
 
     async fn get(&self, name: &str) -> BoxliteResult<Option<SnapshotInfo>> {
-        self.client.require_snapshots_enabled().await?;
-
         let box_id = self.box_id_str();
         let encoded_name = urlencoding::encode(name);
         let path = format!("/boxes/{}/snapshots/{}", box_id, encoded_name);
@@ -778,8 +755,6 @@ impl SnapshotBackend for RestBox {
     }
 
     async fn remove(&self, name: &str) -> BoxliteResult<()> {
-        self.client.require_snapshots_enabled().await?;
-
         let box_id = self.box_id_str();
         let encoded_name = urlencoding::encode(name);
         let path = format!("/boxes/{}/snapshots/{}", box_id, encoded_name);
@@ -787,8 +762,6 @@ impl SnapshotBackend for RestBox {
     }
 
     async fn restore(&self, name: &str) -> BoxliteResult<()> {
-        self.client.require_snapshots_enabled().await?;
-
         let box_id = self.box_id_str();
         let encoded_name = urlencoding::encode(name);
         let path = format!("/boxes/{}/snapshots/{}/restore", box_id, encoded_name);
@@ -2918,7 +2891,7 @@ mod tests {
                     }
                     let head = String::from_utf8(head).unwrap();
                     if head.starts_with("GET /v1/config ") {
-                        let body = r#"{"capabilities":{"private_tunnels_enabled":true}}"#;
+                        let body = r#"{"api_version":"0.12.0"}"#;
                         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                         continue;
                     }
@@ -2977,7 +2950,7 @@ mod tests {
                     }
                     let head = String::from_utf8(head).unwrap();
                     if head.starts_with("GET /v1/config ") {
-                        let body = r#"{"capabilities":{"private_tunnels_enabled":true}}"#;
+                        let body = r#"{"api_version":"0.12.0"}"#;
                         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                     } else if head.starts_with("POST ") {
                         let length = head

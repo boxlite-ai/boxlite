@@ -13,3 +13,4 @@ pub(crate) mod litebox;
 pub mod options;
 pub(crate) mod runtime;
 pub(crate) mod types;
+mod version;

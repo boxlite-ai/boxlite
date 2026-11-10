@@ -5,9 +5,10 @@ use std::time::{Duration, SystemTime};
 
 use reqwest::header::CONTENT_LENGTH;
 use reqwest::{Client, Method, RequestBuilder, StatusCode};
+use semver::Version;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -119,7 +120,7 @@ pub(crate) struct ApiClient {
     /// `Credential` impl — API keys (`expires_at == None`) are fetched
     /// once and cached forever.
     cached: Arc<RwLock<Option<AccessToken>>>,
-    config_cache: Arc<RwLock<Option<ServerConfig>>>,
+    server_version: Arc<OnceCell<Version>>,
 }
 
 impl ApiClient {
@@ -148,7 +149,7 @@ impl ApiClient {
             path_prefix,
             credential: config.credential.clone(),
             cached: Arc::new(RwLock::new(None)),
-            config_cache: Arc::new(RwLock::new(None)),
+            server_version: Arc::new(OnceCell::new()),
         })
     }
 
@@ -220,8 +221,7 @@ impl ApiClient {
     /// is bounded to 4 KiB so a runaway HTML error page can't blow up
     /// terminal output.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
-        let builder = self.authorize(builder).await?;
-        let resp = builder.send().await.map_err(transport_error)?;
+        let resp = self.execute(builder).await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -255,8 +255,7 @@ impl ApiClient {
 
     /// Send a request and expect no response body (204).
     async fn send_no_content(&self, builder: RequestBuilder) -> BoxliteResult<()> {
-        let builder = self.authorize(builder).await?;
-        let resp = builder.send().await.map_err(transport_error)?;
+        let resp = self.execute(builder).await?;
 
         let status = resp.status();
         if status.is_success() {
@@ -374,8 +373,7 @@ impl ApiClient {
         body: &B,
     ) -> BoxliteResult<Vec<u8>> {
         let builder = self.http.post(self.url(path)).json(body);
-        let builder = self.authorize(builder).await?;
-        let resp = builder.send().await.map_err(transport_error)?;
+        let resp = self.execute(builder).await?;
 
         let status = resp.status();
         if status.is_success() {
@@ -404,8 +402,7 @@ impl ApiClient {
 
     pub async fn head_exists(&self, path: &str) -> BoxliteResult<bool> {
         let builder = self.http.head(self.url(path));
-        let builder = self.authorize(builder).await?;
-        let resp = builder.send().await.map_err(transport_error)?;
+        let resp = self.execute(builder).await?;
         match resp.status().as_u16() {
             204 | 200 => Ok(true),
             404 => Ok(false),
@@ -460,6 +457,14 @@ impl ApiClient {
                 .map_err(|e| BoxliteError::Internal(format!("WS auth header invalid: {}", e)))?;
             request.headers_mut().insert("Authorization", value);
         }
+
+        let check = self
+            .http
+            .get(&http_url)
+            .headers(request.headers().clone())
+            .build()
+            .map_err(transport_error)?;
+        self.check_version(&check).await?;
 
         tokio::time::timeout(
             WS_HANDSHAKE_TIMEOUT,
@@ -548,8 +553,6 @@ impl ApiClient {
         let builder = if is_public {
             self.empty_post_request(&path)
         } else {
-            // Older APIs ignore the POST body and would publish this port.
-            self.require_private_tunnels_enabled().await?;
             self.http
                 .post(self.url(&path))
                 .json(&serde_json::json!({"isPublic": false}))
@@ -575,133 +578,78 @@ impl ApiClient {
             .await
     }
 
-    /// Build an authorized file request bounded by the box lifetime.
-    pub async fn authorized_request(
+    /// Send a file request through the same gate, without buffering its stream.
+    pub async fn send_file(
         &self,
         method: Method,
         path: &str,
-    ) -> BoxliteResult<RequestBuilder> {
-        let builder = self
+        body: Option<reqwest::Body>,
+    ) -> BoxliteResult<reqwest::Response> {
+        let mut builder = self
             .http
             .request(method, self.url(path))
             .timeout(FILE_REQUEST_TIMEOUT);
-        self.authorize(builder).await
+        builder = match body {
+            Some(body) => builder
+                .header("Content-Type", "application/x-tar")
+                .body(body),
+            None => builder.header("Accept", "application/x-tar"),
+        };
+        self.execute(builder).await
     }
 
-    pub async fn get_config(&self) -> BoxliteResult<ServerConfig> {
-        {
-            let cache = self.config_cache.read().await;
-            if let Some(config) = cache.as_ref() {
-                return Ok(config.clone());
-            }
-        }
-
-        let config = self.fetch_config().await?;
-        let mut cache = self.config_cache.write().await;
-        *cache = Some(config.clone());
-        Ok(config)
+    /// The only ordinary HTTP send boundary. Keep the built request intact so
+    /// rules inspect exactly the bytes and parameters the server will receive.
+    async fn execute(&self, builder: RequestBuilder) -> BoxliteResult<reqwest::Response> {
+        let request = self
+            .authorize(builder)
+            .await?
+            .build()
+            .map_err(transport_error)?;
+        self.check_version(&request).await?;
+        self.http.execute(request).await.map_err(transport_error)
     }
 
-    async fn fetch_config(&self) -> BoxliteResult<ServerConfig> {
-        self.get_root("/config").await
+    async fn check_version(&self, request: &reqwest::Request) -> BoxliteResult<()> {
+        let root = reqwest::Url::parse(&self.url_root(""))
+            .map_err(|e| BoxliteError::Config(e.to_string()))?;
+        let Some(required) =
+            super::version::requirement(request, &root, self.path_prefix.as_deref())?
+        else {
+            return Ok(());
+        };
+        let server = self
+            .server_version
+            .get_or_try_init(|| async {
+                // Discovery must not re-enter the gate that is initializing it.
+                // Errors and cancelled initializers leave OnceCell retryable.
+                let response = self
+                    .authorize(self.http.get(self.url_root("/config")))
+                    .await?
+                    .send()
+                    .await
+                    .map_err(transport_error)?;
+                if !response.status().is_success() {
+                    return self.handle_error(response.status(), response).await;
+                }
+                let config: ServerConfig = response.json().await.map_err(transport_error)?;
+                let raw = config
+                    .api_version
+                    .as_ref()
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| required.rejection("missing or non-string api_version"))?;
+                Version::parse(raw).map_err(|_| required.rejection("invalid api_version"))
+            })
+            .await?;
+        required.check(server)
     }
 
     /// `GET /v1/me` — identity of the calling credential. Not cached
-    /// (identity is per-credential and cheap; unlike static capabilities).
+    /// (identity is per-credential, unlike the server release).
     /// A 404 surfaces as `BoxliteError::NotFound` (server without `/v1/me`);
     /// 401/403 as `BoxliteError::Config("auth: …")` — callers branch on these.
     pub async fn get_me(&self) -> BoxliteResult<Principal> {
         self.get_root("/me").await
-    }
-
-    pub async fn require_snapshots_enabled(&self) -> BoxliteResult<()> {
-        let config = self.get_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise snapshots capability".to_string(),
-            )
-        })?;
-        ensure_capability("snapshots", capabilities.snapshots_enabled)
-    }
-
-    pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {
-        // This gate protects a security policy, so a cached positive response
-        // is insufficient after a server rollback or replacement. Recheck the
-        // live endpoint immediately before every capability-bearing create.
-        let config = self.fetch_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise Linux capabilities support".to_string(),
-            )
-        })?;
-        ensure_capability(
-            "Linux capabilities",
-            capabilities.linux_capabilities_enabled,
-        )
-    }
-
-    async fn require_private_tunnels_enabled(&self) -> BoxliteResult<()> {
-        // Like Linux capabilities: an older replica would publish the port,
-        // so a cached positive response is not enough.
-        let config = self.fetch_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise private tunnel support".to_string(),
-            )
-        })?;
-        ensure_capability("private tunnel", capabilities.private_tunnels_enabled)
-    }
-
-    pub async fn require_exec_user_enabled(&self) -> BoxliteResult<()> {
-        // A server that ignores `user` runs the command as the box default
-        // user (often root), so recheck the live endpoint before every exec
-        // that names one rather than trusting a cached answer.
-        let config = self.fetch_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise per-exec user support".to_string(),
-            )
-        })?;
-        ensure_capability("per-exec user", capabilities.exec_user_enabled)
-    }
-
-    pub async fn require_privileged_enabled(&self) -> BoxliteResult<()> {
-        // Recheck before every create: cached support may outlive a rollback.
-        let config = self.fetch_config().await?;
-        ensure_capability(
-            "guest privileged",
-            config.capabilities.and_then(|caps| caps.privileged_enabled),
-        )
-    }
-
-    pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
-        let config = self.get_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise clone capability".to_string(),
-            )
-        })?;
-        ensure_capability("clone", capabilities.clone_enabled)
-    }
-
-    pub async fn require_export_enabled(&self) -> BoxliteResult<()> {
-        let config = self.get_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise export capability".to_string(),
-            )
-        })?;
-        ensure_capability("export", capabilities.export_enabled)
-    }
-
-    pub async fn require_import_enabled(&self) -> BoxliteResult<()> {
-        let config = self.get_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise import capability".to_string(),
-            )
-        })?;
-        ensure_capability("import", capabilities.import_enabled)
     }
 
     /// POST binary data with query params, parse JSON response.
@@ -805,23 +753,12 @@ fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
     BoxliteError::Network(format!("WS connect failed: {}", err))
 }
 
-fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {
-    match enabled {
-        Some(true) => Ok(()),
-        Some(false) => Err(BoxliteError::Unsupported(format!(
-            "Remote server does not support {} operations",
-            name
-        ))),
-        None => Err(BoxliteError::Unsupported(format!(
-            "Remote server did not advertise {} capability",
-            name
-        ))),
-    }
-}
+#[cfg(test)]
+#[path = "tests/version.rs"]
+mod version_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_capability;
     use super::*;
     use crate::rest::credential::{AccessToken, Credential};
     use crate::rest::error::map_http_body;
@@ -1019,11 +956,10 @@ mod tests {
 
         let client =
             ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let request = client
-            .authorized_request(Method::GET, "/boxes/box1/files")
+        let response = client
+            .send_file(Method::GET, "/boxes/box1/files", None)
             .await
             .unwrap();
-        let response = request.send().await.unwrap();
 
         response_started_rx.await.unwrap();
         tokio::time::pause();
@@ -1054,7 +990,7 @@ mod tests {
         let client =
             ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
         let control_request =
-            tokio::spawn(async move { client.get::<serde_json::Value>("/slow").await });
+            tokio::spawn(async move { client.get::<serde_json::Value>("/boxes").await });
 
         response_started_rx.await.unwrap();
         tokio::time::pause();
@@ -1463,43 +1399,6 @@ mod tests {
         assert_eq!(client.current_bearer().await.unwrap(), None);
     }
 
-    #[tokio::test]
-    async fn linux_capability_gate_rechecks_uncached_server_config() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            for body in [
-                r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
-                r#"{"capabilities":{}}"#,
-            ] {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut headers = Vec::new();
-                while !headers.ends_with(b"\r\n\r\n") {
-                    headers.push(socket.read_u8().await.unwrap());
-                }
-                socket
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
-                        )
-                        .as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            }
-        });
-
-        let client =
-            ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        client.require_linux_capabilities_enabled().await.unwrap();
-        let second = client.require_linux_capabilities_enabled().await;
-        server.abort();
-
-        assert!(matches!(second, Err(BoxliteError::Unsupported(_))));
-    }
-
     #[test]
     fn flat_nest_error_response_maps_by_code() {
         let err = map_http_body(
@@ -1513,23 +1412,6 @@ mod tests {
             }
             other => panic!("expected Network error for runner non-JSON response, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn test_ensure_capability_enabled() {
-        assert!(ensure_capability("snapshots", Some(true)).is_ok());
-    }
-
-    #[test]
-    fn test_ensure_capability_disabled() {
-        let err = ensure_capability("snapshots", Some(false)).unwrap_err();
-        assert!(matches!(err, BoxliteError::Unsupported(_)));
-    }
-
-    #[test]
-    fn test_ensure_capability_missing() {
-        let err = ensure_capability("snapshots", None).unwrap_err();
-        assert!(matches!(err, BoxliteError::Unsupported(_)));
     }
 
     // ========================================================================
