@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
@@ -52,11 +54,22 @@ type Client struct {
 	awsAccessKeyId      string
 	awsSecretAccessKey  string
 	volumeBackend       string
-	volumeMutexes       map[string]*sync.Mutex
-	volumeMutexesMutex  sync.Mutex
-	volumeCleanupMutex  sync.Mutex
-	lastVolumeCleanup   time.Time
-	volumeCleanup       volumeCleanupConfig
+	// filestoreInstances is the registry of Filestore instances this runner
+	// may mount, parsed from FILESTORE_INSTANCES at startup. A name outside
+	// it fails the create carrying the reference.
+	filestoreInstances []config.FilestoreInstance
+	// mountRunner and probeRunner are the test seams for the NFS mount path:
+	// the concurrency test counts mount commands without a real server, and
+	// the readiness probe reads a host binary (mountpoint) a dev machine may
+	// not have. nil means the real exec runs — every production path lands
+	// there because NewClient sets neither.
+	mountRunner        func(*exec.Cmd) error
+	probeRunner        func(context.Context, string) (bool, error)
+	volumeMutexes      map[string]*sync.Mutex
+	volumeMutexesMutex sync.Mutex
+	volumeCleanupMutex sync.Mutex
+	lastVolumeCleanup  time.Time
+	volumeCleanup      volumeCleanupConfig
 
 	nestedVirtualizationAllowed bool
 
@@ -68,17 +81,22 @@ type Client struct {
 
 // ClientConfig holds configuration for the BoxLite client.
 type ClientConfig struct {
-	Logger                       *slog.Logger
-	HomeDir                      string
-	KernelPath                   string
-	ExperimentalFeatures         string
-	InsecureRegistries           []string
-	RegistryProxy                RegistryProxy
-	AWSRegion                    string
-	AWSEndpointUrl               string
-	AWSAccessKeyId               string
-	AWSSecretAccessKey           string
-	VolumeStorageBackend         string
+	Logger               *slog.Logger
+	HomeDir              string
+	KernelPath           string
+	ExperimentalFeatures string
+	InsecureRegistries   []string
+	RegistryProxy        RegistryProxy
+	AWSRegion            string
+	AWSEndpointUrl       string
+	AWSAccessKeyId       string
+	AWSSecretAccessKey   string
+	VolumeStorageBackend string
+	// FilestoreInstances carries the parsed FILESTORE_INSTANCES registry. It
+	// is a plain field (not parsed here) because the registry belongs to the
+	// runner's startup config, which owns its own validation and reject-on-
+	// failure semantics.
+	FilestoreInstances           []config.FilestoreInstance
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
@@ -371,6 +389,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		awsAccessKeyId:      config.AWSAccessKeyId,
 		awsSecretAccessKey:  config.AWSSecretAccessKey,
 		volumeBackend:       config.VolumeStorageBackend,
+		filestoreInstances:  config.FilestoreInstances,
 		volumeMutexes:       make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
@@ -546,7 +565,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
+	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Id, boxDto.Volumes)
 	if err != nil {
 		return "", "", err
 	}
@@ -601,7 +620,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
-			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
+			var filestoreInstances []string
+			for _, vol := range boxDto.Volumes {
+				if vol.Filestore != nil {
+					filestoreInstances = append(filestoreInstances, vol.Filestore.Instance)
+				}
+			}
+			if cleanupErr := c.removeBoxVolumeMountRecordLocked(ctx, boxDto.Id, filestoreInstances); cleanupErr != nil {
 				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
@@ -689,7 +714,7 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
-		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
+		c.logger.ErrorContext(ctx, "failed to ensure volume mounts", "box", boxId, "error", err)
 	}
 
 	bx, err := c.getOrFetchBox(ctx, boxId)
@@ -748,8 +773,15 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		}
 	}
 
-	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
+	// The record deletion takes each referenced instance's mutex so it cannot
+	// interleave with an in-flight reclaim decision for those instances
+	// (design §4.5.3); the orphan cleanup that follows reclaims their mounts.
+	instances, readErr := c.readFilestoreInstancesFromRecord(boxId)
+	if readErr != nil {
+		c.logger.WarnContext(ctx, "failed to read box volume mount record", "box", boxId, "error", readErr)
+	}
+	if cleanupErr := c.removeBoxVolumeMountRecordLocked(ctx, boxId, instances); cleanupErr != nil {
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", cleanupErr)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

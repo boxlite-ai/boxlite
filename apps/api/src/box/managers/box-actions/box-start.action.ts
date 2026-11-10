@@ -77,7 +77,14 @@ export class BoxStartAction extends BoxAction {
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
     if (box.volumes?.length) {
       metadata['volumes'] = JSON.stringify(
-        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
+        // filestore rides along so a Start after host reboot can re-mount the
+        // NFS instance from the same metadata the create used.
+        box.volumes.map((v) => ({
+          volumeId: v.volumeId,
+          mountPath: v.mountPath,
+          subpath: v.subpath,
+          ...(v.filestore ? { filestore: v.filestore } : {}),
+        })),
       )
     }
 
@@ -123,7 +130,14 @@ export class BoxStartAction extends BoxAction {
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
     if (box.volumes?.length) {
       metadata['volumes'] = JSON.stringify(
-        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
+        // Same shape as the create-side metadata above: a Start must be able
+        // to rebuild every volume reference the box was created with.
+        box.volumes.map((v) => ({
+          volumeId: v.volumeId,
+          mountPath: v.mountPath,
+          subpath: v.subpath,
+          ...(v.filestore ? { filestore: v.filestore } : {}),
+        })),
       )
     }
 
