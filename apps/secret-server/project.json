@@ -1,0 +1,11 @@
+{
+  "name": "secret-server",
+  "projectType": "library",
+  "sourceRoot": "secret-server",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "make -C .. test:apps:secret-server" }
+    }
+  }
+}

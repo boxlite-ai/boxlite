@@ -203,6 +203,15 @@ fmt\:go:
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w .
 	@cd apps/image-service && go fmt ./...
 	@cd apps/runner && gofmt -w .
+	@$(MAKE) fmt:apps:secret-server
+
+PHONY_TARGETS += fmt\:apps\:secret-server lint\:apps\:secret-server
+fmt\:apps\:secret-server:
+	@cd apps/secret-server && gofmt -w .
+
+lint\:apps\:secret-server:
+	@cd apps/secret-server && GOWORK=off go vet ./...
+	@cd apps/secret-server && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
 fmt\:check\:go:
 	@echo "🔍 Checking Go formatting..."
@@ -210,12 +219,14 @@ fmt\:check\:go:
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && \
 		test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 	@cd apps/image-service && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	@cd apps/secret-server && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
 lint\:go:
 	@echo "🔍 Linting Go code (vet)..."
 	@cd sdks/go && go vet -tags boxlite_dev ./...
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go vet ./...
 	@cd apps/image-service && go vet ./...
+	@$(MAKE) lint:apps:secret-server
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."

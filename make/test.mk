@@ -668,6 +668,10 @@ test\:apps\:runner: dev\:go
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
 
+PHONY_TARGETS += test\:apps\:secret-server
+test\:apps\:secret-server:
+	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
+
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@$(MAKE) test:apps:infra
