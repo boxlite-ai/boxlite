@@ -23,7 +23,10 @@ export function domainHandlers() {
   }
   return [
     http.get('*/v1/:organizationId/domains', ({ params }) => {
-      const domains = domainsFor(String(params.organizationId))
+      const domains =
+        globalThis.localStorage?.getItem('desktop-review-empty') === '1'
+          ? []
+          : domainsFor(String(params.organizationId))
       return HttpResponse.json({
         domains,
         limit: 5,

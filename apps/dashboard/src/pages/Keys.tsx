@@ -18,6 +18,7 @@ import { ApiKeyTable } from '../components/ApiKeyTable'
 
 const DEFAULT_API_KEY_PERMISSIONS = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
+/** Lists the selected organization’s keys and limits creation options to the member’s assigned permissions. */
 const Keys: React.FC = () => {
   const { apiUrl } = useConfig()
   const [loadingKeys, setLoadingKeys] = useState<Record<string, boolean>>({})
@@ -74,7 +75,7 @@ const Keys: React.FC = () => {
   )
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-[26px]">
       {/* header — same hierarchy as the Boxes page */}
       <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -83,6 +84,8 @@ const Keys: React.FC = () => {
             Connect your apps, scripts, and SDKs to BoxLite.
           </p>
         </div>
+      </div>
+      <div className="mb-[14px] flex min-h-9 justify-end">
         <CreateApiKeyDialog
           availablePermissions={availablePermissions}
           apiUrl={apiUrl}

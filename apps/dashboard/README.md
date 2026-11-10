@@ -160,7 +160,7 @@ Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
 outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
 
 Import operation icons from `components/ui/icon`, whose aliases all use the
-offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
+bundled Lucide outline collection with a default 1.3px stroke. Give icon-only actions an `aria-label`, retain helpful
 titles, and forward native props/ref through wrappers used by Radix triggers.
 Choose variants and sizes instead of copying hover, padding, or border classes.
 
@@ -355,8 +355,9 @@ The API has no create for an image: one enters the catalog when a box first
 starts from it. So the Images page has no "New image" button, which would
 promise a registration step that does not exist. One description below the title
 explains the active tab: built-in/used images or private-registry credentials.
-The Private registries tab provides credential setup. New box in the filter
-toolbar opens the existing create dialog, while row actions prefill an image.
+The Private registries tab provides credential setup with one toolbar Connect
+action, including an empty list. Images has no independent New box action; use
+Boxes to start from a new reference, or a catalog row action to prefill its image.
 Quota information stays in the usage meter. The inline "How to add an image"
 control expands the registry → New box → successful start steps on demand.
 Its registry link preserves query parameters, including a suggested registry to connect.
@@ -568,10 +569,140 @@ permission apply. Bind acquired full hostnames through the CLI or SDK; binding
 does not request names, and App binding remains reserved. Unbinding retains
 ownership and consumes the same quota slot.
 
-Connection guidance is available in the collapsed "How to connect a domain"
-section. Successful requests clear filtering and show a reservation confirmation.
+The request dialog explains reservation versus binding; the list has no separate
+connection-help footer. Successful requests clear filtering and show a reservation confirmation.
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
+
+
+## Neutral dark surfaces
+
+Dark structural surfaces use zero-saturation gray: page background 4% lightness,
+card 7%, popover 9%, hover/accent 12% and borders 16%. Sidebar, input, code and
+scrollbar tokens follow the same neutral scale; brand and semantic status colors
+keep their hues. Use these tokens instead of blue-gray literal backgrounds.
+Light theme values are independent and unchanged by the dark palette.
+
+For opt-in empty mock fixtures, see the desktop review section below.
+
+
+## Desktop review: code surfaces, payment identity and empty resources
+
+Saved payment methods use an explicit allowlist of locally bundled brand SVGs in
+`src/assets/payment-brands` (license and pinned source included); unknown brands
+retain an accessible generic card icon. Amounts, expiry validation and default-card
+selection are unchanged.
+
+Quickstart code wrappers use `quickstart-code-surface`: a visible neutral outline
+and a separate code surface in each theme. This is local to Quickstart; copy values
+and code whitespace remain unchanged. Console templates scroll with the page.
+The selected template panel keeps its content height, and sticky positioning is
+only enabled on desktop windows at least 800px high; shorter windows use normal flow.
+
+Resource lists share `ResourceEmptyState`: a 48px neutral thin-line icon tile, 18px
+heading, body copy below it, then optional secondary guide links. Creation stays
+in the page toolbar under its existing permission guard. Images directs users to
+Boxes; billing records have no creation CTA. Search misses, loading and errors
+remain separate states. Quotas and other task-specific content above the list can
+change its absolute vertical position without changing the empty-state anatomy.
+
+For local mock review, `localStorage['desktop-review-empty'] = '1'` empties Boxes,
+Images, Registries, Volumes, Domains, billing documents, credit activity and cost
+series. API Keys are already empty by default. Set `SkipOnboarding_mock-user-00000000`
+to `'true'` to inspect the returning-user empty Boxes list. Use the separate
+`desktop-review-empty-members = '1'` only to inspect an unavailable membership list:
+this also removes the mock user's membership and correctly hides owner actions.
+Reset the two `desktop-review-empty*` values to `'0'` and reload for normal fixtures.
+
+The shared resource module provides consumed empty-state, status, and filter primitives. Regression checks cover optional guidance, accessible status labels, empty/loading credit history, both money-history retry paths, volume filter recovery, clipboard failures and the exact-name deletion guard.
+
+Boxes use a cube and Images use stacked layers to distinguish instance from image. Resource lists use 24px thin-line icons from `components/ui/icon`; status stays in its own indicator. Quickstart environment logos and payment brands keep their brand assets. The compact image summary alongside the filter shows `Custom images used / limit · Total image size bytes`. Both metrics cover organization-owned images, excluding curated images. Total image size is the sum of declared ready-version sizes, not deduplicated physical storage or a billing measurement. Only the count changes color near its quota; per-image Size cells and limit guidance remain.
+
+Box inbound state means the proxy tunnel gate, not organization scope: disabled rejects tunnel traffic; enabled applies the public/private tunnel policy. Private tunnels accept a valid access token or organization authentication. Do not describe disabled as organization-only. Detail switches reserve space for their expanded hit targets, and outbound values may wrap.
+
+Desktop visual comparisons and reproduction steps: [screenshot gallery](../../docs/contributing/investigations/assets/desktop-dashboard-review/README.md).
+
+Resource headers leave 24px before the next section. Desktop filters share a 380×36px field, 13px input text, solid border and explicit accessible name. Toolbars precede list headers by 14px; Images and Domains usage wraps only when needed. Private registries supports local host, prefix and username filtering with clear-filter recovery. Boxes shows total, running and stopped counts for fleets of at least ten Boxes, independently of list filters or pagination. Its overview has 24px gaps above and below.
+
+Billing pagers retain Previous on a failed later page with unknown totals. Cached Images refresh failures identify the retained rows as previously loaded data. Unknown invoice statuses preserve the upstream text. Create Box pricing and validation scroll inside the body while header and action footer remain visible.
+
+The signed-out landing state uses a centered, borderless column, a semantic heading,
+and one primary Sign in action. Its presentation shares dashboard theme tokens;
+ordinary unauthenticated visits still redirect to the hosted identity provider,
+while an explicit logout retains the existing manual sign-in guard.
+
+## Expandable left navigation
+
+Desktop navigation uses a 64px icon rail by default. Expand navigation reveals
+labels in a 224px sidebar; the choice is saved as `boxlite-navigation-expanded`
+in localStorage, with an in-memory fallback when storage is unavailable.
+Hover the compact logo for 350ms to preview the full sidebar as an overlay;
+content keeps its position. Moving into the menu keeps it open; leaving closes it
+after 150ms, unless a child has keyboard focus. Escape dismisses the preview and
+returns focus to the logo. The top Collapse button also dismisses the preview;
+clicking the logo pins the expanded sidebar.
+Hover never changes the saved preference; touch uses the explicit click control.
+Images has an independent disclosure for its existing Images and Private
+registries routes. Child links use 14px thin-line icons, a shared inset and
+full-width selection; primary icons remain 18px. Navigation data accepts
+second-level children without adding speculative destinations. Entering a child route reveals its group; the active
+route remains highlighted when the whole sidebar collapses.
+
+The desktop sidebar spans the viewport height (minus any announcement). Its logo
+shows the full wordmark when expanded and the icon when compact. The right column
+contains a 48px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+Welcome keeps its simplified header.
+
+Management is a primary disclosure after Domains, with Billing and Organization
+children. Clicking it in compact mode expands the sidebar and reveals the group;
+entering a management route opens the group, while manual collapse remains possible.
+Organization switching, theme and logout remain in the account menu.
+
+Links retain accessible names in compact mode and show right-side tooltips on
+hover/focus. The middle navigation scrolls on short screens; the footer pins the
+Quickstart as the last action. Collapse sits beside the logo in both pinned
+expansion and hover preview, and is hidden in the compact rail without a preview.
+Clicking the compact logo expands navigation without changing the route.
+Keyboard focus moves to the replacement toggle. Selected navigation uses the
+accent surface, distinct from the quieter hover surface.
+
+Dashboard owns `--app-header-height`, `--app-banner-height` and
+`--app-content-height`. List/detail/fullscreen layouts consume these variables
+to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcement
+height consistently. Preserve `min-w-0` on the content region when adding routes.
+
+Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
+section label. Management remains a separate primary entry. Compact navigation
+keeps the group accessible name without squeezing in a visual label.
+
+Expanded navigation highlights only the current child, using the same full row
+width as primary items. Active parents retain foreground emphasis without a
+second selection rectangle. Child indentation comes from padding, with no tree line.
+
+Sidebar branding always renders the same 43.2px-high wordmark asset
+(20% above the original 36px). Compact mode clips the text area instead of substituting a differently padded icon image, so
+the visible symbol keeps the same size and position across expansion.
+
+Neutral outlines use border, border-hover and border-selected tokens. In dark mode
+these are 16%, 23% and 30% neutral lightness, avoiding foreground-alpha outlines
+whose brightness jumps against dark cards. Selection also retains its text, fill
+or current badge; keyboard-focus indicators are unchanged.
+
+## Resource screen visual rules
+
+The compact Box list exposes a named “Box cards” region; its filter-recovery
+checks locate that accessible region independently of responsive CSS classes.
+
+True empty lists hide column headers and paging; filtered-empty lists retain context.
+Boxes and TanStack-backed tables share ResourcePagination. Totals and fetching stay
+with the caller; a later empty page always retains a Previous action, while a single
+page hides navigation arrows. Pagination follows the data rather than the viewport.
+Desktop image navigation lives in the expandable rail, with mobile-only page tabs.
+Clicking Images in a compact rail reveals its children. Quota metadata uses readable
+12px type. Template columns use a 240px minimum in the available content width;
+short Quickstart code blocks expand naturally. Billing and box details retain all
+data and actions while removing excess whitespace and dotted leaders.

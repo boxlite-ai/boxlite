@@ -327,7 +327,7 @@ pub struct JsPortSpec {
     pub host_ip: Option<String>,
 }
 
-/// Secret substitution configuration.
+/// Secret injection configuration.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsSecret {
@@ -557,6 +557,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
                 name: secret.name,
                 value: secret.value,
                 hosts: secret.hosts.unwrap_or_default(),
+                header: None,
             })
             .collect();
 

@@ -361,6 +361,8 @@ pub(crate) struct CreateBoxSecret {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<String>,
     pub placeholder: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
 }
 
 impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
@@ -370,6 +372,7 @@ impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
             value: secret.value.clone(),
             hosts: secret.hosts.clone(),
             placeholder: secret.placeholder.clone(),
+            header: secret.header.clone(),
         }
     }
 }
@@ -1007,6 +1010,23 @@ mod tests {
     }
 
     #[test]
+    fn create_box_secret_carries_a_configured_header() {
+        let mut secret = crate::runtime::options::Secret {
+            name: "gemini".into(),
+            value: "key".into(),
+            hosts: vec!["generativelanguage.googleapis.com".into()],
+            placeholder: "<BOXLITE_SECRET:gemini>".into(),
+            header: Some("x-goog-api-key".into()),
+        };
+        let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
+        assert_eq!(json["header"], "x-goog-api-key");
+
+        secret.header = None;
+        let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
+        assert!(json.get("header").is_none());
+    }
+
+    #[test]
     fn test_create_box_request_serialization() {
         use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
 
@@ -1027,6 +1047,7 @@ mod tests {
             value: "sk-test".into(),
             hosts: vec!["api.openai.com".into()],
             placeholder: "<BOXLITE_SECRET:openai>".into(),
+            header: None,
         }]);
         req.auto_stop = Some(900);
         req.auto_delete = Some(604800);
@@ -1065,6 +1086,7 @@ mod tests {
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
+                header: None,
             }],
             volumes: vec![VolumeSpec::managed_volume("volume-123", "/data")],
             auto_stop: Some(1800),

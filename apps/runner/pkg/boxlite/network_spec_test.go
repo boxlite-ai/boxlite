@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -130,11 +131,47 @@ func TestCreateRejectsMissingOutboundPolicyBeforeSideEffects(t *testing.T) {
 	}
 }
 
+// A stored secret the runtime would refuse must fail recovery while the old box
+// still exists. A nil runtime would panic in Destroy.
+func TestRecoverRejectsUnrecreatableSecretsBeforeDestroy(t *testing.T) {
+	enabled := true
+	cases := map[string][]dto.SecretDTO{
+		"no hosts":   {{Name: "a", Value: "real-value"}},
+		"empty host": {{Name: "a", Value: "real-value", Hosts: []string{""}}},
+		"same host and header": {
+			{Name: "a", Value: "real-value", Hosts: []string{"api.example.com"}},
+			{Name: "b", Value: "real-value", Hosts: []string{"API.example.com"}},
+		},
+	}
+	for name, secrets := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := (&Client{logger: slog.Default()}).RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{
+				OsUser: "root", OutboundEnabled: &enabled, Secrets: secrets,
+			})
+			if !errdefs.IsInvalidArgument(err) {
+				t.Fatalf("RecoverBox() error = %v, want an invalid-argument error", err)
+			}
+			if strings.Contains(err.Error(), "real-value") {
+				t.Fatalf("error contains the secret value: %v", err)
+			}
+		})
+	}
+}
+
 // RecoverBox destroys the old box before recreating it, so the policy check
 // must come first. A nil runtime would panic in Destroy.
 func TestRecoverRejectsMissingOutboundPolicyBeforeDestroy(t *testing.T) {
 	err := (&Client{logger: slog.Default()}).RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{OsUser: "root"})
 	if !errdefs.IsInvalidArgument(err) {
 		t.Fatalf("RecoverBox() error = %v, want an invalid-argument error", err)
+	}
+}
+
+func TestValidateRecreatableSecretsAllowsHostRepeatedWithinOneSecret(t *testing.T) {
+	err := validateRecreatableSecrets([]dto.SecretDTO{
+		{Name: "a", Value: "real-value", Hosts: []string{"api.example.com", "API.example.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

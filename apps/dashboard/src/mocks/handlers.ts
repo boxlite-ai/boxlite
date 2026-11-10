@@ -124,7 +124,13 @@ export const handlers = [
       points,
     })
   }),
-  http.get(`${API_URL}/organizations/:organizationId/users`, () => HttpResponse.json([MOCK_ORGANIZATION_MEMBER])),
+  http.get(`${API_URL}/organizations/:organizationId/users`, () =>
+    HttpResponse.json(
+      globalThis.localStorage?.getItem('desktop-review-empty-members') === '1' ? [] : [MOCK_ORGANIZATION_MEMBER],
+    ),
+  ),
+  // Latest-main Members also loads outgoing invitations; keep desktop preview offline.
+  http.get(`${API_URL}/organizations/:organizationId/invitations`, () => HttpResponse.json([])),
   http.get(`${API_URL}/box/paginated`, ({ request }) => {
     // Respect the ?states=… filter so the fleet count cards (running / stopped)
     // show real per-state counts in mock, not just the unfiltered total.
@@ -132,7 +138,10 @@ export const handlers = [
     const states = searchParams.getAll('states').flatMap((s) => s.split(','))
     // A brand-new account has no boxes, which static fixtures cannot show;
     // `localStorage['qs-empty-demo'] = '1'` empties the list for that screen.
-    if (globalThis.localStorage?.getItem('qs-empty-demo') === '1') {
+    if (
+      globalThis.localStorage?.getItem('qs-empty-demo') === '1' ||
+      globalThis.localStorage?.getItem('desktop-review-empty') === '1'
+    ) {
       return HttpResponse.json({ ...MOCK_PAGINATED_BOXES, items: [], total: 0 })
     }
     if (states.length === 0) {
@@ -142,8 +151,6 @@ export const handlers = [
       return HttpResponse.json({ ...MOCK_PAGINATED_BOXES, items, total: items.length })
     }
     const items = MOCK_BOXES.filter((b) => b.state != null && states.includes(b.state))
-    const isRunningCount = states.length === 1 && states[0] === 'started' && searchParams.get('limit') === '1'
-    if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
   // The Box API's create, which the New Box dialog calls on the page's own
@@ -222,7 +229,9 @@ export const handlers = [
   // a volume still mounted by a live box is refused with 409, and a successful
   // delete only moves the row to `pending_delete` — the reconciler finishes it
   // later, so the row must not vanish from the list.
-  http.get(`${API_URL}/volumes`, () => HttpResponse.json(MOCK_VOLUMES)),
+  http.get(`${API_URL}/volumes`, () =>
+    HttpResponse.json(globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : MOCK_VOLUMES),
+  ),
   http.post(`${API_URL}/volumes`, async ({ request }) => {
     const body = (await request.json()) as { name?: string }
     const created = {
@@ -276,7 +285,9 @@ export const handlers = [
           },
           { status: 501 },
         )
-      : HttpResponse.json(MOCK_REGISTRY_CREDENTIALS),
+      : HttpResponse.json(
+          globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : MOCK_REGISTRY_CREDENTIALS,
+        ),
   ),
   http.post(`${API_URL}/images/registries`, async ({ request }) => {
     const body = (await request.json()) as {
@@ -342,7 +353,9 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
   http.get(`${API_URL}/images/usage`, () => {
-    const owned = MOCK_IMAGE_DETAILS.filter((i) => !i.curated)
+    const owned = (globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : MOCK_IMAGE_DETAILS).filter(
+      (i) => !i.curated,
+    )
     return HttpResponse.json({
       count: owned.length,
       limit: MOCK_IMAGE_LIMIT,
@@ -351,7 +364,7 @@ export const handlers = [
   }),
   http.get(`${API_URL}/images`, () =>
     HttpResponse.json(
-      MOCK_IMAGE_DETAILS.map((detail) => {
+      (globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : MOCK_IMAGE_DETAILS).map((detail) => {
         const image: Partial<typeof detail> = { ...detail }
         delete image.versions
         delete image.history
@@ -623,7 +636,7 @@ export const handlers = [
         fromWalletCents: totalCents - quotaCoveredCents,
       })
     }
-    return HttpResponse.json(buckets)
+    return HttpResponse.json(globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : buckets)
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/email`, async () => {
     return HttpResponse.json<OrganizationEmail[]>([
@@ -761,8 +774,11 @@ export const handlers = [
 
     const startIndex = (page - 1) * perPage
     const endIndex = startIndex + perPage
-    const paginatedItems = visibleInvoices.slice(startIndex, endIndex)
-    const totalItems = visibleInvoices.length
+    const paginatedItems =
+      globalThis.localStorage?.getItem('desktop-review-empty') === '1'
+        ? []
+        : visibleInvoices.slice(startIndex, endIndex)
+    const totalItems = globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? 0 : visibleInvoices.length
     const totalPages = Math.ceil(totalItems / perPage)
 
     return HttpResponse.json<PaginatedInvoices>({
@@ -937,7 +953,7 @@ export const handlers = [
       // that funds the plan and the usage that draws it back down.
       ...buildWalletHistory(),
     ]
-    const ledger = newestFirst(transactions)
+    const ledger = globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : newestFirst(transactions)
     const start = (page - 1) * perPage
 
     return HttpResponse.json<PaginatedWalletTransactions>({

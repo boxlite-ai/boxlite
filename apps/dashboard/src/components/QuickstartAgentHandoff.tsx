@@ -540,7 +540,7 @@ Verify that the credentials are valid and authorized for this task before execut
         )}
         <details className="mt-6 text-sm text-muted-foreground">
           <summary className="w-fit cursor-pointer hover:text-foreground">View prompt</summary>
-          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-none bg-[hsl(var(--code-background))] p-4 font-mono text-xs leading-relaxed text-foreground">
+          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-none quickstart-code-surface p-4 font-mono text-xs leading-relaxed text-foreground">
             {handoff ? shownPrompt : 'Preparing your key…'}
           </pre>
         </details>
@@ -564,7 +564,7 @@ Verify that the credentials are valid and authorized for this task before execut
 
       <div
         className={cn(
-          'flex items-start gap-3 bg-[hsl(var(--code-background))] px-[14px] py-3',
+          'quickstart-code-surface flex items-start gap-3 px-[14px] py-3',
           composeRequest ? 'rounded-none' : 'border border-border',
         )}
       >

@@ -1,4 +1,4 @@
-//! CA certificate generation and persistence for MITM secret substitution.
+//! CA certificate generation and persistence for MITM secret injection.
 //!
 //! Generates ECDSA P-256 CA certificates and persists them to the box directory
 //! so the same CA survives box restarts.

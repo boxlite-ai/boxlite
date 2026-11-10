@@ -61,7 +61,7 @@ describe('InvoicesTable', () => {
     expect(target.querySelector('[data-invoice-date]')?.textContent).toBe('2026-09-04')
     expect(target.querySelector('[data-invoice-type]')?.textContent).toBe('upgrade')
     expect(target.querySelector('[data-invoice-number]')?.textContent).toBe('BOX-2026-0001')
-    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('paid')
+    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('Paid')
   })
 
   it('shows the price charged for an upgrade, not the quota it granted', () => {
@@ -97,7 +97,7 @@ describe('InvoicesTable', () => {
     const target = render([{ ...invoice, totalAmountCents: 8_900, totalPaidCents: 0, paymentStatus: 'failed' }])
 
     expect(target.querySelector('[data-invoice-amount]')?.textContent).toBe('0.00')
-    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('failed')
+    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('Failed')
   })
 
   it('renders a payment status Commerce added later instead of throwing', () => {
@@ -115,7 +115,7 @@ describe('InvoicesTable', () => {
     const amount = target.querySelector('[data-invoice-amount]')
     expect(amount?.textContent).toBe('548.37')
     expect(amount?.className).toContain('line-through')
-    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('voided')
+    expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('Voided')
   })
 
   it('says the history is empty rather than rendering a bare header', () => {

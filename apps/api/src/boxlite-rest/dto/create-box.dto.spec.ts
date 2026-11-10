@@ -458,7 +458,7 @@ describe('CreateBoxDto detach policy', () => {
 })
 
 describe('CreateBoxDto secrets', () => {
-  it('accepts a secret with name+value and optional hosts/placeholder', async () => {
+  it('accepts a secret with name+value+hosts and an optional placeholder', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         secrets: [
@@ -470,14 +470,31 @@ describe('CreateBoxDto secrets', () => {
     expect(errors).toHaveLength(0)
   })
 
-  it('accepts a secret with only name+value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test' }] }))
+  it('accepts a secret without a placeholder', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).toHaveLength(0)
   })
 
+  it.each([
+    ['missing', {}, 'isDefined'],
+    ['empty', { hosts: [] }, 'arrayNotEmpty'],
+    ['holding an empty entry', { hosts: [''] }, 'isNotEmpty'],
+  ])('rejects a secret with hosts %s', async (_case, hosts, constraint) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test', ...hosts }] }),
+    )
+
+    expect(errors).not.toHaveLength(0)
+    expect(errors[0]?.children?.[0]?.children?.[0]?.property).toBe('hosts')
+    expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty(constraint)
+    expect(JSON.stringify(errors[0]?.children?.[0]?.children?.[0]?.constraints)).not.toContain('sk-test')
+  })
+
   it('rejects a secret missing its name', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test' }] }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test', hosts: ['api.openai.com'] }] }))
 
     expect(errors).not.toHaveLength(0)
     // @ValidateNested({ each: true }) reports one child per array slot, and the
@@ -487,14 +504,14 @@ describe('CreateBoxDto secrets', () => {
   })
 
   it('rejects a secret missing its value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai' }] }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }))
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
   })
 
   it('rejects a secret with an empty value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '' }] }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }))
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')

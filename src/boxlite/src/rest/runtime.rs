@@ -338,6 +338,7 @@ impl BoxOptions {
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         options.sanitize_remote()?;
+        options.validate_secrets()?;
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —

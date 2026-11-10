@@ -25,10 +25,10 @@ const CUSTOM_PLAN_CONTACT_URL =
 // holds the tallest of them (a price, or a price above a line of prose). Left
 // to `flex-1` the leftover height collected in the middle of the short cards
 // instead, so no two rows lined up and each card carried ~100px of nothing.
-const CARD_BADGE_ROW = 'mb-4 flex h-[18px] items-center justify-between gap-3'
+const CARD_BADGE_ROW = 'mb-3 flex h-[18px] items-center justify-between gap-3'
 const CARD_BADGE =
-  'border border-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[1px] text-muted-foreground'
-const CARD_PRICE_BAND = 'mb-4 flex h-[64px] flex-col justify-start'
+  'border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground'
+const CARD_PRICE_BAND = 'mb-3 flex min-h-[64px] flex-col justify-start'
 
 function SpecRow({ label, value }: { label: string; value: string }) {
   return (
@@ -39,6 +39,7 @@ function SpecRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+/** Uses the current subscription to choose a disabled, scheduled, upgrade or downgrade action. */
 function PlanCard({
   plan,
   organizationPlan,
@@ -56,7 +57,7 @@ function PlanCard({
   return (
     <div
       className={`flex flex-col border bg-card px-[22px] py-5 transition-transform hover:-translate-y-0.5 ${
-        isActive ? 'border-foreground/45' : 'border-border hover:border-foreground/25'
+        isActive ? 'border-border-selected' : 'border-border hover:border-border-hover'
       }`}
     >
       <div className={CARD_BADGE_ROW}>
@@ -73,7 +74,7 @@ function PlanCard({
         </span>
       </div>
 
-      <div className="mb-5 divide-y divide-border/40">
+      <div className="mb-5 divide-y divide-border">
         <SpecRow
           label="Quota"
           value={plan.includedQuotaCents != null ? formatWholeDollars(plan.includedQuotaCents) : 'Unlimited'}
@@ -110,7 +111,7 @@ function PlanCard({
  */
 export function CustomPlanCard() {
   return (
-    <div className="flex flex-col border border-border bg-card px-[22px] py-5 transition-colors hover:border-foreground/25">
+    <div className="flex flex-col border border-border bg-card px-[22px] py-5 transition-colors hover:border-border-hover">
       <div className={CARD_BADGE_ROW}>
         <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
           <span style={{ color: BRAND }}>▸</span> Custom
@@ -125,14 +126,14 @@ export function CustomPlanCard() {
         </p>
       </div>
 
-      <div className="mb-5 divide-y divide-border/40">
+      <div className="mb-5 divide-y divide-border">
         <SpecRow label="Quota" value="—" />
         <SpecRow label="Concurrency" value="—" />
       </div>
 
       <a
         href={CUSTOM_PLAN_CONTACT_URL}
-        className="mt-auto inline-flex w-full items-center justify-center border border-border px-4 py-2 font-mono text-[12px] text-foreground transition-colors hover:border-foreground/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="mt-auto inline-flex w-full items-center justify-center border border-border px-4 py-2 font-mono text-[12px] text-foreground transition-colors hover:border-border-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         Contact sales →
       </a>
@@ -156,6 +157,7 @@ export function PlanCardsSkeleton({ count = 3 }: { count?: number }) {
   )
 }
 
+/** Compares self-serve prices against the active plan and routes changes through confirmation. */
 export function PlanCards({ plans, organizationPlan }: { plans: Plan[]; organizationPlan?: OrganizationPlan | null }) {
   const navigate = useNavigate()
   // A lapsed subscription still names its old plan, but that plan no longer

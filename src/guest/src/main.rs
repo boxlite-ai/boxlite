@@ -3,6 +3,10 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("BoxLite guest is Linux-only; build with a Linux target");
 
+#[cfg(all(target_os = "linux", feature = "integration-test-init", not(test)))]
+#[path = "../tests/support/mount_init.rs"]
+mod mount_test_init;
+
 #[cfg(target_os = "linux")]
 mod ca_trust;
 #[cfg(target_os = "linux")]
@@ -73,6 +77,10 @@ struct GuestArgs {
 
 #[cfg(target_os = "linux")]
 fn main() -> BoxliteResult<()> {
+    #[cfg(all(feature = "integration-test-init", not(test)))]
+    {
+        mount_test_init::run();
+    }
     let t0 = Instant::now();
     BOOT_T0.set(t0).expect("BOOT_T0 already initialized");
 

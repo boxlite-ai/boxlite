@@ -30,7 +30,7 @@ A **Box** is a hardware-isolated micro-VM that runs any OCI image — and it per
 - **Real isolation**: its own kernel — stronger than a container, lighter than a full VM. Small footprint, async-first for fleets.
 - **Daemonless**: embed as a library — no root, no background service. *(optional server mode)*
 - **OCI-native**: run any Docker image unchanged (`python:slim`, `node:alpine`, …).
-- **Controlled networking**: restrict egress with `allow_net`; inject real secrets via placeholders.
+- **Controlled networking**: restrict egress with `allow_net`; inject real secrets into configured request headers at the host proxy.
 - **Embed → cloud**: one engine, from your laptop to a multi-tenant cloud.
 
 ## Get started
@@ -228,7 +228,6 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 | Linux          | x86_64                | ✅ Supported     |
 | Linux          | ARM64                 | ✅ Supported     |
 | Windows (WSL2) | x86_64                | ✅ Supported     |
-| macOS          | Intel (x86_64)        | 🚀 Coming soon |
 
 ## System Requirements
 

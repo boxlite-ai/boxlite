@@ -82,7 +82,7 @@ Structured network configuration for outbound connectivity.
   resolved to `0.0.0.0`, so code that detected the block by inspecting a
   lookup result must check for a failed connection instead.
 - A host named by `secrets` below is reachable on port 443 without an
-  `allow_net` rule of its own. Substitution runs in front of the allowlist, and
+  `allow_net` rule of its own. Injection runs in front of the allowlist, and
   the connection is dialed by name like any hostname rule, so the guest cannot
   steer it elsewhere by choosing an address. Under a non-empty `allow_net` that
   dial also refuses an answer in a private, loopback or CGNAT range unless an
@@ -119,17 +119,78 @@ Create and runtime updates reject any other rule, such as `"example.com:443"`.
 
 ### `secrets`
 
-Host-side secret substitution rules for outbound HTTPS requests.
+Secrets the host proxy writes into a request header on outbound HTTPS requests.
+The creator of the box decides which host and header receive a secret; code
+inside the box cannot change that.
 
 **Shape:**
 - `name`: human-readable secret name
 - `value`: real secret value
-- `hosts`: matching hosts for substitution
-- `placeholder`: optional guest-visible token, defaults to `<BOXLITE_SECRET:{name}>`
+- `hosts`: required, at least one host; `*.example.com` matches one subdomain level
+- `placeholder`: optional dummy value for the guest, defaults to `<BOXLITE_SECRET:{name}>`
+- `header`: optional target header, defaults to `Authorization`. Rust `Secret` on
+  a local runtime only for now: the Python, Node, Go and C SDKs have no such
+  parameter, and the cloud API and `boxlite serve` reject a request that sets it.
+
+**Proxy behavior:**
+
+| Request | Result |
+| --- | --- |
+| HTTPS to a listed host, with the configured header | Overwrites its value, including an empty value |
+| HTTPS to a listed host, without the configured header | No injection |
+| Any other host, or plain HTTP | No injection |
+| Placeholder in another header, the query, or the body | Sent unchanged |
+
+Header names match case-insensitively on the original request, before outbound
+hop-by-hop cleanup. The value need not contain a placeholder.
+`Authorization` is written as `Bearer {value}`; any other header as `{value}`.
+
+| API | `hosts` | `header` |
+| --- | --- | --- |
+| OpenAI | `api.openai.com` | default |
+| Anthropic | `api.anthropic.com` | default, or `x-api-key` |
+| GitHub | `api.github.com` | default |
+| Gemini | `generativelanguage.googleapis.com` | `x-goog-api-key` |
+
+Pick the header the SDK in the box actually sends. If the configured header is
+absent, no credential is injected and the upstream may return 401.
+
+**Create rejects:**
+- `hosts` empty, or holding an empty entry
+- an empty `placeholder`
+- a `header` that is not a valid header name, or is one of `Host`, `Connection`,
+  `Proxy-Authorization`, `Keep-Alive`, `TE`, `Trailer`, `Upgrade`,
+  `Content-Length`, `Transfer-Encoding`
+- two secrets writing the same `header` on the same `hosts` entry. Overlap between
+  a wildcard and an exact host is not detected; the last secret wins.
+
+These rules apply when a box is created. A box that already exists keeps starting,
+and asking for it by name adopts it; if two of its secrets write the same header on
+a host, the last one wins and a warning is logged.
+
+Recovering a cloud box recreates it, so a stored secret that breaks these rules
+fails recovery with an error and the old box is kept. Fix the secret, then retry.
+
+**Not supported:**
+- APIs that take the key in the query or body
+- Basic authentication and request signing such as AWS SigV4
+- `Authorization` schemes other than `Bearer`, such as `Bot` or `Token`
+
+**Migrating from placeholder substitution:** the proxy no longer searches requests
+for placeholders. A placeholder in a header other than the configured one, the
+query, or the body now reaches the upstream unchanged. Move those keys to a header
+and declare it, or keep using `Authorization: Bearer`, which needs no change.
+Requests without the configured header remain anonymous; any existing value,
+including an empty value, triggers injection on a matching host.
 
 **Notes:**
-- The guest sees only the placeholder, never the real secret value.
-- The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
+- The guest holds only the placeholder, exposed as `BOXLITE_SECRET_<NAME>`, so SDKs
+  that require a key can start. The proxy never parses it.
+- **Do not bind a secret to a host that echoes requests,** such as a debug or echo
+  service. An upstream that returns the injected header hands the real value back
+  to the box; the proxy does not scrub responses.
+- Any process in the box can make authenticated requests to a listed host. The
+  value is isolated; the right to use it is not.
 - **A secret is an egress grant as well as a credential.** Every host this
   matches becomes reachable on port 443 without a rule of its own — declaring
   that a credential is used at a host already says the host must be reachable.
@@ -138,11 +199,10 @@ Host-side secret substitution rules for outbound HTTPS requests.
   host answering with a private, loopback or CGNAT address is refused unless an
   IP or CIDR rule covers that range. Nothing else opens: those hosts on port
   80, on any other port, or over UDP are still governed by `allow_net` alone.
-- Substitution is HTTPS-only. A plain-HTTP request would carry the placeholder
-  rather than the real value, which is the other reason port 80 is not opened
-  here.
+- Injection is HTTPS-only. A plain-HTTP request carries no real value, which is
+  the other reason port 80 is not opened here.
 - Under `mode` `"disabled"` a secret does nothing: no network backend is
-  created, so nothing is substituted and no host becomes reachable. The
+  created, so nothing is injected and no host becomes reachable. The
   placeholder environment variable is still injected into the guest.
 - C SDK users configure secrets with `boxlite_options_add_secret()`.
 

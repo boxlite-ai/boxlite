@@ -7,14 +7,14 @@ import { ActorKind } from './actor-kind.enum'
 import { PlatformReason } from './platform-reason.enum'
 
 /**
- * What the caller of an operation decides about it: who started it and, for the
- * platform, why. Callers pass it explicitly; build one with the factories, which
- * allow a reason only on a platform context.
+ * Who started an operation and, for platform callers, its reason and optional
+ * database lock-wait budget. Callers pass it explicitly using these factories.
  */
 export class Context {
   private constructor(
     readonly actorKind: ActorKind,
     readonly reason?: PlatformReason,
+    readonly lockTimeoutMs?: number,
   ) {}
 
   static user(): Context {
@@ -25,7 +25,7 @@ export class Context {
     return new Context(ActorKind.ADMIN)
   }
 
-  static platform(reason: PlatformReason): Context {
-    return new Context(ActorKind.PLATFORM, reason)
+  static platform(reason: PlatformReason, options: { lockTimeoutMs?: number } = {}): Context {
+    return new Context(ActorKind.PLATFORM, reason, options.lockTimeoutMs)
   }
 }

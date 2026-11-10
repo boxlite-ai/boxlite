@@ -16,7 +16,7 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 │       ├── mounts/            # Host side of shared/ (isolate_mounts, Linux)
 │       ├── bin/               # Shim binary and libraries the jailer copies in
 │       ├── boot/              # Custom kernel and initramfs
-│       ├── ca/                # CA for secret substitution, kept from the guest
+│       ├── ca/                # CA for secret injection, kept from the guest
 │       ├── logs/              # Shim logs and console.log (kernel, init)
 │       ├── tmp/               # Shim temporary files
 │       ├── shim.pid           # Shim process ID

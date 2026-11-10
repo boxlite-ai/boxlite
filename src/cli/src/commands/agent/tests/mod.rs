@@ -421,14 +421,175 @@ fn agents_help_and_completion_include_nine_flat_commands() {
     }
 }
 
+/// Records use the field names and enum strings documented under "C JSON fields".
 #[test]
-fn agents_handler_returns_typed_unsupported() {
-    let error = execute(AgentArgs {
-        command: parse(&["create", "box", "--agent", "coder"]),
-    })
-    .unwrap_err();
+fn agents_records_use_documented_json_shapes() {
+    use boxlite::agents::{
+        AgentOutcome, AgentRequest, AgentRequestKind, AgentResult, AgentState, AgentStatus,
+        AgentSteeringReceipt, AgentSteeringStatus, AgentTurnState, AgentTurnStatus,
+    };
+    let request = AgentRequest {
+        id: "req".into(),
+        turn_id: "msg".into(),
+        kind: AgentRequestKind::Permission {
+            tool: "bash".into(),
+            arguments: json!({"command": "ls"}),
+        },
+    };
+    let receipt = AgentSteeringReceipt {
+        id: "steer".into(),
+        turn_id: "msg".into(),
+        status: AgentSteeringStatus::Applied,
+    };
+    let state = AgentState {
+        id: "ses".into(),
+        status: AgentStatus::Busy,
+        cursor: None,
+        active_turn_id: Some("msg".into()),
+        queued_turn_ids: vec!["next".into()],
+        requests: vec![request.clone()],
+        steering: vec![receipt.clone()],
+    };
+    assert_eq!(
+        records::agent_state(&state),
+        json!({
+            "id": "ses", "status": "busy", "cursor": null, "active_turn_id": "msg",
+            "queued_turn_ids": ["next"],
+            "requests": [{"id": "req", "turn_id": "msg",
+                "kind": {"type": "permission", "tool": "bash", "arguments": {"command": "ls"}}}],
+            "steering": [{"id": "steer", "turn_id": "msg", "status": "applied"}],
+        })
+    );
+
+    let result = AgentResult {
+        turn_id: "msg".into(),
+        status: AgentTurnStatus::WaitingInput,
+        outcome: Some(AgentOutcome::Question),
+        text: Some("which file?".into()),
+        data: None,
+        artifacts: vec![],
+        usage: None,
+        error: None,
+    };
+    let turn = AgentTurnState {
+        id: "msg".into(),
+        agent_id: "ses".into(),
+        status: AgentTurnStatus::WaitingInput,
+        cursor: Some("c1".into()),
+        result: Some(result),
+        requests: vec![],
+        steering: vec![],
+    };
+    assert_eq!(
+        records::turn_state(&turn),
+        json!({
+            "id": "msg", "agent_id": "ses", "status": "waiting_input", "cursor": "c1",
+            "result": {"turn_id": "msg", "status": "waiting_input", "outcome": "question",
+                "text": "which file?", "data": null, "artifacts": [], "usage": null, "error": null},
+            "requests": [], "steering": [],
+        })
+    );
+}
+
+#[test]
+fn agents_config_and_capabilities_records_omit_or_null_unknowns() {
+    use boxlite::agents::{AgentCapabilities, AgentConfig};
+    use std::time::Duration;
+    let config = AgentConfig {
+        model: Some("fake/fake-model".into()),
+        ..AgentConfig::default()
+    };
+    assert_eq!(
+        records::config(&config),
+        json!({"model": "fake/fake-model", "tools": [], "mcp": []})
+    );
+    let capabilities = AgentCapabilities {
+        operations: vec!["agent.send".into()],
+        input_kinds: vec!["text".into()],
+        max_queued_turns: None,
+        max_pending_steering: Some(1),
+        idempotency_retention: Some(Duration::from_millis(1500)),
+    };
+    assert_eq!(
+        records::capabilities(&capabilities),
+        json!({"operations": ["agent.send"], "input_kinds": ["text"], "max_queued_turns": null,
+            "max_pending_steering": 1, "idempotency_retention_seconds": 1.5})
+    );
+}
+
+#[test]
+fn agents_respond_parses_answers_and_permissions_and_rejects_other_shapes() {
+    use boxlite::BoxliteError;
+    use boxlite::agents::AgentResponse;
+    assert!(matches!(
+        records::parse_response(json!({"type": "answer", "text": "yes", "data": {"n": 1}})),
+        Ok(AgentResponse::Answer { text, data: Some(data) }) if text == "yes" && data == json!({"n": 1})
+    ));
+    assert!(matches!(
+        records::parse_response(json!({"type": "permission", "approved": false})),
+        Ok(AgentResponse::Permission { approved: false })
+    ));
+    for invalid in [
+        json!({"type": "answer"}),
+        json!({"type": "permission", "approved": "yes"}),
+        json!({"type": "vote", "approved": true}),
+        json!({"type": "answer", "text": "yes", "extra": 1}),
+        json!("yes"),
+    ] {
+        assert!(
+            matches!(
+                records::parse_response(invalid.clone()),
+                Err(BoxliteError::InvalidArgument(_))
+            ),
+            "accepted {invalid}"
+        );
+    }
+}
+
+#[test]
+fn agents_config_parses_documented_fields_and_rejects_unknown_ones() {
+    use boxlite::BoxliteError;
+    let config =
+        records::parse_config(json!({"model": "fake/fake-model", "tools": ["bash"]})).unwrap();
+    assert_eq!(config.model.as_deref(), Some("fake/fake-model"));
+    assert_eq!(config.tools, ["bash"]);
+    assert!(config.mcp.is_empty());
+    assert!(matches!(
+        records::parse_config(json!({"modle": "typo"})),
+        Err(BoxliteError::InvalidArgument(message)) if message.contains("modle")
+    ));
+}
+
+/// The agent-level OpenCode stream always ends in an error: every earlier
+/// record must already be written when that error reaches the caller.
+#[tokio::test]
+async fn agents_events_print_every_record_before_the_stream_error() {
+    use boxlite::BoxliteError;
+    use boxlite::agents::AgentEvent;
+    let event = |kind: &str| {
+        Ok(AgentEvent {
+            cursor: None,
+            agent_id: "ses".into(),
+            turn_id: None,
+            kind: kind.into(),
+            data: json!({}),
+        })
+    };
+    let stream: AgentEventStream = Box::pin(futures::stream::iter([
+        event("session.status"),
+        event("session.idle"),
+        Err(BoxliteError::Network("OpenCode event stream ended".into())),
+    ]));
+    let mut out = Vec::new();
+    let error = print_events(stream, &mut out).await.unwrap_err();
     assert!(matches!(
         error.downcast_ref::<BoxliteError>(),
-        Some(BoxliteError::Unsupported(_))
+        Some(BoxliteError::Network(_))
     ));
+    let kinds: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["kind"].clone())
+        .collect();
+    assert_eq!(kinds, [json!("session.status"), json!("session.idle")]);
 }

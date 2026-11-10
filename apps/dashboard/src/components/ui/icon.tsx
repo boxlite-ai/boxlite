@@ -1,174 +1,298 @@
 /*
- * ASCII / pixel icon shim — drop-in replacement for lucide-react.
- * Every lucide name used in the app is re-exported here under the SAME name, mapped to the
- * semantically-equivalent pixelarticons (8-bit, angular) glyph. Call sites only swap the import
- * source ('lucide-react' -> '@/components/ui/icon'); props (className/size/style) are unchanged.
- * The logo is the only mark NOT routed through here.
+ * Shared thin-line SVG icons. Preserve caller overrides and native refs while
+ * matching the console's light visual weight by default.
  */
-import React from 'react'
-import { Icon as IconifyIcon, addCollection } from '@iconify/react'
-import pixelarticons from '@iconify-json/pixelarticons/icons.json'
+import { forwardRef } from 'react'
+import {
+  Activity as LucideActivity,
+  AlertCircle as LucideAlertCircle,
+  AlertCircleIcon as LucideAlertCircleIcon,
+  AlertTriangle as LucideAlertTriangle,
+  AlertTriangleIcon as LucideAlertTriangleIcon,
+  TriangleAlert as LucideTriangleAlert,
+  TriangleAlertIcon as LucideTriangleAlertIcon,
+  AlignCenterIcon as LucideAlignCenterIcon,
+  AlignLeftIcon as LucideAlignLeftIcon,
+  AlignRightIcon as LucideAlignRightIcon,
+  ArrowDown as LucideArrowDown,
+  ArrowDownIcon as LucideArrowDownIcon,
+  ArrowLeft as LucideArrowLeft,
+  ArrowRightIcon as LucideArrowRightIcon,
+  ArrowUp as LucideArrowUp,
+  ArrowUpIcon as LucideArrowUpIcon,
+  ArrowUpDownIcon as LucideArrowUpDownIcon,
+  ArrowUpRight as LucideArrowUpRight,
+  BarChart3 as LucideBarChart3,
+  BoldIcon as LucideBoldIcon,
+  BookOpen as LucideBookOpen,
+  BookSearchIcon as LucideBookSearchIcon,
+  Bot as LucideBot,
+  Building2 as LucideBuilding2,
+  Calendar as LucideCalendar,
+  CalendarIcon as LucideCalendarIcon,
+  Check as LucideCheck,
+  CheckIcon as LucideCheckIcon,
+  CheckCircle as LucideCheckCircle,
+  CheckCircle2 as LucideCheckCircle2,
+  CheckCircle2Icon as LucideCheckCircle2Icon,
+  CheckCircleIcon as LucideCheckCircleIcon,
+  CheckSquare2Icon as LucideCheckSquare2Icon,
+  ChevronDown as LucideChevronDown,
+  ChevronDownIcon as LucideChevronDownIcon,
+  ChevronLeft as LucideChevronLeft,
+  ChevronLeftIcon as LucideChevronLeftIcon,
+  ChevronRight as LucideChevronRight,
+  ChevronRightIcon as LucideChevronRightIcon,
+  ChevronUp as LucideChevronUp,
+  ChevronsDownUp as LucideChevronsDownUp,
+  ChevronsUpDown as LucideChevronsUpDown,
+  ChevronsLeft as LucideChevronsLeft,
+  ChevronsRight as LucideChevronsRight,
+  Circle as LucideCircle,
+  CircleDashed as LucideCircleDashed,
+  Clipboard as LucideClipboard,
+  ClipboardPaste as LucideClipboardPaste,
+  Clock as LucideClock,
+  Code2 as LucideCode2,
+  CommandIcon as LucideCommandIcon,
+  Box as LucideContainer,
+  Cookie as LucideCookie,
+  Copy as LucideCopy,
+  CopyIcon as LucideCopyIcon,
+  Cpu as LucideCpu,
+  CpuIcon as LucideCpuIcon,
+  CreditCardIcon as LucideCreditCardIcon,
+  Database as LucideDatabase,
+  DollarSign as LucideDollarSign,
+  ExternalLink as LucideExternalLink,
+  ExternalLinkIcon as LucideExternalLinkIcon,
+  Eye as LucideEye,
+  EyeIcon as LucideEyeIcon,
+  EyeOff as LucideEyeOff,
+  FileText as LucideFileText,
+  Github as LucideGithub,
+  HardDrive as LucideHardDrive,
+  HardDriveIcon as LucideHardDriveIcon,
+  Home as LucideHome,
+  HomeIcon as LucideHomeIcon,
+  Info as LucideInfo,
+  InfoIcon as LucideInfoIcon,
+  KeyRound as LucideKeyRound,
+  LifeBuoyIcon as LucideLifeBuoyIcon,
+  Link2 as LucideLink2,
+  ListChecks as LucideListChecks,
+  Loader2 as LucideLoader2,
+  Loader2Icon as LucideLoader2Icon,
+  LoaderCircle as LucideLoaderCircle,
+  LogOut as LucideLogOut,
+  Mail as LucideMail,
+  MailIcon as LucideMailIcon,
+  MapPinned as LucideMapPinned,
+  Maximize2 as LucideMaximize2,
+  MegaphoneIcon as LucideMegaphoneIcon,
+  MemoryStick as LucideMemoryStick,
+  MemoryStickIcon as LucideMemoryStickIcon,
+  MessageCircle as LucideMessageCircle,
+  MinusIcon as LucideMinusIcon,
+  MinusSquareIcon as LucideMinusSquareIcon,
+  Monitor as LucideMonitor,
+  MoonIcon as LucideMoonIcon,
+  MoreHorizontal as LucideMoreHorizontal,
+  MoreHorizontalIcon as LucideMoreHorizontalIcon,
+  MoreVertical as LucideMoreVertical,
+  PanelLeft as LucidePanelLeft,
+  Pause as LucidePause,
+  Pencil as LucidePencil,
+  Play as LucidePlay,
+  PlayIcon as LucidePlayIcon,
+  Plus as LucidePlus,
+  PlusIcon as LucidePlusIcon,
+  PlusCircle as LucidePlusCircle,
+  RefreshCcw as LucideRefreshCcw,
+  RefreshCw as LucideRefreshCw,
+  RotateCcw as LucideRotateCcw,
+  Search as LucideSearch,
+  SearchIcon as LucideSearchIcon,
+  Server as LucideServer,
+  Settings as LucideSettings,
+  SettingsIcon as LucideSettingsIcon,
+  ShieldCheck as LucideShieldCheck,
+  SparklesIcon as LucideSparklesIcon,
+  Square as LucideSquare,
+  SquareIcon as LucideSquareIcon,
+  SquareTerminal as LucideSquareTerminal,
+  SunIcon as LucideSunIcon,
+  SunMoon as LucideSunMoon,
+  Tag as LucideTag,
+  Terminal as LucideTerminal,
+  TerminalSquare as LucideTerminalSquare,
+  TextSearch as LucideTextSearch,
+  Timer as LucideTimer,
+  Trash as LucideTrash,
+  Trash2 as LucideTrash2,
+  TrashIcon as LucideTrashIcon,
+  Users as LucideUsers,
+  UsersIcon as LucideUsersIcon,
+  UsersRound as LucideUsersRound,
+  Wrench as LucideWrench,
+  X as LucideX,
+  XIcon as LucideXIcon,
+  XCircle as LucideXCircle,
+  XCircleIcon as LucideXCircleIcon,
+  Globe as LucideGlobe,
+  Braces as LucideBraces,
+  Layers as LucideLayers,
+  type LucideIcon,
+  type LucideProps,
+} from 'lucide-react'
 
-// Register the collection once (offline — no network fetch) so "pixelarticons:*" resolves.
-addCollection(pixelarticons)
+export type { LucideIcon, LucideProps } from 'lucide-react'
 
-export type LucideProps = React.SVGProps<SVGSVGElement> & {
-  size?: number | string
-  absoluteStrokeWidth?: boolean
+/** Supplies the console stroke weight without discarding native SVG props or refs. */
+function thinIcon(Icon: LucideIcon): LucideIcon {
+  const ThinIcon = forwardRef<SVGSVGElement, LucideProps>((props, ref) => (
+    <Icon strokeWidth={1.3} {...props} ref={ref} />
+  ))
+  ThinIcon.displayName = Icon.displayName
+  return ThinIcon
 }
-export type LucideIcon = React.FC<LucideProps>
 
-function makeIcon(pixelName: string): LucideIcon {
-  const Cmp: LucideIcon = ({ size = 24, width, height, strokeWidth, absoluteStrokeWidth, mode, ...rest }) => {
-    void strokeWidth
-    void absoluteStrokeWidth
-    void mode
+export const Activity = thinIcon(LucideActivity)
+export const AlertCircle = thinIcon(LucideAlertCircle)
+export const AlertCircleIcon = thinIcon(LucideAlertCircleIcon)
+export const AlertTriangle = thinIcon(LucideAlertTriangle)
+export const AlertTriangleIcon = thinIcon(LucideAlertTriangleIcon)
+export const TriangleAlert = thinIcon(LucideTriangleAlert)
+export const TriangleAlertIcon = thinIcon(LucideTriangleAlertIcon)
+export const AlignCenterIcon = thinIcon(LucideAlignCenterIcon)
+export const AlignLeftIcon = thinIcon(LucideAlignLeftIcon)
+export const AlignRightIcon = thinIcon(LucideAlignRightIcon)
+export const ArrowDown = thinIcon(LucideArrowDown)
+export const ArrowDownIcon = thinIcon(LucideArrowDownIcon)
+export const ArrowLeft = thinIcon(LucideArrowLeft)
+export const ArrowRightIcon = thinIcon(LucideArrowRightIcon)
+export const ArrowUp = thinIcon(LucideArrowUp)
+export const ArrowUpIcon = thinIcon(LucideArrowUpIcon)
+export const ArrowUpDownIcon = thinIcon(LucideArrowUpDownIcon)
+export const ArrowUpRight = thinIcon(LucideArrowUpRight)
+export const BarChart3 = thinIcon(LucideBarChart3)
+export const BoldIcon = thinIcon(LucideBoldIcon)
+export const BookOpen = thinIcon(LucideBookOpen)
+export const BookSearchIcon = thinIcon(LucideBookSearchIcon)
+export const Bot = thinIcon(LucideBot)
+export const Building2 = thinIcon(LucideBuilding2)
+export const Calendar = thinIcon(LucideCalendar)
+export const CalendarIcon = thinIcon(LucideCalendarIcon)
+export const Check = thinIcon(LucideCheck)
+export const CheckIcon = thinIcon(LucideCheckIcon)
+export const CheckCircle = thinIcon(LucideCheckCircle)
+export const CheckCircle2 = thinIcon(LucideCheckCircle2)
+export const CheckCircle2Icon = thinIcon(LucideCheckCircle2Icon)
+export const CheckCircleIcon = thinIcon(LucideCheckCircleIcon)
+export const CheckSquare2Icon = thinIcon(LucideCheckSquare2Icon)
+export const ChevronDown = thinIcon(LucideChevronDown)
+export const ChevronDownIcon = thinIcon(LucideChevronDownIcon)
+export const ChevronLeft = thinIcon(LucideChevronLeft)
+export const ChevronLeftIcon = thinIcon(LucideChevronLeftIcon)
+export const ChevronRight = thinIcon(LucideChevronRight)
+export const ChevronRightIcon = thinIcon(LucideChevronRightIcon)
+export const ChevronUp = thinIcon(LucideChevronUp)
+export const ChevronsDownUp = thinIcon(LucideChevronsDownUp)
+export const ChevronsUpDown = thinIcon(LucideChevronsUpDown)
+export const ChevronsLeft = thinIcon(LucideChevronsLeft)
+export const ChevronsRight = thinIcon(LucideChevronsRight)
+export const Circle = thinIcon(LucideCircle)
+export const CircleDashed = thinIcon(LucideCircleDashed)
+export const Clipboard = thinIcon(LucideClipboard)
+export const ClipboardPaste = thinIcon(LucideClipboardPaste)
+export const Clock = thinIcon(LucideClock)
+export const Code2 = thinIcon(LucideCode2)
+export const CommandIcon = thinIcon(LucideCommandIcon)
+export const Container = thinIcon(LucideContainer)
+export const Cookie = thinIcon(LucideCookie)
+export const Copy = thinIcon(LucideCopy)
+export const CopyIcon = thinIcon(LucideCopyIcon)
+export const Cpu = thinIcon(LucideCpu)
+export const CpuIcon = thinIcon(LucideCpuIcon)
+export const CreditCardIcon = thinIcon(LucideCreditCardIcon)
+export const Database = thinIcon(LucideDatabase)
+export const DollarSign = thinIcon(LucideDollarSign)
+export const ExternalLink = thinIcon(LucideExternalLink)
+export const ExternalLinkIcon = thinIcon(LucideExternalLinkIcon)
+export const Eye = thinIcon(LucideEye)
+export const EyeIcon = thinIcon(LucideEyeIcon)
+export const EyeOff = thinIcon(LucideEyeOff)
+export const FileText = thinIcon(LucideFileText)
+export const Github = thinIcon(LucideGithub)
+export const HardDrive = thinIcon(LucideHardDrive)
+export const HardDriveIcon = thinIcon(LucideHardDriveIcon)
+export const Home = thinIcon(LucideHome)
+export const HomeIcon = thinIcon(LucideHomeIcon)
+export const Info = thinIcon(LucideInfo)
+export const InfoIcon = thinIcon(LucideInfoIcon)
+export const KeyRound = thinIcon(LucideKeyRound)
+export const LifeBuoyIcon = thinIcon(LucideLifeBuoyIcon)
+export const Link2 = thinIcon(LucideLink2)
+export const ListChecks = thinIcon(LucideListChecks)
+export const Loader2 = thinIcon(LucideLoader2)
+export const Loader2Icon = thinIcon(LucideLoader2Icon)
+export const LoaderCircle = thinIcon(LucideLoaderCircle)
+export const LogOut = thinIcon(LucideLogOut)
+export const Mail = thinIcon(LucideMail)
+export const MailIcon = thinIcon(LucideMailIcon)
+export const MapPinned = thinIcon(LucideMapPinned)
+export const Maximize2 = thinIcon(LucideMaximize2)
+export const MegaphoneIcon = thinIcon(LucideMegaphoneIcon)
+export const MemoryStick = thinIcon(LucideMemoryStick)
+export const MemoryStickIcon = thinIcon(LucideMemoryStickIcon)
+export const MessageCircle = thinIcon(LucideMessageCircle)
+export const MinusIcon = thinIcon(LucideMinusIcon)
+export const MinusSquareIcon = thinIcon(LucideMinusSquareIcon)
+export const Monitor = thinIcon(LucideMonitor)
+export const MoonIcon = thinIcon(LucideMoonIcon)
+export const MoreHorizontal = thinIcon(LucideMoreHorizontal)
+export const MoreHorizontalIcon = thinIcon(LucideMoreHorizontalIcon)
+export const MoreVertical = thinIcon(LucideMoreVertical)
+export const PanelLeft = thinIcon(LucidePanelLeft)
+export const Pause = thinIcon(LucidePause)
+export const Pencil = thinIcon(LucidePencil)
+export const Play = thinIcon(LucidePlay)
+export const PlayIcon = thinIcon(LucidePlayIcon)
+export const Plus = thinIcon(LucidePlus)
+export const PlusIcon = thinIcon(LucidePlusIcon)
+export const PlusCircle = thinIcon(LucidePlusCircle)
+export const RefreshCcw = thinIcon(LucideRefreshCcw)
+export const RefreshCw = thinIcon(LucideRefreshCw)
+export const RotateCcw = thinIcon(LucideRotateCcw)
+export const Search = thinIcon(LucideSearch)
+export const SearchIcon = thinIcon(LucideSearchIcon)
+export const Server = thinIcon(LucideServer)
+export const Settings = thinIcon(LucideSettings)
+export const SettingsIcon = thinIcon(LucideSettingsIcon)
+export const ShieldCheck = thinIcon(LucideShieldCheck)
+export const SparklesIcon = thinIcon(LucideSparklesIcon)
+export const Square = thinIcon(LucideSquare)
+export const SquareIcon = thinIcon(LucideSquareIcon)
+export const SquareTerminal = thinIcon(LucideSquareTerminal)
+export const SunIcon = thinIcon(LucideSunIcon)
+export const SunMoon = thinIcon(LucideSunMoon)
+export const Tag = thinIcon(LucideTag)
+export const Terminal = thinIcon(LucideTerminal)
+export const TerminalSquare = thinIcon(LucideTerminalSquare)
+export const TextSearch = thinIcon(LucideTextSearch)
+export const Timer = thinIcon(LucideTimer)
+export const Trash = thinIcon(LucideTrash)
+export const Trash2 = thinIcon(LucideTrash2)
+export const TrashIcon = thinIcon(LucideTrashIcon)
+export const Users = thinIcon(LucideUsers)
+export const UsersIcon = thinIcon(LucideUsersIcon)
+export const UsersRound = thinIcon(LucideUsersRound)
+export const Wrench = thinIcon(LucideWrench)
+export const X = thinIcon(LucideX)
+export const XIcon = thinIcon(LucideXIcon)
+export const XCircle = thinIcon(LucideXCircle)
+export const XCircleIcon = thinIcon(LucideXCircleIcon)
+export const Globe = thinIcon(LucideGlobe)
+export const Braces = thinIcon(LucideBraces)
 
-    const iconProps = rest as Omit<React.ComponentProps<typeof IconifyIcon>, 'icon' | 'width' | 'height'>
-
-    return (
-      <IconifyIcon icon={`pixelarticons:${pixelName}`} width={width ?? size} height={height ?? size} {...iconProps} />
-    )
-  }
-  Cmp.displayName = pixelName
-  return Cmp
-}
-
-export const Activity = makeIcon('trending')
-export const AlertCircle = makeIcon('warning-box')
-export const AlertCircleIcon = makeIcon('warning-box')
-export const AlertTriangle = makeIcon('alert')
-export const AlertTriangleIcon = makeIcon('alert')
-export const TriangleAlert = makeIcon('alert')
-export const TriangleAlertIcon = makeIcon('alert')
-export const AlignCenterIcon = makeIcon('align-center')
-export const AlignLeftIcon = makeIcon('align-left')
-export const AlignRightIcon = makeIcon('align-right')
-export const ArrowDown = makeIcon('arrow-down')
-export const ArrowDownIcon = makeIcon('arrow-down')
-export const ArrowLeft = makeIcon('arrow-left')
-export const ArrowRightIcon = makeIcon('arrow-right')
-export const ArrowUp = makeIcon('arrow-up')
-export const ArrowUpIcon = makeIcon('arrow-up')
-export const ArrowUpDownIcon = makeIcon('arrows-vertical')
-export const ArrowUpRight = makeIcon('external-link')
-export const BarChart3 = makeIcon('chart-bar')
-export const BoldIcon = makeIcon('heading')
-export const BookOpen = makeIcon('book-open')
-export const BookSearchIcon = makeIcon('book-open')
-export const Bot = makeIcon('robot')
-export const Building2 = makeIcon('building')
-export const Calendar = makeIcon('calendar')
-export const CalendarIcon = makeIcon('calendar')
-export const Check = makeIcon('check')
-export const CheckIcon = makeIcon('check')
-export const CheckCircle = makeIcon('check')
-export const CheckCircle2 = makeIcon('check')
-export const CheckCircle2Icon = makeIcon('check')
-export const CheckCircleIcon = makeIcon('check')
-export const CheckSquare2Icon = makeIcon('checkbox-on')
-export const ChevronDown = makeIcon('chevron-down')
-export const ChevronDownIcon = makeIcon('chevron-down')
-export const ChevronLeft = makeIcon('chevron-left')
-export const ChevronLeftIcon = makeIcon('chevron-left')
-export const ChevronRight = makeIcon('chevron-right')
-export const ChevronRightIcon = makeIcon('chevron-right')
-export const ChevronUp = makeIcon('chevron-up')
-export const ChevronsDownUp = makeIcon('chevrons-vertical')
-export const ChevronsUpDown = makeIcon('chevrons-vertical')
-export const ChevronsLeft = makeIcon('chevron-left-2')
-export const ChevronsRight = makeIcon('chevron-right-2')
-export const Circle = makeIcon('circle')
-export const CircleDashed = makeIcon('circle')
-export const Clipboard = makeIcon('clipboard')
-export const ClipboardPaste = makeIcon('clipboard')
-export const Clock = makeIcon('clock')
-export const Code2 = makeIcon('braces')
-export const CommandIcon = makeIcon('command')
-export const Container = makeIcon('package')
-export const Cookie = makeIcon('info-box')
-export const Copy = makeIcon('copy')
-export const CopyIcon = makeIcon('copy')
-export const Cpu = makeIcon('cpu')
-export const CpuIcon = makeIcon('cpu')
-export const CreditCardIcon = makeIcon('credit-card')
-export const Database = makeIcon('database')
-export const DollarSign = makeIcon('dollar')
-export const ExternalLink = makeIcon('external-link')
-export const ExternalLinkIcon = makeIcon('external-link')
-export const Eye = makeIcon('eye')
-export const EyeIcon = makeIcon('eye')
-export const EyeOff = makeIcon('eye-off')
-export const FileText = makeIcon('file-text')
-export const Github = makeIcon('github')
-export const HardDrive = makeIcon('database')
-export const HardDriveIcon = makeIcon('database')
-export const Home = makeIcon('home')
-export const HomeIcon = makeIcon('home')
-export const Info = makeIcon('info-box')
-export const InfoIcon = makeIcon('info-box')
-export const KeyRound = makeIcon('lock')
-export const LifeBuoyIcon = makeIcon('headset')
-export const Link2 = makeIcon('link')
-export const ListChecks = makeIcon('checklist')
-export const Loader2 = makeIcon('loader')
-export const Loader2Icon = makeIcon('loader')
-export const LoaderCircle = makeIcon('loader')
-export const LogOut = makeIcon('logout')
-export const Mail = makeIcon('mail')
-export const MailIcon = makeIcon('mail')
-export const MapPinned = makeIcon('map-pin')
-export const Maximize2 = makeIcon('expand')
-export const MegaphoneIcon = makeIcon('megaphone')
-export const MemoryStick = makeIcon('memory-stick')
-export const MemoryStickIcon = makeIcon('memory-stick')
-export const MessageCircle = makeIcon('message')
-export const MinusIcon = makeIcon('minus')
-export const MinusSquareIcon = makeIcon('minus-box')
-export const Monitor = makeIcon('monitor')
-export const MoonIcon = makeIcon('moon')
-export const MoreHorizontal = makeIcon('more-horizontal')
-export const MoreHorizontalIcon = makeIcon('more-horizontal')
-export const MoreVertical = makeIcon('more-vertical')
-export const PanelLeft = makeIcon('layout-sidebar-left')
-export const Pause = makeIcon('pause')
-export const Pencil = makeIcon('edit')
-export const Play = makeIcon('play')
-export const PlayIcon = makeIcon('play')
-export const Plus = makeIcon('plus')
-export const PlusIcon = makeIcon('plus')
-export const PlusCircle = makeIcon('plus-box')
-export const RefreshCcw = makeIcon('reload')
-export const RefreshCw = makeIcon('reload')
-export const RotateCcw = makeIcon('reload')
-export const Search = makeIcon('search')
-export const SearchIcon = makeIcon('search')
-export const Server = makeIcon('server')
-export const Settings = makeIcon('settings-cog')
-export const SettingsIcon = makeIcon('settings-cog')
-export const ShieldCheck = makeIcon('shield')
-export const SparklesIcon = makeIcon('sparkles')
-export const Square = makeIcon('square')
-export const SquareIcon = makeIcon('square')
-export const SquareTerminal = makeIcon('terminal')
-export const SunIcon = makeIcon('sun')
-export const SunMoon = makeIcon('moon-star')
-export const Tag = makeIcon('label')
-export const Terminal = makeIcon('terminal')
-export const TerminalSquare = makeIcon('terminal')
-export const TextSearch = makeIcon('text-search')
-export const Timer = makeIcon('hourglass')
-export const Trash = makeIcon('trash')
-export const Trash2 = makeIcon('trash')
-export const TrashIcon = makeIcon('trash')
-export const Users = makeIcon('users')
-export const UsersIcon = makeIcon('users')
-export const UsersRound = makeIcon('users')
-export const Wrench = makeIcon('tool-case')
-export const X = makeIcon('close')
-export const XIcon = makeIcon('close')
-export const XCircle = makeIcon('close-box')
-export const XCircleIcon = makeIcon('close-box')
-
-export const Globe = makeIcon('globe')
-export const Braces = makeIcon('code')
+export const Layers = thinIcon(LucideLayers)

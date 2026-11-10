@@ -50,14 +50,15 @@ describe('BoxNetworkPanel', () => {
     render(network(NetworkMode.DISABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8']))
 
     expect(row('outbound')).toBe('outboundenabled · 2 hosts allowed')
-    expect(row('inbound')).toBe('inbounddisabled · your organization')
+    expect(row('inbound')).toBe('inbounddisabled')
+    expect(container.textContent).not.toContain('Disabled blocks all inbound tunnel access.')
   })
 
   it('reports enabled inbound and blocked egress', () => {
     render(network(NetworkMode.ENABLED, NetworkMode.DISABLED))
 
     expect(row('outbound')).toBe('outbounddisabled')
-    expect(row('inbound')).toBe('inboundenabled · anyone')
+    expect(row('inbound')).toBe('inboundenabled')
   })
 
   it('turns inbound access off without asking', () => {

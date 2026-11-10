@@ -148,12 +148,19 @@ describe('the image list', () => {
     state.images = images
     await renderCatalog()
 
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(images.length)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(images.length)
     const search = document.querySelector<HTMLInputElement>('input[placeholder="Filter images…"]')
     expect(search?.nextElementSibling?.textContent).toBe(String(images.length))
     for (const template of BOX_TEMPLATES) {
-      expect(buttonWithTitle(`New box from ${template.name}`)).toBeUndefined()
+      expect(buttonWithTitle(`New Box from ${template.name}`)).toBeUndefined()
     }
+  })
+
+  it('explains an empty image catalog without a standalone create button', async () => {
+    state.images = []
+    await renderCatalog()
+    expect(document.body.textContent).toContain('No images yet')
+    expect(document.body.textContent).toContain('Boxes page')
   })
 
   it('does not find a Quickstart-only template when filtering images', async () => {
@@ -163,15 +170,41 @@ describe('the image list', () => {
     if (!search) throw new Error('filter field missing')
     await act(async () => typeInto(search, BOX_TEMPLATES[0].image))
 
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(0)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(0)
     expect(document.body.textContent).toContain('No image matches')
     expect(search.nextElementSibling?.textContent).toBe('0')
   })
 
-  it('shows the image count against the limit, and the bytes the versions declare', async () => {
+  it.each([{ images: [] }, { images: [ORG_IMAGE] }])(
+    'only creates boxes from catalog image actions',
+    async ({ images }) => {
+      state.images = images
+      await renderCatalog()
+      const actions = [...document.querySelectorAll('button')].filter(
+        (button) => button.textContent?.trim() === 'New Box',
+      )
+      expect(actions).toHaveLength(images.length)
+      expect(actions.every((button) => button.title.startsWith('New Box from '))).toBe(true)
+    },
+  )
+
+  it('labels the custom-image quota without presenting declared bytes as storage usage', async () => {
     await renderCatalog()
 
-    expect(document.body.textContent).toContain('1 of 20 images · 4.0 KiB')
+    expect(document.body.textContent).toContain('Custom images 1 / 20')
+    const quota = [...document.querySelectorAll('span')].find((span) => span.textContent?.startsWith('Custom images'))
+    expect(quota?.textContent).toBe('Custom images 1 / 20')
+    expect(document.body.textContent).toContain('Total image size 4.0 KiB')
+  })
+
+  it.each([16, 20])('keeps quota guidance at %s images', async (count) => {
+    state.usage = { count, limit: 20, knownBytes: 4096 }
+    await renderCatalog()
+
+    expect(document.body.textContent).toContain(`Custom images ${count} / 20`)
+    expect(document.body.textContent?.includes('At the limit. Remove an image, or contact us to raise it.')).toBe(
+      count === 20,
+    )
   })
 
   it('lists built-in images in searchable rows, with no way to remove them', async () => {
@@ -194,7 +227,7 @@ describe('the image list', () => {
     ]
     await renderCatalog()
 
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(2)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(2)
     expect(buttonWithTitle(`Remove ${name}`)).toBeDefined()
     await act(async () => buttonWithTitle(`Remove ${name}`)!.click())
     await act(async () => confirmButton()!.click())
@@ -231,6 +264,16 @@ describe('the image list', () => {
     expect(row?.textContent).toContain('2')
   })
 
+  it('identifies cached rows as stale when an image refresh fails', async () => {
+    state.imagesError = new BoxliteError('refresh failed')
+    await renderCatalog()
+    expect(document.body.textContent).toContain(ORG_IMAGE.name)
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      'Could not refresh images. Showing previously loaded data.',
+    )
+    expect(document.body.textContent).not.toContain('Images are unavailable')
+  })
+
   it('reports failed reads and draws no usage it cannot back', async () => {
     state.images = []
     state.imagesError = new BoxliteError('catalog unavailable')
@@ -246,8 +289,8 @@ describe('the image list', () => {
       'Failed to fetch image usage',
       expect.objectContaining({ description: 'usage unavailable' }),
     )
-    expect(document.body.textContent).not.toContain('of 20 images')
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(0)
+    expect(document.body.textContent).not.toContain('Custom images')
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(0)
   })
 })
 
@@ -257,7 +300,7 @@ describe('starting a box', () => {
   it('opens the box create with the row’s reference filled in', async () => {
     await renderCatalog()
 
-    await act(async () => buttonWithTitle('New box from quay.io/acme/app:v1')?.click())
+    await act(async () => buttonWithTitle('New Box from quay.io/acme/app:v1')?.click())
 
     expect(state.newBoxOpen).toBe(true)
     expect(state.newBoxImage).toBe('quay.io/acme/app:v1')
@@ -268,27 +311,16 @@ describe('starting a box', () => {
     state.images = [BUILT_IN_IMAGE]
     await renderCatalog()
 
-    await act(async () => buttonWithTitle('New box from python')?.click())
+    await act(async () => buttonWithTitle('New Box from python')?.click())
 
     expect(mocks.navigate).toHaveBeenCalledWith('/dashboard/quickstart?method=console&template=python')
-  })
-
-  it('opens the general box create without prefilling an image', async () => {
-    await renderCatalog()
-
-    const button = [...document.querySelectorAll('button')].find((b) => b.textContent === 'New box' && !b.title)
-    expect(button).toBeDefined()
-    await act(async () => button!.click())
-
-    expect(state.newBoxOpen).toBe(true)
-    expect(state.newBoxImage).toBe('')
   })
 
   it('offers no box creation without Box write permission', async () => {
     state.deniedPermissions = [OrganizationRolePermissionsEnum.WRITE_BOXES]
     await renderCatalog()
 
-    expect([...document.querySelectorAll('button')].filter((b) => b.textContent === 'New box')).toHaveLength(0)
+    expect([...document.querySelectorAll('button')].filter((b) => b.textContent === 'New Box')).toHaveLength(0)
     expect(state.newBoxOpen).toBe(false)
   })
 })

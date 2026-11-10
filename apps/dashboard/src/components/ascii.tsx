@@ -1,3 +1,4 @@
+import { StatusIndicator } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
@@ -228,7 +229,7 @@ export function AsciiChip({
         // and it measured 2.49:1 on the light theme, so brand is kept for
         // things that are live rather than for marking a click.
         selected
-          ? 'border-foreground/45 bg-card font-semibold text-foreground'
+          ? 'border-border-selected bg-card font-semibold text-foreground'
           : 'border-border text-muted-foreground hover:text-foreground',
         className,
       )}
@@ -248,12 +249,7 @@ const STATUS_COLOR = {
 
 /** Square swatch + label. Replaces rounded badges, which clash with the square language. */
 export function StatusMark({ tone, children }: { tone: keyof typeof STATUS_COLOR; children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 font-mono text-[12px]">
-      <span className="size-[9px] shrink-0" style={{ background: STATUS_COLOR[tone] }} />
-      <span className={tone === 'bad' ? 'text-destructive' : 'text-foreground'}>{children}</span>
-    </span>
-  )
+  return <StatusIndicator label={children} color={STATUS_COLOR[tone]} />
 }
 
 /** Bordered panel — the standard container for a section's content. */

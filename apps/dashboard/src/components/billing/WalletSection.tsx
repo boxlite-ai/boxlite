@@ -103,7 +103,8 @@ function useClampPage(page: number, totalPages: number, setPage: (page: number) 
 
 /**
  * Renders pagination controls for navigating between pages.
- * Hidden when there's only one page or no pages.
+ * Hidden on the first page when no further pages are known. Later pages retain
+ * Previous during failed requests, when the total is temporarily unknown.
  *
  * @param props - Component props
  * @param props.page - Current page number
@@ -120,14 +121,15 @@ function Pager({
   totalPages: number
   onPage: (next: (current: number) => number) => void
 }) {
-  if (totalPages <= 1) {
+  if (totalPages <= 1 && page <= 1) {
     return null
   }
 
   return (
     <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
       <span>
-        Page {page} of {totalPages}
+        Page {page}
+        {totalPages > 0 && ` of ${totalPages}`}
       </span>
       <AsciiButton onClick={() => onPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
         ← Previous
@@ -181,19 +183,43 @@ function MoneyHistorySection() {
         </TabsList>
 
         <TabsContent value="invoices" className="mt-5">
-          <InvoicesTable
-            data={invoicesQuery.data?.items ?? []}
-            loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
-          />
+          {invoicesQuery.isError ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-4 border border-border px-4 py-6 text-body"
+            >
+              <p>Could not load billing history. Try again.</p>
+              <AsciiButton onClick={() => void invoicesQuery.refetch()} disabled={invoicesQuery.isFetching}>
+                Retry
+              </AsciiButton>
+            </div>
+          ) : (
+            <InvoicesTable
+              data={invoicesQuery.data?.items ?? []}
+              loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
+            />
+          )}
           <Pager page={invoicePage} totalPages={invoiceTotalPages} onPage={setInvoicePage} />
           <PanelNote>Amounts charged to your payment method.</PanelNote>
         </TabsContent>
 
         <TabsContent value="credits" className="mt-5">
-          <WalletTransactionsTable
-            data={transactionsQuery.data?.items ?? []}
-            loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
-          />
+          {transactionsQuery.isError ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-4 border border-border px-4 py-6 text-body"
+            >
+              <p>Could not load credit activity. Try again.</p>
+              <AsciiButton onClick={() => void transactionsQuery.refetch()} disabled={transactionsQuery.isFetching}>
+                Retry
+              </AsciiButton>
+            </div>
+          ) : (
+            <WalletTransactionsTable
+              data={transactionsQuery.data?.items ?? []}
+              loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+            />
+          )}
           <Pager page={creditPage} totalPages={creditTotalPages} onPage={setCreditPage} />
           {/* Says what these are, which is the job the fold used to do badly:
               quota granted, not money taken. */}

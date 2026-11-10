@@ -78,7 +78,8 @@ coverage\:vmm\:kvm: _ensure-kvm
 
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+coverage\:vmm\:boot: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) vmm\:guest-mount-init
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
@@ -125,7 +126,7 @@ coverage\:node\:integration: dev\:node _local-registry
 	@cd sdks/node && $(WITH_LOCAL_REGISTRY) npm run test:all -- --coverage $(VITEST_FILTER)
 
 coverage\:api: _ensure-apps-deps
-	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(TEST_FILES),--runInBand --passWithNoTests=false --testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 # Add VM integration coverage to the unit profiles instead of erasing them.
 # Run coverage:lcov first for a combined report; BOXLITE_DEPS_STUB must be unset.

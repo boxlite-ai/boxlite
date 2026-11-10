@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { TableRow, TableCell } from './ui/table'
 
 interface TableEmptyStateProps {
@@ -29,15 +30,12 @@ interface TableEmptyStateProps {
   className?: string
 }
 
+/** Spans the table columns with the shared resource empty state and optional guidance. */
 export function TableEmptyState({ colSpan, message, icon, description, className = '' }: TableEmptyStateProps) {
   return (
-    <TableRow>
-      <TableCell colSpan={colSpan} className={`h-24 text-center ${className}`}>
-        <div className="flex flex-col items-center justify-center space-y-3 py-8">
-          {icon && <div className="text-muted-foreground">{icon}</div>}
-          <p className="text-muted-foreground font-medium">{message}</p>
-          {description && <div className="text-sm text-muted-foreground/80 max-w-md">{description}</div>}
-        </div>
+    <TableRow className="hover:bg-background">
+      <TableCell colSpan={colSpan} className={`p-0 text-center ${className}`}>
+        <ResourceEmptyState title={message} icon={icon} description={description} />
       </TableCell>
     </TableRow>
   )

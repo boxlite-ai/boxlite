@@ -149,6 +149,10 @@ message Volume {
 message VirtiofsSource {
   string tag = 1;         // virtiofs tag name
   bool read_only = 2;     // read only in guest
+  // Aggregate device identity. Empty keeps the legacy per-tag mount behavior.
+  string device_tag = 3;
+  // One directory component beneath the aggregate root; tag remains the logical share name.
+  string export_key = 4;
 }
 
 // Block device volume source
@@ -303,7 +307,7 @@ message ContainerInitRequest {
   // Bind mounts from guest VM paths into container namespace
   repeated BindMount mounts = 4;
   // Additional CA certificates to install in the container trust store.
-  // Used for MITM secret substitution — the container trusts the proxy CA.
+  // Used for MITM secret injection — the container trusts the proxy CA.
   repeated CACert ca_certs = 5;
   // Session id the guest registers the container's init process under, so
   // the main command is addressable through the same execution namespace as

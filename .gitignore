@@ -249,3 +249,8 @@ target/
 # Stage coordinates name somebody's cloud account, so they are per checkout.
 # The committed half is mstage.env.json; .mstage.config.example.json is the template.
 .mstage.config.json
+
+# AI agent tooling local state (memory, cache, session state) — per checkout only.
+.omc/
+.omx/
+.workbuddy/

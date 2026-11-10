@@ -3,7 +3,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { AsciiButton, PanelNote } from '@/components/ascii'
+import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogFooter as DialogFooter,
+  FormDialogBody,
+} from '@/components/ui/form-dialog'
+import { AsciiButton } from '@/components/ascii'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,15 +22,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Trash } from '@/components/ui/icon'
+import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { KeyRound, Trash } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -142,7 +142,12 @@ export const PROVIDERS: Provider[] = [
 
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
-const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3 px-2'
+const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
+
+/** The same Covers label is used for display and local filtering. */
+function registryCoverage(prefix?: string): string {
+  return prefix ? `${prefix}*` : 'every repository'
+}
 
 const EMPTY_FORM = { registryHost: 'ghcr.io', repositoryPrefix: '', username: '', password: '' }
 
@@ -162,6 +167,7 @@ function normalizePrefix(value: string): string {
  * nor test it, so the row shows what was given, not whether it still works.
  */
 export function RegistriesPanel() {
+  const [filter, setFilter] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedOrganization, organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
   const { data: credentials = [], error: listError, isLoading } = useRegistriesQuery()
@@ -169,6 +175,12 @@ export function RegistriesPanel() {
   const createRegistry = useCreateRegistryMutation()
   const updateRegistry = useUpdateRegistryMutation()
   const deleteRegistry = useDeleteRegistryMutation()
+  const needle = filter.trim().toLowerCase()
+  const rows = credentials.filter((credential) =>
+    [credential.registryHost, registryCoverage(credential.repositoryPrefix), credential.username].some((value) =>
+      value?.toLowerCase().includes(needle),
+    ),
+  )
   const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_REGISTRIES)
   const canDelete = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_REGISTRIES)
 
@@ -288,11 +300,20 @@ export function RegistriesPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {canWrite && !unsupported && (
-        <div className="mb-[14px] flex justify-end">
-          <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
-            Connect a registry
-          </AsciiButton>
+      {!unsupported && (
+        <div className="resource-toolbar mb-[14px]">
+          <ResourceFilter
+            label="Filter registries"
+            value={filter}
+            onChange={setFilter}
+            count={isLoading || listError ? '—' : rows.length}
+            disabled={isLoading}
+          />
+          {canWrite && (
+            <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
+              Connect a registry
+            </AsciiButton>
+          )}
         </div>
       )}
 
@@ -306,7 +327,8 @@ export function RegistriesPanel() {
             <div
               className={cn(
                 ROW_GRID,
-                'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
+                'resource-list-head',
+                !isLoading && !listError && credentials.length === 0 && 'hidden',
               )}
             >
               <span>Registry</span>
@@ -316,11 +338,11 @@ export function RegistriesPanel() {
               <span className="text-right">Actions</span>
             </div>
 
-            {credentials.map((credential) => (
-              <div key={credential.id} className={cn(ROW_GRID, 'border-b border-border/60 py-[13px] text-body')}>
-                <span className="truncate font-mono font-medium text-foreground">{credential.registryHost}</span>
+            {rows.map((credential) => (
+              <div key={credential.id} className={cn(ROW_GRID, 'resource-list-row')}>
+                <span className="resource-name">{credential.registryHost}</span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
-                  {credential.repositoryPrefix ? `${credential.repositoryPrefix}*` : 'every repository'}
+                  {registryCoverage(credential.repositoryPrefix)}
                 </span>
                 <span className="truncate font-mono text-meta text-muted-foreground">{credential.username}</span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
@@ -341,7 +363,6 @@ export function RegistriesPanel() {
                       }}
                       disabled={saving || updateRegistry.isPending || deleteRegistry.isPending}
                       title={`Update the credential for ${credential.registryHost}`}
-                      className="uppercase"
                     >
                       Update
                     </AsciiButton>
@@ -363,29 +384,32 @@ export function RegistriesPanel() {
               </div>
             ))}
 
-            {listError ? (
+            {isLoading ? (
+              <p role="status" className="px-4 py-12 text-body text-muted-foreground">
+                Loading registries…
+              </p>
+            ) : listError ? (
               <div className="py-10 text-center font-mono text-meta text-muted-foreground">
                 Credentials could not be loaded.
               </div>
             ) : (
               !isLoading &&
               credentials.length === 0 && (
-                <div className="flex flex-col items-center gap-4 py-10 text-center">
-                  <p className="font-mono text-meta text-muted-foreground">No private registries connected.</p>
-                  {canWrite && (
-                    <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
-                      Connect a registry
-                    </AsciiButton>
-                  )}
-                </div>
+                <ResourceEmptyState
+                  title="No private registries connected"
+                  icon={<KeyRound className="size-6" />}
+                  description="Connect a registry to pull private images. Public images work without credentials."
+                />
               )
             )}
 
-            {credentials.length > 0 && (
-              <PanelNote>
-                Credentials are write-only: BoxLite can pull with them and will never show them again. When several
-                cover one image, the longest repository prefix wins.
-              </PanelNote>
+            {!listError && !isLoading && credentials.length > 0 && rows.length === 0 && (
+              <div className="flex flex-col items-center gap-3 py-10 text-center text-meta text-muted-foreground">
+                <span>No registries match “{filter.trim()}”</span>
+                <AsciiButton size="sm" onClick={() => setFilter('')}>
+                  Clear filter
+                </AsciiButton>
+              </div>
             )}
           </>
         )}
@@ -393,17 +417,17 @@ export function RegistriesPanel() {
 
       <Dialog open={formOpen} onOpenChange={(open) => !open && closeForm()}>
         <DialogContent>
-          <form onSubmit={handleSave}>
+          <form onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
             <DialogHeader>
               <DialogTitle>{editing ? 'Update credential' : 'Connect a registry'}</DialogTitle>
               <DialogDescription>
                 {editing
                   ? 'Replace the login for this scope. Existing boxes are preserved.'
-                  : 'Stored write-only. BoxLite uses it only to pull.'}
+                  : 'Connect credentials to pull private images.'}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-4">
+            <FormDialogBody>
               <div className="space-y-1">
                 <Label htmlFor="registry-host">Registry</Label>
                 <Select
@@ -411,7 +435,7 @@ export function RegistriesPanel() {
                   value={form.registryHost}
                   onValueChange={(value) => setForm({ ...form, registryHost: value })}
                 >
-                  <SelectTrigger id="registry-host" className="h-9 w-full font-mono">
+                  <SelectTrigger id="registry-host" className="h-10 w-full font-mono">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -448,15 +472,20 @@ export function RegistriesPanel() {
                   id="registry-password"
                   type="password"
                   autoComplete="new-password"
+                  aria-describedby="registry-secret-help"
                   value={form.password}
                   onChange={(event) => setForm({ ...form, password: event.target.value })}
                   required
                 />
+                <p id="registry-secret-help" className="font-mono text-meta text-muted-foreground">
+                  Cannot be viewed after saving.
+                </p>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="registry-prefix">Only for</Label>
                 <Input
                   id="registry-prefix"
+                  aria-describedby="registry-prefix-help"
                   disabled={!!editing}
                   value={form.repositoryPrefix}
                   onChange={(event) => setForm({ ...form, repositoryPrefix: event.target.value })}
@@ -464,12 +493,12 @@ export function RegistriesPanel() {
                   spellCheck={false}
                   className="font-mono"
                 />
-                <PanelNote>
-                  Repositories under this path; leave empty for the whole registry. This credential will cover{' '}
-                  <span className="text-foreground">{scope}</span>.
-                </PanelNote>
+                <p id="registry-prefix-help" className="font-mono text-meta leading-relaxed text-muted-foreground">
+                  Covers <span className="text-foreground">{scope}</span>. Leave empty for the whole registry. Longest
+                  matching prefix takes precedence.
+                </p>
               </div>
-            </div>
+            </FormDialogBody>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeForm}>

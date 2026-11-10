@@ -24,7 +24,7 @@ TableHeader.displayName = 'TableHeader'
 
 const TableBody = React.forwardRef<HTMLTableSectionElement, React.HTMLAttributes<HTMLTableSectionElement>>(
   ({ className, ...props }, ref) => (
-    <tbody ref={ref} className={cn('[&_tr:last-child]:border-0', '[&_tr]:h-11', className)} {...props} />
+    <tbody ref={ref} className={cn('[&_tr:last-child]:border-0', '[&_tr]:h-14', className)} {...props} />
   ),
 )
 TableBody.displayName = 'TableBody'
@@ -40,7 +40,10 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTML
   ({ className, ...props }, ref) => (
     <tr
       ref={ref}
-      className={cn('border-b bg-card transition-colors hover:bg-muted data-[state=selected]:bg-accent', className)}
+      className={cn(
+        'border-b bg-background transition-colors hover:bg-accent/40 focus-within:bg-accent/40 data-[state=selected]:bg-accent',
+        className,
+      )}
       {...props}
     />
   ),
@@ -54,7 +57,7 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      'bg-inherit h-11 px-2 text-left align-middle text-xs font-medium tracking-normal text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+      'bg-inherit h-11 px-4 text-left align-middle text-meta font-medium tracking-normal text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
       sticky && cn('sticky', 'z-10', sticky === 'left' ? 'left-0' : 'right-0'),
       className,
     )}
@@ -70,7 +73,7 @@ const TableCell = React.forwardRef<
   <td
     ref={ref}
     className={cn(
-      'bg-inherit p-2 align-middle text-sm tracking-tight [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+      'bg-inherit px-4 py-3 align-middle text-sm tracking-normal [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
       sticky && cn('sticky', 'z-[1]', sticky === 'left' ? 'left-0' : 'right-0'),
       className,
     )}

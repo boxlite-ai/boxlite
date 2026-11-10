@@ -365,7 +365,7 @@ function SshControls({
     <div className="mb-[6px]">
       <div className="flex items-baseline gap-2">
         <span className="text-muted-foreground">ssh</span>
-        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
+        <span className="min-w-[8px] flex-1" />
         <button
           type="button"
           title="Refresh SSH status"
@@ -390,7 +390,7 @@ function SshControls({
             aria-label="SSH access"
             checked={status?.enabled ?? false}
             disabled={disabled || !status}
-            className="ml-1 scale-90 self-center"
+            className="ml-1 mr-3 shrink-0 scale-90 self-center"
             onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
           />
         )}

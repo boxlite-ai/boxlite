@@ -1028,6 +1028,18 @@ describe('CreateBoxDialog hourly price', () => {
     )
   }
 
+  it('keeps expanded pricing inside the scrollable form body', async () => {
+    await renderOpen()
+    await act(async () => breakdownToggle()!.click())
+    await flush()
+    const breakdown = document.querySelector('#box-price-breakdown')!
+    expect(breakdown).not.toBeNull()
+    expect(breakdown.closest('.form-dialog-body')).not.toBeNull()
+    expect(document.querySelector('.form-dialog-body')?.contains(document.querySelector('.form-dialog-footer'))).toBe(
+      false,
+    )
+  })
+
   it('keeps the breakdown collapsed until asked for it', async () => {
     await renderOpen()
 
