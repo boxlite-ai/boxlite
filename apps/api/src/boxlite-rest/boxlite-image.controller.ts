@@ -142,6 +142,7 @@ export class BoxliteImageController {
   @Delete(':name')
   @HttpCode(204)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_IMAGES])
+  @Audit({ action: AuditAction.DELETE, targetType: AuditTarget.IMAGE, targetIdFromRequest: (req) => req.params.name })
   async remove(@AuthContext() authContext: OrganizationAuthContext, @Param('name') name: string): Promise<void> {
     await this.imageCatalogService.delete(authContext.organization, name)
   }

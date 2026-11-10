@@ -135,7 +135,7 @@ describe('BoxLite container process options mapper', () => {
     row.id = 'box-1'
     row.privileged = privileged
 
-    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+    const response = boxToBoxResponse(BoxDto.fromBox(row))
 
     expect(response).toEqual(expect.objectContaining({ privileged }))
   })
@@ -205,7 +205,7 @@ describe('BoxLite container process options mapper', () => {
     row.outboundEnabled = true
     row.outboundAllowNet = ['api.openai.com']
 
-    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+    const response = boxToBoxResponse(BoxDto.fromBox(row))
 
     expect(response.network).toEqual({
       outbound: { mode: 'enabled', allow_net: ['api.openai.com'] },

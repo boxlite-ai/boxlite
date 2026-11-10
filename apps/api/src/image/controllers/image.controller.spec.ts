@@ -75,7 +75,7 @@ describe('ImageController routing', () => {
     app.setGlobalPrefix('api')
     // Global in main.ts too, so each route's @Audit metadata is read the way
     // production reads it.
-    app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never, { get: jest.fn() } as never))
+    app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never))
     // As `main.ts` installs it, so a body the DTO refuses is refused here too.
     app.useGlobalPipes(new ValidationPipe({ transform: true }))
     await app.listen(0)

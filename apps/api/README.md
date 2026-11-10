@@ -518,3 +518,118 @@ R2 reuses successful `user.login` records from `LoginEventRecorder`, with the us
 first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
 qualifying token-use record as return activity; it does not require a new interactive login.
 No additional event or issuer-claim configuration is required. Redis/log failures can omit records.
+
+## Toolbox rollout compatibility
+
+Box responses retain deprecated `toolboxProxyUrl: ""` for old Runner decoders;
+the field no longer supplies a URL or performs Region/cache lookups. New Go clients
+accept its absence. The nullable `region.toolboxProxyUrl` column and existing values
+remain, although the new API no longer maps it. This release has no column-drop migration.
+Remove the response field and column in a later release only after all dependent
+Runners/API instances have upgraded and the rollback window is resolved.
+Startup loads migrations recursively: naming a directory `post-deploy` does not defer execution.
+
+Run `make test:apps:api TEST_FILES='box-toolbox-compat|toolbox-retention'` with `DB_*`
+set for PostgreSQL coverage. To include actual old/new Go decoder checks, install Go 1.23+
+and set `LEGACY_API_CLIENT_ROOT` to an exported pre-change `apps/libs/api-client-go` directory.
+
+## Mutation auditing
+
+Business writes use `@Audit` to insert a pending `audit_log` row before the handler runs.
+If insertion fails, the mutation is refused. Completion failures leave a pending row
+for reconciliation; audit status is the HTTP outcome, not an execution's exit code.
+
+The portable REST aliases share auditing for volume creation/deletion, image deletion,
+domain claim/bind/unbind, execution start/signal/termination, file upload, SSH
+configuration/enable/disable, and tunnel creation/revocation. Organization experimental
+configuration and attach-ticket issuance are audited too. Resource names resolved by
+handlers become canonical target IDs without another lookup. Domain unbind records an
+update to the normalized hostname because the organization still owns the domain.
+
+`GET /api/object-storage/push-access` audits temporary storage credential issuance
+against the authenticated organization, despite using GET. Audit insertion must succeed
+before STS is called. Audit records omit returned credentials and use a fixed failure
+description without changing the API's error response.
+
+Box creation, startup, recovery and volume creation retain the resolved target ID before subsequent
+conversion or waiting can fail. Failures before a Box is returned or resolved retain
+the original request identifier, or no target for creation. Recovery still returns its
+current DTO on timeout; a reported error remains a failed operation.
+Startup uses the first resolved Box ID for its mutation, with an ID-only lookup and
+organization check, so reusing the original name cannot redirect the operation.
+Leaving an organization targets that organization; linking or unlinking an account
+targets the secondary `provider|userId`. Invalid identity fields leave the target empty.
+
+Proxy operations use response completion: `finish` records the response status;
+`close` before completion or a response error records unknown (`0`). Completion is
+claimed once before persisting, and its listeners are removed. A client disconnect
+while the initial insert is pending prevents forwarding once that insert returns.
+`finish` confirms server-side transmission, not client receipt.
+
+Before forwarding, response-completion audits acquire a five-minute database lease,
+renewed every minute. Active uploads and streaming responses remain pending beyond
+30 minutes. A failed renewal closes the response; a crashed owner's expired lease
+allows the usual age-based reconciliation. Completion stops renewal and conditionally
+updates only the still-pending, unexpired row, so a late response cannot overwrite an
+unknown result or recreate a published record. Lease writes have five-second deadlines.
+Deploy the additive lease-column migration before the API; all reconcilers must be
+upgraded before this protection applies. Remove new API writers before rolling back
+the column.
+
+Audit metadata excludes command arguments, including the entire `cmd` and `entrypoint`
+fields on Box creation, as well as file contents, SSH secrets, tunnel tokens,
+attach tickets, and raw configuration bodies. Terminal resize, file download, metrics,
+runner/box/job callbacks, preview readiness and access exchanges, and onboarding helpers
+receive no new audit. Webhook portal access remains unchanged.
+MCP calls inherit the target REST operation's audit without a second MCP record.
+Attach-ticket metadata accepts only string execution IDs; invalid objects and arrays
+are excluded before request validation runs.
+
+WebSocket attach upgrades create a pending `attach` row after authorization and
+Box/Runner resolution, before forwarding. An insert failure refuses the connection.
+Runner acceptance completes it with `101`, without waiting for disconnect; this
+observes the upstream handshake, not proof of client receipt. A refused handshake
+records the upstream HTTP status; failure or an observed disconnect before acceptance
+records unknown (`0`) and produces no `detach`.
+
+The first observed socket close after acceptance inserts a separate `detach` row.
+For example, `attach(connectionId=X, status=101)` pairs with
+`detach(connectionId=X, status=200, durationMs=...)`. Both retain the verified actor,
+organization, canonical Box ID and execution ID. Metadata contains `connectionId`,
+`connectedAt`, and, on detach, `disconnectedAt`, monotonic `durationMs` and `hadError`.
+Detach status `200` means the close event was observed; it is neither an HTTP response
+nor a WebSocket close code. `hadError` only describes transport errors observed before
+the first close, not the user's intent or the WebSocket close-frame reason.
+
+The proxy does not inspect terminal frames for auditing. Successful long connections
+are already finalized and do not enter the 30-minute pending-log reconciliation.
+Completion or detach persistence failures emit a fixed diagnostic without interrupting
+an established connection; a failed completion remains eligible for reconciliation.
+Process termination can leave no detach record; this does not infer a disconnect time.
+API Key, JWT and one-time ticket authentication share this lifecycle and retain their
+existing authorization policy. Completed detach inserts also honor `audit.consoleLogEnabled`.
+
+Each attach audit write has a five-second deadline, including pool acquisition and
+transaction cleanup. A timeout refuses an initial upgrade or emits a diagnostic for
+completion/detach. Active database connections are closed on expiry; transaction-local
+SQL timeouts bound server work. A timed-out commit can have an uncertain result and
+is not retried. Completion logs are emitted only after a successful commit.
+At most eight bounded audit writes per API instance may remain unfinished, including
+timed-out callers still waiting for a pool connection. Excess writes fail immediately.
+Late pool acquisitions are released without executing SQL. If pool acquisition never
+settles, those slots remain occupied; this bounds retention rather than guaranteeing
+pool recovery. Closed attach sessions remove their listeners and socket/request references
+without waiting for persistence. Handler-completion HTTP audits retain their existing
+write behavior; response-completion audits use the bounded lease writes described above.
+
+Account-link adoption audits only after signature and identity validation. It records
+the primary/secondary IDs and the local ownership migration result, without an arbitrary
+organization association. Local success does not claim that subsequent Auth0 linking
+succeeded. Retry attempts are recorded even when adoption is already complete.
+
+Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|audit-response-lease.spec|audit-response-lifetime.integration.spec|1794196800000'`;
+set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
+Run `make test:apps:api TEST_FILES='attach-audit.*spec|audit-write-deadline.*spec|audit-backfill.*spec|boxlite-ws-proxy.service.spec'`
+for real local WebSocket lifecycle and authentication tests.
+See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
+for backfill limits and index details.

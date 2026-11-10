@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Audit, AUDIT_TARGET_ID } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 import {
   Controller,
   All,
@@ -106,6 +109,13 @@ export class BoxliteProxyController {
 
   @All(':boxId/exec')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.EXECUTE,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+  })
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -126,6 +136,14 @@ export class BoxliteProxyController {
 
   @All(':boxId/executions/:execId/signal')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.SIGNAL_EXECUTION,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+    requestMetadata: { executionId: (req) => req.params.execId },
+  })
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -207,6 +225,14 @@ export class BoxliteProxyController {
 
   @Delete(':boxId/executions/:execId')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.TERMINATE_EXECUTION,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['DELETE'],
+    completion: 'response',
+    requestMetadata: { executionId: (req) => req.params.execId },
+  })
   async proxyExecKill(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -234,6 +260,13 @@ export class BoxliteProxyController {
 
   @All(':boxId/files')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.UPLOAD_FILES,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['PUT'],
+    completion: 'response',
+  })
   async proxyFiles(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -277,6 +310,13 @@ export class BoxliteProxyController {
   // it, because every accepted call restarts the guest listener.
   @Post(':boxId/ssh')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.CONFIGURE_SSH,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+  })
   async configureSsh(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -318,6 +358,13 @@ export class BoxliteProxyController {
 
   @Post(':boxId/ssh/enable')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.ENABLE_SSH,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+  })
   async enableSsh(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -339,6 +386,13 @@ export class BoxliteProxyController {
 
   @Delete(':boxId/ssh')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.DISABLE_SSH,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['DELETE'],
+    completion: 'response',
+  })
   async disableSsh(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -362,14 +416,22 @@ export class BoxliteProxyController {
   @Header('Cache-Control', 'no-store')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.OK)
+  @Audit({
+    action: AuditAction.CREATE_TUNNEL,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: { port: (req) => req.query.port },
+  })
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
+    @Req() request?: Request,
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
 
     // Tunnel URLs expose the box to the public internet, so only a box with
     // inbound access enabled can use one. Any other box is reached through
@@ -406,12 +468,20 @@ export class BoxliteProxyController {
   @Delete(':boxId/network/tunnel')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Audit({
+    action: AuditAction.REVOKE_TUNNEL,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: { port: (req) => req.query.port },
+  })
   async revokeNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
+    @Req() request?: Request,
   ): Promise<void> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
     await this.tunnelService.revoke(box.id, port)
   }
 
@@ -431,6 +501,8 @@ export class BoxliteProxyController {
     if (!box) {
       throw new NotFoundException(`Box ${boxId} not found`)
     }
+
+    req[AUDIT_TARGET_ID] = box.id
 
     if (policy.activity) {
       // Persist activity before the readiness gate. The lifecycle sweeper rechecks

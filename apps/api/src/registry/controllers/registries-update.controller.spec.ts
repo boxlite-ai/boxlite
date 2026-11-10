@@ -64,7 +64,7 @@ describe('Registry credential update HTTP boundary', () => {
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api')
     app.useGlobalPipes(new ValidationPipe({ transform: true }))
-    app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never, { get: jest.fn() } as never))
+    app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never))
     await app.listen(0, '127.0.0.1')
     baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/images/registries`
   })

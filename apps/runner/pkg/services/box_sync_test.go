@@ -94,7 +94,6 @@ func remoteBox(id string, state apiclient.BoxState) map[string]any {
 		"gpu":             0,
 		"memory":          1,
 		"disk":            1,
-		"toolboxProxyUrl": "https://proxy.invalid",
 		"state":           string(state),
 	}
 }

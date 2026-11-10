@@ -22,7 +22,7 @@ func TestRewriteProxyRequestSetsTrustedForwardedHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	target, err := url.Parse(upstream.URL + "/boxes/box/toolbox/proxy/3999/app?target=1")
+	target, err := url.Parse(upstream.URL + "/boxes/box/proxy/3999/app?target=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func assertTrustedForwardedRequest(t *testing.T, out *http.Request) {
 	if out.Host != "3999-token.proxy.dev.boxlite.ai" {
 		t.Fatalf("Host = %q", out.Host)
 	}
-	if out.URL.Path != "/boxes/box/toolbox/proxy/3999/app" {
+	if out.URL.Path != "/boxes/box/proxy/3999/app" {
 		t.Fatalf("target URL = %s", out.URL.String())
 	}
 	if out.URL.RawQuery != "target=1&client=1" {

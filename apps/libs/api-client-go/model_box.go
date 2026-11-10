@@ -80,8 +80,9 @@ type Box struct {
 	DaemonVersion *string `json:"daemonVersion,omitempty"`
 	// The runner ID of the box
 	RunnerId *string `json:"runnerId,omitempty"`
-	// The toolbox proxy URL for the box
-	ToolboxProxyUrl string `json:"toolboxProxyUrl"`
+	// Deprecated compatibility field; always empty. Clients must tolerate its absence in a future release.
+	// Deprecated
+	ToolboxProxyUrl *string `json:"toolboxProxyUrl,omitempty"`
 	// What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled
 	Progress *BoxProgress `json:"progress,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -93,7 +94,7 @@ type _Box Box
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Box {
+func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, target string, cpu float32, gpu float32, memory float32, disk float32) *Box {
 	this := Box{}
 	this.Id = id
 	this.OrganizationId = organizationId
@@ -106,7 +107,6 @@ func NewBox(id string, organizationId string, name string, user string, env map[
 	this.Gpu = gpu
 	this.Memory = memory
 	this.Disk = disk
-	this.ToolboxProxyUrl = toolboxProxyUrl
 	return &this
 }
 
@@ -961,28 +961,39 @@ func (o *Box) SetRunnerId(v string) {
 	o.RunnerId = &v
 }
 
-// GetToolboxProxyUrl returns the ToolboxProxyUrl field value
+// GetToolboxProxyUrl returns the ToolboxProxyUrl field value if set, zero value otherwise.
+// Deprecated
 func (o *Box) GetToolboxProxyUrl() string {
-	if o == nil {
+	if o == nil || IsNil(o.ToolboxProxyUrl) {
 		var ret string
 		return ret
 	}
-
-	return o.ToolboxProxyUrl
+	return *o.ToolboxProxyUrl
 }
 
-// GetToolboxProxyUrlOk returns a tuple with the ToolboxProxyUrl field value
+// GetToolboxProxyUrlOk returns a tuple with the ToolboxProxyUrl field value if set, nil otherwise
 // and a boolean to check if the value has been set.
+// Deprecated
 func (o *Box) GetToolboxProxyUrlOk() (*string, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.ToolboxProxyUrl) {
 		return nil, false
 	}
-	return &o.ToolboxProxyUrl, true
+	return o.ToolboxProxyUrl, true
 }
 
-// SetToolboxProxyUrl sets field value
+// HasToolboxProxyUrl returns a boolean if a field has been set.
+func (o *Box) HasToolboxProxyUrl() bool {
+	if o != nil && !IsNil(o.ToolboxProxyUrl) {
+		return true
+	}
+
+	return false
+}
+
+// SetToolboxProxyUrl gets a reference to the given string and assigns it to the ToolboxProxyUrl field.
+// Deprecated
 func (o *Box) SetToolboxProxyUrl(v string) {
-	o.ToolboxProxyUrl = v
+	o.ToolboxProxyUrl = &v
 }
 
 // GetProgress returns the Progress field value if set, zero value otherwise.
@@ -1092,7 +1103,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.RunnerId) {
 		toSerialize["runnerId"] = o.RunnerId
 	}
-	toSerialize["toolboxProxyUrl"] = o.ToolboxProxyUrl
+	if !IsNil(o.ToolboxProxyUrl) {
+		toSerialize["toolboxProxyUrl"] = o.ToolboxProxyUrl
+	}
 	if !IsNil(o.Progress) {
 		toSerialize["progress"] = o.Progress
 	}
@@ -1120,7 +1133,6 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		"gpu",
 		"memory",
 		"disk",
-		"toolboxProxyUrl",
 	}
 
 	allProperties := make(map[string]interface{})

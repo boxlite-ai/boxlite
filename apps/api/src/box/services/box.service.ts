@@ -78,12 +78,10 @@ import { Redis } from 'ioredis'
 import {
   BOX_LOOKUP_CACHE_TTL_MS,
   BOX_ORG_ID_CACHE_TTL_MS,
-  TOOLBOX_PROXY_URL_CACHE_TTL_S,
   boxLookupCacheKeyById,
   boxLookupCacheKeyByName,
   boxOrgIdCacheKeyById,
   boxOrgIdCacheKeyByName,
-  toolboxProxyUrlCacheKey,
 } from '../utils/box-lookup-cache.util'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
@@ -897,8 +895,11 @@ export class BoxService {
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+  async start(boxIdOrName: string, organization: Organization, options?: { idOnly?: boolean }): Promise<Box> {
+    const box = options?.idOnly
+      ? await this.findOne(boxIdOrName)
+      : await this.findOneByIdOrName(boxIdOrName, organization.id)
+    if (box.organizationId !== organization.id) throw new NotFoundException('Box not found')
 
     const region = await this.regionService.findOne(box.region)
     if (!region) {
@@ -1076,11 +1077,6 @@ export class BoxService {
     await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
   }
 
-  async getToolboxProxyUrl(boxId: string): Promise<string> {
-    const box = await this.findOne(boxId)
-    return this.resolveToolboxProxyUrl(box.region)
-  }
-
   /**
    * Last activity is metadata about the box rather than part of it, so the read
    * degrades to absent instead of failing the conversion: create() has already
@@ -1090,8 +1086,8 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, reads] = await this.resolveDtoMetadata(box)
-    return BoxDto.fromBox(box, toolboxProxyUrl, reads)
+    const reads = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, reads)
   }
 
   /**
@@ -1100,9 +1096,8 @@ export class BoxService {
    * a caller polling a creating box reads it through
    * {@link toBoxDtoWithExitCode}, and that is the caller progress is for.
    */
-  private async resolveDtoMetadata(box: Box): Promise<[string, BoxDtoReads]> {
-    const [toolboxProxyUrl, lastActivityAt, preparing] = await Promise.all([
-      this.resolveToolboxProxyUrl(box.region),
+  private async resolveDtoMetadata(box: Box): Promise<BoxDtoReads> {
+    const [lastActivityAt, preparing] = await Promise.all([
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
@@ -1115,7 +1110,7 @@ export class BoxService {
         return new Set<string>()
       }),
     ])
-    return [toolboxProxyUrl, { lastActivityAt, preparingImage: preparing.has(box.id) }]
+    return { lastActivityAt, preparingImage: preparing.has(box.id) }
   }
 
   /**
@@ -1133,11 +1128,11 @@ export class BoxService {
    * Only the two endpoints that answer a tenant's read use this.
    */
   async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
-    const [[toolboxProxyUrl, reads], exitCode] = await Promise.all([
+    const [reads, exitCode] = await Promise.all([
       this.resolveDtoMetadata(box),
       this.boxExitCodeService.getExitCode(box),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, { ...reads, exitCode })
+    return BoxDto.fromBox(box, { ...reads, exitCode })
   }
 
   /**
@@ -1149,8 +1144,7 @@ export class BoxService {
    * client that needs it reads the box itself.
    */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const [urlMap, activityMap, preparing] = await Promise.all([
-      this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
+    const [activityMap, preparing] = await Promise.all([
       this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
         this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
         return new Map<string, Date>()
@@ -1161,76 +1155,8 @@ export class BoxService {
       }),
     ])
     return boxes.map((s) => {
-      const url = urlMap.get(s.region)
-      if (!url) {
-        throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
-      }
-      return BoxDto.fromBox(s, url, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
+      return BoxDto.fromBox(s, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
     })
-  }
-
-  async resolveToolboxProxyUrl(regionId: string): Promise<string> {
-    const cacheKey = toolboxProxyUrlCacheKey(regionId)
-    const cached = await this.redis.get(cacheKey)
-    if (cached) {
-      return cached
-    }
-
-    const region = await this.regionService.findOne(regionId)
-    const url = region?.toolboxProxyUrl
-      ? region.toolboxProxyUrl.replace(/\/+$/, '') + '/toolbox'
-      : this.configService.getOrThrow('proxy.toolboxUrl')
-
-    this.redis.setex(cacheKey, TOOLBOX_PROXY_URL_CACHE_TTL_S, url).catch((err) => {
-      this.logger.warn(`Failed to cache toolbox proxy URL for region ${regionId}: ${err.message}`)
-    })
-    return url
-  }
-
-  async resolveToolboxProxyUrls(regionIds: string[]): Promise<Map<string, string>> {
-    const unique = [...new Set(regionIds)]
-    const result = new Map<string, string>()
-
-    const pipeline = this.redis.pipeline()
-    for (const id of unique) {
-      pipeline.get(toolboxProxyUrlCacheKey(id))
-    }
-    const cached = await pipeline.exec()
-
-    const uncached: string[] = []
-    for (let i = 0; i < unique.length; i++) {
-      const err = cached?.[i]?.[0]
-      if (err) {
-        this.logger.warn(`Failed to get cached toolbox proxy URL for region ${unique[i]}: ${err.message}`)
-      }
-      const val = cached?.[i]?.[1] as string | null
-      if (val) {
-        result.set(unique[i], val)
-      } else {
-        uncached.push(unique[i])
-      }
-    }
-
-    if (uncached.length > 0) {
-      const regions = await this.regionService.findByIds(uncached)
-      const regionMap = new Map(regions.map((r) => [r.id, r]))
-      const fallback = this.configService.getOrThrow('proxy.toolboxUrl')
-      const setPipeline = this.redis.pipeline()
-      for (const id of uncached) {
-        const region = regionMap.get(id)
-        const url = region?.toolboxProxyUrl ? region.toolboxProxyUrl.replace(/\/+$/, '') + '/toolbox' : fallback
-        result.set(id, url)
-        setPipeline.setex(toolboxProxyUrlCacheKey(id), TOOLBOX_PROXY_URL_CACHE_TTL_S, url)
-      }
-      const setResults = await setPipeline.exec()
-      setResults?.forEach(([err], i) => {
-        if (err) {
-          this.logger.warn(`Failed to cache toolbox proxy URL for region ${uncached[i]}: ${err.message}`)
-        }
-      })
-    }
-
-    return result
   }
 
   private async getValidatedOrDefaultRegion(organization: Organization, regionIdOrName?: string): Promise<Region> {

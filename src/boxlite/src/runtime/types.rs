@@ -528,7 +528,7 @@ pub struct BoxInfo {
     pub started_at: Option<DateTime<Utc>>,
 
     /// When the box was last active, as recorded by the control plane from
-    /// toolbox and proxy traffic — the clock AutoStop measures idleness
+    /// execution, file and proxy traffic — the clock AutoStop measures idleness
     /// against. `None` when no activity has been recorded yet.
     ///
     /// Local runtimes never report this: AutoStop needs an idle sweeper they

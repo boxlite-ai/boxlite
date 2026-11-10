@@ -93,7 +93,12 @@ function tenant(
   const users = { findOne: jest.fn(async (id: string) => (known.has(id) ? { id } : null)) }
   const controller = new AccountLinkController(
     config,
-    new AccountLinkService(config, { adopt } as unknown as LinkedIdentityService, users as unknown as UserService),
+    new AccountLinkService(
+      config,
+      { adopt } as unknown as LinkedIdentityService,
+      users as unknown as UserService,
+      { createLog: jest.fn().mockResolvedValue({ id: 'audit' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
+    ),
   )
   const passwordAccount = accounts.find((user) => user.identities.some((each) => each.connection === 'boxlite-users'))
   const grant = {

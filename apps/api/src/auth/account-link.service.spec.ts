@@ -39,6 +39,7 @@ describe('AccountLinkService', () => {
       config,
       { adopt } as unknown as LinkedIdentityService,
       { findOne } as unknown as UserService,
+      { createLog: jest.fn().mockResolvedValue({ id: 'audit' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
     )
   })
 

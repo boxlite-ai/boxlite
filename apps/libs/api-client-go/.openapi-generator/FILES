@@ -146,7 +146,6 @@ model_save_onboarding_dto.go
 model_save_prompt_draft_dto.go
 model_send_webhook_dto.go
 model_storage_access_dto.go
-model_toolbox_proxy_url.go
 model_trace_span.go
 model_trace_summary.go
 model_update_box_state_dto.go

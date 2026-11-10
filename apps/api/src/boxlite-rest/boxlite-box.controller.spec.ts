@@ -306,7 +306,7 @@ describe('BoxliteBoxController inbound audit', () => {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
       updateLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
     }
-    const interceptor = new AuditInterceptor(new Reflector(), auditService as any, { get: jest.fn() } as any)
+    const interceptor = new AuditInterceptor(new Reflector(), auditService as any)
     const request = {
       url: '/api/v1/boxes/box-1/network/inbound',
       ip: '127.0.0.1',

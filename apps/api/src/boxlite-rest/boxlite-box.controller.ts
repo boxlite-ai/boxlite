@@ -20,10 +20,11 @@ import {
   ValidationPipe,
   Logger,
   Res,
+  Req,
   ForbiddenException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
-import { Response } from 'express'
+import { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import {
   OrganizationResourceActionGuard,
@@ -41,7 +42,7 @@ import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto, InboundNetworkSpecDto, OutboundNetworkSpecDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
-import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
@@ -108,8 +109,6 @@ export class BoxliteBoxController {
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,
         working_dir: req.body?.working_dir,
-        entrypoint: req.body?.entrypoint,
-        cmd: req.body?.cmd,
         detach: req.body?.detach,
         auto_stop: req.body?.auto_stop,
         auto_delete: req.body?.auto_delete,
@@ -121,6 +120,7 @@ export class BoxliteBoxController {
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,
+    @Req() request?: Request,
   ): Promise<BoxResponseDto> {
     // Attaching a managed volume grants the box read/write access to its data,
     // so it is authorized independently of WRITE_BOXES: the caller must hold the
@@ -135,6 +135,7 @@ export class BoxliteBoxController {
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
     let box = await this.boxService.create(createBoxDto, organization, Context.user(), { maxCreatedBoxes })
+    if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
@@ -226,15 +227,17 @@ export class BoxliteBoxController {
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @Req() request?: Request,
   ): Promise<BoxResponseDto> {
     let box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
 
     if (this.isStartAlreadyInProgress(box)) {
       const dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
       return boxToBoxResponse(dto)
     }
 
-    box = await this.boxService.start(boxId, authContext.organization)
+    box = await this.boxService.start(box.id, authContext.organization, { idOnly: true })
     let dto = await this.boxService.toBoxDto(box)
     if (dto.state !== BoxState.STARTED) {
       dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
