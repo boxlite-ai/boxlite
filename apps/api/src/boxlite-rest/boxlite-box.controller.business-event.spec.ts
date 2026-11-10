@@ -47,7 +47,7 @@ describe('BoxliteBoxController business event actor', () => {
     await controller.removeBox(authContext as never, 'box-1', ctx)
 
     expect(boxService.create).toHaveBeenCalledWith(expect.anything(), organization, ctx, expect.anything())
-    expect(boxService.start).toHaveBeenCalledWith('box-1', organization, ctx)
+    expect(boxService.start).toHaveBeenCalledWith('box-1', organization, ctx, { idOnly: true })
     expect(boxService.stop).toHaveBeenCalledWith('box-1', organization.id, ctx)
     expect(boxService.destroy).toHaveBeenCalledWith('box-1', organization.id, ctx)
   })

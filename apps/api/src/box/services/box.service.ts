@@ -899,7 +899,12 @@ export class BoxService {
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization, ctx: Context, options?: { idOnly?: boolean }): Promise<Box> {
+  async start(
+    boxIdOrName: string,
+    organization: Organization,
+    ctx: Context,
+    options?: { idOnly?: boolean },
+  ): Promise<Box> {
     const box = options?.idOnly
       ? await this.findOne(boxIdOrName)
       : await this.findOneByIdOrName(boxIdOrName, organization.id)
@@ -933,7 +938,6 @@ export class BoxService {
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
-      startEventPending: true,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 

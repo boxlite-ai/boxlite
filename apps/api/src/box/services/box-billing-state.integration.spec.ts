@@ -129,7 +129,11 @@ describeIfServices('Commerce billing-state acceptance (real Postgres, Redis and 
   // Runner completion is outside this suite's Stop-intent acceptance boundary.
   async function finishStopAndRestart(box: Box): Promise<void> {
     await boxes.update(box.id, { state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED, pending: false })
-    const started = await boxService.start(box.id, { id: box.organizationId, suspended: false } as Organization)
+    const started = await boxService.start(
+      box.id,
+      { id: box.organizationId, suspended: false } as Organization,
+      Context.user(),
+    )
     expect(started).toMatchObject({ desiredState: BoxDesiredState.STARTED, pending: true })
     await boxes.update(box.id, { state: BoxState.STARTED, pending: false })
   }

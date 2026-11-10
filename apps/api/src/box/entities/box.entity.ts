@@ -214,10 +214,6 @@ export class Box {
   @Column({ default: false, type: 'boolean' })
   pending: boolean | undefined = false
 
-  // Internal start intent survives runner loss and reconciliation across sync invocations.
-  @Column({ default: false, type: 'boolean' })
-  startEventPending = false
-
   @Column({ type: 'character varying' })
   authToken = nanoid(32).toLowerCase()
 
@@ -315,13 +311,6 @@ export class Box {
   private getInvariantChanges(): Partial<Box> {
     const changes: Partial<Box> = {}
 
-    if (
-      this.startEventPending &&
-      ([BoxState.STARTED, BoxState.ERROR].includes(this.state) || this.desiredState !== BoxDesiredState.STARTED)
-    ) {
-      changes.startEventPending = false
-    }
-
     if (!this.pending && String(this.state) !== String(this.desiredState)) {
       changes.pending = true
     }
@@ -348,7 +337,7 @@ export class Box {
    * absent.
    */
   toJSON() {
-    const { secrets, startEventPending, ...rest } = this
+    const { secrets, ...rest } = this
     return rest
   }
 }
