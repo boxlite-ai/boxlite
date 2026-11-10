@@ -105,6 +105,32 @@ describe('CI page', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
   }
+  it('associates the selected CI tab with its rendered panel', async () => {
+    await render()
+    const tab = document.querySelector('[role="tab"][aria-selected="true"]')!
+    const panel = document.getElementById(tab.getAttribute('aria-controls')!)
+    expect(panel?.getAttribute('role')).toBe('tabpanel')
+    expect(panel?.textContent).toContain(runner.name)
+  })
+  it('keeps Previous available when a later runner page fails', async () => {
+    mocks.api.getCiRunners.mockImplementation(async (_organization, page) => {
+      if (page === 2) throw Error('unavailable')
+      return { items: [runner], total: 26, page: 1, totalPages: 2, capacity }
+    })
+    await render()
+    await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent === 'Next')!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const previous = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Previous')
+    expect(previous).toBeDefined()
+    expect(previous!.disabled).toBe(false)
+    await act(async () => previous!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('tbody')?.textContent).toContain(runner.name)
+  })
   it('shows JIT Boxes and navigates between independently addressable table views', async () => {
     await render()
     expect(document.querySelector('h1')?.textContent).toBe('CI')
@@ -241,6 +267,7 @@ describe('CI page', () => {
     expect(mocks.api.getCiRunners).toHaveBeenCalledTimes(2)
   }, 15000)
   it('submits capacity once and keeps a pending save scoped to its original organization', async () => {
+    cache.setQueryDefaults(['ci-settings'], { gcTime: Infinity })
     let finish!: (result: unknown) => void
     mocks.api.setCiCapacity.mockImplementation(
       () =>

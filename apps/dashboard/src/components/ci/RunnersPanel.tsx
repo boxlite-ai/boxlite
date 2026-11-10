@@ -142,10 +142,12 @@ export function RunnersPanel() {
           </div>
         )}
       </div>
-      {!!runners.data?.total && (
+      {(!!runners.data?.total || page > 1) && (
         <div className="flex items-center justify-between gap-3 border-t border-border py-3 font-mono text-meta text-muted-foreground">
           <span>
-            {runners.data.total} runners · Page {page} of {Math.max(1, runners.data.totalPages)}
+            {runners.data
+              ? `${runners.data.total} runners · Page ${page} of ${Math.max(1, runners.data.totalPages)}`
+              : `Page ${page}`}
           </span>
           <div className="flex gap-2">
             <AsciiButton size="sm" disabled={page <= 1 || runners.isFetching} onClick={() => setPage(page - 1)}>
@@ -153,7 +155,7 @@ export function RunnersPanel() {
             </AsciiButton>
             <AsciiButton
               size="sm"
-              disabled={page >= runners.data.totalPages || runners.isFetching}
+              disabled={!runners.data || page >= runners.data.totalPages || runners.isFetching}
               onClick={() => setPage(page + 1)}
             >
               Next

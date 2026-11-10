@@ -24,10 +24,34 @@ export class CiGitHubOAuth {
   toJSON(): never {
     throw new Error('GitHub OAuth credentials cannot be serialized')
   }
-  webSettings() {
+  async lookupAccount(login: string): Promise<GitHubAccount> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login)) throw this.failure(403, 'Invalid GitHub account')
+    const secret = this.clientSecret()
+    let value: any
+    try {
+      value = await githubRequest({
+        url: 'https://api.github.com/users/' + encodeURIComponent(login),
+        oauthApp: { clientId: this.clientId, clientSecret: secret },
+      })
+    } catch {
+      throw this.failure(502, 'GitHub account lookup unavailable')
+    }
+    if (
+      !['User', 'Organization'].includes(value?.type) ||
+      typeof value?.login !== 'string' ||
+      value.login.toLowerCase() !== login.toLowerCase()
+    )
+      throw this.failure(502, 'Invalid GitHub account identity')
+    return this.account(value, value.type)
+  }
+  private clientSecret(): string {
     const secret = this.options.clientSecret()
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(this.clientId) || !/^\S{16,4096}$/.test(secret) || secret === this.clientId)
       throw this.failure(503, 'GitHub identity OAuth is not configured')
+    return secret
+  }
+  webSettings() {
+    this.clientSecret()
     try {
       const base = new URL(this.options.dashboardUrl || '')
       if (

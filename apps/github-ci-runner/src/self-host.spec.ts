@@ -12,6 +12,7 @@ import {
   ExecutionLease,
   ExecutionScope,
   ExecutionJournal,
+  CiGitHubApp,
   StateDatabase,
   verifyWebhook,
 } from '@boxlite-ai/ci-listener'
@@ -139,6 +140,193 @@ describe('Standalone App binding and HTTP ingress', () => {
     global.fetch = originalFetch
     await db.close()
     rmSync(directory, { recursive: true, force: true })
+  })
+  it.each(['valid', 'suspended', 'owner', 'actions', 'administration'])(
+    'rechecks App admission before dispatch: %s',
+    async (scenario) => {
+      const scope = (await discover()).scopes[0]
+      const backend = await host.backend(scope, lease)
+      const fetch = global.fetch
+      global.fetch = jest.fn(async (input, options) => {
+        if (new URL(String(input)).pathname === '/app/installations/1')
+          return new Response(
+            JSON.stringify({
+              id: 1,
+              account: { id: scenario === 'owner' ? 8 : 7, login: 'owner', type: 'User' },
+              suspended_at: scenario === 'suspended' ? '2026-01-01' : null,
+              permissions: {
+                actions: scenario === 'actions' ? 'none' : 'read',
+                administration: scenario === 'administration' ? 'read' : 'write',
+              },
+            }),
+          )
+        return fetch(input, options)
+      }) as typeof global.fetch
+      try {
+        if (scenario === 'valid') await expect(backend.admit()).resolves.toBeUndefined()
+        else await expect(backend.admit()).rejects.toThrow('admission revoked')
+      } finally {
+        await backend.close()
+      }
+    },
+  )
+  it('denies an old user scan when the configured App now permits organizations only', async () => {
+    const claim = (await state.scans().claim('old-scan'))!
+    host.applications.set(
+      'test-client',
+      new CiGitHubApp({ clientId: 'test-client', accountType: 'Organization', privateKey: () => keys.privateKey }),
+    )
+    jest.mocked(global.fetch).mockClear()
+    await expect(host.scan(claim, AbortSignal.timeout(3000))).rejects.toThrow('account type denied')
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+  it.each(['valid', 'owner', 'repository', 'public', 'changed'])(
+    'discovers and fences an independent PAT repository: %s',
+    async (scenario) => {
+      const patDb = new SqliteStateDatabase(join(directory, 'pat-state'))
+      const patState = new ListenerState(patDb, 'pat')
+      let changed = false
+      const previousFetch = global.fetch
+      global.fetch = jest.fn(async (input, options) => {
+        const url = new URL(String(input))
+        if (url.origin === 'https://box.test') return previousFetch(input, options)
+        expect(new Headers(options?.headers).get('authorization')).toBe('Bearer private-pat')
+        if (url.pathname.endsWith('/actions/runs'))
+          return new Response(
+            JSON.stringify({
+              total_count: url.searchParams.get('status') === 'queued' ? 1 : 0,
+              workflow_runs: url.searchParams.get('status') === 'queued' ? [{ id: 99, repository: { id: 21 } }] : [],
+            }),
+          )
+        if (url.pathname.endsWith('/actions/runs/99/jobs'))
+          return new Response(
+            JSON.stringify({
+              total_count: 1,
+              jobs: [
+                {
+                  id: 55,
+                  run_id: 99,
+                  status: 'queued',
+                  labels: ['boxlite-ci-runner'],
+                  runner_id: null,
+                  conclusion: null,
+                  completed_at: null,
+                },
+              ],
+            }),
+          )
+        return new Response(
+          JSON.stringify({
+            id: changed ? 22 : 21,
+            name: scenario === 'repository' ? 'other' : 'repo',
+            owner: { id: 7, login: scenario === 'owner' ? 'other' : 'owner', type: 'User' },
+            private: scenario !== 'public',
+          }),
+        )
+      }) as typeof fetch
+      const config = loadConfig({
+        BOXLITE_REST_URL: 'https://box.test',
+        BOXLITE_API_KEY: 'private-box-key',
+        GITHUB_TOKEN: 'private-pat',
+        GITHUB_CONFIG_URL: 'https://github.com/owner/repo',
+      })
+      const boxes = await BoxLiteWorkers.connect(patState, config.endpoint, config.apiKey(), [
+        { key: 'backend/github', payload: { kind: 'pat', owner: 'owner', repository: 'repo' } },
+      ])
+      const patHost = new SelfHost(config, patState, patDb, 'pat', boxes)
+      try {
+        const lease = (await patState.acquire('pat-owner', 300000))!
+        const discovery = patHost.discover(lease, AbortSignal.timeout(5000), { refresh: true, wakes: [] })
+        if (['owner', 'repository', 'public'].includes(scenario))
+          await expect(discovery).rejects.toThrow('authority changed')
+        else {
+          const view = await discovery
+          expect(view.scopes).toHaveLength(1)
+          expect(view.scopes[0].installation.id).toBe(0)
+          await new ExecutionJournal(patState).define(lease, view.scopes[0])
+          const backend = await patHost.backend(view.scopes[0], lease)
+          try {
+            await expect(backend.admit()).resolves.toBeUndefined()
+            changed = scenario === 'changed'
+            if (changed) await expect(backend.admit()).rejects.toThrow('repository changed')
+          } finally {
+            await backend.close()
+          }
+          if (scenario === 'valid') {
+            const claim = (await patState.scans().claim('pat-follower'))!
+            const scanner = await patHost.scan(claim, AbortSignal.timeout(3000))
+            try {
+              const jobs = await scanner.queued(AbortSignal.timeout(3000))
+              expect(jobs).toHaveLength(1)
+              await scanner.publish(jobs, AbortSignal.timeout(3000))
+              expect((await patState.read(['notice/0/55']))[0].payload).toMatchObject({ repositoryId: 21 })
+              const [root] = await patState.read(['backend/github'])
+              await patState.commit(lease, [
+                {
+                  key: root.key,
+                  expected: root.version,
+                  payload: { kind: 'pat', owner: 'changed', repository: 'repo' },
+                },
+              ])
+              await expect(scanner.publish(jobs, AbortSignal.timeout(3000))).rejects.toThrow('scan repository changed')
+            } finally {
+              await scanner.close()
+            }
+          }
+        }
+      } finally {
+        await patHost.close()
+        await patDb.close()
+      }
+    },
+  )
+  it.each([null, ['test-client', 'test-client'], ['removed-client']])(
+    'rejects changed persisted App registries before discovery: %p',
+    async (applications) => {
+      const [root] = await state.read(['backend/github'])
+      await state.commit(lease, [
+        { key: root.key, expected: root.version, payload: { ...(root.payload as object), applications } },
+      ])
+      jest.mocked(global.fetch).mockClear()
+      await expect(host.discover(lease, AbortSignal.timeout(1000), { refresh: true, wakes: [] })).rejects.toThrow(
+        'identities changed',
+      )
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect((await state.read(['backend/github']))[0].payload).toMatchObject({ applications })
+    },
+  )
+  it('retains failed catalog credential retirement until a later shutdown retry succeeds', async () => {
+    const previous = global.fetch
+    let fail = true
+    global.fetch = jest.fn(async (input, options) =>
+      new URL(String(input)).pathname === '/installation/token' && fail
+        ? new Response('{}', { status: 503 })
+        : previous(input, options),
+    ) as typeof fetch
+    const report = jest.spyOn(host, 'report').mockImplementation(() => {})
+    try {
+      await discover(() => report.mock.calls.length > 0)
+      await expect(host.close()).rejects.toThrow('retirement is incomplete')
+      fail = false
+      await expect(host.close()).resolves.toBeUndefined()
+      expect(await state.scan(lease, { prefix: 'credential/' })).toEqual([])
+    } finally {
+      fail = false
+      report.mockRestore()
+    }
+  })
+  it('reports only error categories and withdraws readiness after a cycle failure', () => {
+    const output = jest.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      host.discoveryReady = true
+      host.report(Error('private detail'), 'listener-cycle')
+      expect(host.discoveryReady).toBe(false)
+      host.report('private detail', 'installation-index')
+      expect(output.mock.calls.map(([message]) => JSON.parse(message).error)).toEqual(['Error', 'Unknown'])
+      expect(output.mock.calls.some(([message]) => message.includes('private detail'))).toBe(false)
+    } finally {
+      output.mockRestore()
+    }
   })
   const serve = async (routes: Parameters<typeof createHttp>[2] = secret) => {
     http = createHttp(listener, host, routes)
@@ -514,6 +702,27 @@ describe('Standalone App binding and HTTP ingress', () => {
     expect(observed.posts).toEqual([])
     expect(observed.lookups()).toBe(2)
   })
+  it.each([404, 503])('does not replay without installation authority after HTTP %s', async (status) => {
+    const observed = await enableReplay()
+    const previous = global.fetch
+    let attempted = false
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname === '/app/installations/1') {
+        attempted = true
+        return new Response('{}', { status })
+      }
+      return previous(input, options)
+    }) as typeof fetch
+    await replayUntil(async () => {
+      if (status === 503) {
+        const [progress] = await state.read(['replay/progress'])
+        return attempted && !!progress && Number((progress.payload as any).notBefore) > Date.now()
+      }
+      const [row] = await state.read(['replay/item/00000000-0000-4000-8000-000000000001'])
+      return attempted && !!row && Number((row.payload as any).nextAt) > Date.now()
+    })
+    expect(observed.posts).not.toContain('/app/hook/deliveries/1/attempts')
+  })
   it.each(['root', 'lease'])('denies self-deployed replay at the %s boundary', async (kind) => {
     const observed = await enableReplay()
     if (kind === 'root') {
@@ -663,6 +872,15 @@ describe('Standalone ENV configuration', () => {
     CI_GITHUB_APP_CLIENT_ID: 'test-client',
     CI_GITHUB_APP_PRIVATE_KEY_FILE: '/private/key.pem',
   }
+  it.each(['0.0.0.0:80', '[::1]:80', 'localhost:8080'])('accepts an explicit HTTP listen port: %s', (address) => {
+    expect(loadConfig({ ...base, CI_LISTEN_ADDR: address }).listen.port).toBe(Number(address.split(':').at(-1)))
+  })
+  it.each(['localhost', 'localhost:', 'localhost:0', '[::1]', 'localhost:80/path'])(
+    'rejects a missing or invalid listen port: %s',
+    (address) => {
+      expect(() => loadConfig({ ...base, CI_LISTEN_ADDR: address })).toThrow()
+    },
+  )
   it('needs only App and BoxLite credentials, with conservative resource defaults', () => {
     const config = loadConfig(base)
     expect(config.max).toBe(1)

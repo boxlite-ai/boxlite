@@ -17,7 +17,7 @@ Lock authority rows, then the organization/App-scoped binding FOR UPDATE. Unknow
 A changed boolean advances generation once, sets provisioning and writes the existing durable installation inventory wake in the same transaction. A repeated same-value update is a no-op returning 204.
 Recheck delegated key expiry before commit. Do not cancel connect attempts, change original actor, modify quota, delete scopes, stop Boxes, or call GitHub mutation APIs.
 The listener discovers the changed generation and verifies the existing GitHub installation and runner-group restrictions before readiness.
-Organization runner-group public access must still match the selected policy; the UI must explain the GitHub-side prerequisite.
+Organization runner-group public access is synchronized by BoxLite through the durable inventory wake. The saved policy remains provisioning until GitHub readback succeeds; users do not repeat the setting in GitHub.
 
 Generation fencing prevents new creation/JIT operations under the previous policy. A previously admitted external effect may finish before commit.
 Already delivered JIT jobs continue running: WorkerPool recovery queries existing Boxes without new admission; cleanup retains original durable identity.

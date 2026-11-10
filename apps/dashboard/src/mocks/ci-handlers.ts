@@ -2,7 +2,7 @@
 import { http, HttpResponse } from 'msw'
 import { BoxState } from '@boxlite-ai/api-client'
 import type { CiSettings } from '@/api/ci-types'
-import { buildBox, MOCK_BOXES, MOCK_ORGANIZATION } from './fixtures'
+import { buildBox, MOCK_BOXES, MOCK_PAGINATED_BOXES, MOCK_ORGANIZATION } from './fixtures'
 
 export function ciHandlers() {
   const runners = [
@@ -24,6 +24,7 @@ export function ciHandlers() {
     }),
   ]
   MOCK_BOXES.push(...runners)
+  MOCK_PAGINATED_BOXES.total = MOCK_BOXES.length
   const settings: CiSettings = {
     available: true,
     commerce_limit: 5,

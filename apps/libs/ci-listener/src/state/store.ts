@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
 import { Json, LeaseLost, StateConflict, StateCorrupt, StateDatabase, StateRecord, StateTransaction } from './database'
+import { RepositoryScanQueue } from '../compensation/queue'
 
 export interface ExecutionLease {
   namespace: string
@@ -23,6 +24,9 @@ const record = (key: string, payload: Json): StateRecord => ({ key, payload, sch
 
 /** Durable facts only. Hosts authorize ingress; a lease fences execution commits, not already-issued HTTP requests. */
 export class ListenerState {
+  scans(): RepositoryScanQueue {
+    return new RepositoryScanQueue(this.database, this.namespace, (tx, lease) => this.assertLease(tx, lease))
+  }
   constructor(
     private readonly database: StateDatabase,
     private readonly namespace: string,

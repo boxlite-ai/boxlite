@@ -6,6 +6,23 @@ import { CiWebhookService } from './ci-webhook.service'
 import { CiSecretsService } from './ci-secrets.service'
 
 describe('CI runtime secret ENV configuration', () => {
+  it.each([
+    ['CI_WORKER_CPUS', '0'],
+    ['CI_WORKER_CPUS', '17'],
+    ['CI_WORKER_CPUS', '1.5'],
+    ['CI_WORKER_MEMORY_GB', '200'],
+    ['CI_WORKER_MEMORY_GB', '0.124'],
+    ['CI_WORKER_MEMORY_GB', 'NaN'],
+  ])('rejects invalid native worker resources at startup: %s=%s', (key, value) => {
+    const previous = process.env[key]
+    process.env[key] = value
+    try {
+      expect(() => jest.isolateModules(() => require('../config/configuration'))).toThrow(key)
+    } finally {
+      if (previous === undefined) delete process.env[key]
+      else process.env[key] = previous
+    }
+  })
   it('uses injected values through production configuration for JWT, HMAC and connect encryption', async () => {
     const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const secret = randomBytes(32).toString('hex')

@@ -46,7 +46,9 @@ An API key needs `write:boxes` and `delete:boxes`. Current and future App-select
 repositories follow the binding. A conflicting binding is rejected rather than replaced.
 
 The current API reports `provisioning` after binding; runner capacity is not ready yet.
-See the [Listener README](../../../apps/github-ci-runner/README.md#hosted-connect)
+The API deployment also needs the CI Login OAuth App credentials for authenticated GitHub account-type lookup; user authorization still uses the matching Personal or Organization CI App.
+
+See the [Listener README](../../apps/github-ci-runner/README.md#hosted-connect)
 for deployment status and authentication requirements. CI logs and results remain in GitHub
 Actions; running jobs use ordinary Box management commands.
 

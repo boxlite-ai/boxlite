@@ -64,7 +64,7 @@ for (const [path, expected] of [
   ['src/cli/src/main.rs', ['rust']],
   ['src/vmm/src/vm.rs', ['rust', 'vmm']],
   ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
-  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'infra']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'api', 'infra']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
   ['openapi/box.openapi.yaml', ['rust', 'api']],

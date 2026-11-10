@@ -259,8 +259,11 @@ a conflicting record cannot redirect stop/delete/JIT operations to another Box.
 An HTTP 408 from a Box mutation can follow server-side creation and is therefore
 an uncertain outcome, not permission to retry the create or return its quota.
 
-The default directory and compensation interval is five minutes. Each compensation
-step scans one eligible repository, so a large inventory takes multiple steps.
+The default directory refresh and successful compensation interval is five minutes.
+Two independent scan lanes claim durable repository tasks, with one effective scan
+lease per GitHub App installation (or pinned PAT repository). Different installations
+can be scanned concurrently. Scan timing survives restart; failed reads back off
+without occupying the execution scheduler, and large inventories need multiple tasks.
 Normal webhook jobs use their exact IDs without waiting for a repository-wide
 scan. Directory failure retains pending work rather than treating it as an empty
 installation. Binding generations are published atomically for ingress checks.

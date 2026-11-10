@@ -36,7 +36,8 @@ pub async fn execute(args: CiArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let CiCommand::Connect(args) = args.command;
     // Match the Connect API's bounded account-name input before issuing HTTP.
     if args.github_account.is_empty()
-        || args.github_account.len() > 100
+        || args.github_account.len() > 39
+        || !args.github_account.as_bytes()[0].is_ascii_alphanumeric()
         || !args
             .github_account
             .bytes()
@@ -279,6 +280,23 @@ fn field<'a>(value: &'a Value, name: &str) -> anyhow::Result<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn ci_rejects_invalid_accounts_before_loading_remote_credentials() {
+        use clap::Parser;
+        for account in ["-foo", &"a".repeat(40)] {
+            let cli = crate::cli::Cli::try_parse_from(["boxlite", "ci", "connect", "--", account])
+                .unwrap();
+            let args = CiArgs {
+                command: CiCommand::Connect(ConnectArgs {
+                    github_account: account.to_owned(),
+                    allow_public_repositories: false,
+                    no_browser: true,
+                }),
+            };
+            let error = execute(args, &cli.global).await.unwrap_err();
+            assert!(error.to_string().contains("GitHub account must"), "{error}");
+        }
+    }
     #[test]
     fn ci_endpoint_preserves_context_routing_and_rejects_unsafe_urls() {
         let options =

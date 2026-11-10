@@ -12,6 +12,8 @@ import { FairSelection, matches, pendingJob, repositories } from './scheduling'
 import { VerifiedWebhook } from './webhook'
 import type { AppDeliveryRecovery } from './replay/recovery'
 import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity } from './capacity'
+import { RepositoryCompensation, RepositoryScanSession } from './compensation/scanner'
+import { ScanClaim } from './compensation/queue'
 
 export interface ListenerBackend extends PoolBackend {
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -21,6 +23,7 @@ export interface ListenerHost {
   readonly recovery?: Pick<AppDeliveryRecovery, 'step'>
   discover(lease: ExecutionLease, signal: AbortSignal, request: DiscoveryRequest): Promise<DiscoverySnapshot>
   backend(scope: ExecutionScope, lease: ExecutionLease): Promise<ListenerBackend>
+  scan(claim: ScanClaim, signal: AbortSignal): Promise<RepositoryScanSession>
   /** Persist with live binding authorization in the same ingress transaction. */
   accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'>
   report(error: unknown, operation: string): void
@@ -37,9 +40,7 @@ interface Session {
   current: Map<string, ExecutionScope>
   discoveryAt: number
   discoveryPending: boolean
-  scans: Map<string, number>
   jobs: FairSelection
-  compensation: FairSelection
 }
 export interface ListenerOptions {
   state: ListenerState
@@ -53,6 +54,7 @@ export interface ListenerOptions {
 export class Listener {
   private readonly journal: ExecutionJournal
   private readonly worker: PoolSettings
+  private readonly compensation: RepositoryCompensation
   private readonly timing: { tickMs: number; leaseMs: number; discoveryMs: number; compensationMs: number }
   private running = false
   private readonly retiring = new Set<Runtime>()
@@ -67,6 +69,14 @@ export class Listener {
       this.timing.leaseMs > 300000
     )
       throw new Error('Invalid Listener scheduling configuration')
+    this.compensation = new RepositoryCompensation({
+      queue: options.state.scans(),
+      open: (claim, signal) => options.host.scan(claim, signal),
+      report: (error, operation) => options.host.report(error, operation),
+      wake: () => this.wake?.(),
+      tickMs: this.timing.tickMs,
+      intervalMs: this.timing.compensationMs,
+    })
   }
   async receive(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
     const captured = {
@@ -81,10 +91,13 @@ export class Listener {
   async run(signal: AbortSignal): Promise<void> {
     if (this.running) throw new Error('Listener is already running')
     this.running = true
+    const scanStop = new AbortController()
+    let scans: Promise<void> | undefined
     try {
       while (!signal.aborted) {
         try {
           await this.journal.initialize()
+          scans ??= this.compensation.run(AbortSignal.any([signal, scanStop.signal]))
           await this.retireKnown()
           const lease = await this.options.state.acquire(randomUUID(), this.timing.leaseMs)
           if (lease) await this.session(lease, signal)
@@ -95,7 +108,12 @@ export class Listener {
         if (!signal.aborted) await this.wait(signal)
       }
     } finally {
-      this.running = false
+      scanStop.abort()
+      try {
+        await scans
+      } finally {
+        this.running = false
+      }
     }
   }
   private async session(lease: ExecutionLease, external: AbortSignal): Promise<void> {
@@ -108,9 +126,7 @@ export class Listener {
         current: new Map(),
         discoveryAt: 0,
         discoveryPending: false,
-        scans: new Map(),
         jobs: new FairSelection(),
-        compensation: new FairSelection(),
       }
     let renewalError: unknown
     const renewal = (async () => {
@@ -343,47 +359,6 @@ export class Listener {
         )
           await this.settle(lease, wake)
       }
-    const scans = [...session.current]
-      .flatMap(([key, scope]) =>
-        blocked.has(key)
-          ? []
-          : repositories(scope).map((repository) => ({
-              scope,
-              value: { key, scope, repository, scanKey: `${key}/${repository}` },
-            })),
-      )
-      .filter(({ value }) => (session.scans.get(value.scanKey) ?? 0) <= Date.now())
-    // Resolve only the selected scope; a large directory must not poll Commerce for every tenant.
-    for (const { key, scope, repository, scanKey } of session.compensation.take(scans, 1)) {
-      if (!(await this.journal.hasCapacity(lease, key, await resolveCapacity(scope, repository)))) continue
-      const runtime = await this.runtime(session, key, scope),
-        bounded = AbortSignal.any([signal, AbortSignal.timeout(45000)])
-      const jobs = await runtime.backend.queued(repository, bounded)
-      for (const job of jobs) {
-        if (job.repository !== repository) throw new Error('Compensation returned an outside repository')
-        if (!jobMatches(job, this.worker.labels)) continue
-        const key = `notice/${scope.installation.id}/${job.job}`,
-          [prior] = await this.options.state.read([key])
-        if (prior) {
-          const pending = pendingJob(prior)
-          if (!matches(scope, pending) || pending.notice.run !== job.run) throw new StateCorrupt()
-          continue
-        }
-        await this.options.state.commit(lease, [
-          {
-            key,
-            expected: null,
-            payload: {
-              installationId: scope.installation.id,
-              accountId: scope.installation.account.id,
-              repositoryId: repository,
-              job: { id: job.job, runId: job.run },
-            },
-          },
-        ])
-      }
-      session.scans.set(scanKey, Date.now() + this.timing.compensationMs)
-    }
     for (const [key, runtime] of session.runtimes) {
       if (session.current.has(key) || (await this.journal.scope(lease, key)).active) continue
       await runtime.pool.close()

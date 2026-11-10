@@ -24,6 +24,7 @@ export class GitHubRequestError extends Error {
 interface GitHubRequest {
   url: string
   token?: string
+  oauthApp?: { clientId: string; clientSecret: string }
   json?: Json
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   response?: 'json' | 'empty' | 'page'
@@ -47,7 +48,8 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       address.username ||
       address.password ||
       address.hash ||
-      (device && (options.token || method !== 'POST')) ||
+      (device && (options.token || options.oauthApp || method !== 'POST')) ||
+      (options.oauthApp && (!api || method !== 'GET' || !!options.token)) ||
       (options.response === 'page' && (!api || method !== 'GET'))
     )
       throw new Error('Invalid GitHub endpoint')
@@ -61,7 +63,15 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+        ...(options.oauthApp
+          ? {
+              Authorization:
+                'Basic ' +
+                Buffer.from(options.oauthApp.clientId + ':' + options.oauthApp.clientSecret).toString('base64'),
+            }
+          : options.token
+            ? { Authorization: `Bearer ${options.token}` }
+            : {}),
       },
       body: options.json === undefined ? undefined : JSON.stringify(options.json),
     })

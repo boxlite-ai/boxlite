@@ -84,8 +84,15 @@ export function completeCiRedirect(
 ) {
   if (completion) return completion
   completion = (async () => {
+    const metadata = window.sessionStorage.getItem(pendingKey)
+    const received = callback
+    callback = undefined
+    const clearPending = () => {
+      if (window.sessionStorage.getItem(pendingKey) === metadata) window.sessionStorage.removeItem(pendingKey)
+    }
+    let valid = false
     try {
-      const pending = JSON.parse(window.sessionStorage.getItem(pendingKey) || 'null')
+      const pending = JSON.parse(metadata || 'null')
       if (
         callbackRejected ||
         !pending ||
@@ -93,32 +100,34 @@ export function completeCiRedirect(
         !uuid.test(pending.organization) ||
         !Number.isFinite(pending.expires) ||
         pending.expires <= Date.now() ||
-        (callback !== undefined && !callback.state.startsWith(pending.attempt + '.'))
+        (received !== undefined && !received.state.startsWith(pending.attempt + '.'))
       )
         throw Error('Restart connect from CI settings.')
+      valid = true
       const result =
-        !callback && api.getCiConnect
+        !received && api.getCiConnect
           ? await api.getCiConnect(pending.organization, pending.attempt)
-          : callback?.kind === 'oauth'
+          : received?.kind === 'oauth'
             ? await api.completeCiConnect(pending.organization, pending.attempt, {
-                code: callback.code,
-                state: callback.state,
+                code: received.code,
+                state: received.state,
               })
             : await api.completeCiInstallation(pending.organization, pending.attempt, {
-                installation_id: callback!.installation_id,
-                state: callback!.state,
+                installation_id: received!.installation_id,
+                state: received!.state,
               })
-      if (!['selection_required', 'installation_required', 'pending'].includes(result.status))
-        window.sessionStorage.removeItem(pendingKey)
+      if (!['selection_required', 'installation_required', 'pending'].includes(result.status)) clearPending()
       return { organization: pending.organization as string, result }
     } catch {
-      window.sessionStorage.removeItem(pendingKey)
+      if (!valid) clearPending()
       throw new Error('GitHub authorization could not be completed. Restart connect from CI settings.')
-    } finally {
-      callback = undefined
     }
   })()
-  return completion
+  const current = completion
+  void current.catch(() => {
+    if (completion === current) completion = undefined
+  })
+  return current
 }
 
 export function clearCiConnectSession(): void {

@@ -237,7 +237,8 @@ export function ConnectsPanel() {
             <AlertDialogTitle>Delete connection to {pendingDelete?.github_account}?</AlertDialogTitle>
             <AlertDialogDescription>
               New CI jobs stop using this connection. Running jobs can finish and their workers are cleaned up. Pending
-              authorizations for this account type are cancelled. You can reconnect later.
+              browser authorizations for all owners in this BoxLite organization, plus Device Flow authorizations for
+              this CI App, are cancelled. You can reconnect later.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

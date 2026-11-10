@@ -42,3 +42,8 @@ export { ScopeApplications } from './app-scopes'
 
 export { CiGitHubOAuth } from './ci-github-oauth'
 export type { GitHubAccount } from './ci-github-oauth'
+
+export { RepositoryScanQueue } from './compensation/queue'
+export type { ScanClaim } from './compensation/queue'
+export { GitHubRepositoryScanner } from './compensation/scanner'
+export type { RepositoryScanSession } from './compensation/scanner'

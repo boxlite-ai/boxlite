@@ -26,7 +26,7 @@ export class ListenerCredentials {
   private readonly retryAt = new Map<string, number>()
   private closed = false
   constructor(
-    private readonly state: ListenerState,
+    private readonly state: Pick<ListenerState, 'commit'>,
     lease: ExecutionLease,
     private readonly owner: string,
     source: CredentialSource,

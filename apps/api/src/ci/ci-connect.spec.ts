@@ -1,3 +1,4 @@
+import { BadGatewayException } from '@nestjs/common'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -133,6 +134,123 @@ integration('CI connect persistence (real Postgres)', () => {
       .mockResolvedValue({ installationId: 123, accountId: 456, accountLogin: 'alice', accountType: 'User' })
     service = new CiConnectService(db, github as unknown as CiGitHubService, secrets, native, settings)
   })
+  it.each([true, false])('reports Login OAuth availability independently from CI Apps: %s', (available) => {
+    const settings = jest.spyOn(github, 'webSettings')
+    if (!available)
+      settings.mockImplementation(() => {
+        throw Error('missing client secret')
+      })
+    try {
+      expect(service.configuration()).toMatchObject({
+        web_connect_available: available,
+        apps: [{ account_type: 'User', web_connect_available: available }],
+      })
+    } finally {
+      settings.mockRestore()
+    }
+  })
+  it.each(['expired', 'lease-expired'])(
+    'erases an unusable browser grant on authenticated resume: %s',
+    async (state) => {
+      const { attempt } = await accountSession()
+      if (state === 'expired')
+        await db.query("UPDATE ci_connect_attempt SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [
+          attempt.id,
+        ])
+      else
+        await db.query(
+          "UPDATE ci_connect_attempt SET state='polling',lease_id=$2,lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [attempt.id, randomUUID()],
+        )
+      expect((await service.getWeb(actor, attempt.id)).status).toBe(state === 'expired' ? 'expired' : 'failed')
+      const [row] = await db.query(
+        'SELECT oauth_token_ciphertext,web_target_ciphertext,lease_id FROM ci_connect_attempt WHERE id=$1',
+        [attempt.id],
+      )
+      expect(row).toEqual({ oauth_token_ciphertext: null, web_target_ciphertext: null, lease_id: null })
+    },
+  )
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid account selection before claiming a grant: %s',
+    async (account_id) => {
+      const { attempt } = await accountSession()
+      await expect(
+        service.selectAccount(actor, attempt.id, { account_id, allow_public_repositories: false }),
+      ).rejects.toThrow('Invalid GitHub account selection')
+      expect((await service.getWeb(actor, attempt.id)).status).toBe('selection_required')
+    },
+  )
+  it('rejects account selection before login and ownership lost after inventory', async () => {
+    const attempt = await web()
+    github.isIdentityClient.mockReturnValue(true)
+    await expect(
+      service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: false }),
+    ).rejects.toThrow('login required')
+    const { attempt: loggedIn } = await accountSession()
+    await expect(
+      service.selectAccount(actor, loggedIn.id, { account_id: 999, allow_public_repositories: false }),
+    ).rejects.toThrow('Current GitHub account owner')
+    expect((await service.getWeb(actor, loggedIn.id)).status).toBe('failed')
+  })
+  it.each(['cancelled', 'expired'])('does not revive a %s grant after a delayed provider error', async (scenario) => {
+    const { attempt } = await accountSession()
+    github.ownedAccounts.mockImplementationOnce(async () => {
+      if (scenario === 'cancelled') await service.cancel(actor, attempt.id)
+      else
+        await db.query("UPDATE ci_connect_attempt SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [
+          attempt.id,
+        ])
+      throw new BadGatewayException('GitHub unavailable')
+    })
+    await expect(
+      service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }),
+    ).rejects.toThrow('GitHub unavailable')
+    expect((await service.getWeb(actor, attempt.id)).status).toBe(scenario)
+    const [row] = await db.query('SELECT oauth_token_ciphertext FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    expect(row.oauth_token_ciphertext).toBeNull()
+  })
+  it('rejects unknown and device attempts at the browser resume boundary', async () => {
+    await expect(service.getWeb(actor, randomUUID())).rejects.toThrow('not found')
+    const attempt = await service.start(actor, input)
+    await expect(service.getWeb(actor, attempt.id)).rejects.toThrow('Browser authorization required')
+  })
+  it.each(['cancelled', 'identity-changed', 'installation-missing'])(
+    'keeps account-selection authority pinned: %s',
+    async (scenario) => {
+      const { attempt, installed } = await accountSession()
+      if (scenario === 'cancelled') {
+        await service.cancel(actor, attempt.id)
+        expect(
+          (await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }))
+            .status,
+        ).toBe('cancelled')
+      } else if (scenario === 'identity-changed') {
+        github.isIdentityClient.mockReturnValue(false)
+        await expect(
+          service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }),
+        ).rejects.toThrow('identity OAuth App changed')
+      } else {
+        installed.delete(789)
+        const selected = await service.selectAccount(actor, attempt.id, {
+          account_id: 789,
+          allow_public_repositories: false,
+        })
+        const state = new URL(selected.installation_url).searchParams.get('state')!
+        await expect(service.completeInstallation(actor, attempt.id, 321, state)).rejects.toThrow(
+          'installation is unavailable',
+        )
+      }
+      expect(await db.query('SELECT id FROM ci_installation_binding')).toEqual([])
+    },
+  )
+  it('rejects unverified API key identity before querying key authority', async () => {
+    const started = await service.startWeb(actor, input)
+    const state = new URL(started.authorization_url).searchParams.get('state')!
+    await expect(
+      service.completeWeb({ ...actor, apiKey: { keyHash: '' } }, started.id, { code: 'code', state }),
+    ).rejects.toThrow('Verified API key identity')
+    expect(github.exchangeWeb).not.toHaveBeenCalled()
+  })
   it('web migration expands existing device rows and can be rolled back independently', async () => {
     const device = await service.start(actor, input)
     const runner = db.createQueryRunner()
@@ -162,6 +280,28 @@ integration('CI connect persistence (real Postgres)', () => {
     const url = new URL(attempt.authorization_url)
     return { ...attempt, state: url.searchParams.get('state')!, challenge: url.searchParams.get('code_challenge')! }
   }
+  it.each(['invalid-id', 'pending', 'expired', 'lease-expired'])(
+    'denies legacy selection without a live grant: %s',
+    async (scenario) => {
+      const attempt = await web()
+      if (scenario === 'expired')
+        await db.query("UPDATE ci_connect_attempt SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [
+          attempt.id,
+        ])
+      if (scenario === 'lease-expired')
+        await db.query(
+          "UPDATE ci_connect_attempt SET state='polling',lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",
+          [attempt.id],
+        )
+      const completion = service.selectWeb(actor, attempt.id, scenario === 'invalid-id' ? 0 : 123)
+      if (scenario === 'invalid-id' || scenario === 'pending')
+        await expect(completion).rejects.toThrow(
+          scenario === 'invalid-id' ? 'Invalid GitHub installation' : 'GitHub authorization is required',
+        )
+      else await expect(completion).resolves.toMatchObject({ status: scenario === 'expired' ? 'expired' : 'failed' })
+      expect(github.verifyUserInstallation).not.toHaveBeenCalled()
+    },
+  )
   it('web connect exchanges once, persists an encrypted selection token and binds only after selecting', async () => {
     const attempt = await web()
     const [stored] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
@@ -442,6 +582,9 @@ integration('CI connect persistence (real Postgres)', () => {
       backend: async () => {
         throw Error('No execution scope in this directory handoff test')
       },
+      scan: async () => {
+        throw Error('No scan catalog in this directory handoff test')
+      },
       accept: async () => {
         throw Error('No webhook in this connect handoff test')
       },
@@ -592,6 +735,27 @@ integration('CI connect persistence (real Postgres)', () => {
     await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
     return { attempt, installed }
   }
+  it.each(['ownedAccounts', 'installationFor'])(
+    'retains a bounded selection grant after transient %s failure',
+    async (method) => {
+      const { attempt } = await accountSession()
+      const [before] = await db.query('SELECT expires_at FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+      github[method].mockRejectedValueOnce(new BadGatewayException('GitHub unavailable'))
+      await expect(
+        service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false }),
+      ).rejects.toThrow('GitHub unavailable')
+      const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+      expect(row.state).toBe('selecting')
+      expect(row.expires_at).toEqual(before.expires_at)
+      expect(row.oauth_token_ciphertext).toBeTruthy()
+      expect(row.lease_id).toBeNull()
+      const result = await service.selectAccount(actor, attempt.id, {
+        account_id: 789,
+        allow_public_repositories: false,
+      })
+      expect(result.accounts.find((account) => account.account_id === 789).connected).toBe(true)
+    },
+  )
   it('connects two owned accounts under one bounded OAuth session with separate CI App bindings', async () => {
     const { attempt } = await accountSession()
     const [before] = await db.query('SELECT expires_at FROM ci_connect_attempt WHERE id=$1', [attempt.id])
@@ -648,6 +812,33 @@ integration('CI connect persistence (real Postgres)', () => {
     expect(url.searchParams.get('target_type')).toBe('User')
     expect((await service.getWeb(actor, attempt.id)).installation_url).toBe(url.href)
   })
+  it.each(['ciphertext', 'shape', 'missing-verifier'])(
+    'rejects unusable persisted browser credentials: %s',
+    async (scenario) => {
+      if (scenario === 'missing-verifier') {
+        const attempt = await web()
+        await db.query('UPDATE ci_connect_attempt SET oauth_verifier_ciphertext=NULL WHERE id=$1', [attempt.id])
+        await expect(
+          service.completeWeb(actor, attempt.id, { code: 'code', state: attempt.state }),
+        ).resolves.toMatchObject({ status: 'failed' })
+        expect(github.exchangeWeb).not.toHaveBeenCalled()
+        return
+      }
+      const { attempt, installed } = await accountSession()
+      installed.delete(789)
+      await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+      const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+      const aad = JSON.stringify([row.id, row.user_id, row.organization_id])
+      const ciphertext =
+        scenario === 'shape'
+          ? secrets.seal(JSON.stringify({}), aad + ':web-target:' + row.app_client_id)
+          : 'invalid-ciphertext'
+      await db.query('UPDATE ci_connect_attempt SET web_target_ciphertext=$2 WHERE id=$1', [attempt.id, ciphertext])
+      await expect(service.getWeb(actor, attempt.id)).rejects.toThrow(
+        scenario === 'shape' ? 'Invalid GitHub installation context' : 'context unavailable',
+      )
+    },
+  )
   it.each(['owner-revoked', 'wrong-installation', 'wrong-account'])(
     'denies installation completion after %s',
     async (scenario) => {

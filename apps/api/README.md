@@ -368,7 +368,10 @@ the identity client. The original OAuth client remains pinned to each attempt.
 Set `CI_GITHUB_OAUTH_CLIENT_ID` as a plain API setting and
 `CI_GITHUB_OAUTH_CLIENT_SECRET` as a workload secret reference. They must be distinct
 from the CI Apps. Without both, new browser connect is unavailable; scheduling and
-CLI connect remain independent. Existing `CI_GITHUB_APP_CLIENT_SECRET` and
+running installed CI workloads remain independent. CLI connect uses the Login OAuth
+App's server credentials to look up the account type before starting the selected
+CI App's Device Flow. Credentials stay on the server; account discovery does not
+require additional user scopes. Existing `CI_GITHUB_APP_CLIENT_SECRET` and
 `CI_GITHUB_ORG_APP_CLIENT_SECRET` settings only support legacy web grants during
 transition, rather than new Dashboard sign-in. No Auth0 identity-provider tokens
 are needed, and switching the CI GitHub identity does not switch the BoxLite login.
@@ -1121,8 +1124,12 @@ an uncertain outcome and must not trigger a blind retry or adoption by name.
 
 `CiListenerService` imports the shared TypeScript `Listener` directly. Every API
 replica can receive signed webhooks; a PostgreSQL execution lease selects one
-scheduler. No CI process, private RPC channel or API-container state volume is
-required. The shared journal retains original execution identities across restarts.
+scheduler. Each replica also runs two independent repository scan lanes;
+PostgreSQL task leases serialize scans per GitHub installation across replicas.
+Scans write missed jobs into the existing queue and never occupy runner cap.
+Publication rechecks the original connection generation and owner in its write
+transaction, so deleting a connection prevents late scan results from returning.
+No CI process, private RPC channel or API-container state volume is required. The shared journal retains original execution identities across restarts.
 
 The host modules divide responsibilities:
 
@@ -1268,8 +1275,9 @@ columns expand the same attempt table; Device Flow rows default to `device`.
 Build both API and Dashboard artifacts for browser connect. On GCP, the API
 Dockerfile bundles and serves both, so deploying that image updates the API and
 Dashboard in one Cloud Run revision. The optional
-`CI_GITHUB_OAUTH_CLIENT_SECRET` reference enables the Dashboard grant without making
-it mandatory for CLI-only deployments. GCP dev acceptance still needs the real
+`CI_GITHUB_OAUTH_CLIENT_SECRET` reference enables the Dashboard grant and authenticated
+account discovery for CLI connect; both require the Login OAuth App credentials.
+GCP dev acceptance still needs the real
 browser authorization, webhook and CI workflow checks after deployment.
 
 ### Hosted CI capacity
@@ -1330,8 +1338,11 @@ Unknown/foreign bindings return 404; disabled connections return 409. Binding,
 verified GitHub identity, original actor, quota, authorization attempts and workers
 remain intact. Delivered jobs continue through original-resource recovery and
 cleanup; workers not yet given JIT may retire when old admission is rejected.
-Organization runner-group public access must still match on GitHub. The endpoint
-does not mutate GitHub configuration. See the [update design](../../docs/contributing/investigations/2026-11-06-ci-connection-update.md).
+The inventory wake asynchronously synchronizes BoxLite's dedicated Organization
+runner group with the saved public-repository policy. The connection remains
+provisioning until GitHub policy and repository membership pass readback; remote
+failures retry without discarding the desired policy.
+See the [update design](../../docs/contributing/investigations/2026-11-06-ci-connection-update.md).
 
 `DELETE /api/v1/{organization-prefix}/ci/connections/{bindingId}` requires the
 current owner and both Box write/delete key scopes. Unknown or foreign bindings

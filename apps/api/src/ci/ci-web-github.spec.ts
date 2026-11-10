@@ -5,6 +5,8 @@ describe('CI browser GitHub transport', () => {
   const original = global.fetch
   const values = {
     'ci.githubClientId': 'app-client',
+    'ci.githubOAuthClientId': 'identity-client',
+    'ci.githubOAuthClientSecret': 'private-identity-oauth-secret',
     'ci.githubAppSlug': 'test-app',
     'ci.githubPrivateKey': 'not-used-by-web-transport',
     'ci.githubClientSecret': 'private-test-oauth-client-secret',
@@ -15,6 +17,31 @@ describe('CI browser GitHub transport', () => {
   afterEach(() => {
     global.fetch = original
   })
+  it.each(['missing-app', 'same-app', 'missing-identity', 'overlapping-identity', 'changed-identity'])(
+    'rejects invalid CI App registry configuration: %s',
+    (scenario) => {
+      const config = { ...values } as Record<string, string>
+      if (scenario === 'missing-app') config['ci.githubClientId'] = ''
+      if (scenario === 'same-app') config['ci.githubOrgClientId'] = config['ci.githubClientId']
+      if (scenario === 'missing-identity') config['ci.githubOAuthClientId'] = ''
+      if (scenario === 'overlapping-identity') config['ci.githubOAuthClientId'] = config['ci.githubClientId']
+      const registry = new CiGitHubService({ get: (key: string) => config[key] } as any)
+      if (scenario === 'changed-identity') {
+        registry.identity()
+        config['ci.githubOAuthClientId'] = 'changed-client'
+      }
+      expect(() => (scenario.endsWith('app') ? registry.forType('User') : registry.identity())).toThrow()
+    },
+  )
+  it.each(['-account', 'a'.repeat(40), 'owner/repo'])(
+    'rejects invalid account lookup before HTTP: %s',
+    async (account) => {
+      global.fetch = jest.fn()
+      const registry = new CiGitHubService({ get: (key: string) => values[key] } as any)
+      await expect(registry.forAccount(account)).rejects.toThrow('Invalid GitHub account')
+      expect(global.fetch).not.toHaveBeenCalled()
+    },
+  )
   it('uses a fixed GitHub authorize URL, explicit callback and S256 challenge without the verifier or secret', () => {
     const url = new URL(make().authorizeWeb('independent-state', 'A'.repeat(43)))
     expect(url.origin + url.pathname).toBe('https://github.com/login/oauth/authorize')
@@ -95,10 +122,14 @@ describe('CI browser GitHub transport', () => {
       'ci.githubOrgClientSecret': 'private-organization-oauth-secret',
     }
     const registry = new CiGitHubService({ get: (key: string) => config[key] } as any)
+    const lookupAuth: (string | null)[] = []
     global.fetch = jest.fn(async (address, options) => {
       const url = new URL(String(address))
-      if (url.pathname === '/users/team')
+      if (url.pathname === '/users/team') {
+        lookupAuth.push(new Headers(options?.headers).get('authorization'))
+        expect(url.search).toBe('')
         return new Response(JSON.stringify({ id: 7, login: 'team', type: 'Organization' }))
+      }
       expect(url.href).toBe('https://github.com/login/oauth/access_token')
       expect(JSON.parse(String(options?.body))).toMatchObject({
         client_id: 'organization-client',
@@ -107,6 +138,9 @@ describe('CI browser GitHub transport', () => {
       return new Response(JSON.stringify({ access_token: 'private-org-user-token' }))
     }) as typeof fetch
     const app = await registry.forAccount('team')
+    expect(lookupAuth).toEqual([
+      'Basic ' + Buffer.from('identity-client:private-identity-oauth-secret').toString('base64'),
+    ])
     expect(app).toBe(registry.byClientId('organization-client'))
     expect(new URL(app.authorizeWeb('state', 'A'.repeat(43))).searchParams.get('client_id')).toBe('organization-client')
     expect(await app.exchangeWeb('code', 'A'.repeat(43))).toBe('private-org-user-token')

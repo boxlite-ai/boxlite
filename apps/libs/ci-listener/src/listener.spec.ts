@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ExecutionJournal } from './execution/journal'
-import { ExecutionScope } from './execution/model'
+import { ExecutionScope, decodeScope } from './execution/model'
 import { Listener, ListenerBackend, ListenerHost } from './listener'
 import { JitRegistration } from './runners'
 import { SqliteStateDatabase } from './state/sqlite'
@@ -15,7 +15,10 @@ import { ListenerInbox, verifyWebhook } from './webhook'
 import { AppDeliveryRecovery } from './replay/recovery'
 import { GitHubAppSource } from './github-app'
 import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected } from './worker'
+import { StateCorrupt } from './state/database'
 import { CapacityRequest } from './capacity'
+import { ScanClaim } from './compensation/queue'
+import { WorkflowJob } from './jobs'
 
 const deferred = () => {
   let resolve!: () => void
@@ -35,7 +38,8 @@ describe('CI shared Listener orchestration', () => {
     namespace: string,
     scope: ExecutionScope,
     delivered: ReturnType<typeof deferred>,
-    abort: AbortController
+    abort: AbortController,
+    publishScan: jest.Mock<Promise<void>, [ScanClaim, readonly WorkflowJob[]]>
   const settings = { image: 'runner-test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] }
   const notification = (job = 55, installation = 1, account = 7, repository = 21) => {
     const secret = Buffer.alloc(32, 1),
@@ -57,10 +61,33 @@ describe('CI shared Listener orchestration', () => {
       secret,
     )!
   }
+  const withScanCatalog = (original: ListenerHost): ListenerHost => {
+    const wrapped = Object.create(original) as ListenerHost
+    wrapped.discover = async (...args) => {
+      const result = await original.discover(...args)
+      const valid = result.scopes.flatMap((scope) => {
+        try {
+          return [decodeScope(scope)]
+        } catch {
+          return []
+        }
+      })
+      const bindings = new Set(valid.map((scope) => scope.binding))
+      for (const binding of bindings)
+        await state.scans().synchronize(
+          args[0],
+          'fixture',
+          binding,
+          valid.filter((scope) => scope.binding === binding),
+        )
+      return result
+    }
+    return wrapped
+  }
   const make = () =>
     new Listener({
       state,
-      host,
+      host: withScanCatalog(host),
       worker: settings,
       capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
       timing: { tickMs: 1, leaseMs: 3000 },
@@ -121,7 +148,13 @@ describe('CI shared Listener orchestration', () => {
         close: jest.fn(async () => {}),
       })),
     }
+    publishScan = jest.fn((claim, jobs) => state.scans().publish(claim, jobs, settings.labels))
     host = {
+      scan: jest.fn(async (claim: ScanClaim) => ({
+        queued: (signal: AbortSignal) => backend.queued(claim.repository, signal),
+        publish: (jobs: readonly WorkflowJob[]) => publishScan(claim, jobs),
+        close: async () => {},
+      })),
       discover: jest.fn(async (original, _signal, request) => {
         lease = { ...original }
         return { scopes: [scope], completed: request.wakes.map((row) => ({ ...row })), pending: false, ready: true }
@@ -200,7 +233,7 @@ describe('CI shared Listener orchestration', () => {
     })
     listener = new Listener({
       state,
-      host,
+      host: withScanCatalog(host),
       worker: settings,
       capacity: { resolve: resolve },
       timing: { tickMs: 1, leaseMs: 3000 },
@@ -219,7 +252,7 @@ describe('CI shared Listener orchestration', () => {
     jest.mocked(host.report).mockImplementation(() => observed.resolve())
     listener = new Listener({
       state,
-      host,
+      host: withScanCatalog(host),
       worker: settings,
       capacity: { resolve },
       timing: { tickMs: 1, leaseMs: 3000 },
@@ -286,7 +319,7 @@ describe('CI shared Listener orchestration', () => {
     }))
     listener = new Listener({
       state,
-      host,
+      host: withScanCatalog(host),
       worker: settings,
       capacity: { resolve },
       timing: { tickMs: 1, leaseMs: 3000 },
@@ -304,6 +337,60 @@ describe('CI shared Listener orchestration', () => {
     const snapshot = await inspectJournal(state, lease)
     expect([...snapshot.allocations.values()].map((row) => row.value.job.repository)).toEqual([22])
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
+  })
+  it.each([false, true])('handles a webhook that wins compensation publication; conflicting=%s', async (conflict) => {
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([
+        { repository: 21, run: 33, job: 55, status: 'queued', labels: ['boxlite-ci-runner'], runner: null },
+      ])
+    const publish = publishScan.getMockImplementation()!,
+      reported = deferred()
+    let injected = false
+    jest.mocked(host.report).mockImplementation(() => reported.resolve())
+    publishScan.mockImplementation(async (claim, jobs) => {
+      if (!injected) {
+        injected = true
+        await listener.receive(notification(55, 1, conflict ? 8 : 7))
+      }
+      return publish(claim, jobs)
+    })
+    await runUntil(conflict ? reported.promise : delivered.promise)
+    expect(injected).toBe(true)
+    if (conflict) {
+      expect(host.report).toHaveBeenCalledWith(expect.any(StateCorrupt), expect.any(String))
+      expect(backend.workers.create).not.toHaveBeenCalled()
+    } else {
+      expect(host.report).not.toHaveBeenCalled()
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    }
+  })
+  it('dispatches a webhook job while a compensation scan is blocked', async () => {
+    const entered = deferred(),
+      release = deferred()
+    jest.mocked(backend.queued).mockImplementation(async () => {
+      entered.resolve()
+      await release.promise
+      return []
+    })
+    const running = listener.run(abort.signal)
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    try {
+      await entered.promise
+      await listener.receive(notification())
+      await Promise.race([
+        delivered.promise,
+        new Promise<void>((resolve) => {
+          deadline = setTimeout(resolve, 1000)
+        }),
+      ])
+      expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    } finally {
+      clearTimeout(deadline)
+      release.resolve()
+      abort.abort()
+      await running
+    }
   })
   it('compensates a missed webhook by recording the scanned job before dispatching it', async () => {
     jest
@@ -452,7 +539,7 @@ describe('CI shared Listener orchestration', () => {
     expect((await ingressRows()).some((row) => row.key === 'notice/1/56')).toBe(true)
     expect(jest.mocked(backend.job).mock.calls.map(([notice]) => notice.job)).not.toContain(56)
     expect(backend.job).toHaveBeenCalledTimes(2)
-    expect(backend.queued).not.toHaveBeenCalled()
+    expect(backend.queued).toHaveBeenCalled()
   })
   it.each([
     ['tenant', false],
@@ -509,13 +596,15 @@ describe('CI shared Listener orchestration', () => {
       })
       listener = new Listener({
         state,
-        host,
+        host: withScanCatalog(host),
         worker: settings,
         capacity: { resolve: async () => testCapacity({ account: 2, tenant: 1 }) },
         timing: { tickMs: 1, leaseMs: 3000 },
       })
       await runUntil(observed.promise)
-      expect(jest.mocked(backend.queued).mock.calls.map(([repository]) => repository)).toEqual(available ? [22] : [])
+      expect(new Set(jest.mocked(backend.queued).mock.calls.map(([repository]) => repository))).toEqual(
+        new Set([21, 22]),
+      )
       expect(
         (await inspectJournal(state, lease)).workers.filter((worker) => worker.organization === scope.organization),
       ).toHaveLength(1)
@@ -585,7 +674,7 @@ describe('CI shared Listener orchestration', () => {
   it('renews ownership while a GitHub operation is waiting beyond the original lease expiry', async () => {
     listener = new Listener({
       state,
-      host,
+      host: withScanCatalog(host),
       worker: settings,
       capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
       timing: { tickMs: 1, leaseMs: 300 },
