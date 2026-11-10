@@ -14,6 +14,7 @@ import { EventEmitter } from 'node:events'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BOX_EVENT_CHANNEL } from '../common/constants/constants'
+import { Context } from '../common/context/context'
 
 const user = {
   userId: 'user',
@@ -276,8 +277,9 @@ it.each(['event', 'dto'])('keeps the recovered Box ID after a subsequent %s fail
     {} as never,
   )
   const request = { user, params: { boxIdOrName: 'friendly-name' }, get: () => undefined }
+  const ctx = Context.user({ userId: user.userId, authMethod: 'api_key' })
   const { audit, result } = auditCall(BoxController.prototype.recoverBox, request, () =>
-    (controller.recoverBox as any)(user, 'friendly-name', request),
+    controller.recoverBox(user as never, 'friendly-name', ctx, request as never),
   )
   await expect(result).rejects.toThrow(failure === 'dto' ? 'DTO conversion failed' : 'startup failed')
   expect(audit.updateLog).toHaveBeenCalledWith(
