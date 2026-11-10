@@ -17,8 +17,8 @@
  */
 
 import { loadConfig as loadStageConfig, type StageConfig } from 'mstage/config'
-import { loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
-import { assertTag, releaseTagFor, resolveRegistry } from '../src/address.ts'
+import { loadArtifactConfig, loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
+import { assertTag, ghcrRegistryFor, releaseTagFor, resolveRegistry } from '../src/address.ts'
 import { assertPromotable, coordinatesOf, type Coordinates } from '../src/coordinates.ts'
 import {
   AuditFailedError,
@@ -68,6 +68,7 @@ const USAGE = [
   '       npm run mbuild promote -- --tag <commit-sha> --from <stage> --to <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild verify -- --tag <commit-sha> --stage <stage> [--artifact <name>] [--version v<X.Y.Z>]',
   '       npm run mbuild inspect -- --stage <stage>',
+  '       npm run mbuild verify -- --tag <full-sha> --ghcr <owner/repository> --version v<X.Y.Z>',
   '',
   '--artifact narrows the command to one declared artifact. Absent means every',
   'one, which is what a deploy asks about.',
@@ -174,7 +175,17 @@ const coordinates = (config: BuildConfig, stage: string): Promise<Coordinates> =
 
 const main = async (): Promise<number> => {
   const [command, ...argv] = process.argv.slice(2)
-  const config = loadBuildConfig()
+  const ghcr = option(argv, 'ghcr')
+  const config = ghcr === undefined ? loadBuildConfig() : loadArtifactConfig()
+  if (ghcr !== undefined) {
+    if (command !== 'verify') throw new Error('--ghcr currently requires verify')
+    if (!option(argv, 'version') || !/^[0-9a-f]{40}$/.test(required(argv, 'tag'))) throw new Error('--ghcr requires --version and a full commit SHA')
+    const registry = ghcrRegistryFor(ghcr)
+    for (const outcome of await verifyPublished({ config: narrowed(config, argv), stage: 'ghcr', registry, tag: tagOf(argv), run })) {
+      console.log(`${outcome.artifact}=${outcome.address}`)
+    }
+    return 0
+  }
 
   if (command === 'inspect') {
     const stage = required(argv, 'stage')
