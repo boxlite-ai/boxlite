@@ -228,7 +228,6 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 | Linux          | x86_64                | ✅ Supported     |
 | Linux          | ARM64                 | ✅ Supported     |
 | Windows (WSL2) | x86_64                | ✅ Supported     |
-| macOS          | Intel (x86_64)        | 🚀 Coming soon |
 
 ## System Requirements
 
