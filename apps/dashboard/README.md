@@ -49,6 +49,17 @@ successful exact-identity lookup; a lookup failure offers retry. Saved disk
 capacity is not exposed by the checkpoint API, so **Disk (GiB)** shows `—`
 instead of substituting the source Box's current capacity.
 
+The page heading and description follow the shared resource header spacing and
+typography used by Images and Volumes. The checkpoint filter and toolbar use the
+shared resource components, matching Volumes and Registries: a solid border,
+muted search icon, row count and focus border. Filtering still matches checkpoint
+names and IDs without case sensitivity.
+The list keeps the same 14px toolbar gap and 44px header height as Images and
+Volumes. Column headings use the shared resource heading typography and sentence
+case, preserving acronyms such as GiB.
+Checkpoint table borders belong to individual cells, keeping the header divider
+inside its 44px height like the grid-based resource lists.
+
 **New Checkpoint** opens a source picker showing eligible running/stopped
 Boxes and their current disk capacity. **Boxes → More → Checkpoint** opens the
 same dialog with the source selected and refreshed. Transitional sources and

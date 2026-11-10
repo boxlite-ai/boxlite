@@ -41,20 +41,17 @@ export function CheckpointTable({
   const canDelete = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const byId = new Map(boxes?.map((box) => [box.id, box]))
   return (
-    <Table className="min-w-[850px]">
+    <Table className="min-w-[850px] border-separate border-spacing-0">
       <TableHeader>
         <TableRow className="bg-transparent hover:bg-transparent">
           {['Name', 'Source box', 'Status', 'Size', 'Disk (GiB)', 'Created', 'Actions'].map((label) => (
-            <TableHead
-              key={label}
-              className="h-auto pb-2 font-mono text-[10px] uppercase leading-normal tracking-[1px] last:text-right"
-            >
+            <TableHead key={label} className="resource-list-head last:text-right">
               {label}
             </TableHead>
           ))}
         </TableRow>
       </TableHeader>
-      <TableBody className="[&_tr]:h-[55px] [&_tr:last-child]:border-b [&_td]:py-[13px] [&_td]:tracking-normal">
+      <TableBody className="[&_tr]:h-[55px] [&_td]:border-b [&_td]:border-border/60 [&_td]:py-[13px] [&_td]:tracking-normal">
         {loading ? (
           <TableRow className="border-border/60 bg-transparent hover:bg-transparent">
             <TableCell colSpan={7} className="h-40 text-center" role="status">
