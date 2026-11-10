@@ -235,7 +235,7 @@ mod tests {
             },
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("test:latest".to_string()),
-                cpus: Some(2),
+                cpus: Some(2.0),
                 memory_mib: Some(512),
                 ..Default::default()
             },

@@ -35,19 +35,22 @@ pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
 pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 
 /// Older importers must refuse a CPU limit they cannot enforce.
-pub(crate) const CPU_LIMIT_ARCHIVE_VERSION: u32 = 6;
+pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 7;
 
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = CPU_LIMIT_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = FRACTIONAL_CPUS_ARCHIVE_VERSION;
 
 /// Pick the archive format an exported box needs.
 ///
 /// Use the oldest format that can represent all configured policies.
 /// An explicitly empty capability policy still requires v4; ports require v5,
-/// and CPU limits require v6 so older readers cannot silently discard them.
+/// and fractional CPUs require v7 so older readers cannot silently discard them.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
-    if options.cpu_limit.is_some() {
-        CPU_LIMIT_ARCHIVE_VERSION
+    if options
+        .cpu_count()
+        .is_ok_and(|cpu| cpu.is_some_and(|cpu| cpu.is_fractional()))
+    {
+        FRACTIONAL_CPUS_ARCHIVE_VERSION
     } else if !options.ports.is_empty() {
         PUBLISHED_PORTS_ARCHIVE_VERSION
     } else if options.advanced.capabilities().is_none() {
@@ -64,10 +67,11 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v3: adds `box_options` for full configuration preservation
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
-/// v6: `box_options.cpu_limit_millicpu` requires host CPU bandwidth enforcement
+/// v6: unsupported experimental separate CPU-limit configuration
+/// v7: fractional `box_options.cpus` requires host CPU bandwidth enforcement
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 6).
+    /// Archive format version (1 through 5, or 7).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -75,6 +79,7 @@ pub struct ArchiveManifest {
     pub image: String,
     /// Full box configuration (v3+). `None` for v1/v2 archives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::runtime::cpu_count::deserialize_options")]
     pub box_options: Option<crate::runtime::options::BoxOptions>,
     /// SHA-256 checksum of the guest rootfs disk.
     ///
@@ -335,13 +340,10 @@ mod tests {
         let ordinary = crate::runtime::options::BoxOptions::default();
         assert_eq!(archive_version_for_options(&ordinary), ARCHIVE_VERSION);
         let limited = crate::BoxOptions {
-            cpu_limit: Some(crate::CpuLimit::new(0.125).unwrap()),
+            cpus: Some(0.125),
             ..ordinary.clone()
         };
-        assert_eq!(
-            archive_version_for_options(&limited),
-            CPU_LIMIT_ARCHIVE_VERSION
-        );
+        assert_eq!(archive_version_for_options(&limited), 7);
 
         let mut custom_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         custom_advanced

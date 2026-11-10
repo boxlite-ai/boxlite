@@ -100,7 +100,7 @@ pub struct CBoxInfo {
     pub status: *mut c_char,
     pub running: c_int,
     pub pid: c_int,
-    pub cpus: c_int,
+    pub cpus: f64,
     pub memory_mib: c_int,
     pub auto_stop: u32,
     pub auto_delete: u32,
@@ -349,7 +349,7 @@ impl CBoxInfo {
             status: to_c_str(status_to_str(info.status)),
             running: if info.status.is_running() { 1 } else { 0 },
             pid: info.pid.map(|p| p as c_int).unwrap_or(0),
-            cpus: info.cpus as c_int,
+            cpus: info.cpus,
             memory_mib: info.memory_mib as c_int,
             auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
@@ -449,52 +449,6 @@ pub unsafe extern "C" fn boxlite_get_info(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     box_info_by_id(runtime, id_or_name, cb, user_data, out_error)
-}
-
-/// Query the immutable creation-time CPU limit by Box ID or name.
-/// Completion is delivered by boxlite_runtime_drain; missing boxes return NotFound.
-/// This separate getter preserves the existing CBoxInfo ABI.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_get_cpu_limit(
-    runtime: *mut CBoxliteRuntime,
-    id_or_name: *const c_char,
-    cb: crate::event_queue::CBoxCpuLimitCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    unsafe {
-        let Some(runtime) = runtime.as_ref() else {
-            write_error(out_error, null_pointer_error("runtime"));
-            return BoxliteErrorCode::InvalidArgument;
-        };
-        let id_or_name = match crate::util::c_str_to_string(id_or_name) {
-            Ok(id) => id,
-            Err(error) => {
-                write_error(out_error, error);
-                return BoxliteErrorCode::InvalidArgument;
-            }
-        };
-        let cb = crate::unwrap_cb_or_return!(cb, out_error);
-        let backend = runtime.runtime.clone();
-        let queue = runtime.queue.clone();
-        let user_data = user_data as usize;
-        runtime.tokio_rt.spawn(async move {
-            let result = backend.get_info(&id_or_name).await.and_then(|info| {
-                info.map(|info| info.cpu_limit)
-                    .ok_or_else(|| BoxliteError::NotFound(format!("Box not found: {id_or_name}")))
-            });
-            push_event(
-                &queue,
-                RuntimeEvent::CpuLimit {
-                    cb,
-                    user_data,
-                    result,
-                },
-            )
-            .await;
-        });
-        BoxliteErrorCode::Ok
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -897,8 +851,7 @@ mod tests {
             last_updated: SystemTime::UNIX_EPOCH.into(),
             pid: None,
             image: "alpine:latest".to_string(),
-            cpus: 1,
-            cpu_limit: None,
+            cpus: 1.0,
             memory_mib: 256,
             privileged: None,
             network: None,

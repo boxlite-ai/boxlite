@@ -381,15 +381,9 @@ mod registry_options_tests {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct BoxOptions {
-    pub cpus: Option<u8>,
-    /// Creation-only Linux CPU bandwidth in cores, shared by the whole Box.
-    #[serde(
-        default,
-        rename = "cpu_limit_millicpu",
-        with = "super::cpu_limit::persisted",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub cpu_limit: Option<crate::CpuLimit>,
+    /// CPU allocation; fractional values enable Linux CPU bandwidth control.
+    #[serde(serialize_with = "super::cpu_count::serialize_optional")]
+    pub cpus: Option<f64>,
     pub memory_mib: Option<u32>,
     /// Disk size in GB for the container rootfs (sparse, grows as needed).
     ///
@@ -604,7 +598,6 @@ impl Default for BoxOptions {
     fn default() -> Self {
         Self {
             cpus: None,
-            cpu_limit: None,
             memory_mib: None,
             disk_size_gb: None,
             working_dir: None,
@@ -665,16 +658,15 @@ impl BoxOptions {
     ///   guest-networking switch (it gates host jailer grants only)
     /// - every mount in `mounts` fits its type
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
-        self.validate_cpu_limit()?;
-        if self.cpu_limit.is_some() {
+        if self.cpu_count()?.is_some_and(|cpu| cpu.is_fractional()) {
             if !cfg!(target_os = "linux") {
                 return Err(BoxliteError::Unsupported(
-                    "cpu_limit requires a Linux host".into(),
+                    "fractional cpus requires a Linux host".into(),
                 ));
             }
             if !self.advanced.security.jailer_enabled {
                 return Err(BoxliteError::Unsupported(
-                    "cpu_limit requires the jailer and cgroup v2 CPU controller".into(),
+                    "fractional cpus requires the jailer and cgroup v2 CPU controller".into(),
                 ));
             }
         }
@@ -802,11 +794,32 @@ impl BoxOptions {
         Ok(())
     }
 
+    /// Normalize the public resource quantity before deriving quotas or topology.
+    pub(crate) fn cpu_count(&self) -> BoxliteResult<Option<super::cpu_count::CpuCount>> {
+        self.cpus.map(super::cpu_count::CpuCount::new).transpose()
+    }
+
+    /// An explicit fractional allocation must survive named-box reuse unchanged.
+    pub(crate) fn check_reused_cpus(&self, actual: f64) -> BoxliteResult<()> {
+        if let Some(requested) = self.cpu_count()?.filter(|cpu| cpu.is_fractional())
+            && requested != super::cpu_count::CpuCount::new(actual)?
+        {
+            return Err(BoxliteError::InvalidArgument(
+                "existing box has different cpus; create a new box to change fractional cpus"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The requested vCPU count when the bundled guest kernel cannot bring
     /// all of them online. A custom kernel sets its own ceiling, so it never
     /// exceeds this one.
     pub(crate) fn cpus_beyond_guest_kernel(&self) -> Option<u8> {
-        self.cpus
+        self.cpu_count()
+            .ok()
+            .flatten()
+            .map(|cpu| cpu.vcpus())
             .filter(|&cpus| cpus > MAX_CPUS && self.advanced.kernel.is_none())
     }
 
@@ -817,37 +830,16 @@ impl BoxOptions {
     /// reuse, and a box created before this limit must keep starting (boot
     /// warns via `cpus_beyond_guest_kernel`).
     pub(crate) fn validate_cpus(&self) -> BoxliteResult<()> {
+        self.cpu_count()?;
         match self.cpus {
-            Some(cpus) if cpus == 0 || self.cpus_beyond_guest_kernel().is_some() => Err(
+            Some(cpus) if self.cpus_beyond_guest_kernel().is_some() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
-                    "cpus must be between 1 and {MAX_CPUS} (the guest kernel brings up at \
+                    "cpus must be between 0.01 and {MAX_CPUS} (the guest kernel brings up at \
                      most {MAX_CPUS} vCPUs), got {cpus}"
                 )),
             ),
             _ => Ok(()),
         }
-    }
-
-    pub(crate) fn validate_cpu_limit(&self) -> BoxliteResult<()> {
-        if let Some(limit) = self.cpu_limit {
-            limit.validate_cpus(
-                self.cpus
-                    .unwrap_or(super::constants::vm_defaults::DEFAULT_CPUS),
-            )?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn check_reused_cpu_limit(
-        &self,
-        actual: Option<crate::CpuLimit>,
-    ) -> BoxliteResult<()> {
-        if self.cpu_limit.is_some() && self.cpu_limit != actual {
-            return Err(BoxliteError::InvalidArgument(
-                "existing box has a different cpu_limit; create a new box to change it".into(),
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -2118,7 +2110,7 @@ mod tests {
     #[test]
     fn persisted_and_imported_boxes_keep_cpus_beyond_guest_kernel() {
         let mut opts = BoxOptions {
-            cpus: Some(24),
+            cpus: Some(24.0),
             ..Default::default()
         };
 

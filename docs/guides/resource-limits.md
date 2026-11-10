@@ -54,87 +54,82 @@ Available runner capacity still determines whether an allowed request can run.
 
 ## CPU configuration
 
-**Set CPU Count:**
+Set the CPU allocation with `cpus`; the default remains one virtual CPU.
 
 ```python
-boxlite.BoxOptions(
-    cpus=2,  # 2 CPU cores
-)
-```
-
-**Range:** 1 to 16. The bundled guest kernel is built with `CONFIG_NR_CPUS=16`
-and brings up at most 16 vCPUs, so creating a box with `cpus` outside this
-range fails with an invalid-argument error. A box created with a custom kernel
-(experimental) is not bound by this limit. A box created with more than 16
-vCPUs before this check still starts, logs a warning, and runs on 16.
-
-**Behavior:**
-- `cpus` sets integer virtual CPU topology; `cpu_limit` optionally bounds aggregate host CPU time.
-- Does not reserve physical cores
-- Multiple boxes can exceed host CPU count
-
-**Monitor Usage:**
-
-```python
-metrics = await box.metrics()
-print(f"CPU time: {metrics.cpu_time_ms}ms")
-```
-
-### Creation-only CPU time limit (Linux)
-
-Keep `cpus` as the integer number of virtual CPUs and set `cpu_limit` to bound their shared CPU time:
-
-```python
-options = boxlite.BoxOptions(image="alpine:latest", cpus=2, cpu_limit=0.5)
+options = boxlite.BoxOptions(image="alpine:latest", cpus=1.5)
 box = await runtime.create(options)
-print((await box.info()).cpu_limit)  # 0.5
+print((await box.info()).cpus)  # 1.5; the guest sees 2 vCPUs
 ```
 
-When cgroup membership succeeds, both vCPUs and host VMM/device threads share this budget.
-It does not reserve physical cores or guarantee latency.
-Linux uses a 100 ms period: `0.5` writes `50000 100000` to `cpu.max`.
-Concurrent work can consume the budget early and then wait for the next period.
-Boot and device I/O share the budget, so very low limits can reach existing startup or operation timeouts.
+| Input | Guest vCPUs | Additional CPU bandwidth quota |
+| --- | --- | --- |
+| Omitted/null | Existing default: 1 | None |
+| `2` or `2.0` | 2 | None; preserves integer behavior |
+| `0.5` | 1 | Half a CPU on Linux |
+| `1.5` | 2 | 1.5 CPUs on Linux |
 
-| Setting | Contract |
+Fractional allocations round up only the guest topology; information queries retain the requested value.
+They do not reserve physical cores or guarantee latency.
+Integer allocations add no new cgroup requirement and continue working on macOS.
+
+**Range:** `0.01` to `16`, in increments of `0.001`, with the bundled guest kernel.
+Zero, negatives, non-finite values, and excessive precision are rejected.
+A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
+Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
+
+### Fractional CPUs (Linux)
+
+Linux applies the allocation to the Box's cgroup using a fixed 100 ms period.
+For example, `cpus=0.125` writes `12500 100000` to `cpu.max`; `cpus=1.5` writes `150000 100000`.
+When cgroup membership succeeds, all vCPU and host VMM/device threads share that budget.
+Parallel work can exhaust it early and wait for the next period.
+Boot and device I/O also consume this budget; very small allocations can hit existing operation timeouts.
+
+| Condition | Behavior |
 | --- | --- |
-| Valid values | `0.01 <= cpu_limit <= cpus`, in increments of `0.001`; omitted CPUs use the existing default |
-| Omitted/null | Preserve existing CPU behavior |
-| Invalid numbers | Reject zero, negatives, NaN, infinity, excessive precision, and values above resolved CPUs |
-| Host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; rootless hosts need CPU delegation |
-| Quota write failure | Refuse startup before Guest execution if `cpu.max` cannot be written |
-| Membership failure | Preserve existing best-effort joining; the Box may start without the requested limit taking effect |
-| macOS | Explicit limits return `Unsupported`, including through the public REST runtime API |
-| Existing host limits | The stricter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` meaning is unchanged |
-| Information queries | Report the configured limit, not proof of enforcement, CPU usage, or a stricter effective ancestor/legacy limit |
+| Host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; rootless operation needs CPU delegation |
+| Quota write failure | Startup fails before guest execution |
+| Membership failure | Existing best-effort joining remains; a Box can start without the requested quota taking effect |
+| macOS | Fractional values return `Unsupported`, including through the public REST runtime API |
+| Existing host limits | A tighter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` behavior is unchanged |
+| Information queries | Return configured `cpus`, not CPU usage, reserved capacity, or proof of enforcement |
 
-The limit is immutable after creation; changing or clearing it requires a new Box.
+CPU configuration is immutable after creation.
 Restart, reconnect, disk snapshot restore, clone, and archive import retain it.
-Disk-only `restore_from_archive` keeps the destination Box's existing configuration, including its CPU limit.
-An explicit limit on `get_or_create` must equal the saved limit; omission preserves ordinary reuse.
+Disk-only `restore_from_archive` retains the destination Box's CPU configuration.
+An explicitly fractional `get_or_create` request must equal the saved allocation; integer or omitted values retain ordinary reuse behavior.
 
 | Interface | Creation | Query |
 | --- | --- | --- |
-| Rust | `cpu_limit: Some(CpuLimit::new(0.5)?)` | `BoxInfo.cpu_limit` / `CpuLimit::cores()` |
-| Python | `BoxOptions(cpu_limit=0.5)` or `SimpleBox(cpu_limit=0.5)` | `BoxInfo.cpu_limit` |
-| Node | `{ cpus: 2, cpuLimit: 0.5 }` | `JsBoxInfo.cpuLimit` |
-| Go | `WithCPUs(2), WithCPULimit(0.5)` | `BoxInfo.CPULimit` (`nil` when unset) |
-| C | `boxlite_options_set_cpu_limit(opts, 0.5, &error)` | Async `boxlite_get_cpu_limit`, delivered by runtime drain |
-| CLI | `boxlite create --cpus 2 --cpu-limit 0.5 alpine` | `boxlite inspect` → `CpuLimit` |
-| REST/serve | `{"image":"alpine","cpus":2,"cpu_limit":0.5}` | Box response `cpu_limit` |
+| Rust | `cpus: Some(0.5)` | `BoxInfo.cpus: f64` |
+| Python | `BoxOptions(cpus=0.5)` or `SimpleBox(cpus=0.5)` | `BoxInfo.cpus` |
+| Node | `{ cpus: 0.5 }` | `JsBoxInfo.cpus` |
+| Go | `WithCPUs(0.5)` | `BoxInfo.CPUs: float64` |
+| C | `boxlite_options_set_cpus(opts, 0.5)` | `CBoxInfo.cpus: double` |
+| CLI | `boxlite create --cpus 0.5 alpine` | `boxlite inspect` → `Cpus` |
+| REST/serve | `{"image":"alpine","cpus":0.5}` | Box response `cpus` |
 
-REST clients send explicit limits directly in `POST /boxes`, without a CPU-specific `/config` request.
-Servers that reject the top-level field as unknown return an SDK `Unsupported` error naming `cpu_limit` and the refusal reason.
-For example, Cloud's `property cpu_limit should not exist` becomes `Field 'cpu_limit' is not supported by this server: property cpu_limit should not exist`.
-The client never removes the limit or retries creation; value-validation errors and unrelated server errors retain their original classification.
-Other features may still use `/config`; this feature does not add Cloud scheduling or billing support.
-The C query preserves existing structure layouts; Go info/list methods perform an additional lookup per Box using its immutable ID.
+REST clients send `cpus` directly in `POST /boxes`, without a CPU-specific `/config` request.
+Integer values serialize as integer JSON for compatibility with strict older servers.
+A successful fractional create must return exactly the requested allocation.
+Missing, rounded, or changed values produce an `Unsupported` error containing the created Box ID; inspect or remove that Box before retrying.
+The SDK never retries creation by rounding or dropping the value; ordinary HTTP failures retain their original error classification.
+Other features may still use `/config`.
+This feature does not add fractional scheduling, capacity accounting, or billing to BoxLite Cloud; older Cloud servers may reject fractional values.
 
-Immutable configuration stores integer `cpu_limit_millicpu`; public requests and queries use numeric cores.
-Archives containing limits use version 6 so older importers refuse them; ordinary exports retain their previous versions.
-Downgrading the local database to older runtimes is unsupported.
+**Compatibility:** C CPU parameters and `CBoxInfo.cpus` now use `double`; rebuild C and Go consumers against the matching header and library.
+The Simple C API retains its documented `cpus=0` default sentinel; explicit options use the shared positive-value validation.
+Go information/list calls obtain CPUs from the existing callback without supplementary per-Box requests.
 
-Run `make test:cpu-limit:acceptance` on a KVM host with CPU controller delegation to verify aggregate throttling and lifecycle preservation.
+Persistence stores numeric `cpus`; calculations normalize it to integer millicpu.
+Main-branch integer data remains readable, but experimental non-null `cpu_limit` or `cpu_limit_millicpu` records are rejected rather than silently converted.
+Fractional archives use version 7; integer exports retain the existing version 3/4/5 selection.
+Import still supports legacy versions 1–5 and explicitly rejects experimental version 6.
+Downgrading a local database containing fractional CPUs is unsupported.
+
+Monitor consumption with `box.metrics().cpu_time_ms`.
+Run `make test:fractional-cpus:acceptance` on a KVM host with CPU controller delegation to check topology, aggregate throttling, and lifecycle preservation.
 
 ## Memory management
 

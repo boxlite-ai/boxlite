@@ -174,11 +174,8 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
-    /// Number of CPU cores (default: 1, range: 1-16, the guest kernel's limit)
-    pub cpus: Option<u8>,
-
-    /// Creation-only aggregate CPU limit in cores (Linux).
-    pub cpu_limit: Option<f64>,
+    /// CPU allocation (default: 1, range: 0.01-16); fractional values require Linux
+    pub cpus: Option<f64>,
 
     /// Memory limit in MiB (default: 512)
     pub memory_mib: Option<u32>,
@@ -490,6 +487,9 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
 
     #[allow(deprecated)]
     fn try_from(js_opts: JsBoxOptions) -> Result<Self, Self::Error> {
+        if let Some(cpus) = js_opts.cpus {
+            boxlite::runtime::cpu_count::CpuCount::new(cpus)?;
+        }
         let auto_remove = js_opts.auto_remove.unwrap_or(false);
         let auto_delete = js_opts.auto_delete;
         // Convert volumes
@@ -571,7 +571,6 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
 
         Ok(BoxOptions {
             cpus: js_opts.cpus,
-            cpu_limit: js_opts.cpu_limit.map(boxlite::CpuLimit::new).transpose()?,
             memory_mib: js_opts.memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
             working_dir: js_opts.working_dir,
@@ -912,7 +911,6 @@ mod tests {
             image: Some("alpine:latest".into()),
             rootfs_path: None,
             cpus: None,
-            cpu_limit: None,
             memory_mib: None,
             disk_size_gb: None,
             working_dir: None,
@@ -945,24 +943,18 @@ mod tests {
             secrets: None,
         };
 
+        for cores in [0.01, 0.125, 1.5, 2.0] {
+            let mut options = js.clone();
+            options.cpus = Some(cores);
+            assert_eq!(BoxOptions::try_from(options).unwrap().cpus, Some(cores));
+        }
+        for cores in [0.0, -0.5, 0.009, 0.1255, f64::NAN, f64::INFINITY] {
+            let mut options = js.clone();
+            options.cpus = Some(cores);
+            assert!(BoxOptions::try_from(options).is_err(), "{cores}");
+        }
+
         let mut both = js.clone();
-        for cores in [0.01, 0.125, 2.0] {
-            let mut limited = js.clone();
-            limited.cpu_limit = Some(cores);
-            assert_eq!(
-                BoxOptions::try_from(limited)
-                    .unwrap()
-                    .cpu_limit
-                    .unwrap()
-                    .cores(),
-                cores
-            );
-        }
-        for cores in [0.0, -0.5, 0.001, 0.1255, f64::NAN, f64::INFINITY] {
-            let mut limited = js.clone();
-            limited.cpu_limit = Some(cores);
-            assert!(BoxOptions::try_from(limited).is_err());
-        }
         both.auto_remove = Some(false);
         both.auto_delete = Some(60);
         let both = BoxOptions::try_from(both).unwrap();
@@ -1017,7 +1009,6 @@ mod tests {
             image: Some("python:slim".into()),
             rootfs_path: None,
             cpus: None,
-            cpu_limit: None,
             memory_mib: None,
             disk_size_gb: None,
             working_dir: None,

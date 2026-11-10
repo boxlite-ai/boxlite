@@ -12,10 +12,11 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::credential::{AccessToken, Credential};
-use super::error::{map_create_box_error, map_http_body, map_plain_reply};
+use super::error::{map_http_body, map_plain_reply};
 use super::options::BoxliteRestOptions;
 use super::types::{BoxResponse, CreateBoxRequest, ServerConfig};
 use crate::runtime::auth::Principal;
+use crate::runtime::cpu_count::CpuCount;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
@@ -203,22 +204,12 @@ impl ApiClient {
     /// is bounded to 4 KiB so a runaway HTML error page can't blow up
     /// terminal output.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
-        self.send_json_with_error_mapper(builder, map_http_body)
-            .await
-    }
-
-    async fn send_json_with_error_mapper<T: DeserializeOwned>(
-        &self,
-        builder: RequestBuilder,
-        map_error: fn(StatusCode, &str) -> BoxliteError,
-    ) -> BoxliteResult<T> {
         let builder = self.authorize(builder).await?;
         let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(map_error(status, &text));
+            return self.handle_error(status, resp).await;
         }
         // Read the body as bytes once, then parse; this is what lets us
         // include the body in a parse-failure error without re-issuing the
@@ -298,17 +289,29 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
+    /// A fractional create must not silently lose its requested CPU allocation.
     pub async fn create_box(&self, request: &CreateBoxRequest) -> BoxliteResult<BoxResponse> {
-        let map_error = if request.cpu_limit.is_some() {
-            map_create_box_error
-        } else {
-            map_http_body
-        };
-        self.send_json_with_error_mapper(
-            self.http.post(self.url("/boxes")).json(request),
-            map_error,
-        )
-        .await
+        let requested = request.cpus.map(CpuCount::new).transpose()?;
+        let value: serde_json::Value = self.post("/boxes", request).await?;
+        if let Some(requested) = requested.filter(|cpu| cpu.is_fractional()) {
+            let actual = value
+                .get("cpus")
+                .and_then(serde_json::Value::as_f64)
+                .and_then(|cores| CpuCount::new(cores).ok());
+            if actual != Some(requested) {
+                let id = value
+                    .get("box_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                return Err(BoxliteError::Unsupported(format!(
+                    "server did not confirm requested fractional cpus={}; created Box ID: {id}; remove this box before retrying",
+                    requested.cores()
+                )));
+            }
+        }
+        serde_json::from_value(value).map_err(|error| {
+            BoxliteError::Internal(format!("invalid box creation response: {error}"))
+        })
     }
 
     pub async fn post_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {

@@ -182,8 +182,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `string` | - | OCI image URI |
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
-| `cpus` | `number` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
-| `cpuLimit` | `number` | unset | Creation-only aggregate CPU time limit in cores, Linux; see [resource limits](../../guides/resource-limits.md#creation-only-cpu-time-limit-linux) |
+| `cpus` | `number` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require Linux; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
 | `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
@@ -331,7 +330,6 @@ Metadata about a box.
 | `lastActivityAt` | `string \| undefined` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; absent for a local box, which records no activity |
 | `image` | `string` | OCI image reference or rootfs path |
 | `cpus` | `number` | Allocated CPU count |
-| `cpuLimit` | `number \| undefined` | Configured immutable aggregate CPU limit, or absent |
 | `memoryMib` | `number` | Allocated memory in MiB |
 | `network` | `JsNetworkInfo \| null` | Current network configuration and resolved local publications |
 
@@ -579,7 +577,6 @@ interface SimpleBoxOptions {
   image?: string;         // Default: "python:slim"
   memoryMib?: number;     // Memory in MiB
   cpus?: number;          // CPU cores
-  cpuLimit?: number;      // Creation-only aggregate CPU time limit (Linux)
   runtime?: JsBoxlite;    // Runtime instance
   name?: string;          // Box name
   autoRemove?: boolean;   // Default: true

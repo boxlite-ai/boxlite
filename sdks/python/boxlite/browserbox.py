@@ -95,7 +95,7 @@ class BrowserBoxOptions:
 
     browser: str = "chromium"  # chromium, firefox, or webkit
     memory: int = 2048  # Memory in MiB
-    cpu: int = 2  # Number of CPU cores
+    cpu: float = 2  # Number of CPU cores
     port: int | None = None  # Host port for Playwright Server (default: 3000)
     cdp_port: int | None = None  # Host port for CDP/Puppeteer (default: 9222)
 

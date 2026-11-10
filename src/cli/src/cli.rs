@@ -1270,13 +1270,9 @@ impl CapabilityFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ResourceFlags {
-    /// Number of CPUs (1-16 with the bundled guest kernel)
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
-    pub cpus: Option<u8>,
-
-    /// Creation-only aggregate CPU limit in cores (Linux; e.g. 0.5)
-    #[arg(long)]
-    pub cpu_limit: Option<boxlite::CpuLimit>,
+    /// CPU allocation (0.01-16); fractional values require Linux
+    #[arg(long, value_parser = clap::value_parser!(f64))]
+    pub cpus: Option<f64>,
 
     /// Memory limit (in MiB)
     #[arg(long)]
@@ -1297,9 +1293,6 @@ impl ResourceFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
         if let Some(cpus) = self.cpus {
             opts.cpus = Some(cpus);
-        }
-        if let Some(limit) = self.cpu_limit {
-            opts.cpu_limit = Some(limit);
         }
         if let Some(mem) = self.memory {
             opts.memory_mib = Some(mem);
@@ -2322,52 +2315,19 @@ mod tests {
         assert!(opts.path_prefix.is_none());
     }
 
-    /// `--cpus` must reach the runtime unchanged: it owns the vCPU ceiling, and
-    /// clamping here used to turn `--cpus 1000` into a silent 255.
+    /// Numeric values reach the runtime unchanged; it owns CPU validation.
     #[test]
-    fn test_resource_flags_cpus_passed_through_unclamped() {
-        for bad in ["0", "1000"] {
-            assert!(
-                Cli::try_parse_from(["boxlite", "run", "--cpus", bad, "alpine"]).is_err(),
-                "--cpus {bad} must be rejected while parsing"
-            );
+    fn fractional_cpus_resource_flags_preserve_numbers() {
+        for cpus in ["0.125", "1.5", "2", "2.0", "0", "1000"] {
+            let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", cpus, "alpine"]).unwrap();
+            let Commands::Run(run) = cli.command else {
+                panic!("expected run");
+            };
+            let mut opts = BoxOptions::default();
+            run.resource.apply_to(&mut opts);
+            assert_eq!(opts.cpus, Some(cpus.parse().unwrap()));
         }
-
-        let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", "24", "alpine"])
-            .expect("--cpus 24 parses; the runtime decides whether it fits");
-        let Commands::Run(run) = cli.command else {
-            panic!("expected run");
-        };
-        let mut opts = BoxOptions::default();
-        run.resource.apply_to(&mut opts);
-
-        assert_eq!(opts.cpus, Some(24));
-    }
-
-    #[test]
-    fn cpu_limit_flag_is_creation_only_and_keeps_integer_cpus() {
-        let cli = Cli::try_parse_from([
-            "boxlite",
-            "run",
-            "--cpus",
-            "2",
-            "--cpu-limit",
-            "0.125",
-            "alpine",
-        ])
-        .unwrap();
-        let Commands::Run(run) = cli.command else {
-            panic!("expected run")
-        };
-        let mut options = BoxOptions::default();
-        run.resource.apply_to(&mut options);
-        assert_eq!(options.cpus, Some(2));
-        assert_eq!(options.cpu_limit.unwrap().cores(), 0.125);
-        for invalid in ["0", "-0.5", "NaN", "inf", "0.001", "0.1255"] {
-            assert!(
-                Cli::try_parse_from(["boxlite", "run", "--cpu-limit", invalid, "alpine"]).is_err()
-            );
-        }
+        assert!(Cli::try_parse_from(["boxlite", "run", "--cpus", "invalid", "alpine"]).is_err());
     }
 
     #[test]
@@ -2379,7 +2339,6 @@ mod tests {
         // they'd silently ENOSPC mid-`docker pull`.
         let flags = ResourceFlags {
             cpus: None,
-            cpu_limit: None,
             memory: None,
             disk_size_gb: Some(10),
         };
@@ -2399,7 +2358,6 @@ mod tests {
         // refactor that injects a fallback (`unwrap_or(N)`) would fail.
         let flags = ResourceFlags {
             cpus: None,
-            cpu_limit: None,
             memory: None,
             disk_size_gb: None,
         };

@@ -37,7 +37,6 @@ extern CBoxRegistryListCb cbRegistryList(void);
 extern CBoxRegistryRemoveCb cbRegistryRemove(void);
 
 extern CBoxInfoCb cbInfo(void);
-extern CBoxCpuLimitCb cbCpuLimit(void);
 extern CBoxInfoListCb cbInfoList(void);
 extern CExecutionInfoListCb cbExecutionInfoList(void);
 

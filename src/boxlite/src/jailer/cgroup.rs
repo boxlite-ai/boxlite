@@ -280,20 +280,20 @@ const CPU_PERIOD_US: u64 = 100_000;
 /// Apply the explicit aggregate Box CPU bandwidth, preserving stricter legacy limits.
 pub(crate) fn set_cpu_max(
     box_id: &str,
-    cpu_limit: crate::CpuLimit,
+    cpus: crate::runtime::cpu_count::CpuCount,
     limits: &ResourceLimits,
 ) -> Result<(), JailerError> {
-    let quota = cpu_quota_us(cpu_limit, limits);
+    let quota = cpu_quota_us(cpus, limits);
     write_file(
         &cgroup_path(box_id).join("cpu.max"),
         &format!("{quota} {CPU_PERIOD_US}"),
     )
 }
 
-fn cpu_quota_us(cpu_limit: crate::CpuLimit, limits: &ResourceLimits) -> u64 {
+fn cpu_quota_us(cpus: crate::runtime::cpu_count::CpuCount, limits: &ResourceLimits) -> u64 {
     // The legacy quota is max_cpu_time cores over a one-second period.
     // Compare equivalent budgets at the explicit limit's 100 ms period.
-    let requested = u64::from(cpu_limit.millicpu()) * (CPU_PERIOD_US / 1000);
+    let requested = u64::from(cpus.millicpu()) * (CPU_PERIOD_US / 1000);
     limits.max_cpu_time.map_or(requested, |limit| {
         requested.min(limit.saturating_mul(CPU_PERIOD_US))
     })
@@ -495,11 +495,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cpu_limit_quota_respects_precision_and_legacy_budget() {
+    fn fractional_cpus_quota_respects_precision_and_legacy_budget() {
         let mut limits = ResourceLimits::default();
         for (cores, quota) in [(0.01, 1_000), (0.125, 12_500), (2.0, 200_000)] {
             assert_eq!(
-                cpu_quota_us(crate::CpuLimit::new(cores).unwrap(), &limits),
+                cpu_quota_us(
+                    crate::runtime::cpu_count::CpuCount::new(cores).unwrap(),
+                    &limits
+                ),
                 quota
             );
         }
@@ -507,11 +510,17 @@ mod tests {
         let legacy = CgroupConfig::from(&limits).cpu_max.unwrap();
         assert_eq!(legacy, (1_000_000, 1_000_000));
         assert_eq!(
-            cpu_quota_us(crate::CpuLimit::new(2.0).unwrap(), &limits),
+            cpu_quota_us(
+                crate::runtime::cpu_count::CpuCount::new(2.0).unwrap(),
+                &limits
+            ),
             100_000
         );
         assert_eq!(
-            cpu_quota_us(crate::CpuLimit::new(0.5).unwrap(), &limits),
+            cpu_quota_us(
+                crate::runtime::cpu_count::CpuCount::new(0.5).unwrap(),
+                &limits
+            ),
             50_000
         );
     }

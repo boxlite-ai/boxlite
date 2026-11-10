@@ -165,38 +165,22 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 - The resolved set is applied to OCI bounding, effective, and permitted sets.
   Inheritable and ambient capabilities stay unset; they are not implied by `add`.
 
-### `cpus: int`
+### `cpus: float`
 
-Integer number of virtual CPUs allocated to the box.
+CPU allocation, default `1`, from `0.01` to `16` with the bundled kernel, in increments of `0.001`.
+Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
+Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
-**Default:** 1
-
-**Range:** 1 to 16 — the bundled guest kernel brings up at most 16 vCPUs, so
-create rejects larger values (see [Resource limits](../guides/resource-limits.md#cpu-configuration)).
-
-**Example:**
 ```python
-cpus=2  # 2 CPU cores
-cpus=4  # 4 CPU cores
+cpus=0.5  # 1 guest vCPU, half a CPU of aggregate time
+cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
+cpus=2    # 2 guest vCPUs, no additional bandwidth quota
 ```
 
-**Notes:**
-- `cpus` sets integer virtual CPU topology; `cpu_limit` optionally bounds aggregate host CPU time.
-- Does not reserve physical cores.
-- Monitor actual usage with `box.metrics().cpu_time_ms`
-
-### `cpu_limit: float | None`
-
-Optional creation-only aggregate CPU time limit in cores, independent of integer `cpus`.
-For example, `cpus=2, cpu_limit=0.5` shares half a core across both vCPUs and VMM threads when cgroup membership succeeds.
-Accepts `0.01` through resolved `cpus`, in `0.001` increments; the default `None` preserves existing behavior.
-
-Requires Linux, enabled jailer, and a writable cgroup v2 CPU quota; explicit macOS local limits return `Unsupported`.
-Quota-write errors prevent startup.
-Cgroup joining retains existing best-effort behavior, so membership failures may leave a running Box without the requested limit.
-Information queries return the configured value and do not confirm enforcement.
-The value persists across supported lifecycle operations and cannot be changed after creation.
-See [CPU time limits](../guides/resource-limits.md#creation-only-cpu-time-limit-linux) for SDK mappings, REST field rejection, and rootless requirements.
+Fractional values require Linux, the jailer, and writable cgroup v2 CPU quotas; macOS rejects them.
+Quota-write failures prevent startup; cgroup membership remains best-effort and can leave a running Box without enforcement.
+Information queries return the configured allocation.
+Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
 
 ### `memory_mib: int`
 

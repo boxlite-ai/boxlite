@@ -236,11 +236,6 @@ pub(crate) type CBoxSshDisableFn =
 pub type CBoxInfoCb = Option<extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxInfoFn = extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void);
 
-/// Configured CPU limit in cores. When has_limit is false, cores is ignored.
-/// The error pointer is borrowed for callback dispatch only.
-pub type CBoxCpuLimitCb = Option<extern "C" fn(f64, bool, *mut crate::CBoxliteError, *mut c_void)>;
-pub(crate) type CBoxCpuLimitFn = extern "C" fn(f64, bool, *mut crate::CBoxliteError, *mut c_void);
-
 /// Box info list completion.
 pub type CBoxInfoListCb =
     Option<extern "C" fn(*mut CBoxInfoList, *mut crate::CBoxliteError, *mut c_void)>;
@@ -548,11 +543,6 @@ pub enum RuntimeEvent {
         cb: CExecutionInfoListFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CExecutionInfoList>, BoxliteError>,
-    },
-    CpuLimit {
-        cb: CBoxCpuLimitFn,
-        user_data: usize,
-        result: Result<Option<boxlite::CpuLimit>, BoxliteError>,
     },
     Metrics {
         cb: CBoxMetricsFn,
@@ -1389,7 +1379,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             status: test_cstr("running"),
             running: 1,
             pid: 0,
-            cpus: 1,
+            cpus: 1.0,
             memory_mib: 256,
             auto_stop: 900,
             auto_delete: 0,
@@ -1480,7 +1470,7 @@ mod owned_ffi_ptr_nested_leak_tests {
             status: test_cstr("stopped"),
             running: 0,
             pid: 0,
-            cpus: 2,
+            cpus: 2.0,
             memory_mib: 512,
             auto_stop: 900,
             auto_delete: 0,

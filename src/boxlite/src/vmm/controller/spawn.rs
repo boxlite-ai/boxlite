@@ -66,7 +66,7 @@ impl<'a> ShimSpawner<'a> {
 
     #[cfg(target_os = "linux")]
     fn apply_cpu_quota(&self) -> BoxliteResult<()> {
-        let Some(limit) = self.options.cpu_limit else {
+        let Some(limit) = self.options.cpu_count()?.filter(|cpu| cpu.is_fractional()) else {
             return Ok(());
         };
         let security = &self.options.advanced.security;
@@ -249,8 +249,8 @@ impl<'a> ShimSpawner<'a> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-#[path = "tests/cpu_limit_membership.rs"]
-mod cpu_limit_membership_tests;
+#[path = "tests/fractional_cpus_membership.rs"]
+mod fractional_cpus_membership_tests;
 
 #[cfg(test)]
 mod tests {
@@ -268,13 +268,16 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn cpu_limit_requires_enforcement_before_start() {
+    fn fractional_cpus_requires_quota_write_before_start() {
         let layout = test_layout();
         let mut options = BoxOptions::default();
         options.advanced.security.jailer_enabled = false;
         let unlimited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
         assert!(unlimited.apply_cpu_quota().is_ok());
-        options.cpu_limit = Some(crate::CpuLimit::new(0.125).unwrap());
+        options.cpus = Some(2.0);
+        let integer = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(integer.apply_cpu_quota().is_ok());
+        options.cpus = Some(0.125);
         let limited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
         assert!(
             limited.apply_cpu_quota().is_err(),
@@ -284,7 +287,7 @@ mod tests {
         let limited = ShimSpawner::new(
             Path::new("/unused"),
             &layout,
-            "missing-cpu-limit-test",
+            "missing-fractional-cpus-test",
             &options,
         );
         assert!(

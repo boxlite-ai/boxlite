@@ -36,33 +36,8 @@ pub unsafe extern "C" fn boxlite_options_set_name(opts: *mut CBoxliteOptions, na
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cpus: c_int) {
+pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cpus: f64) {
     options_set_cpus(opts, cpus)
-}
-
-/// Set the creation-only aggregate CPU limit in cores (Linux).
-/// Accepts 0.01 or more, in 0.001 increments; creation also checks against cpus.
-/// Invalid input leaves the previous option unchanged.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_options_set_cpu_limit(
-    opts: *mut CBoxliteOptions,
-    cores: f64,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    let Some(opts) = (unsafe { opts.as_mut() }) else {
-        unsafe { write_error(out_error, null_pointer_error("opts")) };
-        return BoxliteErrorCode::InvalidArgument;
-    };
-    match boxlite::CpuLimit::new(cores) {
-        Ok(limit) => {
-            opts.options.cpu_limit = Some(limit);
-            BoxliteErrorCode::Ok
-        }
-        Err(error) => {
-            unsafe { write_error(out_error, error) };
-            BoxliteErrorCode::InvalidArgument
-        }
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -381,16 +356,11 @@ pub unsafe fn options_set_name(handle: *mut OptionsHandle, name: *const c_char) 
     }
 }
 
-/// Convert a C `cpus` value, leaving an oversized one out of range (saturated)
-/// so the runtime's vCPU check rejects it rather than a wrapped small value.
-pub(crate) fn cpus_from_c(cpus: c_int) -> Option<u8> {
-    (cpus > 0).then(|| u8::try_from(cpus).unwrap_or(u8::MAX))
-}
-
-pub unsafe fn options_set_cpus(handle: *mut OptionsHandle, cpus: c_int) {
+/// Preserve CPU input for runtime validation, including invalid/non-finite values.
+pub unsafe fn options_set_cpus(handle: *mut OptionsHandle, cpus: f64) {
     unsafe {
-        if !handle.is_null() && cpus > 0 {
-            (*handle).options.cpus = cpus_from_c(cpus);
+        if let Some(handle) = handle.as_mut() {
+            handle.options.cpus = Some(cpus);
         }
     }
 }
@@ -680,37 +650,4 @@ fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> 
     }
 
     values
-}
-
-#[cfg(test)]
-mod cpu_limit_tests {
-    use super::*;
-
-    #[test]
-    fn cpu_limit_setter_validates_without_mutating_on_error() {
-        let mut options = OptionsHandle {
-            options: BoxOptions::default(),
-            name: None,
-        };
-        unsafe {
-            for cores in [0.01, 0.125, 2.0] {
-                assert_eq!(
-                    boxlite_options_set_cpu_limit(&mut options, cores, std::ptr::null_mut()),
-                    BoxliteErrorCode::Ok
-                );
-                assert_eq!(options.options.cpu_limit.unwrap().cores(), cores);
-            }
-            for invalid in [0.0, -0.5, 0.001, 0.1255, f64::NAN, f64::INFINITY] {
-                assert_eq!(
-                    boxlite_options_set_cpu_limit(&mut options, invalid, std::ptr::null_mut()),
-                    BoxliteErrorCode::InvalidArgument
-                );
-                assert_eq!(options.options.cpu_limit.unwrap().cores(), 2.0);
-            }
-            assert_eq!(
-                boxlite_options_set_cpu_limit(std::ptr::null_mut(), 0.5, std::ptr::null_mut()),
-                BoxliteErrorCode::InvalidArgument
-            );
-        }
-    }
 }

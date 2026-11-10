@@ -52,12 +52,11 @@ class SyncSimpleBox:
         image: str | None = None,
         rootfs_path: str | None = None,
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["SyncBoxlite"] = None,
         name: str | None = None,
         auto_remove: bool = True,
         reuse_existing: bool = False,
-        cpu_limit: float | None = None,
         **kwargs,
     ):
         """
@@ -68,7 +67,6 @@ class SyncSimpleBox:
             rootfs_path: Path to local OCI layout directory (overrides image if provided)
             memory_mib: Memory limit in MiB (default: system default)
             cpus: Number of CPU cores (default: system default)
-            cpu_limit: Creation-only aggregate CPU time limit in cores (Linux).
             runtime: Optional SyncBoxlite runtime. If None, creates default runtime.
             name: Optional unique name for the box
             auto_remove: Remove box when stopped (default: True)
@@ -98,7 +96,6 @@ class SyncSimpleBox:
             image=image,
             rootfs_path=rootfs_path,
             cpus=cpus,
-            cpu_limit=cpu_limit,
             memory_mib=memory_mib,
             auto_remove=auto_remove,
             **kwargs,
