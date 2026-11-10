@@ -353,18 +353,6 @@ impl RuntimeBackend for RestRuntime {
         }
         .validate()?;
 
-        // A server that does not advertise the capability policy would accept
-        // the request and drop the field, silently granting default privileges.
-        // `Some` alone is the trigger, even an explicitly empty policy: the
-        // caller configured something, and a server that can't represent the
-        // concept at all can't be trusted to preserve that from a no-op value.
-        if options.advanced.capabilities().is_some() {
-            self.client.require_linux_capabilities_enabled().await?;
-        }
-        if options.advanced.privileged {
-            self.client.require_privileged_enabled().await?;
-        }
-
         let req = CreateBoxRequest::from_options(&options, name);
         let resp = self.client.create_box(&req).await?;
         let info = resp.to_box_info()?;
@@ -468,8 +456,6 @@ impl RuntimeBackend for RestRuntime {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        self.client.require_import_enabled().await?;
-
         let archive_bytes = std::fs::read(archive.path()).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to read archive {}: {}",
@@ -638,21 +624,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_import_box_requires_capability() {
-        // Without a running server, import_box should fail with a connection error
-        // (it tries to check capabilities first). This verifies the code path is wired up.
-        let options = BoxliteRestOptions::new("http://localhost:1"); // unreachable port
+    async fn test_import_box_discovers_server_version() {
+        let (port, server) = json_server(vec![r#"{"api_version":"0.11.0"}"#]).await;
+        let options = BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"));
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            archive.path(),
+            b"archive bytes must not reach an old server",
+        )
+        .unwrap();
 
         let result = RuntimeBackend::import_box(
             &runtime,
-            BoxArchive::new("/tmp/ignored.boxlite"),
+            BoxArchive::new(archive.path()),
             Some("x".to_string()),
         )
         .await;
 
-        // Should fail trying to reach the server for capability check
-        assert!(result.is_err(), "Expected error when server is unreachable");
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 
     #[tokio::test]
@@ -682,7 +673,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_capabilities_require_server_advertisement_before_create() {
+    async fn custom_capabilities_require_server_version_before_create() {
         // A server that does not advertise the feature would accept the create
         // request and drop `advanced`, silently granting default privileges.
         let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
@@ -700,10 +691,10 @@ mod tests {
 
     /// An explicitly empty policy is still explicit — the caller configured
     /// something, even if it happens to be a no-op value. A server that
-    /// can't advertise the capability feature at all can't be trusted to
+    /// cannot report its API release cannot be trusted to
     /// honor that distinction either, so this must still be probed for.
     #[tokio::test]
-    async fn explicit_empty_capabilities_still_require_server_advertisement() {
+    async fn explicit_empty_capabilities_still_require_server_version() {
         let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
@@ -727,12 +718,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn advertised_capability_support_creates_on_the_shared_route() {
-        let (port, server) = json_server(vec![
-            r#"{"capabilities":{"linux_capabilities_enabled":true}}"#,
-            BOX_RESPONSE,
-        ])
-        .await;
+    async fn supported_version_creates_on_the_shared_route() {
+        let (port, server) = json_server(vec![r#"{"api_version":"0.12.0"}"#, BOX_RESPONSE]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
 
@@ -747,7 +734,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordinary_create_does_not_probe_server_capabilities() {
+    async fn ordinary_create_does_not_probe_server_version() {
         let (port, server) = json_server(vec![BOX_RESPONSE]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
@@ -762,8 +749,12 @@ mod tests {
     /// A server that does not honor `ExecRequest.user` would run the command
     /// as the box default user, so the client must refuse before sending it.
     #[tokio::test]
-    async fn exec_user_requires_server_advertisement() {
-        let (port, server) = json_server(vec![BOX_RESPONSE, r#"{"capabilities":{}}"#]).await;
+    async fn legacy_flags_do_not_replace_exec_user_version() {
+        let (port, server) = json_server(vec![
+            BOX_RESPONSE,
+            r#"{"capabilities":{"exec_user_enabled":true}}"#,
+        ])
+        .await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
         let sandbox = RuntimeBackend::get(&runtime, "named")
@@ -782,10 +773,10 @@ mod tests {
         );
     }
 
-    /// A config without a capabilities object advertises nothing at all; the
+    /// A config without a release cannot establish compatibility; the
     /// gate must refuse rather than assume support.
     #[tokio::test]
-    async fn exec_user_requires_capabilities_object() {
+    async fn exec_user_requires_version_metadata() {
         let (port, server) = json_server(vec![BOX_RESPONSE, "{}"]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
@@ -805,17 +796,14 @@ mod tests {
         );
     }
 
-    /// A cached "yes" would let later execs reach a server that has since
-    /// dropped the flag, where they would run as the box default user (#2116),
-    /// so the gate must re-read the live endpoint before every user exec.
     #[tokio::test]
-    async fn exec_user_gate_rechecks_uncached_server_config() {
+    async fn exec_user_reuses_server_version() {
         const EXEC_RESPONSE: &str = r#"{"execution_id":"exec-1"}"#;
         let (port, server) = exchange_server(vec![
             (200, BOX_RESPONSE),
-            (200, r#"{"capabilities":{"exec_user_enabled":true}}"#),
+            (200, r#"{"api_version":"0.12.0"}"#),
             (201, EXEC_RESPONSE),
-            (200, r#"{"capabilities":{}}"#),
+            (201, EXEC_RESPONSE),
         ])
         .await;
         let runtime =
@@ -828,12 +816,12 @@ mod tests {
         sandbox
             .exec(crate::BoxCommand::new("id").user("1000:1000"))
             .await
-            .expect("first exec with advertised capability");
+            .expect("first exec with a supported release");
         let second = sandbox
             .exec(crate::BoxCommand::new("id").user("1000:1000"))
             .await;
 
-        assert!(matches!(second, Err(BoxliteError::Unsupported(_))));
+        assert!(second.is_ok());
         let requests: Vec<String> = server
             .await
             .unwrap()
@@ -846,13 +834,13 @@ mod tests {
                 "GET /v1/boxes/named HTTP/1.1",
                 "GET /v1/config HTTP/1.1",
                 "POST /v1/boxes/01HJK4TNRPQSXYZ8WM6NCVT9R5/exec HTTP/1.1",
-                "GET /v1/config HTTP/1.1",
+                "POST /v1/boxes/01HJK4TNRPQSXYZ8WM6NCVT9R5/exec HTTP/1.1",
             ]
         );
     }
 
     /// The exec body carries `user` exactly when the command sets one, and
-    /// only a command with a user probes the server's capabilities.
+    /// only a command with a user probes the server version.
     #[tokio::test]
     async fn exec_request_body_carries_user_only_when_set() {
         const EXEC_RESPONSE: &str = r#"{"execution_id":"exec-1"}"#;
@@ -863,7 +851,7 @@ mod tests {
                 Some("1000:1000"),
                 &[
                     (200, BOX_RESPONSE),
-                    (200, r#"{"capabilities":{"exec_user_enabled":true}}"#),
+                    (200, r#"{"api_version":"0.12.0"}"#),
                     (201, EXEC_RESPONSE),
                 ],
             ),
@@ -1149,7 +1137,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn privileged_requires_server_advertisement() {
+    async fn privileged_requires_server_version() {
         let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
         let options = BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"));
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
@@ -1166,7 +1154,7 @@ mod tests {
             .expect("unadvertised guest privilege must be rejected");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("guest privileged"));
+        assert!(error.to_string().contains("advanced.privileged"));
         assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 
@@ -1208,11 +1196,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn advertised_privileged_creates_guest_box_and_rechecks_support() {
+    async fn versioned_privileged_create_reuses_discovery() {
         let (port, server) = capture_server(vec![
-            (200, r#"{"capabilities":{"privileged_enabled":true}}"#),
+            (200, r#"{"api_version":"0.12.0"}"#),
             (200, BOX_RESPONSE),
-            (200, r#"{"capabilities":{"privileged_enabled":false}}"#),
+            (200, BOX_RESPONSE),
         ])
         .await;
         let runtime =
@@ -1222,11 +1210,7 @@ mod tests {
         RuntimeBackend::create(&runtime, opts.clone(), None)
             .await
             .unwrap();
-        let error = RuntimeBackend::create(&runtime, opts, None)
-            .await
-            .err()
-            .unwrap();
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        RuntimeBackend::create(&runtime, opts, None).await.unwrap();
         let requests = server.await.unwrap();
         assert_eq!(
             requests
@@ -1236,7 +1220,7 @@ mod tests {
             [
                 "GET /v1/config HTTP/1.1",
                 "POST /v1/boxes HTTP/1.1",
-                "GET /v1/config HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1",
             ]
         );
         assert!(
@@ -1342,7 +1326,7 @@ mod tests {
                 404,
                 r#"{"error":{"message":"missing","type":"NotFoundError","code":"not_found"}}"#,
             ),
-            (200, r#"{"capabilities":{"privileged_enabled":true}}"#),
+            (200, r#"{"api_version":"0.12.0"}"#),
             (200, BOX_RESPONSE),
         ])
         .await;

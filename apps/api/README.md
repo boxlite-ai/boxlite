@@ -158,7 +158,9 @@ lifecycle tests cover database rollback.
 ## Guest Docker privilege
 
 REST creation accepts `advanced.privileged` (default false) and advertises
-`privileged_enabled` in `/v1/config`. The option is stored on the Box and
+`privileged_enabled` in `/v1/config` for older SDKs. New SDKs check the
+OpenAPI minimum against `api_version`, sourced from the deployed `VERSION`,
+just like the `X-BoxLite-Api-Version` header. The option is stored on the Box and
 forwarded by both runner adapters on creation and by v0 recovery. Subsequent
 starts reuse the runtime's persisted guest settings. The
 pre-deploy migration initializes existing Boxes to false. Privileged requests

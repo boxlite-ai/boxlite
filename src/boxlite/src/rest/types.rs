@@ -79,24 +79,10 @@ pub(crate) struct ErrorModel {
 // Configuration
 // ============================================================================
 
-/// Server configuration & capabilities — the `GET /v1/config` response.
-/// Matches the `ServerConfig` schema in `openapi/box.openapi.yaml`.
+/// Untrusted discovery metadata. A non-string version is rejected by the gate.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct ServerConfig {
-    pub capabilities: Option<ServerCapabilities>,
-}
-
-#[allow(dead_code)] // Constructed via serde::Deserialize
-#[derive(Debug, Deserialize, Clone, Default)]
-pub(crate) struct ServerCapabilities {
-    pub privileged_enabled: Option<bool>,
-    pub linux_capabilities_enabled: Option<bool>,
-    pub snapshots_enabled: Option<bool>,
-    pub clone_enabled: Option<bool>,
-    pub export_enabled: Option<bool>,
-    pub import_enabled: Option<bool>,
-    pub private_tunnels_enabled: Option<bool>,
-    pub exec_user_enabled: Option<bool>,
+    pub api_version: Option<serde_json::Value>,
 }
 
 // ============================================================================
@@ -1637,24 +1623,6 @@ mod tests {
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Unknown);
         resp.status = "paused".to_string();
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Paused);
-    }
-
-    #[test]
-    fn test_server_config_capabilities_deserialization() {
-        let json = r#"{
-            "capabilities": {
-                "snapshots_enabled": true,
-                "linux_capabilities_enabled": true,
-                "clone_enabled": false,
-                "export_enabled": true
-            }
-        }"#;
-        let resp: ServerConfig = serde_json::from_str(json).unwrap();
-        let caps = resp.capabilities.unwrap();
-        assert_eq!(caps.linux_capabilities_enabled, Some(true));
-        assert_eq!(caps.snapshots_enabled, Some(true));
-        assert_eq!(caps.clone_enabled, Some(false));
-        assert_eq!(caps.export_enabled, Some(true));
     }
 
     #[test]

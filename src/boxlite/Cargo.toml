@@ -27,7 +27,7 @@ bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for
 krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Download libkrunfw firmware for runtime bundling
 krun = ["krunfw", "libkrun-sys/krun"]                        # Build + statically link libkrun.a (only for boxlite-shim)
 native = ["dep:boxlite-vmm"]                                 # BoxLite's own VMM as a box engine (only for boxlite-shim)
-rest = ["dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
+rest = ["dep:semver", "dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
 test-support = []                                            # Expose internal constructors for cross-crate tests
 
@@ -104,6 +104,7 @@ time = "0.3"
 x509-cert = "0.2.5"
 
 # REST backend (optional)
+semver = { version = "1.0", features = ["serde"], optional = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], optional = true, default-features = false }
 urlencoding = { version = "2.1", optional = true }
 tokio-tungstenite = { version = "0.24", optional = true, default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
