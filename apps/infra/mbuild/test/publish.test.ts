@@ -722,6 +722,9 @@ const googleDouble = ({
          */
         if (!args.includes('--include-tags')) return ok('')
         // The banner goes to stderr, so an empty page really is empty here.
+        if (args.some((arg) => arg.startsWith('--format=json'))) {
+          return ok(JSON.stringify(published.has(`${image}:${tag}`) ? [{ version: `sha256:${'a'.repeat(64)}`, tags: [tag] }] : []))
+        }
         return published.has(`${image}:${tag}`) ? ok('sha256:0123456789abcdef\n') : ok('')
       }
       if (deniedReads) {
@@ -735,7 +738,10 @@ const googleDouble = ({
       // Only the flagged read carries findings. A double that answered both the
       // same way would keep the severity gate green with the flag removed.
       return args.includes('--show-package-vulnerability')
-        ? ok(JSON.stringify({ package_vulnerability_summary: { vulnerabilities } }))
+        ? ok(JSON.stringify({
+          discovery_summary: { discovery: [{ discovery: { analysisStatus: 'FINISHED_SUCCESS' }, kind: 'DISCOVERY' }] },
+          package_vulnerability_summary: { vulnerabilities },
+        }))
         : ok()
     }
     return ok()
@@ -877,11 +883,8 @@ test('a stage that blocks on nothing publishes what would be refused elsewhere',
 
 test('what the gate read is reported, so an answer of nothing is not silence', async () => {
   /*
-   * The case that is invisible otherwise. Artifact Analysis is a project-wide
-   * service and `bootstrap/gcp.ts` does not turn it on, so a GCP publish reads
-   * no occurrences for every image — the same answer a genuinely clean image
-   * gives. A gate that blocks nothing and says nothing cannot be told from one
-   * that looked; this line is the difference.
+   * A completed scan with no findings must be distinguishable from a policy
+   * that skipped scanning; the log states which gate actually ran.
    */
   lines.length = 0
   const probe = googleDouble({ published: new Set([GAR_IMAGE]) })

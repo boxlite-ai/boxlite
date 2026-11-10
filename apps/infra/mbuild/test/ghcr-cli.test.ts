@@ -15,7 +15,7 @@ const digest = `sha256:${createHash('sha256').update(manifest).digest('hex')}`
 const cli = fileURLToPath(new URL('../bin/mbuild.ts', import.meta.url))
 const loader = fileURLToPath(new URL('../../node_modules/tsx/dist/loader.mjs', import.meta.url))
 
-const fixture = (t: TestContext) => {
+const fixture = (t: TestContext, cloud = false) => {
   const directory = mkdtempSync(join(tmpdir(), 'mbuild-ghcr-cli-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const script = (name: string, body: string) => writeFileSync(join(directory, name), `#!/bin/bash\nset -eu\n${body}\n`, { mode: 0o755 })
@@ -30,22 +30,23 @@ if [[ "$*" == *'%{content_type}'* ]]; then printf '\\n%s' "$type"; fi`)
 elif [[ "$*" == *'--format=json'* ]]; then printf '%s' '${JSON.stringify([{ version: digest, tags: [tag] }])}';
 elif [[ "$*" == *'images list'* ]]; then printf '%s' '${digest}'; fi`)
   script('docker', 'exit 0')
-  const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, MSTAGE_ENV_CONFIG: join(directory, 'mstage.env.json'), MSTAGE_CONFIG: join(directory, 'missing-stage-config.json'),
+  const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, MSTAGE_ENV_CONFIG: join(directory, 'mstage.env.json'), MSTAGE_CONFIG: join(directory, cloud ? '.mstage.config.json' : 'missing-stage-config.json'),
     GHCR_USERNAME: 'actor', GHCR_TOKEN: 'test-token', GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
     GITHUB_WORKFLOW_REF: 'boxlite-ai/boxlite/.github/workflows/mbuild-release.yml@refs/heads/main', GITHUB_JOB: 'publish', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', RUNNER_TEMP: directory }
   return (args: string[]) => spawnSync(process.execPath, ['--import', loader, '--conditions=development', cli, ...args], { cwd: directory, env, encoding: 'utf8', timeout: 10_000 })
 }
 
-for (const command of ['publish', 'verify']) test(`GHCR CLI ${command} executes its production operation`, (t) => {
-  const run = fixture(t)
+for (const command of ['publish', 'verify', 'import-release']) test(`GHCR CLI ${command} executes its production operation`, (t) => {
+  const run = fixture(t, command === 'import-release')
   const result = run([command, '--ghcr', 'boxlite-ai/boxlite', '--tag', sha, '--version', 'v1.2.3', ...(command === 'import-release' ? ['--stage', 'dev'] : [])])
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, command === 'import-release' ? /api=us-east1-docker.pkg.dev\/project\/images\/api:/ : /api=ghcr.io\/boxlite-ai\/boxlite\/api:/)
 })
 
 test('GHCR CLI rejects unsupported operations, incomplete releases and unknown artifacts', (t) => {
-  const run = fixture(t)
+  const run = fixture(t, true)
   for (const [args, expected] of [
+    [['import-release', '--tag', sha], /requires --ghcr/],
     [['inspect', '--ghcr', 'boxlite-ai/boxlite'], /requires.*verify/],
     [['verify', '--ghcr', 'boxlite-ai/boxlite', '--tag', sha], /requires --version/],
     [['verify', '--ghcr', 'boxlite-ai/boxlite', '--tag', 'short', '--version', 'v1.2.3'], /full commit SHA/],

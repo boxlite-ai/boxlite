@@ -41,7 +41,7 @@ const fixture = (t: TestContext, manager: 'npm' | 'yarn') => {
       },
     }),
   )
-  script('gcloud', 'if [[ "$*" == *"repositories describe"* ]]; then echo True; fi')
+  script('gcloud', 'if [[ "$*" == *"repositories describe"* ]]; then echo True; elif [[ "$*" == *"--format=json"* ]]; then echo "[]"; fi')
   script('docker', 'echo docker >> "$AUDIT_TEST_CALLS"; exit 99')
   script('sleep', 'echo sleep >> "$AUDIT_TEST_CALLS"')
   const audit = 'echo audit >> "$AUDIT_TEST_CALLS"; echo "$AUDIT_TEST_STDOUT"; echo "$AUDIT_TEST_STDERR" >&2; exit 1'
