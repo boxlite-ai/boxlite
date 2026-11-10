@@ -886,11 +886,8 @@ func TestBoxliteExecAttach_SilentPeerIsDroppedAtTheBound(t *testing.T) {
 // A client that keeps talking must not be able to hold the connection open
 // indefinitely.
 //
-// What this pins is the outcome, not the mechanism: awaitPeerClose's timer
-// enforces the bound on its own, so this still passes if the reader starts
-// pushing its read deadline again. That ordering is a race the teardown
-// usually wins, and no test here can fail for it — it is removed by
-// construction rather than proved.
+// This checks sustained traffic; DelayedPongRefreshCannotExtendClose controls
+// the deadline-refresh interleaving separately.
 func TestBoxliteExecAttach_ChattyPeerStillHitsTheBound(t *testing.T) {
 	restore := setPeerCloseWaitForTest(300 * time.Millisecond)
 	defer restore()
@@ -960,13 +957,6 @@ func TestBoxliteExecAttach_ChattyPeerStillHitsTheBound(t *testing.T) {
 // The same outcome for the one frame that reaches a handler of its own: gorilla
 // calls the pong handler for every Pong, the drain after our own Close
 // included.
-//
-// Read this the way the chatty case above reads. The timer bounds the wait
-// whether or not the pong handler still pushes the read deadline, so this
-// passes with that guard removed too. The guard is there because the deadline
-// is what ends the reader after the wait, and a Pong arriving in the window
-// between the teardown's near deadline and sideWg.Wait() could otherwise push
-// it out by pongWait — a race, not something a test can land on.
 func TestBoxliteExecAttach_PongingPeerStillHitsTheBound(t *testing.T) {
 	restore := setPeerCloseWaitForTest(300 * time.Millisecond)
 	defer restore()

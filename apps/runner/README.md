@@ -286,7 +286,8 @@ pkg/api/controllers/boxlite_exec_attach.go
       │  └─ handleControlFrame()              resize | signal (whitelist) | stdin_eof
       ├─ runKeepalive()                       WS Ping every 15s
       ├─ (on exec.Done) writeJSONFrame()      sends {"type":"exit",...} + Close
-      └─ awaitPeerClose(conn, readerDone)     RFC 6455 §5.5.1: hold TCP for the peer's Close, ≤ 5 s
+      ├─ awaitPeerClose(readerDone)           RFC 6455 §5.5.1: hold TCP for the peer's Close, ≤ 5 s
+      └─ conn.Close() → sideWg.Wait()         unblock socket I/O before joining reader and keepalive
 
 pkg/boxlite/exec_manager.go
 ├─ ExecManager (struct)                       map[id]*ManagedExec + cleanupLoop
@@ -404,6 +405,10 @@ Notable properties:
   drop the socket — bounded at 5 s. Dropping it unilaterally strands any
   intermediary still relaying the `101`, which an external load balancer
   reports as a failed upgrade rather than as the clean exit it was.
+  Once this wait ends, the server closes the transport before waiting for
+  its reader and keepalive goroutines to finish. A liveness deadline refresh
+  racing with cancellation therefore cannot keep the connection open past
+  the close wait. Output draining before the Close frame is unchanged.
 - **Single-attach.** A second `/attach` to an already-attached exec
   returns HTTP 409 _before_ the WS upgrade. The client should respect
   this and surface a "session busy" error rather than retry. The slot is

@@ -228,12 +228,8 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	loopCtx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
-	// Set after loopCtx because it has to stop pushing once the loop is
-	// cancelled. gorilla calls this from advanceFrame for every Pong, the drain
-	// after our own Close included, and a push there would move the deadline
-	// pongWait out — past the close-wait bound, and past the near deadline the
-	// teardown sets before waiting on this goroutine. A peer that keeps ponging
-	// would otherwise hold the socket and the single-attach slot behind it.
+	// Pongs received while draining after cancellation no longer refresh
+	// liveness. Teardown closes the transport to bound even an in-flight refresh.
 	conn.SetPongHandler(func(string) error {
 		if loopCtx.Err() != nil {
 			return nil
@@ -275,12 +271,10 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 			// A panic unwinds past the wait in the normal flow, and this Close
 			// is as owed a handshake as any other — a client that is still
 			// there would otherwise get the teardown this whole path avoids.
-			awaitPeerClose(conn, readerDone)
+			awaitPeerClose(readerDone)
 		}
-		// Every non-panic path has already sent its Close and completed the
-		// handshake by the time this runs, so nothing is sent here: closeOnce
-		// would make it a no-op, and a second Close after a completed handshake
-		// is not something to leave the shape of behind.
+		// Normal teardown already closed the transport before joining workers.
+		// Keep this idempotent fallback for the panic path.
 		_ = conn.Close()
 		// Tear down the subscriber FIRST so the broadcaster stops fanning
 		// chunks into now-dead channels; then release the single-attach
@@ -373,12 +367,12 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	// never answer. RFC 6455 §5.5.1 forbids a data frame after a Close, and
 	// handleControlFrame's error replies are data frames.
 	cancel()
-	awaitPeerClose(conn, readerDone)
+	awaitPeerClose(readerDone)
 
-	// Set a near read deadline so conn.ReadMessage() in the reader goroutine
-	// unblocks — it does not respect context cancellation and would hang until
-	// the TCP keepalive timeout otherwise.
-	_ = conn.SetReadDeadline(time.Now())
+	// Close before joining: a reader that passed its cancellation check can
+	// still refresh a read deadline. Closing the transport unblocks socket I/O
+	// regardless of that refresh; context cancellation alone cannot do so.
+	_ = conn.Close()
 	sideWg.Wait()
 }
 
@@ -442,12 +436,9 @@ func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec
 		// down either way, and releasing its attach slot is what lets the
 		// client come back and resend.
 		//
-		// The deadline is deliberately NOT extended here. A live session pushes
-		// it out by pongWait on every frame, which is how an idle client is
-		// told from a dead one; a draining one leaves the caller's deadline
-		// standing. Together with the pong handler's own cancellation guard
-		// that makes the bound absolute, rather than something a talkative peer
-		// can keep moving.
+		// Only live sessions refresh liveness. The teardown owner closes the
+		// transport after the handshake wait, even if cancellation races with
+		// the refresh below.
 		if ctx.Err() != nil {
 			continue
 		}
@@ -565,16 +556,11 @@ func writeCloseFrame(conn *websocket.Conn, mu *sync.Mutex, code int, reason stri
 // awaitPeerClose completes the closing handshake started by our own Close
 // frame: it holds the connection until the peer answers, drops the socket, or
 // wsPeerCloseWait elapses. See the constant for why the wait exists at all.
-func awaitPeerClose(conn *websocket.Conn, readerDone <-chan struct{}) {
+func awaitPeerClose(readerDone <-chan struct{}) {
 	// A peer Close frame, a FIN and a reset all surface in the reader's
-	// ReadMessage, so the reader ending is the handshake completing. Nothing
-	// extends this deadline once the loop is cancelled — neither the reader nor
-	// the pong handler — so it is what ends the wait for a peer that answers
-	// with nothing. The timer covers the rest: a read deadline is only consulted
-	// when a read is outstanding.
-	bound := peerCloseWait()
-	_ = conn.SetReadDeadline(time.Now().Add(bound))
-	timer := time.NewTimer(bound)
+	// ReadMessage. The timer bounds our wait independently of the reader's
+	// liveness deadline; the caller closes the transport when the wait ends.
+	timer := time.NewTimer(peerCloseWait())
 	defer timer.Stop()
 	select {
 	case <-readerDone:
