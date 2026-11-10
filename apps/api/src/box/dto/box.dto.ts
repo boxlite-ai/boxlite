@@ -417,14 +417,3 @@ export class BoxDto {
     }
   }
 }
-
-@ApiSchema({ name: 'BoxLabels' })
-export class BoxLabelsDto {
-  @ApiProperty({
-    description: 'Key-value pairs of labels',
-    example: { environment: 'dev', team: 'backend' },
-    type: 'object',
-    additionalProperties: { type: 'string' },
-  })
-  labels: { [key: string]: string }
-}

@@ -155,6 +155,8 @@ enabling consumers of this contract.
 | `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads. |
 | `GET` | `/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
 
+The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operations) list retired operations and their remaining alternatives.
+
 ## Control-plane API
 
 **Service:** `apps/api` · **Base URL:** `https://api.<domain>` · **Port:** `3000` in
@@ -195,7 +197,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Users and authentication</b> · 11 routes</summary>
+<summary><b>Users and authentication</b> · 10 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -203,7 +205,6 @@ organization boundaries.
 | `GET`    | `/users`                                             | Lists users.                                   |
 | `POST`   | `/users`                                             | Creates a user.                                |
 | `GET`    | `/users/{id}`                                        | Gets a user by ID.                             |
-| `POST`   | `/users/{id}/regenerate-key-pair`                    | Regenerates a user's key pair.                 |
 | `GET`    | `/users/account-providers`                           | Lists account providers available for linking. |
 | `POST`   | `/users/linked-accounts`                             | Links an external account to the user.         |
 | `DELETE` | `/users/linked-accounts/{provider}/{providerUserId}` | Unlinks an external account.                   |
@@ -265,20 +266,16 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 18 routes</summary>
+<summary><b>Boxes and preview access</b> · 14 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
-| `GET`  | `/box`                                                              | Lists all boxes visible to the caller.                |
 | `GET`  | `/box/paginated`                                                    | Lists boxes with pagination.                          |
 | `GET`  | `/box/for-runner`                                                   | Lists boxes assigned to the authenticated runner.     |
 | `GET`  | `/box/{boxIdOrName}`                                                | Gets a box by ID or name.                             |
 | `POST` | `/box/{boxIdOrName}/recover`                                        | Requests recovery of a box in an error state.         |
-| `PUT`  | `/box/{boxIdOrName}/labels`                                         | Replaces a box's labels.                              |
 | `PUT`  | `/box/{boxId}/state`                                                | Updates the control plane's recorded box state.       |
 | `POST` | `/box/{boxId}/last-activity`                                        | Records the box's latest activity time.               |
-| `POST` | `/box/{boxIdOrName}/autostop/{interval}`                            | Sets the box auto-stop interval.                      |
-| `POST` | `/box/{boxIdOrName}/autodelete/{interval}`                          | Sets the box auto-delete interval.                    |
 | `POST` | `/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
 | `GET`  | `/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
@@ -292,7 +289,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Volumes and object storage</b> · 6 routes</summary>
+<summary><b>Volumes</b> · 4 routes</summary>
 
 | Method   | Path                              | What it does                                       |
 | -------- | --------------------------------- | -------------------------------------------------- |
@@ -300,8 +297,6 @@ organization boundaries.
 | `POST`   | `/volumes`                    | Creates a volume.                                  |
 | `GET`    | `/volumes/{volumeId}`         | Gets a volume by ID.                               |
 | `DELETE` | `/volumes/{volumeId}`         | Deletes a volume.                                  |
-| `GET`    | `/volumes/by-name/{name}`     | Gets a volume by name.                             |
-| `GET`    | `/object-storage/push-access` | Returns temporary credentials for pushing objects. |
 
 </details>
 
@@ -403,14 +398,10 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 </details>
 
 <details>
-<summary><b>Box telemetry</b> · 5 routes</summary>
+<summary><b>Box telemetry configuration</b> · 1 route</summary>
 
 | Method | Path                                                           | What it does                                                             |
 | ------ | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `GET`  | `/box/{boxId}/telemetry/logs`                              | Queries logs for a box.                                                  |
-| `GET`  | `/box/{boxId}/telemetry/traces`                            | Queries traces for a box.                                                |
-| `GET`  | `/box/{boxId}/telemetry/traces/{traceId}`                  | Gets spans for one trace.                                                |
-| `GET`  | `/box/{boxId}/telemetry/metrics`                           | Queries metrics for a box.                                               |
 | `GET`  | `/organizations/otel-config/by-box-auth-token/{authToken}` | Resolves a box token to its organization telemetry export configuration. |
 
 </details>

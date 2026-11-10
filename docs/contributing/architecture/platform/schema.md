@@ -320,7 +320,6 @@ Identity, keyed by the subject the IdP issues rather than a generated uuid.
 | `emailVerified` | `boolean`           | default `false`                                                                                    |
 | `role`          | `enum`              | `admin` \| `user`, default `user`                                                                  |
 | `publicKeys`    | `simple-json`       |                                                                                                    |
-| `keyPair`       | `simple-json`       | nullable; deprecated — written on user creation, read by nothing since the SSH gateway was removed |
 | `createdAt`     | `timestamptz`       |                                                                                                    |
 
 ### `organization_user`
@@ -1115,10 +1114,9 @@ The other eight organization-referencing columns — on `box`, `volume`,
 
 ### Orphaned columns
 
-`user.keyPair` is written on user creation and by the regenerate-key-pair
-endpoint, and read by nothing; the entity marks it and the
-`UserSSHKeyPair` interface deprecated, pending removal along with the
-endpoint.
+`user.keyPair` remains a nullable physical column for older API instances and rollback.
+The current User entity no longer maps it, and registration and account linking no longer write or copy generated SSH keys.
+The regenerate-key-pair endpoint is removed. Physical column removal requires a later migration after the older reader rollback window closes.
 
 ### CI Listener execution history
 

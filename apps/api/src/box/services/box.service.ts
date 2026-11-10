@@ -1372,17 +1372,6 @@ export class BoxService {
     }
   }
 
-  async replaceLabels(boxIdOrName: string, labels: { [key: string]: string }, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    // Replace all labels
-    const updateData: Partial<Box> = {
-      labels,
-    }
-
-    return await this.boxRepository.update(box.id, { updateData, entity: box })
-  }
-
   @Cron(CronExpression.EVERY_SECOND, { name: 'cleanup-destroyed-boxes' })
   @LogExecution('cleanup-destroyed-boxes')
   @WithInstrumentation()
@@ -1417,26 +1406,6 @@ export class BoxService {
     if (result.affected > 0) {
       this.logger.debug(`Cleaned up ${result.affected} stale error boxes`)
     }
-  }
-
-  async setAutostopInterval(boxIdOrName: string, interval: number, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const updateData: Partial<Box> = {
-      autoStop: this.minutesToSeconds(interval),
-    }
-
-    return await this.boxRepository.update(box.id, { updateData, entity: box })
-  }
-
-  async setAutoDeleteInterval(boxIdOrName: string, interval: number, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const updateData: Partial<Box> = {
-      autoDelete: interval <= 0 ? 0 : this.minutesToSeconds(interval),
-    }
-
-    return await this.boxRepository.update(box.id, { updateData, entity: box })
   }
 
   async updateNetworkSettings(
@@ -1657,14 +1626,6 @@ export class BoxService {
       //  log the error for now, but don't throw it as it will be retried
       this.logger.error(`Error stopping box from suspended organization. BoxId: ${event.boxId}: `, error)
     })
-  }
-
-  private minutesToSeconds(interval: number): number {
-    if (!Number.isInteger(interval) || interval < 0) {
-      throw new BadRequestError('Interval must be a non-negative integer number of minutes')
-    }
-
-    return interval * 60
   }
 
   private resolveLifecyclePolicy(input: { autoStop?: number; autoDelete?: number; autoResume?: boolean }): {

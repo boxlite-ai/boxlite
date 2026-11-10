@@ -100,7 +100,7 @@ Ordinary JWT-authenticated requests then return `403 registration_required` unti
 account exists. Database-account email verification remains an Auth0 Action responsibility.
 The API's registration email policy requires an email address for a new local user.
 `UserService.create` trims and lowercases each non-empty email, validates its syntax,
-then rejects disposable domains before generating keys, persisting the user or creating a default organization.
+then rejects disposable domains before persisting the user or creating a default organization.
 This covers database, social and enterprise OIDC identities, CLI authentication and administrator-created users.
 
 | Rejection                          | HTTP status | Error code         |
@@ -1130,11 +1130,6 @@ configuration and attach-ticket issuance are audited too. Resource names resolve
 handlers become canonical target IDs without another lookup. Domain unbind records an
 update to the normalized hostname because the organization still owns the domain.
 
-`GET /api/object-storage/push-access` audits temporary storage credential issuance
-against the authenticated organization, despite using GET. Audit insertion must succeed
-before STS is called. Audit records omit returned credentials and use a fixed failure
-description without changing the API's error response.
-
 Box creation, startup, recovery and volume creation retain the resolved target ID before subsequent
 conversion or waiting can fail. Failures before a Box is returned or resolved retain
 the original request identifier, or no target for creation. Recovery still returns its
@@ -1539,3 +1534,25 @@ promised. Deployment and dev data reset remain operator actions.
 4. For standalone state, move the cleaned old `CI_STATE_DIR` aside and start with
    an empty private state directory; PostgreSQL reset steps do not apply to SQLite.
 5. Restart the configured hosts and reconnect the GitHub installations.
+
+## Retired cloud operations
+
+The removal release deletes these operations (paths relative to the hosted API base):
+
+| Removed operation | Supported path or behavior |
+| --- | --- |
+| `POST /users/{id}/regenerate-key-pair` | SSH gateway keys have no consumer; account creation no longer generates them |
+| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics` | Dashboard queries the independent Analytics API |
+| `GET /object-storage/push-access` | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning |
+| `GET /box` | Use `/box/paginated` or portable `/v1` listing |
+| `PUT /box/{id}/labels` | No replacement mutation; stored labels and label filters remain |
+| `POST /box/{id}/autostop/{interval}`, `POST /box/{id}/autodelete/{interval}` | Set `auto_stop` and `auto_delete` in seconds when creating a Box through `/v1`; dynamic updates are retired |
+| `GET /volumes/by-name/{name}` | Look up volumes by ID; managed-volume selectors still accept names |
+
+Removed operations return 404 and are absent from regenerated TypeScript and Go cloud clients.
+External consumers must stop calling them before this release; absence of repository callers does not establish absence of external use.
+Existing Boxes retain their stored lifecycle intervals and background enforcement. New Boxes accept `auto_stop` and `auto_delete` in seconds at creation; there is no API to change these intervals after creation.
+Dashboard owns its normalized telemetry display types, independently of the removed cloud schemas.
+
+The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
+No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.

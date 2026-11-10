@@ -29,7 +29,6 @@ import { TypedConfigService } from './config/typed-config.service'
 import { TypedConfigModule } from './config/typed-config.module'
 import { NotificationModule } from './notification/notification.module'
 import { WebhookModule } from './webhook/webhook.module'
-import { ObjectStorageModule } from './object-storage/object-storage.module'
 import { CustomNamingStrategy } from './common/utils/naming-strategy.util'
 import { MaintenanceMiddleware } from './common/middleware/maintenance.middleware'
 import { AuditModule } from './audit/audit.module'
@@ -45,7 +44,6 @@ import { RegionModule } from './region/region.module'
 import { BodyParserErrorModule } from './common/modules/body-parser-error.module'
 import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
-import { BoxTelemetryModule } from './box-telemetry/box-telemetry.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 import { McpModule } from './mcp/mcp.module'
 
@@ -201,12 +199,10 @@ import { McpModule } from './mcp/mcp.module'
     }),
     NotificationModule,
     WebhookModule,
-    ObjectStorageModule,
     AuditModule,
     HealthModule,
     StatusSyncModule,
     ClickHouseModule,
-    BoxTelemetryModule,
     BoxliteRestModule,
     McpModule,
     OpenFeatureModule.forRoot({

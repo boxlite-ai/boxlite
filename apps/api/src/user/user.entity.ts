@@ -7,16 +7,6 @@
 import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm'
 import { SystemRole } from './enums/system-role.enum'
 
-/**
- * @deprecated Orphaned when the SSH gateway was removed — nothing reads the
- * generated keys. Scheduled for removal in a future release, together with the
- * `User.keyPair` column and the regenerate-key-pair endpoint.
- */
-export interface UserSSHKeyPair {
-  privateKey: string
-  publicKey: string
-}
-
 export interface UserPublicKey {
   key: string
   name: string
@@ -39,16 +29,6 @@ export class User {
     default: false,
   })
   emailVerified: boolean
-
-  /**
-   * @deprecated Written on user creation and by regenerateKeyPair, read by
-   * nothing. Scheduled for removal in a future release.
-   */
-  @Column({
-    type: 'simple-json',
-    nullable: true,
-  })
-  keyPair: UserSSHKeyPair
 
   @Column('simple-json')
   publicKeys: UserPublicKey[]

@@ -7,7 +7,7 @@ import { useQuery, UseQueryOptions } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { PaginatedTraces } from '@boxlite-ai/api-client'
+import type { PaginatedTraces } from '@/types/telemetry'
 
 export interface TracesQueryParams {
   from: Date
