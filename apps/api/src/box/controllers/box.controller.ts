@@ -18,9 +18,7 @@ import {
   HttpCode,
   UseInterceptors,
   Put,
-  Req,
 } from '@nestjs/common'
-import type { Request } from 'express'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { BoxService } from '../services/box.service'
 import {
