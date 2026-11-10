@@ -248,6 +248,58 @@ describe('Standalone BoxLite execution boundary', () => {
       await expect(worker.get(name)).rejects.not.toBeInstanceOf(ConfirmedWorkerAbsent)
     },
   )
+  it.each([
+    'complete',
+    'missing-items',
+    'invalid-id',
+    'duplicate-id',
+    'repeated-token',
+    'invalid-token',
+    'too-many-pages',
+  ])('validates the complete paginated inventory before confirming absence: %s', async (scenario) => {
+    await create()
+    notFound = true
+    const previous = global.fetch
+    let page = 0
+    global.fetch = jest.fn(async (input, options) => {
+      const url = new URL(String(input))
+      if (url.pathname !== '/v1/tenant-a/boxes' || options?.method !== 'GET') return previous(input, options)
+      page++
+      if (page === 2) expect(url.searchParams.get('pageToken')).toBe('page-1')
+      const payload =
+        scenario === 'missing-items'
+          ? {}
+          : scenario === 'invalid-id'
+            ? { boxes: [{ box_id: 1 }] }
+            : {
+                boxes: scenario === 'duplicate-id' ? [{ box_id: 'other-box' }, { box_id: 'other-box' }] : [],
+                ...(scenario === 'invalid-token'
+                  ? { next_page_token: 42 }
+                  : scenario === 'complete' && page === 2
+                    ? {}
+                    : { next_page_token: scenario === 'repeated-token' ? 'page-1' : 'page-' + page }),
+              }
+      return new Response(JSON.stringify(payload))
+    }) as typeof fetch
+    if (scenario === 'complete') {
+      await expect(worker.get(name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
+      expect(page).toBe(2)
+    } else await expect(worker.get(name)).rejects.not.toBeInstanceOf(ConfirmedWorkerAbsent)
+  })
+  it.each(['invalid-name', 'missing-allocation', 'closing'])(
+    'rejects worker admission outside its original active allocation: %s',
+    async (scenario) => {
+      if (scenario === 'closing') await advance({ closing: true })
+      const proposed =
+        scenario === 'invalid-name'
+          ? 'foreign-worker'
+          : scenario === 'missing-allocation'
+            ? 'ci-jit-' + '0'.repeat(32)
+            : name
+      await expect(worker.create({ ...launch(), name: proposed })).rejects.toThrow()
+      expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0)
+    },
+  )
   it('confirms absence through the original principal and a complete inventory', async () => {
     await create()
     notFound = true

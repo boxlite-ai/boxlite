@@ -7,6 +7,18 @@ describe('CI shared GitHub transport', () => {
   afterEach(() => {
     global.fetch = original
   })
+  it.each([
+    { url: 'https://evil.test/users/team' },
+    { url: 'https://github.com/login/device/code', method: 'POST' as const },
+    { url: 'https://api.github.com/users/team', method: 'POST' as const },
+    { url: 'https://api.github.com/users/team', token: 'another-token' },
+  ])('does not forward OAuth App credentials to an invalid request %p', async (request) => {
+    global.fetch = jest.fn()
+    await expect(
+      githubRequest({ ...request, oauthApp: { clientId: 'identity-client', clientSecret: 'private-secret' } }),
+    ).rejects.toMatchObject({ uncertain: false })
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
   it('signs a fresh five-minute App JWT with the supplied identity', () => {
     const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const first = createGitHubAppJwt('app-client', keys.privateKey, 1_800_000_000_000).split('.')

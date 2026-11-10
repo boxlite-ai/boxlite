@@ -8,7 +8,7 @@ it('rejects ingress after the hosted scheduler unexpectedly stops', async () => 
   const receive = jest.spyOn(Listener.prototype, 'receive').mockResolvedValue('stored')
   const host = { report: jest.fn(), close: jest.fn() }
   const service = new CiListenerService(
-    { app: 'app', initialize: jest.fn(), state: {} } as any,
+    { app: 'app', initialize: jest.fn(), state: { scans: jest.fn() } } as any,
     host as any,
     { get: (key: string) => ({ 'ci.workerCPUs': 1, 'ci.workerMemoryGB': 1, 'ci.workerImage': 'runner' })[key] } as any,
     { configured: () => [{ settings: jest.fn() }] } as any,

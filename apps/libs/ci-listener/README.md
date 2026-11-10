@@ -164,7 +164,7 @@ counter directly, without reading scope or worker history.
 
 Every candidate asks the provider separately, including its repository identity;
 a policy is never cached across different repositories by the controller.
-Compensation asks only for its selected scope. Existing worker recovery runs
+Compensation only records pending jobs and does not query capacity. Existing worker recovery runs
 before policy lookup and continues when Commerce or settings are unavailable.
 Future repository rules belong in the hosted provider and candidate selection;
 strict repository limits also require runner eligibility to be partitioned.
@@ -226,6 +226,52 @@ until both original resources are absent, preserving runner cleanup and job dedu
 The host must enforce authority and execution epoch
 again at actual side effects, including native Box persistence. Both host entry
 points use this kernel; runtime acceptance remains a separate deployment check.
+
+### Independent repository compensation
+
+Every Listener replica runs two compensation lanes alongside the single execution
+scheduler. A lane claims only work it can start immediately. The existing state
+table holds repository tasks, immutable scope references and ordered due keys; PostgreSQL uses short transactions
+and SKIP LOCKED candidate selection, while SQLite uses its existing serialized
+write transaction. Neither keeps a database lock during GitHub requests.
+
+Each successful binding catalog activates its own completed snapshot. A failing
+installation does not block another binding's scans, and a failed catalog read is
+not an empty catalog. An authoritative installation index retires removed bindings.
+Repeated discovery preserves existing task deadlines. Directory staging records
+its committed batch offsets, so a canceled publication resumes without rereading
+already written tasks and activates only after all batches complete. Old snapshot memberships and
+expired credential metadata are removed in bounded pages, without scanning retained
+execution history.
+
+A task has an owner, epoch and 60-second lease; the full scan has a 45-second
+abort deadline. Different installations can run concurrently, while one App's
+installation has at most one effective scan lease across replicas. Busy repository
+candidates move out of the due head. Successful scans become eligible again after
+five minutes; failures use capped backoff. A 429 or rate-limited 403 with a retry
+header also persists an installation-wide retry deadline. Other 403 responses
+remain repository failures rather than being guessed to mean rate limiting.
+
+The scanner has GitHub jobs-read capabilities only. It reuses credential issuance
+intents and retirement, but its lease cannot create allocations or change cap.
+Cleanup may conditionally remove its own original credential record after lease
+expiry; it cannot delete another owner's operation or issue another credential.
+Unknown issuance metadata expires after two hours, beyond the maximum App token
+lifetime accepted by the transport. Tokens themselves are never stored.
+
+Publication checks the task lease, active binding snapshot and exact job identity.
+Hosted publication checks the original binding generation and owner in the same
+PostgreSQL transaction. Standalone publication checks its captured backend and
+binding record versions. A deleted connection or superseded snapshot rejects late
+results. Repeated jobs converge with webhook ingress; repository, run, account or
+installation conflicts fail closed.
+
+Scanned jobs enter the ordinary pending-notice queue. They do not reserve slots
+or query Commerce. The execution scheduler rechecks current authority, job state
+and cap before creating a Box. A waiting notice can therefore resume after worker
+cleanup releases a slot without waiting for the five-minute scan interval.
+Stopping the Listener cancels and awaits both lanes and retires their credentials;
+failed retirement retains its handle for retry and reports the cleanup failure.
 
 ### Worker recovery and logs
 
@@ -327,9 +373,9 @@ credential handles survive failed shutdown retirement, and another session canno
 start until retirement succeeds.
 
 Idle ticks read local state rather than scanning every GitHub repository. The
-default directory/compensation interval is five minutes. Each compensation step
-scans one eligible repository, with a 45-second deadline, and records discovered
-jobs durably before dispatch. Large inventories therefore need multiple steps;
+default directory refresh and successful compensation interval is five minutes.
+Independent lanes scan leased repositories with a 45-second deadline and record
+discovered jobs durably before dispatch. Large inventories need multiple tasks;
 the interval is not a guaranteed maximum recovery latency. Normal workflow-job
 webhooks persist an exact job ID, so their admission does not wait for that scan.
 
@@ -641,8 +687,9 @@ sequenceDiagram
 The host returns HTTP 204 for hosted webhook acceptance and HTTP 202 for the
 standalone endpoint. When a delivery never reaches durable acceptance,
 App-wide delivery recovery can request a signed replay; bounded REST compensation
-can also discover pending jobs later. Current compensation visits
-one eligible repository per step and it provides no fixed recovery-latency guarantee.
+can also discover pending jobs later through independent, leased repository tasks.
+Each replica has two scan lanes; installations are serialized across replicas.
+There is no fixed recovery-latency guarantee.
 
 Sources: [webhook verification and inbox](src/webhook.ts),
 [controller](src/listener.ts), [worker pool and bootstrap](src/execution/pool.ts),
@@ -674,3 +721,8 @@ of the hosted entry. Cross-project test fixtures use the scoped `/testing` alias
 Standalone shutdown attempts every owned resource and reports combined cleanup
 failures; extracting that cleanup operation preserves failure precedence.
 Cursor and label validators retain their existing ASCII-control rejection ranges.
+
+Compensation scans can race a verified webhook inserting the same queued notice.
+On an insertion conflict, the Listener rereads that notice and accepts it only if
+installation, account, repository and run still match; identity conflicts remain
+errors. This keeps ordinary duplicate delivery from aborting the cleanup cycle.

@@ -609,7 +609,6 @@ without showing a success notification in the current organization.
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
 
-
 ## Neutral dark surfaces
 
 Dark structural surfaces use zero-saturation gray: page background 4% lightness,
@@ -619,7 +618,6 @@ keep their hues. Use these tokens instead of blue-gray literal backgrounds.
 Light theme values are independent and unchanged by the dark palette.
 
 For opt-in empty mock fixtures, see the desktop review section below.
-
 
 ## Desktop review: code surfaces, payment identity and empty resources
 
@@ -859,3 +857,19 @@ sequenceDiagram
     A-->>D: Connected with durable Listener setup state
     Note over D,A: Browser metadata never grants binding authority
 ```
+
+Browser connect recovery keeps routing metadata after an ambiguous network failure;
+**Retry authorization status** reads the existing grant without exchanging the OAuth
+code again. A late response can clear only its own attempt. Opening Back to Connects
+in another tab preserves the current grant. If browser storage cannot select the
+original BoxLite organization, the callback retains the result and offers an explicit
+retry. A failed cancellation offers **Discard local authorization** with a warning
+that the server grant may remain active until expiry.
+
+A recovered pending connection checks authorization status once per second until
+GitHub completes it or the browser grant expires. Closing the dialog or switching
+organizations stops those checks. A failed status request pauses polling and offers
+**Retry authorization status** without repeating the OAuth code exchange.
+
+CI tabs expose their corresponding tab panels to assistive technology. A failed
+later Runners page keeps Previous available so the user can return to loaded rows.

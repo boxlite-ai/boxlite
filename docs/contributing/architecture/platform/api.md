@@ -440,7 +440,9 @@ them.
 
 ## Experimental GitHub CI webhook
 
-`POST /api/v1/ci/github/webhook` uses GitHub HMAC-SHA256 authentication over the raw
+`POST /api/v1/ci/github/webhook` (Personal App) and
+`POST /api/v1/ci/github/webhook/organization` (Organization App) use their respective
+GitHub HMAC-SHA256 secrets to authenticate the raw
 request body, not platform API-key authentication. Only supported, verified notifications
 matching an established installation binding persist a wake hint. Success is 204;
 invalid signatures are 401, conflicting delivery bodies 409, unsupported media/compression
@@ -463,6 +465,7 @@ also registered without `{prefix}`, using the authenticated organization.
 | `POST`      | `/api/v1/{prefix}/ci/connect/{id}/complete` | Validates original actor/state, claims one code exchange and uses the shared binding transaction. |
 | `GET`       | `/api/v1/{prefix}/ci/connect/{id}`              | Resumes an authenticated browser grant without exchanging its code again.                         |
 | `POST`      | `/api/v1/{prefix}/ci/connect/{id}/accounts`     | Selects a verified owned account; connects or returns the matching CI App install URL.            |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/select` | Legacy installation selection under an authenticated browser grant; rechecks current ownership. |
 | `POST`      | `/api/v1/{prefix}/ci/connect/{id}/installation` | Verifies installation state, original target/App and current ownership before binding.            |
 | `GET/PATCH` | `/api/v1/{prefix}/ci/settings`              | Reads/updates the account-wide CI maximum; null inherits Commerce and zero pauses new workers.    |
 

@@ -27,6 +27,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
   const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
   let db: DataSource, store: CiNativeState, host: CiNativeHost, lease: ExecutionLease
   let upstream: jest.SpyInstance, requests: { path: string; method: string }[]
+  const worker = { create: jest.fn(), get: jest.fn(), stop: jest.fn(), remove: jest.fn(), deliverJit: jest.fn() }
   let beforeRepositories: () => Promise<void>
   const config = { get: (key: string) => (key === 'ci.githubClientId' ? 'test-app' : undefined) }
   const notification = (): VerifiedWebhook => ({
@@ -103,7 +104,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     host = new CiNativeHost(
       db,
       store,
-      {} as any,
+      { open: () => worker } as any,
       {
         byClientId: () => ({
           appSource: () => app,
@@ -161,6 +162,106 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     await host.close()
     upstream.mockRestore()
   })
+  it('creates a native backend that fences admissions while retaining cleanup after disconnection', async () => {
+    const view = await discover()
+    const backend = await host.backend(view.scopes[0], lease)
+    worker.get.mockResolvedValue({ box_id: 'original-box', status: 'running' })
+    try {
+      await expect(backend.admit()).resolves.toBeUndefined()
+      await db.query("UPDATE ci_installation_binding SET state='disabled',generation=generation+1 WHERE id=$1", [
+        binding,
+      ])
+      await expect(backend.admit()).rejects.toThrow()
+      await expect(backend.workers.get('existing-worker')).resolves.toMatchObject({ box_id: 'original-box' })
+      const abort = new AbortController()
+      abort.abort()
+      await expect(backend.admit(abort.signal)).rejects.toThrow()
+    } finally {
+      await backend.close()
+    }
+  })
+  async function scanFixture() {
+    await discover()
+    const claim = (await store.state.scans().claim('follower-api'))!
+    expect(claim).toBeDefined()
+    const repository = claim.scope.runners.kind === 'repository' ? claim.scope.runners.repository : undefined
+    expect(repository).toBeDefined()
+    const previous = upstream.getMockImplementation()!
+    const permissions: unknown[] = []
+    upstream.mockImplementation(async (input, options) => {
+      const url = new URL(String(input)),
+        path = url.pathname
+      const response = (value: unknown) =>
+        new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } })
+      if (path.endsWith('/access_tokens')) {
+        const body = JSON.parse(String(options?.body))
+        permissions.push(body.permissions)
+        return response({
+          token: 'scan-fixture-token',
+          expires_at: new Date(Date.now() + 3600000).toISOString(),
+          permissions: body.permissions,
+          repositories: [repository],
+        })
+      }
+      if (path === '/repositories/' + repository!.id) return response(repository)
+      if (path.endsWith('/actions/runs'))
+        return response({
+          total_count: url.searchParams.get('status') === 'queued' ? 1 : 0,
+          workflow_runs:
+            url.searchParams.get('status') === 'queued' ? [{ id: 99, repository: { id: repository!.id } }] : [],
+        })
+      if (path.endsWith('/actions/runs/99/jobs'))
+        return response({
+          total_count: 1,
+          jobs: [
+            {
+              id: 77,
+              run_id: 99,
+              status: 'queued',
+              labels: ['boxlite-ci-runner'],
+              runner_id: null,
+              conclusion: null,
+              completed_at: null,
+            },
+          ],
+        })
+      return previous(input, options)
+    })
+    const scanner = await host.scan(claim, AbortSignal.timeout(3000))
+    return { claim, scanner, permissions }
+  }
+  it('allows a follower to read and publish real scanned jobs using jobs-only credentials', async () => {
+    const { claim, scanner, permissions } = await scanFixture()
+    try {
+      const jobs = await scanner.queued(AbortSignal.timeout(3000))
+      expect(jobs).toHaveLength(1)
+      await scanner.publish(jobs, AbortSignal.timeout(3000))
+      expect((await store.state.read(['notice/10/77']))[0].payload).toMatchObject({
+        repositoryId: claim.repository,
+        job: { id: 77, runId: 99 },
+      })
+      expect(permissions).toEqual([{ actions: 'read' }])
+      expect(await store.state.acquire('another-main', 30000)).toBeUndefined()
+    } finally {
+      await scanner.close()
+    }
+  })
+  it.each(['generation', 'owner', 'deleted'] as const)(
+    'rejects scanned publication after current binding authority changes: %s',
+    async (change) => {
+      const { scanner } = await scanFixture()
+      try {
+        const jobs = await scanner.queued(AbortSignal.timeout(3000))
+        if (change === 'generation') await db.query('UPDATE ci_installation_binding SET generation=generation+1')
+        else if (change === 'owner') await db.query('DELETE FROM organization_user')
+        else await db.query('DELETE FROM ci_installation_binding')
+        await expect(scanner.publish(jobs, AbortSignal.timeout(3000))).rejects.toThrow()
+        expect(await store.state.read(['notice/10/77'])).toEqual([])
+      } finally {
+        await scanner.close()
+      }
+    },
+  )
   async function receipts() {
     return db.query(
       "SELECT record_key,payload FROM ci_listener_state WHERE record_key LIKE 'receipt/%' ORDER BY record_key",

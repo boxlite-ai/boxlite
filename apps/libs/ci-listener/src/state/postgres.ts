@@ -60,10 +60,11 @@ class PostgresTransaction implements StateTransaction {
     )
     return rows[0] ? decode(rows[0]) : undefined
   }
-  async page(after: string, limit: number, prefix = ''): Promise<StateRecord[]> {
+  async page(after: string, limit: number, prefix = '', lock?: 'skip-locked'): Promise<StateRecord[]> {
     return (
       await this.rows(
-        'SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key>$2 AND record_key>=$3 AND record_key<$4 ORDER BY record_key LIMIT $5',
+        'SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key>$2 AND record_key>=$3 AND record_key<$4 ORDER BY record_key LIMIT $5' +
+          (lock ? ' FOR UPDATE SKIP LOCKED' : ''),
         [this.namespace, after, prefix, prefix + '\x7f', limit],
       )
     ).map(decode)

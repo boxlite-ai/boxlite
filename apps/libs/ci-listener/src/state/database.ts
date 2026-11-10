@@ -13,7 +13,7 @@ export interface StateRecord {
 export interface StateTransaction {
   now(): Promise<number>
   get(key: string, lock?: boolean): Promise<StateRecord | undefined>
-  page(after: string, limit: number, prefix?: string): Promise<StateRecord[]>
+  page(after: string, limit: number, prefix?: string, lock?: 'skip-locked'): Promise<StateRecord[]>
   put(record: StateRecord, expected: string | null): Promise<boolean>
   remove(key: string, expected: string): Promise<boolean>
 }

@@ -10,6 +10,7 @@ import { SqliteStateDatabase } from '../state/sqlite'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { GitHubExecutionBackend, ExecutionHost } from './backend'
 import { ExecutionJournal } from './journal'
+import { testCapacity } from '../../tests/capacity'
 import { ExecutionScope } from './model'
 
 describe('CI shared execution authority', () => {
@@ -177,6 +178,41 @@ describe('CI shared execution authority', () => {
     rmSync(directory, { recursive: true, force: true })
   })
   const launch = () => ({ name, image: 'runner', cpus: 2, memoryMiB: 2048, entrypoint: ['bash', '-c', 'run'] })
+  it.each(['valid', 'revoked', 'missing', 'invalid-name'])(
+    'fences undispatched creation by its persisted intent: %s',
+    async (scenario) => {
+      await backend.close()
+      host.rejectUndispatchedCreate = jest.fn(async () => {
+        throw Error('creation rejected')
+      })
+      backend = makeBackend()
+      const journal = new ExecutionJournal(state)
+      const key = await journal.define(lease, scope)
+      const row = await journal.reserve(lease, key, notice, testCapacity({ account: 2, tenant: 2 }))
+      if (!row) throw Error('fixture reservation failed')
+      const intent = await journal.advance(lease, row.record.key, row.record.version, {
+        box: { phase: 'requested', id: null },
+        effect: { id: randomUUID(), kind: 'box-create' },
+      })
+      const workerName = scenario === 'invalid-name' ? 'foreign' : scenario === 'missing' ? name : intent.value.name
+      revoked = scenario === 'revoked'
+      if (scenario === 'valid')
+        await expect(backend.workers.create({ ...launch(), name: workerName })).resolves.toMatchObject({
+          box_id: 'original-box',
+        })
+      else await expect(backend.workers.create({ ...launch(), name: workerName })).rejects.toThrow()
+      if (scenario === 'revoked')
+        expect(host.rejectUndispatchedCreate).toHaveBeenCalledWith(workerName, intent.value.effect!.id)
+      if (scenario !== 'valid') expect(host.workers.create).not.toHaveBeenCalled()
+    },
+  )
+  it('passes authorized cleanup reads and JIT delivery through their distinct authority checks', async () => {
+    await expect(backend.workers.get(name)).resolves.toMatchObject({ box_id: 'original-box' })
+    await backend.workers.deliverJit(name, 'c2VjcmV0')
+    expect(host.authorize).toHaveBeenCalledWith(expect.anything(), 'cleanup', undefined)
+    expect(host.authorize).toHaveBeenCalledWith(expect.anything(), 'admission', undefined)
+    expect(host.workers.deliverJit).toHaveBeenCalledWith(name, 'c2VjcmV0', undefined)
+  })
   const useOrganization = async () => {
     await backend.close()
     if (source.kind !== 'app') throw new Error('Invalid test setup')

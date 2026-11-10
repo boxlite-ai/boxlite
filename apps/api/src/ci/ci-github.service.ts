@@ -1,7 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { BadGatewayException, ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import { createPrivateKey } from 'node:crypto'
-import { CiGitHubApp, CiGitHubOAuth, githubRequest } from '@boxlite-ai/ci-listener'
+import { CiGitHubApp, CiGitHubOAuth } from '@boxlite-ai/ci-listener'
 import { TypedConfigService } from '../config/typed-config.service'
 export { CiInstallationRequired } from '@boxlite-ai/ci-listener'
 export type { VerifiedInstallation } from '@boxlite-ai/ci-listener'
@@ -110,12 +110,7 @@ export class CiGitHubService {
   }
   async forAccount(account: string): Promise<CiGitHubApp> {
     if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(account)) throw new ForbiddenException('Invalid GitHub account')
-    const value = (await githubRequest({
-      url: 'https://api.github.com/users/' + encodeURIComponent(account),
-      token: '',
-    })) as { login?: string; type?: string }
-    if (value.login?.toLowerCase() !== account.toLowerCase() || !['User', 'Organization'].includes(value.type || ''))
-      throw new ForbiddenException('GitHub account identity unavailable')
-    return this.forType(value.type as 'User' | 'Organization')
+    const identity = await this.identity().lookupAccount(account)
+    return this.forType(identity.accountType)
   }
 }

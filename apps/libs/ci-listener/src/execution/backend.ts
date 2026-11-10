@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { CredentialSource, ListenerCredentials } from '../credentials'
-import { decodeRepository, GitHubJobs, GitHubRepository, JobNotice, WorkflowJob } from '../jobs'
+import { JobNotice, WorkflowJob } from '../jobs'
+import { readRepositoryJobs } from '../job-reader'
 import { GitHubRunners, RunnerEffect } from '../runners'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { WorkerExecutor } from '../worker'
@@ -104,47 +105,26 @@ export class GitHubExecutionBackend implements PoolBackend {
   admit(signal?: AbortSignal): Promise<void> {
     return this.check('admission', signal)
   }
-  private contains(repository: number): boolean {
-    return this.scope.runners.kind === 'repository'
-      ? repository === this.scope.runners.repository.id
-      : this.scope.runners.repositories.includes(repository)
-  }
   async job(notice: JobNotice, signal?: AbortSignal): Promise<WorkflowJob> {
     notice = { ...notice }
-    return this.readJobs(notice.repository, (jobs) => jobs.job(notice, signal), signal)
+    return readRepositoryJobs(
+      this.scope,
+      this.credentials,
+      (signal) => this.check('admission', signal),
+      notice.repository,
+      (jobs) => jobs.job(notice, signal),
+      signal,
+    )
   }
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]> {
-    return this.readJobs(repository, (jobs) => jobs.queued(signal), signal)
-  }
-  private async readJobs<T>(
-    repositoryId: number,
-    read: (jobs: GitHubJobs) => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    if (!this.contains(repositoryId)) throw new Error('Job is outside the original execution scope')
-    await this.check('admission', signal)
-    const borrow = await this.credentials.open({ kind: 'jobs', repository: repositoryId }, signal)
-    try {
-      let repository: GitHubRepository
-      if (this.scope.runners.kind === 'repository') repository = this.scope.runners.repository
-      else {
-        repository = decodeRepository(await borrow.credential.request(`/repositories/${repositoryId}`, { signal }))
-        const account = this.scope.installation.account
-        if (
-          repository.id !== repositoryId ||
-          repository.owner.id !== account.id ||
-          repository.owner.login.toLowerCase() !== account.login
-        )
-          throw new Error('GitHub job repository authority changed')
-      }
-      if (!repository.private && !this.scope.runners.allowPublic)
-        throw new Error('Public repository runners are disabled')
-      const result = await read(new GitHubJobs(borrow.credential, repository))
-      await this.check('admission', signal)
-      return result
-    } finally {
-      await borrow.close()
-    }
+    return readRepositoryJobs(
+      this.scope,
+      this.credentials,
+      (signal) => this.check('admission', signal),
+      repository,
+      (jobs) => jobs.queued(signal),
+      signal,
+    )
   }
   async runners(beforeMutation: (effect: RunnerEffect) => Promise<void>, signal?: AbortSignal): Promise<RunnerSession> {
     await this.check('cleanup', signal)

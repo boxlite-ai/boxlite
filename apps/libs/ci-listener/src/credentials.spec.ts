@@ -90,6 +90,41 @@ describe('CI shared credential ownership', () => {
   })
   const posts = () => calls.filter((call) => call.path.endsWith('/access_tokens'))
   const deletes = () => calls.filter((call) => call.path === '/installation/token')
+  it.each([
+    null,
+    { kind: 'unknown' },
+    { kind: 'jobs', repository: 0 },
+    { kind: 'repository-runners', repository: 1.5 },
+  ])('rejects invalid credential purposes before issuance: %p', async (purpose) => {
+    await expect(provider.open(purpose as any)).rejects.toThrow('Invalid GitHub credential')
+    expect(posts()).toHaveLength(0)
+  })
+  it('keeps providers memory-only and makes closing a borrow idempotent', async () => {
+    expect(() => JSON.stringify(provider)).toThrow('memory-only')
+    const borrow = await provider.open({ kind: 'jobs', repository: 11 })
+    await borrow.close()
+    await borrow.close()
+    expect(deletes()).toHaveLength(1)
+  })
+  it('preserves issuance and retirement failures and retries the retained cleanup debt', async () => {
+    const originalCommit = state.commit.bind(state)
+    const commit = jest.spyOn(state, 'commit').mockImplementation(async (lease, mutations) => {
+      if (mutations.some((row) => (row.payload as any)?.phase === 'issued')) throw Error('issued state unavailable')
+      return originalCommit(lease, mutations)
+    })
+    failClose = 1
+    try {
+      const error = await provider.open({ kind: 'jobs', repository: 11 }).catch((error) => error)
+      expect(error).toBeInstanceOf(AggregateError)
+      expect(error.errors[0].message).toBe('issued state unavailable')
+      expect(error.errors).toHaveLength(2)
+    } finally {
+      commit.mockRestore()
+    }
+    await provider.close()
+    expect(deletes()).toHaveLength(2)
+    expect(await state.scan(lease, { prefix: 'credential/' })).toEqual([])
+  })
   it('journals issuance before HTTP and retires its exact private credential', async () => {
     const borrow = await provider.open({ kind: 'jobs', repository: 11 })
     expect(await borrow.credential.request('/repos/owner/repo/actions/jobs/55')).toEqual({ id: 55 })

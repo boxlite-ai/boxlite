@@ -3,11 +3,15 @@ import { ForbiddenException, Injectable, Logger, ServiceUnavailableException } f
 import { DataSource } from 'typeorm'
 import {
   decodeScope,
+  scopeKey,
   AppDeliveryRecovery,
   ExecutionJournal,
   ExecutionLease,
   ExecutionScope,
   GitHubExecutionBackend,
+  GitHubRepositoryScanner,
+  RepositoryScanSession,
+  ScanClaim,
   InstallationCatalog,
   InstallationDirectory,
   DirectoryBinding,
@@ -141,6 +145,10 @@ export class CiNativeHost implements ListenerHost {
     )
     signal.throwIfAborted()
     if (rows.length > 10000) throw new ServiceUnavailableException('CI binding capacity exceeded')
+    await this.store.state.scans().reconcile(
+      lease,
+      rows.map((row) => ({ application: row.app_client_id, binding: row.id })),
+    )
     return rows.map((row) => {
       const original = authority(row)
       return {
@@ -232,6 +240,7 @@ export class CiNativeHost implements ListenerHost {
         [binding.binding, binding.generation],
       )
     })
+    await this.store.state.scans().synchronize(lease, client, binding.binding, scopes, signal)
     return scopes
   }
   async backend(original: ExecutionScope, lease: ExecutionLease): Promise<ListenerBackend> {
@@ -256,6 +265,56 @@ export class CiNativeHost implements ListenerHost {
       },
       ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
     )
+  }
+  async scan(original: ScanClaim, signal: AbortSignal): Promise<RepositoryScanSession> {
+    const claim = structuredClone(original),
+      scope = decodeScope(claim.scope)
+    const app = this.github.byClientId(claim.application)
+    const authorize = async (state: ListenerState, tx: import('typeorm').EntityManager) => {
+      await this.store.root(state)
+      // The immutable scope mapping, not the task hash, identifies its original App.
+      const [provenance] = await state.read(['app-scope/' + scopeKey(scope).slice(6)])
+      if (
+        !provenance?.payload ||
+        typeof provenance.payload !== 'object' ||
+        Array.isArray(provenance.payload) ||
+        provenance.payload.application !== claim.application
+      )
+        throw new ForbiddenException('Original scan App identity changed')
+      await this.store.admit(tx, scope, claim.application)
+    }
+    signal.throwIfAborted()
+    await this.store.transaction((tx, state) => authorize(state, tx))
+    return new GitHubRepositoryScanner({
+      queue: this.store.state.scans(),
+      claim,
+      source: {
+        kind: 'app',
+        app: app.appSource(),
+        installation: { ...scope.installation, permissions: {}, suspended: false },
+      },
+      credentials: {
+        commit: (lease, changes) => {
+          if (changes.every((change) => change.payload === undefined))
+            return this.store.state.scans().credentials(claim).commit(lease, changes)
+          return this.store.transaction(async (tx, state) => {
+            await authorize(state, tx)
+            return state.scans().credentials(claim).commit(lease, changes)
+          })
+        },
+      },
+      authorize: async (signal) => {
+        signal?.throwIfAborted()
+        await this.store.transaction((tx, state) => authorize(state, tx))
+        signal?.throwIfAborted()
+      },
+      publish: (jobs, signal) =>
+        this.store.transaction(async (tx, state) => {
+          signal.throwIfAborted()
+          await authorize(state, tx)
+          await state.scans().publish(claim, jobs, ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'])
+        }),
+    })
   }
   async accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
     const captured = {

@@ -69,6 +69,49 @@ describe('CI installation directory protocol', () => {
     await directory.close()
     jest.restoreAllMocks()
   })
+  it.each([
+    { key: 'wake/1', version: '', installationId: 1, accountId: 7, repositoryId: 0 },
+    { key: 'wake/1', version: 'version', installationId: -1, accountId: 7, repositoryId: 0 },
+    { key: 'wake/1', version: 'version', installationId: 1, accountId: 0, repositoryId: 0 },
+    { key: 'wake/1', version: 'version', installationId: 1, accountId: 7, repositoryId: -1 },
+  ])('rejects malformed wake metadata before discovery: %p', (value) => {
+    wakes = [
+      {
+        ...value,
+        key: `wake/${value.installationId}/${value.repositoryId}`,
+        version: value.version ? randomUUID() : '',
+      },
+    ]
+    expect(step).toThrow(StateCorrupt)
+    expect(source.index).not.toHaveBeenCalled()
+  })
+  it.each(['generation', 'policy', 'excess'])(
+    'rejects invalid installation indexes atomically: %s',
+    async (scenario) => {
+      source.index.mockResolvedValue(
+        scenario === 'excess'
+          ? Array.from({ length: 10001 }, (_, id) => binding(id + 1))
+          : [
+              {
+                ...binding(1),
+                ...(scenario === 'generation'
+                  ? { generation: 0 }
+                  : { policy: { group: 'ci', allowPublic: null as any } }),
+              },
+            ],
+      )
+      if (scenario === 'excess') {
+        await until(() => source.report.mock.calls.length > 0)
+        expect(step().ready).toBe(false)
+      } else await expect(until((view) => view.ready)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(source.load).not.toHaveBeenCalled()
+    },
+  )
+  it('rejects a wake for the wrong owner after directory publication', async () => {
+    await until((view) => view.ready)
+    wakes = [{ key: 'wake/1/0', version: randomUUID(), installationId: 1, accountId: 999, repositoryId: 0 }]
+    expect(step).toThrow(StateCorrupt)
+  })
   it('publishes one installation while a different catalog remains in flight', async () => {
     const blocked = deferred()
     source.index.mockResolvedValue([binding(1), binding(2)])

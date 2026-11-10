@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { createPrivateKey, generateKeyPairSync, verify } from 'node:crypto'
-import { CiGitHubApp, CiInstallationRequired } from '@boxlite-ai/ci-listener'
+import { CiGitHubApp, CiInstallationRequired } from './index'
 
 describe('CI connect GitHub authority', () => {
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })

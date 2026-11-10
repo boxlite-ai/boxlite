@@ -106,14 +106,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
     throw new Error('CI_WORKER_MEMORY_GB must convert to whole MiB between 128 MiB and 128 GiB')
   const stateDir = env.CI_STATE_DIR ?? '/var/lib/boxlite-ci'
   if (!isAbsolute(stateDir)) throw new Error('CI_STATE_DIR must be absolute')
-  const address = new URL('http://' + (env.CI_LISTEN_ADDR ?? '0.0.0.0:8080'))
+  const listenAddress = env.CI_LISTEN_ADDR ?? '0.0.0.0:8080'
+  const port = /:(\d+)$/.exec(listenAddress)?.[1]
+  const address = new URL('http://' + listenAddress)
   if (
     address.username ||
     address.password ||
     address.search ||
     address.hash ||
     address.pathname !== '/' ||
-    !address.port
+    !port ||
+    Number(port) < 1 ||
+    Number(port) > 65535
   )
     throw new Error('CI_LISTEN_ADDR requires host:port')
   const allow = env.CI_ALLOW_PUBLIC_REPOSITORIES ?? 'false'
@@ -124,7 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
     apiKey: () => apiKey,
     github,
     stateDir,
-    listen: { host: address.hostname.replace(/^\[|\]$/g, ''), port: Number(address.port) },
+    listen: { host: address.hostname.replace(/^\[|\]$/g, ''), port: Number(port) },
     webhookSecretFile:
       github.kind === 'app' ? (github.webhookSecretFile ?? env.CI_GITHUB_WEBHOOK_SECRET_FILE) : undefined,
     allowPublic: allow === 'true',

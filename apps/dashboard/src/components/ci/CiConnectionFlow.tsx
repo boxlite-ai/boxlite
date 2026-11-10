@@ -38,7 +38,8 @@ export function CiConnectionFlow({
     [starting, setStarting] = useState(false),
     [loading, setLoading] = useState(false),
     [message, setMessage] = useState(''),
-    [resume, setResume] = useState(0)
+    [resume, setResume] = useState(0),
+    [cancelFailed, setCancelFailed] = useState(false)
   const startGeneration = useRef(0),
     startingRef = useRef(false)
   const removeRoute = () =>
@@ -56,7 +57,13 @@ export function CiConnectionFlow({
       .catch(() => toast.error('Unable to confirm cancellation of the previous GitHub authorization.'))
   }
   useEffect(() => {
-    const restored = () => {
+    const restored = (event: PageTransitionEvent) => {
+      if (
+        !event.persisted &&
+        (performance.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined)?.type !==
+          'back_forward'
+      )
+        return
       startGeneration.current++
       startingRef.current = false
       setStarting(false)
@@ -90,27 +97,55 @@ export function CiConnectionFlow({
       setMessage('Authorization expired. Reconnect GitHub to continue.')
       return
     }
+    let timer: ReturnType<typeof setTimeout> | undefined
     setLoading(true)
     setMessage('')
-    api
-      .getCiConnect(organization, id)
-      .then(
-        (value) => {
-          if (!active) return
-          setResult(value)
-          if (!['selection_required', 'installation_required'].includes(value.status))
-            setMessage('Authorization did not complete. Reconnect GitHub to continue.')
-          void cache.invalidateQueries({ queryKey: ['ci-settings', organization] })
-        },
-        () => {
-          if (active) setMessage('Unable to read GitHub accounts. Review organization access and SSO, then reconnect.')
-        },
-      )
-      .finally(() => {
-        if (active) setLoading(false)
-      })
+    const read = () => {
+      const current = getCiConnectSession()
+      if (!active) return
+      if (!current || current.attempt !== id || current.organization !== organization) {
+        setLoading(false)
+        setResult(undefined)
+        setMessage('Authorization expired. Reconnect GitHub to continue.')
+        return
+      }
+      api
+        .getCiConnect(organization, id)
+        .then(
+          (value) => {
+            const current = getCiConnectSession()
+            if (!active) return
+            if (!current || current.attempt !== id || current.organization !== organization) {
+              setResult(undefined)
+              setMessage('Authorization expired. Reconnect GitHub to continue.')
+              return
+            }
+            setResult(value)
+            if (value.status === 'pending') {
+              timer = setTimeout(read, Math.min(1000, Math.max(1, current.expires - Date.now())))
+            } else if (value.status === 'connected') {
+              clearCiConnectSession()
+              removeRoute()
+            } else if (!['selection_required', 'installation_required'].includes(value.status)) {
+              setMessage('Authorization did not complete. Reconnect GitHub to continue.')
+            }
+            void cache.invalidateQueries({ queryKey: ['ci-settings', organization] })
+          },
+          () => {
+            if (active)
+              setMessage(
+                'Unable to read GitHub accounts. Review organization access and SSO, or retry authorization status.',
+              )
+          },
+        )
+        .finally(() => {
+          if (active) setLoading(false)
+        })
+    }
+    read()
     return () => {
       active = false
+      clearTimeout(timer)
     }
   }, [api, cache, organization, id, resume])
   const close = () => {
@@ -132,7 +167,20 @@ export function CiConnectionFlow({
     setMessage('')
     try {
       const previous = getCiConnectSession()
-      if (previous) await api.cancelCiConnect(previous.organization, previous.attempt)
+      if (previous) {
+        try {
+          await api.cancelCiConnect(previous.organization, previous.attempt)
+        } catch {
+          if (request === startGeneration.current) {
+            setCancelFailed(true)
+            setMessage(
+              'The previous authorization could not be cancelled. Retry cancellation or discard its local reference; the server authorization may remain active until it expires.',
+            )
+          }
+          return
+        }
+      }
+      setCancelFailed(false)
       if (request !== startGeneration.current) return
       clearCiConnectSession()
       const attempt = await api.startCiConnect(organization, {
@@ -155,17 +203,31 @@ export function CiConnectionFlow({
     }
   }
   const changed = (value: CiConnectResult) => {
-    if (['selection_required', 'installation_required'].includes(value.status)) setResult(value)
-    else
-      setMessage(
-        value.status === 'pending'
-          ? 'Another connection request is finishing. Reconnect if it does not complete.'
-          : 'Authorization did not complete. Reconnect GitHub to continue.',
-      )
+    setResult(value)
+    setMessage('')
+    if (value.status === 'connected') {
+      clearCiConnectSession()
+      removeRoute()
+    } else if (value.status === 'pending') {
+      setResume((value) => value + 1)
+    } else if (!['selection_required', 'installation_required'].includes(value.status)) {
+      setMessage('Authorization did not complete. Reconnect GitHub to continue.')
+    }
     void cache.invalidateQueries({ queryKey: ['ci-settings', organization] })
   }
   const settingsUrl = githubAuthorizationSettingsUrl(
     result?.authorization_settings_url || configuration?.authorization_settings_url,
+  )
+  const discard = cancelFailed && (
+    <AsciiButton
+      onClick={() => {
+        clearCiConnectSession()
+        close()
+        setCancelFailed(false)
+      }}
+    >
+      Discard local authorization
+    </AsciiButton>
   )
   return (
     <>
@@ -188,6 +250,7 @@ export function CiConnectionFlow({
           </p>
         )}
       </div>
+      {!id && discard}
       <Dialog
         open={!!id}
         onOpenChange={(open) => {
@@ -199,9 +262,9 @@ export function CiConnectionFlow({
             <DialogTitle>Connect GitHub</DialogTitle>
             <DialogDescription>Choose your personal account or an organization you own.</DialogDescription>
           </DialogHeader>
-          {loading ? (
+          {loading || result?.status === 'pending' ? (
             <p role="status" className="text-body text-muted-foreground">
-              Loading GitHub accounts…
+              {result?.status === 'pending' ? 'Finishing GitHub connection…' : 'Loading GitHub accounts…'}
             </p>
           ) : result?.accounts && result.authenticated_account ? (
             <CiAccountPicker
@@ -219,6 +282,10 @@ export function CiConnectionFlow({
               {message}
             </p>
           )}
+          {message && getCiConnectSession() && (
+            <AsciiButton onClick={() => setResume((value) => value + 1)}>Retry authorization status</AsciiButton>
+          )}
+          {discard}
           <DialogFooter>
             <AsciiButton onClick={close}>
               <ArrowLeft className="size-4" />

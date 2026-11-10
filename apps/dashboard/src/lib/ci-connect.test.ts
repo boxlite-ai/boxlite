@@ -21,6 +21,56 @@ describe('CI browser callback state', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
+  it.each(['connected', 'failed', 'transport'])(
+    'keeps a newer attempt when an older completion ends: %s',
+    async (status) => {
+      const module = await import('./ci-connect')
+      module.prepareCiRedirect(organization, attempt())
+      window.history.replaceState({}, '', '/settings/ci/callback?' + new URLSearchParams({ code: 'code', state }))
+      module.captureCiCallback()
+      let finish!: (value: any) => void, fail!: (error: Error) => void
+      const api = {
+        completeCiInstallation: vi.fn(),
+        completeCiConnect: vi.fn(
+          () =>
+            new Promise<any>((resolve, reject) => {
+              finish = resolve
+              fail = reject
+            }),
+        ),
+      }
+      const pending = module.completeCiRedirect(api).catch(() => undefined)
+      const next = {
+        ...attempt(),
+        id: organization,
+        authorization_url: 'https://github.com/login/oauth/authorize?state=' + organization + '.' + 'B'.repeat(43),
+      }
+      module.prepareCiRedirect(organization, next)
+      if (status === 'transport') fail(Error('connection lost'))
+      else finish({ status })
+      await pending
+      expect(module.getCiConnectSession()?.attempt).toBe(organization)
+    },
+  )
+  it('recovers a lost completion response by reading the attempt without reusing the OAuth code', async () => {
+    const module = await import('./ci-connect')
+    module.prepareCiRedirect(organization, attempt())
+    window.history.replaceState({}, '', '/settings/ci/callback?' + new URLSearchParams({ code: 'code', state }))
+    module.captureCiCallback()
+    const api = {
+      completeCiInstallation: vi.fn(),
+      completeCiConnect: vi.fn().mockRejectedValue(Error('lost response')),
+      getCiConnect: vi.fn().mockResolvedValue({ id, status: 'selection_required' }),
+    }
+    await expect(module.completeCiRedirect(api)).rejects.toThrow()
+    expect(module.getCiConnectSession()?.attempt).toBe(id)
+    await expect(module.completeCiRedirect(api)).resolves.toMatchObject({
+      organization,
+      result: { status: 'selection_required' },
+    })
+    expect(api.completeCiConnect).toHaveBeenCalledTimes(1)
+    expect(api.getCiConnect).toHaveBeenCalledExactlyOnceWith(organization, id)
+  })
   it('scrubs the entire callback URL and keeps only routing metadata across the redirect', async () => {
     const module = await import('./ci-connect')
     module.prepareCiRedirect(organization, attempt())
@@ -135,7 +185,7 @@ describe('CI browser callback state', () => {
     const failure = await module.completeCiRedirect(api).catch((error) => error)
     expect(failure.message).not.toContain('private-code')
     expect(failure.cause).toBeUndefined()
-    expect(window.sessionStorage.length).toBe(0)
+    expect(module.getCiConnectSession()?.attempt).toBe(id)
   })
   it('refuses an outside authorize URL before writing routing metadata', async () => {
     const module = await import('./ci-connect')

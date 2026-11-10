@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import {
   ConflictException,
+  HttpException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
@@ -440,7 +441,15 @@ export class CiConnectService {
         await this.bind(row, lease, installed, actor, target)
       }
     } catch (error) {
-      await this.terminal(id, lease, 'failed')
+      if (error instanceof HttpException && [502, 503, 504].includes(error.getStatus())) {
+        await this.query(
+          this.db,
+          `UPDATE ci_connect_attempt SET state='selecting',oauth_token_ciphertext=$3,
+          lease_id=NULL,lease_until=NULL WHERE id=$1 AND state='polling' AND lease_id=$2
+          AND expires_at>clock_timestamp() AND lease_until>clock_timestamp()`,
+          [id, lease, row.oauth_token_ciphertext],
+        )
+      } else await this.terminal(id, lease, 'failed')
       throw error
     }
     return this.getWeb(actor, id)

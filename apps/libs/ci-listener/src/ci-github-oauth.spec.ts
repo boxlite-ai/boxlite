@@ -21,6 +21,87 @@ describe('CI identity OAuth and per-App installation lookup', () => {
   afterEach(() => {
     global.fetch = original
   })
+  it.each(['User', 'Organization'])('authenticates public %s lookup with Login OAuth credentials', async (type) => {
+    global.fetch = jest.fn(async (address, options) => {
+      expect(String(address)).toBe('https://api.github.com/users/team')
+      expect(new Headers(options?.headers).get('authorization')).toBe(
+        'Basic ' + Buffer.from('identity-client:private-identity-secret').toString('base64'),
+      )
+      return new Response(JSON.stringify({ id: 7, login: 'team', type }))
+    }) as typeof fetch
+    expect(await client.lookupAccount('team')).toEqual({ accountId: 7, accountLogin: 'team', accountType: type })
+  })
+  it.each([
+    { id: 0, login: 'team', type: 'User' },
+    { id: 7, login: 'other', type: 'User' },
+    { id: 7, login: {}, type: 'User' },
+    { id: 7, login: 'team', type: 'Bot' },
+  ])('rejects invalid public lookup identity %p', async (value) => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify(value))) as typeof fetch
+    await expect(client.lookupAccount('team')).rejects.toThrow('Invalid GitHub account')
+  })
+  it('rejects malformed account names before HTTP and sanitizes lookup failures', async () => {
+    global.fetch = jest.fn().mockRejectedValue(Error('private-secret'))
+    await expect(client.lookupAccount('-team')).rejects.toThrow('Invalid GitHub account')
+    expect(global.fetch).not.toHaveBeenCalled()
+    await expect(client.lookupAccount('team')).rejects.toThrow('lookup unavailable')
+  })
+  it.each([
+    'https://user:secret@console.test',
+    'https://console.test/path',
+    'https://console.test/?x',
+    'https://console.test/#x',
+    'http://external.test',
+    '',
+  ])('rejects an unsafe OAuth callback origin %s', (dashboardUrl) => {
+    expect(() =>
+      new CiGitHubOAuth({
+        clientId: 'identity-client',
+        clientSecret: () => 'private-identity-secret',
+        dashboardUrl,
+      }).webSettings(),
+    ).toThrow('callback')
+  })
+  it.each(['http://localhost', 'http://127.0.0.1:3000', 'http://[::1]:3000'])(
+    'accepts a local identity callback %s',
+    (dashboardUrl) => {
+      expect(
+        new CiGitHubOAuth({
+          clientId: 'identity-client',
+          clientSecret: () => 'private-identity-secret',
+          dashboardUrl,
+        }).webSettings().redirectUri,
+      ).toBe(dashboardUrl + '/settings/ci/callback')
+    },
+  )
+  it.each(['', 'short', 'identity-client'])('rejects invalid Login OAuth credentials before HTTP: %s', (secret) => {
+    expect(() => new CiGitHubOAuth({ clientId: 'identity-client', clientSecret: () => secret }).webSettings()).toThrow(
+      'not configured',
+    )
+  })
+  it.each([null, [], 'invalid'])('rejects malformed OAuth exchange payloads %p', async (value) => {
+    global.fetch = jest.fn(async () => new Response(JSON.stringify(value))) as typeof fetch
+    await expect(client.exchangeWeb('code', 'B'.repeat(43))).rejects.toThrow('Invalid GitHub OAuth response')
+  })
+  it.each([
+    null,
+    {},
+    [{ organization: { id: 7, login: 'team' }, role: 'admin', state: 'unknown' }],
+    [{ organization: { id: 7, login: 'team' }, role: 'unknown', state: 'active' }],
+  ])('rejects incomplete membership inventories %p', async (batch) => {
+    global.fetch = jest.fn(
+      async (input) =>
+        new Response(
+          JSON.stringify(new URL(String(input)).pathname === '/user' ? { id: 1, login: 'alice', type: 'User' } : batch),
+        ),
+    ) as typeof fetch
+    await expect(client.ownedAccounts('token')).rejects.toThrow('membership inventory')
+  })
+  it('rejects invalid OAuth input without contacting GitHub', async () => {
+    global.fetch = jest.fn()
+    await expect(client.exchangeWeb('', 'short')).rejects.toThrow('Invalid GitHub browser')
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
   it('requests only identity/organization reads and forces account selection only when requested', () => {
     const normal = new URL(client.authorizeWeb('state', 'A'.repeat(43))),
       switched = new URL(client.authorizeWeb('state', 'A'.repeat(43), true))

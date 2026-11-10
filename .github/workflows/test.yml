@@ -270,6 +270,10 @@ jobs:
               - '.github/workflows/test.yml'
               - '.github/workflows/lint.yml'
             api:
+              - 'Makefile'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'make/dev.mk'
               - 'apps/api/**/!(*.md)'
               - 'apps/libs/ci-listener/**/!(*.md)'
               - 'apps/github-ci-runner/**/!(*.md)'

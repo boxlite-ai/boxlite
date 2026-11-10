@@ -438,6 +438,17 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
   return { appDomain, appHost, platformSubdomainMinLength }
 }
 
+function ciWorkerResources() {
+  const cpus = Number(process.env.CI_WORKER_CPUS ?? '2')
+  const memoryGB = Number(process.env.CI_WORKER_MEMORY_GB ?? '2')
+  const memoryMiB = memoryGB * 1024
+  if (!Number.isInteger(cpus) || cpus < 1 || cpus > 16)
+    throw new Error('CI_WORKER_CPUS must be an integer between 1 and 16')
+  if (!Number.isInteger(memoryMiB) || memoryMiB < 128 || memoryMiB > 131072)
+    throw new Error('CI_WORKER_MEMORY_GB must convert to whole MiB between 128 MiB and 128 GiB')
+  return { workerCPUs: cpus, workerMemoryGB: memoryGB }
+}
+
 const configuration = {
   turnstile: turnstileConfig(),
   production: process.env.NODE_ENV === 'production',
@@ -773,8 +784,7 @@ const configuration = {
   ci: {
     workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
     workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
-    workerCPUs: Number(process.env.CI_WORKER_CPUS || '2'),
-    workerMemoryGB: Number(process.env.CI_WORKER_MEMORY_GB || '2'),
+    ...ciWorkerResources(),
     githubOAuthClientId: process.env.CI_GITHUB_OAUTH_CLIENT_ID,
     githubOAuthClientSecret: process.env.CI_GITHUB_OAUTH_CLIENT_SECRET,
     githubWebhookSecret: process.env.CI_GITHUB_WEBHOOK_SECRET,

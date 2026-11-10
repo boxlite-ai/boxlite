@@ -5,6 +5,7 @@ import { createRoot, Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { prepareCiRedirect, getCiConnectSession } from '@/lib/ci-connect'
 import { ConnectsPanel } from './ConnectsPanel'
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     setCiCapacity: vi.fn(),
     getCiConnectConfiguration: vi.fn(),
     startCiConnect: vi.fn(),
+    cancelCiConnect: vi.fn(),
     deleteCiConnection: vi.fn(),
     updateCiConnection: vi.fn(),
   },
@@ -36,6 +38,8 @@ describe('CI connects panel', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionStorage.clear()
+    mocks.api.cancelCiConnect.mockReset().mockResolvedValue(undefined)
     mocks.api.deleteCiConnection.mockReset().mockResolvedValue(undefined)
     mocks.api.updateCiConnection.mockReset().mockResolvedValue(undefined)
     mocks.selection.authenticatedUserOrganizationMember.role = 'owner'
@@ -96,11 +100,42 @@ describe('CI connects panel', () => {
     if (button('Authorize GitHub')) await act(async () => button('Authorize GitHub').click())
     expect(mocks.api.startCiConnect).toHaveBeenCalledTimes(1)
     try {
-      await act(async () => window.dispatchEvent(new Event('pageshow')))
+      await act(async () => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
       expect(button('Connect GitHub').disabled).toBe(false)
     } finally {
       await act(async () => fail(Error('test completion')))
     }
+  })
+  function pendingAttempt() {
+    const id = '12345678-1234-4234-8234-123456789abc'
+    prepareCiRedirect('12345678-1234-4234-8234-123456789def', {
+      id,
+      expires_at: new Date(Date.now() + 300000).toISOString(),
+      installation_url: '',
+      authorization_url: 'https://github.com/login/oauth/authorize?state=' + id + '.' + 'A'.repeat(43),
+    })
+    return id
+  }
+  it('does not cancel an active picker on the initial pageshow event', async () => {
+    const id = pendingAttempt()
+    await render()
+    await act(async () => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false })))
+    expect(getCiConnectSession()?.attempt).toBe(id)
+    expect(mocks.api.cancelCiConnect).not.toHaveBeenCalled()
+  })
+  it('offers explicit recovery when a stale authorization cannot be cancelled', async () => {
+    pendingAttempt()
+    mocks.api.cancelCiConnect.mockRejectedValue(Error('access lost'))
+    await render()
+    await act(async () => button('Connect GitHub').click())
+    expect(mocks.api.startCiConnect).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('could not be cancelled')
+    expect(button('Discard local authorization')).toBeDefined()
+    await act(async () => button('Discard local authorization').click())
+    expect(getCiConnectSession()).toBeUndefined()
+    mocks.api.startCiConnect.mockRejectedValueOnce(Error('test stop'))
+    await act(async () => button('Connect GitHub').click())
+    expect(mocks.api.startCiConnect).toHaveBeenCalledTimes(1)
   })
   it('shows connections without capacity controls', async () => {
     await render()

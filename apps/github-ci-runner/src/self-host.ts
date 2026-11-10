@@ -12,6 +12,10 @@ import {
   ScopeApplications,
   GitHubCredential,
   GitHubExecutionBackend,
+  GitHubRepositoryScanner,
+  RepositoryScanSession,
+  ScanClaim,
+  scopeKey,
   InstallationCatalog,
   InstallationDirectory,
   DirectoryBinding,
@@ -188,6 +192,7 @@ export class SelfHost implements ListenerHost {
     } finally {
       await credential.close()
     }
+    await this.state.scans().synchronize(lease, 'personal-token', 'personal-token', scopes, signal)
     this.discoveryReady = true
     return { scopes, completed: [], ready: true, pending: false }
   }
@@ -225,6 +230,13 @@ export class SelfHost implements ListenerHost {
         payload: { accounts, applications: Object.fromEntries(originalApps) },
       },
     ])
+    await this.state.scans().reconcile(
+      lease,
+      installations.map((installation) => ({
+        application: originalApps.get(installation.id)!,
+        binding: 'installation:' + installation.id,
+      })),
+    )
     return installations.map((installation) => ({
       ...this.owner(),
       installation,
@@ -300,6 +312,7 @@ export class SelfHost implements ListenerHost {
       }).load(signal)
       await authorize()
       for (const scope of scopes) await this.scopes().define(lease, scope, client)
+      await this.state.scans().synchronize(lease, client, binding.binding, scopes, signal)
       return scopes
     } finally {
       await provider.close()
@@ -380,6 +393,86 @@ export class SelfHost implements ListenerHost {
       },
       this.config.worker.labels,
     )
+  }
+  async scan(original: ScanClaim, signal: AbortSignal): Promise<RepositoryScanSession> {
+    const claim = structuredClone(original),
+      scope = decodeScope(claim.scope),
+      auth = this.config.github
+    const app = auth.kind === 'app' ? this.applications.get(claim.application) : undefined
+    if (auth.kind === 'app' && !app) throw new Error('Original scan App unavailable')
+    if (app?.accountType && app.accountType !== scope.installation.account.type)
+      throw new Error('GitHub App account type denied')
+    const source: CredentialSource = app
+      ? {
+          kind: 'app',
+          app: app.appSource(),
+          installation: { ...scope.installation, permissions: {}, suspended: false },
+        }
+      : auth.kind === 'pat' && claim.application === 'personal-token' && scope.runners.kind === 'repository'
+        ? { kind: 'pat', repository: scope.runners.repository.id, token: auth.token }
+        : (() => {
+            throw new Error('Original scan source unavailable')
+          })()
+    const authority = async () => {
+      const owner = this.owner()
+      if (
+        scope.organization !== owner.organization ||
+        scope.actor !== owner.actor ||
+        scope.runners.allowPublic !== this.config.allowPublic
+      )
+        throw new Error('Original scan tenant authority changed')
+      const [root] = await this.state.read(['backend/github'])
+      if (!root || !object(root.payload)) throw new Error('Original scan backend unavailable')
+      const rows = [root]
+      if (auth.kind === 'app') {
+        const [current, provenance] = await this.state.read([
+          'binding/self/current',
+          'app-scope/' + scopeKey(scope).slice(6),
+        ])
+        if (
+          root.payload.kind !== 'app' ||
+          root.payload.issuer !== auth.issuer ||
+          !Array.isArray(root.payload.applications) ||
+          !root.payload.applications.includes(claim.application) ||
+          !current ||
+          !object(current.payload) ||
+          !object(current.payload.accounts) ||
+          !object(current.payload.applications) ||
+          current.payload.accounts[String(scope.installation.id)] !== scope.installation.account.id ||
+          current.payload.applications[String(scope.installation.id)] !== claim.application ||
+          !provenance ||
+          !object(provenance.payload) ||
+          provenance.payload.application !== claim.application
+        )
+          throw new Error('Original scan binding changed')
+        rows.push(current, provenance)
+      } else if (
+        root.payload.kind !== 'pat' ||
+        root.payload.owner !== auth.owner.toLowerCase() ||
+        root.payload.repository !== auth.repository.toLowerCase() ||
+        scope.runners.kind !== 'repository' ||
+        scope.runners.repository.owner.login !== auth.owner.toLowerCase() ||
+        scope.runners.repository.name !== auth.repository.toLowerCase()
+      )
+        throw new Error('Original token scan repository changed')
+      return rows.map((row) => ({ key: row.key, version: row.version }))
+    }
+    await authority()
+    return new GitHubRepositoryScanner({
+      queue: this.state.scans(),
+      claim,
+      source,
+      authorize: async (signal) => {
+        signal?.throwIfAborted()
+        await authority()
+        await this.admit(scope, app?.appSource(), signal)
+        await authority()
+      },
+      publish: async (jobs, signal) => {
+        signal.throwIfAborted()
+        await this.state.scans().publish(claim, jobs, this.config.worker.labels, await authority())
+      },
+    })
   }
   async accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
     const client =
