@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Audit } from '../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID } from '../audit/decorators/audit.decorator'
+import { Request } from 'express'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import {
@@ -17,6 +18,7 @@ import {
   Param,
   Post,
   Put,
+  Req,
   UseGuards,
   UsePipes,
   ValidationPipe,
@@ -132,11 +134,16 @@ export class BoxliteDomainController {
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
   @Audit({
-    action: AuditAction.DELETE,
+    action: AuditAction.UPDATE,
     targetType: AuditTarget.DOMAIN,
     targetIdFromRequest: (req) => req.params.domain,
   })
-  async unbind(@AuthContext() authContext: OrganizationAuthContext, @Param('domain') domain: string): Promise<void> {
-    await this.domainService.unbind(authContext.organizationId, domain)
+  async unbind(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('domain') domain: string,
+    @Req() request?: Request,
+  ): Promise<void> {
+    const hostname = await this.domainService.unbind(authContext.organizationId, domain)
+    if (request) request[AUDIT_TARGET_ID] = hostname
   }
 }

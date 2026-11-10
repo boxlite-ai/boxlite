@@ -22,6 +22,11 @@ import { DistributedLock } from '../../common/decorators/distributed-lock.decora
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 
+export interface PendingAuditLease {
+  signal: AbortSignal
+  complete(result: UpdateAuditLogInternalDto): Promise<void>
+}
+
 @Injectable()
 export class AuditService implements OnApplicationBootstrap {
   private readonly logger = new Logger(AuditService.name)
@@ -109,6 +114,77 @@ export class AuditService implements OnApplicationBootstrap {
       this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(updated)}`)
     }
     return updated
+  }
+
+  async keepPendingLogAlive(id: string): Promise<PendingAuditLease> {
+    const controller = new AbortController()
+    const renew = async (initial = false) => {
+      await this.writeWithDeadline(5000, async (repository) => {
+        const [rows] = await repository.query(
+          `UPDATE audit_log SET "leaseExpiresAt" = clock_timestamp() + interval '5 minutes'
+           WHERE id = $1 AND "statusCode" IS NULL
+           ${initial ? '' : 'AND "leaseExpiresAt" > clock_timestamp()'} RETURNING id`,
+          [id],
+        )
+        if (rows.length !== 1) throw new Error('Pending audit lease lost')
+      })
+    }
+    await renew(true)
+    let stopped = false
+    let completion: Promise<void> | undefined
+    let renewal: Promise<void> | undefined
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      timer = setTimeout(() => {
+        renewal = renew()
+          .catch((error) => {
+            stopped = true
+            // Abort listeners may call complete; never await them from this renewal.
+            controller.abort(error)
+          })
+          .finally(() => {
+            renewal = undefined
+            if (!stopped) schedule()
+          })
+      }, 60_000)
+      timer.unref()
+    }
+    schedule()
+    return {
+      signal: controller.signal,
+      complete: (result) => {
+        if (completion) return completion
+        stopped = true
+        clearTimeout(timer)
+        completion = (async () => {
+          await renewal
+          const row = await this.writeWithDeadline(5000, async (repository) => {
+            // A late response must neither replace reconciliation nor recreate a published row.
+            const [rows] = await repository.query(
+              `UPDATE audit_log SET "statusCode" = $2, "errorMessage" = $3,
+               "targetId" = COALESCE($4, "targetId"), "organizationId" = COALESCE($5, "organizationId"),
+               "leaseExpiresAt" = NULL
+               WHERE id = $1 AND "statusCode" IS NULL AND "leaseExpiresAt" > clock_timestamp()
+               RETURNING *`,
+              [
+                id,
+                result.statusCode,
+                result.errorMessage ?? null,
+                result.targetId ?? null,
+                result.organizationId ?? null,
+              ],
+            )
+            if (rows.length !== 1) throw new Error('Pending audit lease lost')
+            return rows[0]
+          })
+          if (this.configService.get('audit.consoleLogEnabled')) {
+            delete row.leaseExpiresAt
+            this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(row)}`)
+          }
+        })()
+        return completion
+      },
+    }
   }
 
   private async writeWithDeadline<T>(
@@ -246,10 +322,12 @@ export class AuditService implements OnApplicationBootstrap {
             `WITH pending AS (
           SELECT id FROM audit_log
           WHERE "statusCode" IS NULL AND "createdAt" < $1
+            AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= clock_timestamp())
           ORDER BY "createdAt" LIMIT 500 FOR UPDATE SKIP LOCKED
         ), updated AS (
           UPDATE audit_log AS log SET "statusCode" = 0
           FROM pending WHERE log.id = pending.id AND log."statusCode" IS NULL
+            AND (log."leaseExpiresAt" IS NULL OR log."leaseExpiresAt" <= clock_timestamp())
           RETURNING ${consoleEnabled ? 'log.*' : 'log.id'}
         ) SELECT * FROM updated`,
             [cutoff],

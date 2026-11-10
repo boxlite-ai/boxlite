@@ -1,7 +1,8 @@
-import { Audit } from '../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, UseGuards } from '@nestjs/common'
+import { Request } from 'express'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -39,9 +40,11 @@ export class BoxliteVolumeController {
   async create(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto?: CreateVolumeDto,
+    @Req() request?: Request,
   ): Promise<RestVolumeResponse> {
     // An absent body is an unnamed volume; VolumeService falls back to the id.
     const volume = await this.volumeService.create(authContext.organization, dto ?? {})
+    if (request) request[AUDIT_TARGET_ID] = volume.id
     return this.toResponse(await this.volumeService.waitForReady(volume.id, 30))
   }
 

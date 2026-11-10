@@ -52,6 +52,8 @@ databaseSuite('Toolbox column during rolling API deployment', () => {
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}"`)
     await db.synchronize()
+    // Model the pre-release schema rather than the current entity's lease column.
+    await db.query('ALTER TABLE audit_log DROP COLUMN "leaseExpiresAt"')
     await db.query('DROP INDEX idx_audit_log_pending_created_at')
     await db.query('CREATE TABLE region (id text PRIMARY KEY, "proxyUrl" text, "toolboxProxyUrl" character varying)')
     await db.query("INSERT INTO region VALUES ('us', 'https://proxy.test', 'https://legacy.test')")

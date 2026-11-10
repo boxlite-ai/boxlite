@@ -888,8 +888,11 @@ export class BoxService {
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+  async start(boxIdOrName: string, organization: Organization, options?: { idOnly?: boolean }): Promise<Box> {
+    const box = options?.idOnly
+      ? await this.findOne(boxIdOrName)
+      : await this.findOneByIdOrName(boxIdOrName, organization.id)
+    if (box.organizationId !== organization.id) throw new NotFoundException('Box not found')
 
     const region = await this.regionService.findOne(box.region)
     if (!region) {

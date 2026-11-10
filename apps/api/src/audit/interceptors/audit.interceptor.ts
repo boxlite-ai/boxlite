@@ -20,7 +20,7 @@ import { Request, Response } from 'express'
 import { Observable, Subscriber, firstValueFrom } from 'rxjs'
 import { AUDIT_CONTEXT_KEY, AUDIT_TARGET_ID, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
 import { AuditLog, AuditLogMetadata } from '../entities/audit-log.entity'
-import { AuditService } from '../services/audit.service'
+import { AuditService, PendingAuditLease } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
 
@@ -85,7 +85,13 @@ export class AuditInterceptor implements NestInterceptor {
 
       const completeResponse =
         auditContext.completion === 'response'
-          ? this.observeResponse(auditContext, auditLog, request, response)
+          ? this.observeResponse(
+              auditContext,
+              auditLog,
+              request,
+              response,
+              await this.auditService.keepPendingLogAlive(auditLog.id),
+            )
           : undefined
       try {
         // A client can disconnect while the initial audit insert is pending.
@@ -123,7 +129,13 @@ export class AuditInterceptor implements NestInterceptor {
     }
   }
 
-  private observeResponse(context: AuditContext, log: AuditLog, request: RequestWithUser, response: Response) {
+  private observeResponse(
+    context: AuditContext,
+    log: AuditLog,
+    request: RequestWithUser,
+    response: Response,
+    lease: PendingAuditLease,
+  ) {
     let completed = false
     const finish = () => complete(response.statusCode)
     const close = () =>
@@ -132,6 +144,10 @@ export class AuditInterceptor implements NestInterceptor {
         response.writableFinished ? undefined : 'Response closed before completion.',
       )
     const error = () => complete(0, 'Response failed before completion.')
+    const abort = () => {
+      complete(0, 'Response audit lease lost.')
+      response.destroy()
+    }
     const complete = (statusCode: number, errorMessage?: string) => {
       if (completed) return
       // Claim completion and detach before the asynchronous database write.
@@ -139,8 +155,9 @@ export class AuditInterceptor implements NestInterceptor {
       response.off('finish', finish)
       response.off('close', close)
       response.off('error', error)
-      void this.auditService
-        .updateLog(log.id, {
+      lease.signal.removeEventListener('abort', abort)
+      void lease
+        .complete({
           statusCode,
           errorMessage,
           targetId: this.resolveTargetId(context, request),
@@ -151,6 +168,8 @@ export class AuditInterceptor implements NestInterceptor {
     response.once('finish', finish)
     response.once('close', close)
     response.once('error', error)
+    lease.signal.addEventListener('abort', abort, { once: true })
+    if (lease.signal.aborted) abort()
     return complete
   }
 

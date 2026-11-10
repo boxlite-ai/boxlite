@@ -157,6 +157,7 @@ describe('UserController.create', () => {
 it('does not register the retired SMS enrollment route', () => {
   const paths = Object.getOwnPropertyNames(UserController.prototype)
     .filter((name) => name !== 'constructor')
-    .map((name) => Reflect.getMetadata(PATH_METADATA, UserController.prototype[name]))
-  expect(paths).not.toContain('/mfa/sms/enroll')
+    .flatMap((name) => Reflect.getMetadata(PATH_METADATA, UserController.prototype[name]) ?? [])
+    .map((path: string) => path.replace(/^\/+|\/+$/g, ''))
+  expect(paths).not.toContain('mfa/sms/enroll')
 })

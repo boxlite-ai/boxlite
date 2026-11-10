@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing'
 import { Reflector } from '@nestjs/core'
-import { INestApplication } from '@nestjs/common'
+import { INestApplication, RequestTimeoutException } from '@nestjs/common'
 import { AddressInfo } from 'node:net'
 import { createServer, Server, ServerResponse } from 'node:http'
 import { once } from 'node:events'
@@ -33,7 +33,7 @@ describe('audit refinement contracts', () => {
   let app: INestApplication
   let upstream: Server
   let base: string
-  let audit: { createLog: jest.Mock; updateLog: jest.Mock }
+  let audit: { createLog: jest.Mock; updateLog: jest.Mock; keepPendingLogAlive: jest.Mock }
   let volume: { delete: jest.Mock; create: jest.Mock; waitForReady: jest.Mock }
   let releaseResponse: (() => void) | undefined
   let upstreamStarted: Promise<void>
@@ -55,19 +55,24 @@ describe('audit refinement contracts', () => {
       }
     })
     await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
-    audit = { createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }), updateLog: jest.fn().mockResolvedValue({}) }
+    audit = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      updateLog: jest.fn().mockResolvedValue({}),
+      keepPendingLogAlive: jest.fn(async () => ({
+        signal: new AbortController().signal,
+        complete: (result) => audit.updateLog('audit-1', result),
+      })),
+    }
     volume = {
       delete: jest.fn().mockResolvedValue(undefined),
       create: jest.fn().mockResolvedValue({ id: 'volume-id' }),
-      waitForReady: jest
-        .fn()
-        .mockResolvedValue({
-          id: 'volume-id',
-          name: 'volume',
-          state: 'ready',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }),
+      waitForReady: jest.fn().mockResolvedValue({
+        id: 'volume-id',
+        name: 'volume',
+        state: 'ready',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
     }
     const module = await Test.createTestingModule({
       controllers: [BoxliteProxyController, BoxliteVolumeController, BoxliteDomainController, BoxliteImageController],
@@ -75,16 +80,14 @@ describe('audit refinement contracts', () => {
         {
           provide: BoxService,
           useValue: {
-            findOneByIdOrName: jest
-              .fn()
-              .mockResolvedValue({
-                id: 'box-id',
-                runnerId: 'runner',
-                autoResume: false,
-                state: 'started',
-                desiredState: 'started',
-                inboundEnabled: true,
-              }),
+            findOneByIdOrName: jest.fn().mockResolvedValue({
+              id: 'box-id',
+              runnerId: 'runner',
+              autoResume: false,
+              state: 'started',
+              desiredState: 'started',
+              inboundEnabled: true,
+            }),
             updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
             getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://tunnel.example.test'),
           },
@@ -172,6 +175,39 @@ describe('audit refinement contracts', () => {
     },
   )
 
+  it.each(['/v1/volumes', '/v1/tenant/volumes'])(
+    'keeps the created volume target on timeout through %s',
+    async (path) => {
+      volume.waitForReady.mockRejectedValue(new RequestTimeoutException('volume not ready'))
+      const res = await fetch(base + path, { method: 'POST' })
+      expect(res.status).toBe(408)
+      expect(volume.create).toHaveBeenCalledTimes(1)
+      expect(audit.updateLog).toHaveBeenCalledWith(
+        'audit-1',
+        expect.objectContaining({ targetId: 'volume-id', statusCode: 408 }),
+      )
+    },
+  )
+
+  it.each(['/v1/domains', '/v1/tenant/domains'])(
+    'audits canonical domain unbinding as an update through %s',
+    async (path) => {
+      const query = jest.fn().mockResolvedValue([[], 1])
+      const domains = app.get(DomainService)
+      Object.assign(domains, { dataSource: { query }, fullHostname: (DomainService.prototype as any).fullHostname })
+      domains.unbind = DomainService.prototype.unbind
+      const res = await fetch(base + path + '/HELLO.example.test./target', { method: 'DELETE' })
+      expect(res.status).toBe(204)
+      expect(await res.text()).toBe('')
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('UPDATE "domain"'), ['hello.example.test', 'org'])
+      expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'update', targetType: 'domain' }))
+      expect(audit.updateLog).toHaveBeenCalledWith(
+        'audit-1',
+        expect.objectContaining({ targetId: 'hello.example.test', statusCode: 204 }),
+      )
+    },
+  )
+
   it('does not perform a mutation if creating its audit fails', async () => {
     audit.createLog.mockRejectedValue(new Error('database unavailable'))
     const res = await fetch(base + '/v1/volumes/volume-id', { method: 'DELETE' })
@@ -248,6 +284,32 @@ describe('audit refinement contracts', () => {
     )
     expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain('secret-command')
     expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain('runner-secret')
+  })
+
+  it('closes the stream and completes once when its audit lease fails', async () => {
+    const lease = new AbortController()
+    const remove = jest.spyOn(lease.signal, 'removeEventListener')
+    audit.keepPendingLogAlive.mockResolvedValue({
+      signal: lease.signal,
+      complete: (result) => audit.updateLog('audit-1', result),
+    })
+    const request = fetch(base + '/v1/boxes/mybox/exec', { method: 'POST' })
+    await upstreamStarted
+    const response = await request
+    const closed = once(serverResponse, 'close')
+    lease.abort(new Error('renewal failed'))
+    await closed
+    await expect(response.text()).rejects.toThrow()
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function))
+    expect(audit.updateLog).toHaveBeenCalledTimes(1)
+    expect(audit.updateLog).toHaveBeenCalledWith('audit-1', expect.objectContaining({ statusCode: 0 }))
+  })
+
+  it('refuses forwarding if the response audit lease cannot be acquired', async () => {
+    audit.keepPendingLogAlive.mockRejectedValue(new Error('lease unavailable'))
+    const response = await fetch(base + '/v1/boxes/mybox/exec', { method: 'POST' })
+    expect(response.status).toBe(500)
+    expect(releaseResponse).toBeUndefined()
   })
 
   it('records an interrupted stream as unknown, once', async () => {

@@ -40,6 +40,9 @@ export class AuditLog {
   @Column({ nullable: true })
   statusCode?: number
 
+  @Column({ type: 'timestamptz', nullable: true, select: false })
+  leaseExpiresAt?: Date
+
   @Column({ nullable: true })
   errorMessage?: string
 

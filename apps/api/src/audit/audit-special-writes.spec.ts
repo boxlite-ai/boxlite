@@ -1,10 +1,11 @@
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common'
+import { ExecutionContext, UnauthorizedException, ValidationPipe } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { firstValueFrom, defer } from 'rxjs'
 import { SignJWT } from 'jose'
 import { AuditInterceptor } from './interceptors/audit.interceptor'
 import { BoxController } from '../box/controllers/box.controller'
 import { AttachTicketService } from '../box/services/attach-ticket.service'
+import { CreateAttachTicketDto } from '../box/dto/attach-ticket.dto'
 import { OrganizationController } from '../organization/controllers/organization.controller'
 import { AccountLinkService, ADOPT_AUDIENCE } from '../auth/account-link.service'
 import { UserController } from '../user/user.controller'
@@ -63,6 +64,24 @@ it('audits real attach ticket issuance without leaking its ticket or key hash', 
   expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain(issued.ticket)
   expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain('private-key-hash')
 })
+
+it.each([{ secret: 'private-execution-id' }, ['private-execution-id'], 123])(
+  'excludes invalid execution ID %j before request validation',
+  async (executionId) => {
+    const request = { user, body: { executionId }, params: { boxIdOrName: 'mybox' }, get: () => undefined }
+    const { audit, result } = auditCall(BoxController.prototype.createAttachTicket, request, () =>
+      new ValidationPipe({ transform: true }).transform(request.body, {
+        type: 'body',
+        metatype: CreateAttachTicketDto,
+      }),
+    )
+    await expect(result).rejects.toMatchObject({ status: 400 })
+    expect(audit.createLog).toHaveBeenCalledWith(expect.objectContaining({ metadata: { executionId: null } }))
+    expect(JSON.stringify([audit.createLog.mock.calls, audit.updateLog.mock.calls])).not.toContain(
+      'private-execution-id',
+    )
+  },
+)
 
 it('retains the resolved box ID when attach ticket persistence fails', async () => {
   const tickets = new AttachTicketService({

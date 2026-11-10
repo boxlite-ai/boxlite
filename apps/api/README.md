@@ -494,17 +494,20 @@ The portable REST aliases share auditing for volume creation/deletion, image del
 domain claim/bind/unbind, execution start/signal/termination, file upload, SSH
 configuration/enable/disable, and tunnel creation/revocation. Organization experimental
 configuration and attach-ticket issuance are audited too. Resource names resolved by
-handlers become canonical target IDs without another lookup.
+handlers become canonical target IDs without another lookup. Domain unbind records an
+update to the normalized hostname because the organization still owns the domain.
 
 `GET /api/object-storage/push-access` audits temporary storage credential issuance
 against the authenticated organization, despite using GET. Audit insertion must succeed
 before STS is called. Audit records omit returned credentials and use a fixed failure
 description without changing the API's error response.
 
-Box creation, startup and recovery retain the resolved target ID before subsequent
+Box creation, startup, recovery and volume creation retain the resolved target ID before subsequent
 conversion or waiting can fail. Failures before a Box is returned or resolved retain
 the original request identifier, or no target for creation. Recovery still returns its
 current DTO on timeout; a reported error remains a failed operation.
+Startup uses the first resolved Box ID for its mutation, with an ID-only lookup and
+organization check, so reusing the original name cannot redirect the operation.
 Leaving an organization targets that organization; linking or unlinking an account
 targets the secondary `provider|userId`. Invalid identity fields leave the target empty.
 
@@ -514,11 +517,24 @@ claimed once before persisting, and its listeners are removed. A client disconne
 while the initial insert is pending prevents forwarding once that insert returns.
 `finish` confirms server-side transmission, not client receipt.
 
-Audit metadata excludes command arguments, file contents, SSH secrets, tunnel tokens,
+Before forwarding, response-completion audits acquire a five-minute database lease,
+renewed every minute. Active uploads and streaming responses remain pending beyond
+30 minutes. A failed renewal closes the response; a crashed owner's expired lease
+allows the usual age-based reconciliation. Completion stops renewal and conditionally
+updates only the still-pending, unexpired row, so a late response cannot overwrite an
+unknown result or recreate a published record. Lease writes have five-second deadlines.
+Deploy the additive lease-column migration before the API; all reconcilers must be
+upgraded before this protection applies. Remove new API writers before rolling back
+the column.
+
+Audit metadata excludes command arguments, including the entire `cmd` and `entrypoint`
+fields on Box creation, as well as file contents, SSH secrets, tunnel tokens,
 attach tickets, and raw configuration bodies. Terminal resize, file download, metrics,
 runner/box/job callbacks, preview readiness and access exchanges, and onboarding helpers
 receive no new audit. Webhook portal access remains unchanged.
 MCP calls inherit the target REST operation's audit without a second MCP record.
+Attach-ticket metadata accepts only string execution IDs; invalid objects and arrays
+are excluded before request validation runs.
 
 WebSocket attach upgrades create a pending `attach` row after authorization and
 Box/Runner resolution, before forwarding. An insert failure refuses the connection.
@@ -554,14 +570,15 @@ timed-out callers still waiting for a pool connection. Excess writes fail immedi
 Late pool acquisitions are released without executing SQL. If pool acquisition never
 settles, those slots remain occupied; this bounds retention rather than guaranteeing
 pool recovery. Closed attach sessions remove their listeners and socket/request references
-without waiting for persistence. Ordinary HTTP auditing retains its existing behavior.
+without waiting for persistence. Handler-completion HTTP audits retain their existing
+write behavior; response-completion audits use the bounded lease writes described above.
 
 Account-link adoption audits only after signature and identity validation. It records
 the primary/secondary IDs and the local ownership migration result, without an arbitrary
 organization association. Local success does not claim that subsequent Auth0 linking
 succeeded. Retry attempts are recorded even when adoption is already complete.
 
-Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
+Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|audit-response-lease.spec|audit-response-lifetime.integration.spec|1794196800000'`;
 set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
 Run `make test:apps:api TEST_FILES='attach-audit.*spec|audit-write-deadline.*spec|audit-backfill.*spec|boxlite-ws-proxy.service.spec'`
 for real local WebSocket lifecycle and authentication tests.

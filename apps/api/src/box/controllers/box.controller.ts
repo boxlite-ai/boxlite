@@ -572,7 +572,9 @@ export class BoxController {
     action: AuditAction.ISSUE_ATTACH_TICKET,
     targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxIdOrName,
-    requestMetadata: { executionId: (req) => req.body?.executionId },
+    requestMetadata: {
+      executionId: (req) => (typeof req.body?.executionId === 'string' ? req.body.executionId : null),
+    },
   })
   async createAttachTicket(
     @AuthContext() authContext: OrganizationAuthContext,

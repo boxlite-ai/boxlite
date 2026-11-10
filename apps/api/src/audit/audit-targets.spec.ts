@@ -141,6 +141,40 @@ describe('audit targets at HTTP boundaries', () => {
     )
   })
 
+  describe.each(['/v1/boxes', '/v1/org/boxes'])('creation command privacy through %s', (path) => {
+    it.each(['success', 'timeout', 'invalid'])('omits command fields from %s audits', async (outcome) => {
+      const cmd = ['tool', '--token=private-command-marker']
+      const entrypoint = ['sh', '-c', 'private-entrypoint-marker']
+      const body = {
+        image: 'alpine:latest',
+        cmd: outcome === 'invalid' ? { value: cmd } : cmd,
+        entrypoint: outcome === 'invalid' ? { value: entrypoint } : entrypoint,
+      }
+      if (outcome === 'success') box.state = BoxState.STARTED
+      const res = await fetch(base + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      expect(res.status).toBe(outcome === 'success' ? 201 : outcome === 'timeout' ? 408 : 400)
+      expect(audit.createLog).toHaveBeenCalledTimes(1)
+      const metadata = audit.createLog.mock.calls[0][0].metadata.body
+      expect(metadata).toMatchObject({ image: body.image })
+      expect(metadata).not.toHaveProperty('cmd')
+      expect(metadata).not.toHaveProperty('entrypoint')
+      const writes = JSON.stringify([audit.createLog.mock.calls, audit.updateLog.mock.calls])
+      expect(writes).not.toContain('private-command-marker')
+      expect(writes).not.toContain('private-entrypoint-marker')
+      expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ statusCode: res.status }))
+      if (outcome === 'invalid') {
+        expect(boxes.create).not.toHaveBeenCalled()
+      } else {
+        expect(boxes.create).toHaveBeenCalledTimes(1)
+        expect(boxes.create.mock.calls[0][0]).toMatchObject({ cmd, entrypoint })
+      }
+    })
+  })
+
   it.each(['/v1/boxes', '/v1/org/boxes'])('keeps the created Box ID after a wait timeout through %s', async (path) => {
     const res = await fetch(base + path, {
       method: 'POST',
@@ -155,6 +189,38 @@ describe('audit targets at HTTP boundaries', () => {
       expect.objectContaining({ statusCode: 408, targetId: box.id }),
     )
   })
+
+  it.each(['renamed', 'removed', 'other-organization'])(
+    'binds startup to the authorized ID when the resolved Box is %s',
+    async (change) => {
+      box.organizationId = 'org'
+      const replacement = { ...box, id: 'replacement', name: box.id }
+      const updateWhere = jest.fn(async (id: string) => ({ ...box, id }))
+      const service = Object.create(BoxService.prototype) as BoxService
+      Object.assign(service, {
+        boxRepository: {
+          findOne: jest.fn(async ({ where }) => {
+            if (where.name) return replacement
+            if (where.id !== box.id || change === 'removed') return null
+            return change === 'other-organization' ? { ...box, organizationId: 'other' } : box
+          }),
+          updateWhere,
+        },
+        regionService: { findOne: async () => ({}) },
+        organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+        eventEmitter: { emit: jest.fn() },
+      })
+      boxes.start.mockImplementation((...args) => (service.start as any)(...args))
+      const res = await fetch(base + '/v1/boxes/friendly-name/start', { method: 'POST' })
+      expect(res.status).toBe(change === 'renamed' ? 408 : 404)
+      if (change === 'renamed') {
+        expect(updateWhere).toHaveBeenCalledWith(box.id, expect.anything())
+      } else {
+        expect(updateWhere).not.toHaveBeenCalled()
+      }
+      expect(audit.updateLog).toHaveBeenCalledWith('audit', expect.objectContaining({ targetId: box.id }))
+    },
+  )
 
   it.each([false, true])('keeps the resolved ID when startup fails (already starting: %s)', async (alreadyStarting) => {
     if (alreadyStarting) {

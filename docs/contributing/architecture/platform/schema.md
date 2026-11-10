@@ -345,7 +345,7 @@ because TypeORM clears its primary columns during removal.
 
 Action record inserted before a mutation, then completed with its result. A null status
 means pending; zero means unknown, including an interrupted response or a request
-unresolved after 30 minutes. Nonzero completed statuses are immutable through the
+unresolved after 30 minutes without a live response lease. Nonzero completed statuses are immutable through the
 entity subscriber. The target is a polymorphic, untyped string pair —
 deliberately not a foreign key, so an entry survives deletion of what it
 describes.
@@ -360,6 +360,7 @@ describes.
 | `targetType` | `character varying` | nullable |
 | `targetId` | `character varying` | nullable |
 | `statusCode` | `integer` | nullable |
+| `leaseExpiresAt` | `timestamptz` | nullable; internal response liveness, omitted from API DTOs |
 | `errorMessage` | `character varying` | nullable |
 | `ipAddress` | `character varying` | nullable |
 | `userAgent` | `text` | nullable |
@@ -380,6 +381,14 @@ fixed at 30 minutes before the run started and has no lower time bound, so downt
 cannot strand old pending records. Cron invocations on the same instance do not overlap.
 This dedicated SQL transition preserves final statuses without the ORM subscriber;
 ordinary per-record updates still use that subscriber.
+
+Response-completion audits acquire a five-minute lease using the database clock and
+renew it every minute. The resolver excludes live leases before its batch limit and
+rechecks expiry during the update. Null leases retain the existing age rule. Terminal
+response writes require a pending, unexpired row and clear its lease; they cannot
+overwrite an unknown result or recreate a published row. The additive lease migration
+must precede deployment. Old reconcilers ignore leases, so upgrade every reconciler
+before relying on this protection; remove new writers before dropping the column.
 
 ### `webhook_initialization`
 

@@ -63,6 +63,24 @@ databaseSuite('audit backfill on PostgreSQL', () => {
     30000,
   )
 
+  it('skips a full batch of live leases and still recovers expired and unleased rows', async () => {
+    await db.query(`INSERT INTO audit_log (id, "actorId", "actorEmail", action, "createdAt", "leaseExpiresAt")
+      SELECT md5(n::text)::uuid, 'actor', '', 'upload_files', now() - interval '2 hours',
+      now() + interval '5 minutes' FROM generate_series(1, 501) n`)
+    await db.query(`INSERT INTO audit_log (id, "actorId", "actorEmail", action, "createdAt", "leaseExpiresAt")
+      VALUES (md5('expired')::uuid, 'actor', '', 'upload_files', now() - interval '1 hour', now() - interval '1 second'),
+      (md5('unleased')::uuid, 'actor', '', 'create', now() - interval '1 hour', NULL)`)
+    await service.resolveDanglingLogs()
+    expect(
+      await db.query(
+        'SELECT "statusCode", count(*)::int AS count FROM audit_log GROUP BY "statusCode" ORDER BY "statusCode"',
+      ),
+    ).toEqual([
+      { statusCode: 0, count: 2 },
+      { statusCode: null, count: 501 },
+    ])
+  })
+
   it('preserves recent pending and finalized rows, and persists explicit unknown status', async () => {
     const repo = db.getRepository(AuditLog)
     const recent = new AuditLog({ actorId: 'actor', actorEmail: '', action: 'create' })

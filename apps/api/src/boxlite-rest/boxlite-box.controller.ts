@@ -109,8 +109,6 @@ export class BoxliteBoxController {
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,
         working_dir: req.body?.working_dir,
-        entrypoint: req.body?.entrypoint,
-        cmd: req.body?.cmd,
         detach: req.body?.detach,
         auto_stop: req.body?.auto_stop,
         auto_delete: req.body?.auto_delete,
@@ -239,7 +237,7 @@ export class BoxliteBoxController {
       return boxToBoxResponse(dto)
     }
 
-    box = await this.boxService.start(boxId, authContext.organization)
+    box = await this.boxService.start(box.id, authContext.organization, { idOnly: true })
     let dto = await this.boxService.toBoxDto(box)
     if (dto.state !== BoxState.STARTED) {
       dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)

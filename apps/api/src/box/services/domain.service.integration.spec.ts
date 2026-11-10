@@ -216,7 +216,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
       ['demo1.other.example', ORG, box.id],
     )
     await expect(service.unbind(OTHER_ORG, 'demo1.other.example')).rejects.toMatchObject({ status: 404 })
-    await expect(service.unbind(ORG, 'DEMO1.Other.Example.')).resolves.toBeUndefined()
+    await expect(service.unbind(ORG, 'DEMO1.Other.Example.')).resolves.toBe('demo1.other.example')
     expect(await heldNames(ORG)).toEqual([
       { hostname: `demo1.${APP_DOMAIN}`, box_id: box.id, port: 3000 },
       { hostname: 'demo1.other.example', box_id: null, port: null },

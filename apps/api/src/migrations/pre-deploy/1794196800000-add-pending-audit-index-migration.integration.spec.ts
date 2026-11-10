@@ -62,13 +62,42 @@ databaseSuite('audit refinement migrations', () => {
   }, 30000)
 
   it('repairs an invalid concurrent build and refuses an unrelated same-name index', async () => {
-    await db.query(
-      'CREATE INDEX idx_audit_log_pending_created_at ON audit_log ("createdAt") WHERE "statusCode" IS NULL',
-    )
-    // Catalog fault injection reproduces the state left by an interrupted concurrent build.
-    await db.query(
-      "UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'idx_audit_log_pending_created_at'::regclass",
-    )
+    const snapshot = db.createQueryRunner()
+    const builder = db.createQueryRunner()
+    let build: Promise<unknown> | undefined
+    try {
+      await snapshot.startTransaction('REPEATABLE READ')
+      await snapshot.query('SELECT * FROM audit_log')
+      const [{ pid }] = await builder.query('SELECT pg_backend_pid() AS pid')
+      await builder.query("SET statement_timeout = '10s'")
+      build = builder.query(
+        'CREATE INDEX CONCURRENTLY idx_audit_log_pending_created_at ON audit_log ("createdAt") WHERE "statusCode" IS NULL',
+      )
+      void build.catch(() => undefined)
+      const deadline = Date.now() + 5000
+      let phase: string | undefined
+      while (Date.now() < deadline) {
+        phase = (await db.query('SELECT phase FROM pg_stat_progress_create_index WHERE pid = $1', [pid]))[0]?.phase
+        if (phase === 'waiting for old snapshots') break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(phase).toBe('waiting for old snapshots')
+      await db.query('SELECT pg_cancel_backend($1)', [pid])
+      await expect(build).rejects.toMatchObject({ code: '57014' })
+    } finally {
+      if (snapshot.isTransactionActive) await snapshot.rollbackTransaction()
+      await build?.catch(() => undefined)
+      await builder.query('RESET statement_timeout')
+      await builder.release()
+      await snapshot.release()
+    }
+    expect(
+      (
+        await db.query(
+          "SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_audit_log_pending_created_at'::regclass",
+        )
+      )[0].indisvalid,
+    ).toBe(false)
     const runner = db.createQueryRunner()
     try {
       await migration.up(runner)
@@ -85,5 +114,5 @@ databaseSuite('audit refinement migrations', () => {
     } finally {
       await runner.release()
     }
-  })
+  }, 15000)
 })
