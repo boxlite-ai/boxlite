@@ -111,3 +111,9 @@ created by an earlier file entry. Its regression observed mode `0755` instead of
 `0700` before correction and passed afterward. Only directories that predate the
 archive retain their original metadata. Local green results do not establish that
 the updated cross-platform CI or patch-coverage gate has passed.
+
+The runner HTTP VM regression skips only the runtime constructor's typed
+`ErrUnsupported` verdict when the host lacks usable virtualization, matching the
+existing execution-inventory regression. Other constructor errors and every
+upload/download assertion remain failures. Hosted Go coverage jobs may therefore
+skip this VM case; the local supported-host run provides its HTTP/guest evidence.

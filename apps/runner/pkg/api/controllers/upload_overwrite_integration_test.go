@@ -6,11 +6,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	client "github.com/boxlite-ai/runner/pkg/boxlite"
@@ -24,6 +26,10 @@ func TestIntegrationUploadOverwriteHTTP(t *testing.T) {
 	_, _ = config.GetConfig()
 	runtime, err := client.NewClient(ctx, client.ClientConfig{HomeDir: t.TempDir()})
 	if err != nil {
+		var runtimeErr *sdk.Error
+		if errors.As(err, &runtimeErr) && runtimeErr.Code == sdk.ErrUnsupported {
+			t.Skipf("virtualization prerequisite unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	defer runtime.Close()
