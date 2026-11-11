@@ -1253,8 +1253,13 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
 | `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
 
-Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. The worker
-label is fixed to `boxlite-ci-runner`; existing BoxLite authentication remains on
+Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
+`boxlite` workflow label for configured defaults, or
+`boxlite-2vcpu-4gbmem-10gbdisk` to request 2 vCPU, 4 GiB RAM and 10 GiB disk.
+Organization resource ceilings and Commerce creation quota still apply at Box
+creation; labels do not grant quota. See the shared [resource-label contract](../libs/ci-listener/README.md#resource-labels)
+for bounds, conflicts and recovery. Runner-group names remain independent of labels;
+existing BoxLite authentication remains on
 connect and Box APIs. Shared scheduling state uses the existing DataSource and
 migration `1793700000000-add-ci-listener-state-migration.ts`, alongside the connect
 migration `1793664000000`.

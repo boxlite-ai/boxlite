@@ -143,7 +143,12 @@ export class GitHubExecutionBackend implements PoolBackend {
       signal,
     )
   }
-  async runners(beforeMutation: (effect: RunnerEffect) => Promise<void>, signal?: AbortSignal): Promise<RunnerSession> {
+  async runners(
+    beforeMutation: (effect: RunnerEffect) => Promise<void>,
+    signal?: AbortSignal,
+    labels: readonly string[] = this.labels,
+  ): Promise<RunnerSession> {
+    labels = [...labels]
     await this.check('cleanup', signal)
     const purpose =
       this.scope.runners.kind === 'repository'
@@ -151,7 +156,7 @@ export class GitHubExecutionBackend implements PoolBackend {
         : { kind: 'organization-runners' as const }
     const borrow = await this.credentials.open(purpose, signal)
     try {
-      const registry = new GitHubRunners(borrow.credential, this.scope.runners, this.labels, async (effect) => {
+      const registry = new GitHubRunners(borrow.credential, this.scope.runners, labels, async (effect) => {
         await this.check(effect.kind === 'register' ? 'admission' : 'cleanup', signal)
         await beforeMutation({ ...effect })
         await this.journal.check(this.lease)

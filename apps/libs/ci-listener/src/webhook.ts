@@ -2,6 +2,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { ListenerState } from './state/store'
 import { Json, StateConflict, StateCorrupt } from './state/database'
+import { parseResourceLabels } from './resource-labels'
 
 export interface WakeHint {
   installationId: number
@@ -45,8 +46,11 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
       !job.labels.every((label: unknown) => typeof label === 'string' && label.length <= 128)
     )
       throw new WebhookError(400, 'Invalid workflow job notification')
-    if (!job.labels.some((label) => typeof label === 'string' && label.toLowerCase() === 'boxlite-ci-runner'))
-      return null
+    try {
+      if (!parseResourceLabels(job.labels)) return null
+    } catch {
+      throw new WebhookError(400, 'Invalid CI resource labels')
+    }
     return {
       installationId: body.installation.id,
       accountId: repo.owner.id,

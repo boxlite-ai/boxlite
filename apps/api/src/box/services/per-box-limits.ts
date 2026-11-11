@@ -11,6 +11,9 @@ import { BadRequestException } from '@nestjs/common'
  * exceed it. Mirrors the runtime's `vm_defaults::MAX_CPUS`. */
 export const MAX_CPU_PER_BOX = 16
 
+/** A deterministic resource denial before any Box persistence. */
+export class PerBoxResourceLimitExceededError extends BadRequestException {}
+
 /** Per-box resource ceilings carried on the organization (the "security
  * option" numbers). A value <= 0 means "unset" and is not enforced. */
 export interface PerBoxLimits {
@@ -40,6 +43,6 @@ export function assertWithinPerBoxLimits(cpu: number, memoryGb: number, diskGb: 
     violations.push(`disk ${diskGb}GB exceeds the per-box limit of ${limits.maxDiskPerBox}GB`)
   }
   if (violations.length > 0) {
-    throw new BadRequestException(`Requested resources exceed per-box limits: ${violations.join('; ')}`)
+    throw new PerBoxResourceLimitExceededError(`Requested resources exceed per-box limits: ${violations.join('; ')}`)
   }
 }

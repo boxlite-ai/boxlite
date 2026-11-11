@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import type { CiCapacity } from '@/api/ci-types'
-import { AsciiButton, Panel, SegmentedBar } from '@/components/ascii'
+import { AsciiButton } from '@/components/ascii'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -18,7 +18,7 @@ import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
 
-export function CapacityBar({ capacity }: { capacity: CiCapacity }) {
+export function CapacitySummary({ capacity }: { capacity: CiCapacity }) {
   const api = useApi(),
     cache = useQueryClient()
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
@@ -62,46 +62,33 @@ export function CapacityBar({ capacity }: { capacity: CiCapacity }) {
   }
   return (
     <>
-      <Panel className={cn('mb-[14px] px-[14px] py-[12px]', atLimit && 'border-destructive')}>
-        <div className="flex flex-wrap items-center gap-4">
-          <div
-            className="flex min-w-[100px] flex-1"
-            role={limit !== null && limit > 0 ? 'meter' : undefined}
-            aria-label="CI capacity"
-            aria-valuemin={limit !== null && limit > 0 ? 0 : undefined}
-            aria-valuemax={limit !== null && limit > 0 ? limit : undefined}
-            aria-valuenow={limit !== null && limit > 0 ? Math.min(capacity.used, limit) : undefined}
-            aria-valuetext={limit !== null && limit > 0 ? `${capacity.used} of ${limit} CI slots occupied` : undefined}
-          >
-            <SegmentedBar used={capacity.used} limit={limit ?? 0} segments={Math.min(40, Math.max(1, limit ?? 20))} />
-          </div>
-          <span
-            className={cn(
-              'whitespace-nowrap font-mono text-meta tabular-nums',
-              atLimit ? 'text-destructive' : nearLimit ? 'text-yellow-600 dark:text-yellow-400' : 'text-foreground',
-            )}
-          >
-            {limit === null
-              ? `${capacity.used} in use · Unlimited`
-              : limit === 0
-                ? `${capacity.used} in use · Paused`
-                : `${capacity.used} of ${limit} slots`}
-          </span>
-          {owner && (
-            <button
-              type="button"
-              className="font-mono text-meta text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-              onClick={() => {
-                setMaximum(capacity.max_concurrent_jobs?.toString() ?? '')
-                setError('')
-                setOpen(true)
-              }}
-            >
-              Edit
-            </button>
+      <div className="flex flex-wrap items-center gap-4">
+        <span
+          className={cn(
+            'whitespace-nowrap font-mono text-meta tabular-nums',
+            atLimit ? 'text-destructive' : nearLimit ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground',
           )}
-        </div>
-      </Panel>
+        >
+          {limit === null
+            ? `CI slots ${capacity.used} / Unlimited`
+            : limit === 0
+              ? `CI slots ${capacity.used} / 0 · Paused`
+              : `CI slots ${capacity.used} / ${limit}`}
+        </span>
+        {owner && (
+          <button
+            type="button"
+            className="font-mono text-meta text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+            onClick={() => {
+              setMaximum(capacity.max_concurrent_jobs?.toString() ?? '')
+              setError('')
+              setOpen(true)
+            }}
+          >
+            Edit
+          </button>
+        )}
+      </div>
       <Dialog open={open} onOpenChange={(value) => !busy && setOpen(value)}>
         <DialogContent>
           <form

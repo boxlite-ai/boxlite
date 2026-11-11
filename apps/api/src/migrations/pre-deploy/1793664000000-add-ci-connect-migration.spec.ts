@@ -2,16 +2,23 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { AddCiConnect1793664000000 } from './1793664000000-add-ci-connect-migration'
-
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
-;(url ? describe : describe.skip)('CI connection initial schema (real Postgres)', () => {
+const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
+describeIfDatabase('CI connection initial schema (real Postgres)', () => {
   const schema = 'ci_initial_' + randomUUID().replaceAll('-', '')
   const organization = randomUUID()
   let db: DataSource
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw new Error('Disposable local database required')
-    db = await new DataSource({ type: 'postgres', url, extra: { options: `-c search_path=${schema}` } }).initialize()
+    db = await new DataSource({
+      type: 'postgres',
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
+      extra: { options: `-c search_path=${schema}` },
+    }).initialize()
     await db.query(`CREATE SCHEMA "${schema}"`)
     await db.query('CREATE TABLE organization(id uuid PRIMARY KEY)')
     await db.query('INSERT INTO organization VALUES($1)', [organization])

@@ -2,6 +2,13 @@
 
 Show CI slot occupancy beside its effective limit on Runners, and move the existing owner capacity editor out of Connects.
 
+## Presentation update
+
+Runners now follows Images’ compact inline usage summary: `CI slots used / limit`
+beside the filter. The segmented meter and enclosing panel are removed; unlimited,
+paused, quota coloring and owner editing retain their existing behavior.
+The meter-specific presentation below records the original design.
+
 ## Problem
 
 The current local CI implementation has a JIT Box inventory, but no capacity meter. Its capacity editor remains in Connects.

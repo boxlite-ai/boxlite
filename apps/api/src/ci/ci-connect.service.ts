@@ -862,7 +862,7 @@ export class CiConnectService {
         binding_id: binding.id,
         listener_status: binding.state,
         github_account: binding.account_login,
-        runs_on: 'boxlite-ci-runner',
+        runs_on: 'boxlite',
         allow_private_repositories: binding.allow_private,
       }
     }

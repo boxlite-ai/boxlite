@@ -13,12 +13,14 @@ import {
   scopeKey,
   WorkerExecutor,
   WorkerLaunch,
+  validateWorkerResources,
 } from '@boxlite-ai/ci-listener'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxService } from '../box/services/box.service'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
+import { PerBoxResourceLimitExceededError } from '../box/services/per-box-limits'
 import { RunnerService } from '../box/services/runner.service'
 import { CreateBoxDto } from '../box/dto/create-box.dto'
 import { OrganizationService } from '../organization/services/organization.service'
@@ -193,14 +195,13 @@ export class CiNativeWorkers {
       rejectUndispatchedCreate,
       create: async (input) => {
         const launch: WorkerLaunch = { ...input, entrypoint: [...input.entrypoint] }
+        try {
+          validateWorkerResources(launch)
+        } catch {
+          throw new ForbiddenException('Invalid CI worker launch')
+        }
         if (
           !launch.image ||
-          !Number.isInteger(launch.cpus) ||
-          launch.cpus < 1 ||
-          launch.cpus > 16 ||
-          !Number.isInteger(launch.memoryMiB) ||
-          launch.memoryMiB < 128 ||
-          launch.memoryMiB > 131072 ||
           !launch.entrypoint.length ||
           launch.entrypoint.some((v) => typeof v !== 'string' || v.includes('\0'))
         )
@@ -224,6 +225,7 @@ export class CiNativeWorkers {
           image: launch.image,
           cpu: launch.cpus,
           memory: launch.memoryMiB / 1024,
+          disk: launch.diskGiB ?? 10,
           user: 'runner',
           workingDir: '/home/runner',
           entrypoint: launch.entrypoint,
@@ -256,7 +258,11 @@ export class CiNativeWorkers {
         } catch (error) {
           if (error instanceof CreationAdmissionDenied && error.effect === creationEffect)
             return rejectUndispatchedCreate(launch.name, creationEffect)
-          if (!(error instanceof BoxCreationLimitExceededError) || persistenceEntered) throw error
+          if (
+            !(error instanceof BoxCreationLimitExceededError || error instanceof PerBoxResourceLimitExceededError) ||
+            persistenceEntered
+          )
+            throw error
           return rejectUndispatchedCreate(launch.name, creationEffect)
         }
         return boxToBoxResponse(created)

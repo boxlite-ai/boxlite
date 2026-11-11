@@ -98,10 +98,44 @@ the state write and preserves the cleanup debt for reconciliation.
 `GitHubJobs` verifies the original repository identity before and after reading a
 job. A job notice must match the repository, run and job IDs returned by GitHub.
 Admission also requires an unassigned queued job and a complete supported label
-set containing `boxlite-ci-runner`. Compensation scans inspect queued, running,
+set containing exactly one routing label: `boxlite` for configured defaults, or
+`boxlite-2vcpu-4gbmem-10gbdisk` for explicit resources. Compensation scans inspect queued, running,
 waiting, pending and requested workflow runs. A changing or truncated inventory,
 permission failure or API pagination cap is an error; callers retain their wake
 and retry discovery instead of acknowledging an incomplete pass.
+
+### Resource labels
+
+Both hosts share resource parsing across webhook hints, compensation, job matching,
+Box creation and JIT registration. `boxlite` uses configured CPU and memory with
+10 GiB disk. `boxlite-2vcpu-4gbmem-10gbdisk` creates **2 vCPU, 4 GiB RAM and
+10 GiB disk**; its JIT runner advertises that resource label, replacing `boxlite`.
+Other requested labels must match the worker's supported platform labels.
+
+All three custom quantities must be positive decimal integers without signs,
+fractions, exponent notation or leading zeroes. CPU is limited to 1–16 and memory
+to 1–128 GiB. Disk must convert exactly to a safe integer byte count (at most
+8,388,607 GiB); actual provisioning also remains subject to backend limits.
+Labels are case-insensitive. Duplicate routing labels, multiple resource labels,
+or `boxlite` combined with a resource label are rejected. Unsupported or invalid
+jobs cannot reserve workers through compensation or job admission; signed
+webhooks with invalid resource labels receive HTTP 400.
+
+These labels request resources, not entitlements. Hosted creation still runs
+BoxService's organization CPU, memory and disk checks and Commerce creation quota.
+Standalone sends the same quantities through its authenticated REST create API,
+which retains its backend checks. A hosted resource refusal before persistence
+records the existing confirmed-rejection fact and returns its occupied slot.
+Unknown creation outcomes retain capacity until the original Box can be reconciled.
+
+Resource specifications are not persisted in the Listener journal. A new job or
+rerun rereads its original GitHub job labels before creation. Restarting a reserved
+operation does the same; an already attempted create only recovers its original
+Box ID, never repeats POST. Pending JIT registration rereads the original job
+when needed. A single reconciliation uses the same selection for launch and JIT.
+
+Organization runner-group names are independent of workflow routing labels and
+retain their configured defaults.
 
 `GitHubRunners` registers JIT runners in a fixed repository or organization group.
 Organization admission requires a selected, non-inherited group with the exact
@@ -708,10 +742,11 @@ make build:apps:ci-listener
 make test:apps:ci-listener
 ```
 
-Run under Node 24. SQLite tests always run. To include PostgreSQL contracts, supply
-`CI_CONNECT_TEST_DATABASE_URL` pointing to a disposable local database; tests create
-and drop isolated schemas and reject remote hosts. This variable is test-only and
-is not a Listener production setting. `FILTER` selects test names as on other Make
+Run under Node 24. SQLite tests always run. PostgreSQL contracts follow other API
+tests: set `DB_HOST`, `DB_PORT` (default 5432), `DB_USERNAME`, `DB_PASSWORD` and
+`DB_DATABASE` for the existing local test database. With `DB_HOST` unset, only
+the PostgreSQL suites skip. Tests create and drop isolated schemas and reject
+remote hosts. `FILTER` selects test names as on other Make
 test targets. These checks do not establish real hosted or standalone CI acceptance.
 When changing the optional PostgreSQL environment, use `NX_SKIP_NX_CACHE=true`
 to execute the contracts rather than reuse a cached run from a different environment.

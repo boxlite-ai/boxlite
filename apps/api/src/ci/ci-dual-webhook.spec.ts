@@ -30,7 +30,7 @@ it('verifies each hosted App only on its own HTTP route and supplies trusted pro
       action: 'queued',
       installation: { id: 1 },
       repository: { id: 2, owner: { id: 3 } },
-      workflow_job: { id: 4, run_id: 5, status: 'queued', labels: ['boxlite-ci-runner'] },
+      workflow_job: { id: 4, run_id: 5, status: 'queued', labels: ['boxlite'] },
     }),
   )
   const post = (route: string, key: string) =>

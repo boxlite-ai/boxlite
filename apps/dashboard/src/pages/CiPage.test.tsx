@@ -43,6 +43,7 @@ describe('CI page', () => {
     image: 'runner:test',
     cpu: 2,
     memory: 2,
+    disk: 10,
   }
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -136,9 +137,10 @@ describe('CI page', () => {
     expect(document.querySelector('h1')?.textContent).toBe('Runners')
     expect(document.querySelector('tbody a')?.getAttribute('href')).toBe('/dashboard/boxes/runner-original')
     expect(document.querySelector('tbody')?.textContent).toContain('JIT')
+    expect(document.querySelector('tbody')?.textContent).toContain('2 vCPU · 2 GiB RAM · 10 GiB disk')
     expect(document.querySelector('tbody td svg')?.getAttribute('width')).toBe('28')
-    expect(document.querySelector('[role="meter"]')?.getAttribute('aria-valuenow')).toBe('2')
-    expect(document.body.textContent).toContain('2 of 5 slots')
+    expect(document.querySelector('[role="meter"]')).toBeNull()
+    expect(document.body.textContent).toContain('CI slots 2 / 5')
     expect(mocks.api.getCiRunners).toHaveBeenCalledWith('account-a', 1, 25)
     expect([...document.querySelectorAll('button')].some((button) => button.textContent === 'Refresh')).toBe(false)
     const tab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent === 'Connects')!
@@ -158,7 +160,7 @@ describe('CI page', () => {
     expect(document.querySelector('tbody')?.textContent).toContain('ci-jit-original')
     expect(document.body.textContent).not.toContain('Connect GitHub')
     expect(document.body.textContent).not.toContain('Edit')
-    expect(document.body.textContent).toContain('2 of 5 slots')
+    expect(document.body.textContent).toContain('CI slots 2 / 5')
     expect(mocks.api.getCiSettings).not.toHaveBeenCalled()
   })
   it('automatically retries a failed inventory request without a refresh control', async () => {
@@ -187,10 +189,10 @@ describe('CI page', () => {
     expect(mocks.events.size).toBe(0)
   })
   it.each([
-    [0, 2, '2 in use · Paused'],
-    [null, 2, '2 in use · Unlimited'],
-    [1, 2, '2 of 1 slots'],
-  ])('renders capacity limit %s without an invalid meter range', async (limit, used, label) => {
+    [0, 2, 'CI slots 2 / 0 · Paused'],
+    [null, 2, 'CI slots 2 / Unlimited'],
+    [1, 2, 'CI slots 2 / 1'],
+  ])('renders capacity limit %s as an inline summary without a meter', async (limit, used, label) => {
     mocks.api.getCiRunners.mockResolvedValue({
       items: [],
       total: 0,
@@ -200,12 +202,7 @@ describe('CI page', () => {
     })
     await render()
     expect(document.body.textContent).toContain(label)
-    const meter = document.querySelector('[role="meter"]')
-    if (limit === null || limit === 0) expect(meter).toBeNull()
-    else {
-      expect(meter?.getAttribute('aria-valuenow')).toBe('1')
-      expect(meter?.getAttribute('aria-valuetext')).toContain('2 of 1')
-    }
+    expect(document.querySelector('[role="meter"]')).toBeNull()
   })
   it('edits zero and inherited capacity from Runners and refreshes its original organization', async () => {
     await render()
@@ -259,11 +256,11 @@ describe('CI page', () => {
       .mockResolvedValueOnce({ items: [], total: 0, page: 1, totalPages: 0, capacity: { ...capacity, used: 1 } })
       .mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0, capacity: { ...capacity, used: 0 } })
     await render()
-    expect(document.body.textContent).toContain('1 of 5 slots')
+    expect(document.body.textContent).toContain('CI slots 1 / 5')
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10100))
     })
-    expect(document.body.textContent).toContain('0 of 5 slots')
+    expect(document.body.textContent).toContain('CI slots 0 / 5')
     expect(mocks.api.getCiRunners).toHaveBeenCalledTimes(2)
   }, 15000)
   it('submits capacity once and keeps a pending save scoped to its original organization', async () => {
@@ -294,7 +291,7 @@ describe('CI page', () => {
     await render()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     await act(async () => finish({ ...capacity, effective_limit: 3, max_concurrent_jobs: 3, connections: [] }))
-    expect(document.body.textContent).toContain('4 of 5 slots')
+    expect(document.body.textContent).toContain('CI slots 4 / 5')
     expect(cache.getQueryData(['ci-settings', 'account-a'])).toMatchObject({ max_concurrent_jobs: 3 })
     expect(cache.getQueryData(['ci-settings', 'account-b'])).toBeUndefined()
   })
@@ -313,7 +310,7 @@ describe('CI page', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
     expect(document.body.textContent).toContain('Page 2 of 2')
-    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter runners by name"]')!
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter runners"]')!
     const type = async (value: string) => {
       await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
@@ -326,14 +323,14 @@ describe('CI page', () => {
     await type(' Runner ')
     expect(input.value).toBe(' Runner ')
     expect(mocks.api.getCiRunners).toHaveBeenLastCalledWith('account-a', 1, 25, 'Runner')
-    expect(document.querySelector('[role="meter"]')?.getAttribute('aria-valuenow')).toBe('2')
+    expect(document.querySelector('[role="meter"]')).toBeNull()
     expect(document.body.textContent).not.toContain('No runners match')
     await act(async () => finish({ items: [], total: 0, page: 1, totalPages: 0, capacity }))
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
     expect(document.body.textContent).toContain('No runners match “Runner”')
-    expect(document.body.textContent).toContain('2 of 5 slots')
+    expect(document.body.textContent).toContain('CI slots 2 / 5')
     await type('')
     expect(document.querySelector('tbody')?.textContent).toContain('page-1')
     expect(document.body.textContent).not.toContain('No runners match')

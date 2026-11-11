@@ -40,7 +40,7 @@ describe('CI shared Listener orchestration', () => {
     delivered: ReturnType<typeof deferred>,
     abort: AbortController,
     publishScan: jest.Mock<Promise<void>, [ScanClaim, readonly WorkflowJob[]]>
-  const settings = { image: 'runner-test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] }
+  const settings = { image: 'runner-test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] }
   const notification = (job = 55, installation = 1, account = 7, repository = 21) => {
     const secret = Buffer.alloc(32, 1),
       raw = Buffer.from(
@@ -48,7 +48,7 @@ describe('CI shared Listener orchestration', () => {
           action: 'queued',
           installation: { id: installation },
           repository: { id: repository, owner: { id: account } },
-          workflow_job: { id: job, run_id: 33, status: 'queued', labels: ['boxlite-ci-runner'] },
+          workflow_job: { id: job, run_id: 33, status: 'queued', labels: ['boxlite'] },
         }),
       )
     return verifyWebhook(
@@ -119,7 +119,7 @@ describe('CI shared Listener orchestration', () => {
       job: jest.fn(async (notice) => ({
         ...notice,
         status: 'queued' as const,
-        labels: ['boxlite-ci-runner'],
+        labels: ['boxlite'],
         runner: null,
       })),
       queued: jest.fn(async () => []),
@@ -342,9 +342,7 @@ describe('CI shared Listener orchestration', () => {
   it.each([false, true])('handles a webhook that wins compensation publication; conflicting=%s', async (conflict) => {
     jest
       .mocked(backend.queued)
-      .mockResolvedValue([
-        { repository: 21, run: 33, job: 55, status: 'queued', labels: ['boxlite-ci-runner'], runner: null },
-      ])
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', labels: ['boxlite'], runner: null }])
     const publish = publishScan.getMockImplementation()!,
       reported = deferred()
     let injected = false
@@ -396,9 +394,7 @@ describe('CI shared Listener orchestration', () => {
   it('compensates a missed webhook by recording the scanned job before dispatching it', async () => {
     jest
       .mocked(backend.queued)
-      .mockResolvedValue([
-        { repository: 21, run: 33, job: 55, status: 'queued', labels: ['boxlite-ci-runner'], runner: null },
-      ])
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', labels: ['boxlite'], runner: null }])
     await runUntil(delivered.promise)
     expect((await ingressRows()).some((row) => row.key === 'notice/1/55')).toBe(true)
     expect(backend.queued).toHaveBeenCalledTimes(1)
@@ -409,7 +405,7 @@ describe('CI shared Listener orchestration', () => {
     jest.mocked(backend.job).mockImplementation(async (notice) => ({
       ...notice,
       status: 'completed',
-      labels: ['boxlite-ci-runner'],
+      labels: ['boxlite'],
       runner: null,
     }))
     const scanned = deferred()
@@ -429,7 +425,7 @@ describe('CI shared Listener orchestration', () => {
     jest.mocked(backend.job).mockImplementation(async (notice) => {
       entered.resolve()
       await resume.promise
-      return { ...notice, status: 'completed', labels: ['boxlite-ci-runner'], runner: null }
+      return { ...notice, status: 'completed', labels: ['boxlite'], runner: null }
     })
     jest.mocked(backend.queued).mockImplementation(async () => {
       scanned.resolve()
@@ -539,7 +535,8 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect((await ingressRows()).some((row) => row.key === 'notice/1/56')).toBe(true)
     expect(jest.mocked(backend.job).mock.calls.map(([notice]) => notice.job)).not.toContain(56)
-    expect(backend.job).toHaveBeenCalledTimes(2)
+    // Selection, admission and the pre-create resource reread happen once; full capacity adds no reads.
+    expect(backend.job).toHaveBeenCalledTimes(3)
     expect(backend.queued).toHaveBeenCalled()
   })
   it.each([

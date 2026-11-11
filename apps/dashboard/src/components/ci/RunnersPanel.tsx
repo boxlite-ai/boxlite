@@ -5,7 +5,7 @@ import { Link, generatePath } from 'react-router-dom'
 import { AsciiButton } from '@/components/ascii'
 import { BoxState } from '@/components/BoxTable/BoxState'
 import { BoxCube } from '@/components/BoxCube'
-import { Search } from '@/components/ui/icon'
+import { ResourceFilter } from '@/components/ResourceLayout'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -13,7 +13,7 @@ import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { timeAgo } from '@/lib/format'
 import { isTransitioning } from '@/lib/utils/box'
 import { boxCubeState } from '@/lib/box-shape'
-import { CapacityBar } from './CapacityBar'
+import { CapacitySummary } from './CapacitySummary'
 
 export function RunnersPanel() {
   const api = useApi()
@@ -52,25 +52,18 @@ export function RunnersPanel() {
   }, [runners.data, runners.isPlaceholderData, page])
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {runners.data?.capacity && <CapacityBar capacity={runners.data.capacity} />}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px]">
-          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-          <input
-            value={filter}
-            onChange={(event) => {
-              setFilter(event.target.value)
-              setPage(1)
-            }}
-            placeholder="Filter runners…"
-            aria-label="Filter runners by name"
-            maxLength={128}
-            className="w-full border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground"
-          />
-          <span className="whitespace-nowrap font-mono text-label uppercase text-muted-foreground">
-            {runners.isPending || runners.isPlaceholderData ? '…' : (runners.data?.total ?? '—')}
-          </span>
-        </div>
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter runners"
+          value={filter}
+          onChange={(value) => {
+            setFilter(value)
+            setPage(1)
+          }}
+          maxLength={128}
+          count={runners.isPending || runners.isPlaceholderData ? '…' : (runners.data?.total ?? '—')}
+        />
+        {runners.data?.capacity && <CapacitySummary capacity={runners.data.capacity} />}
       </div>
       <div className="mt-[14px] min-h-0 flex-1 overflow-auto" aria-busy={runners.isFetching}>
         <table className="w-full min-w-[720px] text-left text-body">
@@ -114,7 +107,7 @@ export function RunnersPanel() {
                   {box.image || '—'}
                 </td>
                 <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
-                  {box.cpu} vCPU · {box.memory} GiB
+                  {box.cpu} vCPU · {box.memory} GiB RAM · {box.disk} GiB disk
                 </td>
                 <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
                   {box.createdAt ? timeAgo(box.createdAt) : '—'}

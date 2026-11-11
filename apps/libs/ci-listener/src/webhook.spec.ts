@@ -15,13 +15,22 @@ const payload = () => ({
   action: 'queued',
   installation: { id: 9 },
   repository: { id: 21, owner: { id: 7 } },
-  workflow_job: { id: 55, run_id: 33, status: 'queued', labels: ['boxlite-ci-runner'], name: '中文 Unicode' },
+  workflow_job: { id: 55, run_id: 33, status: 'queued', labels: ['boxlite'], name: '中文 Unicode' },
 })
 const signed = (value: unknown = payload(), delivery: string = randomUUID(), event = 'workflow_job') => {
   const raw = Buffer.from(JSON.stringify(value, null, 2))
   return { raw, signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'), delivery, event }
 }
 describe('CI shared webhook verification', () => {
+  it('recognizes signed custom resources and rejects conflicting or invalid requests', () => {
+    const body = payload()
+    body.workflow_job.labels = ['boxlite-2vcpu-4gbmem-10gbdisk']
+    expect(verifyWebhook(signed(body), secret)?.hint.job).toEqual({ id: 55, runId: 33 })
+    for (const labels of [['boxlite', ...body.workflow_job.labels], ['boxlite-17vcpu-4gbmem-10gbdisk']]) {
+      body.workflow_job.labels = labels
+      expect(() => verifyWebhook(signed(body), secret)).toThrow('Invalid CI resource labels')
+    }
+  })
   it.each([[], ['signed body'], '{}', { length: 1 }, null])('rejects a non-Buffer request body %j', (raw) => {
     expect(() => verifyWebhook({ ...signed(), raw: raw as Buffer }, secret)).toThrow('Raw webhook body required')
   })
@@ -76,9 +85,8 @@ describe('CI shared webhook verification', () => {
     ).toThrow()
   })
 })
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
 for (const backend of ['sqlite', 'postgres'] as const) {
-  const suite = backend === 'postgres' && !url ? describe.skip : describe
+  const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
   suite(`CI shared webhook inbox ${backend}`, () => {
     let db: StateDatabase,
       sqlite: SqliteStateDatabase | undefined,
@@ -93,12 +101,16 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         sqlite = new SqliteStateDatabase(directory)
         db = sqlite
       } else {
-        if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+        if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
           throw new Error('Disposable local PostgreSQL required')
         schema = 'ci_inbox_' + randomUUID().replaceAll('-', '')
         pg = await new DataSource({
           type: 'postgres',
-          url,
+          host: process.env.DB_HOST,
+          port: Number(process.env.DB_PORT || 5432),
+          username: process.env.DB_USERNAME,
+          password: process.env.DB_PASSWORD,
+          database: process.env.DB_DATABASE,
           extra: { options: `-c search_path=${schema},public` },
         }).initialize()
         await pg.query(`CREATE SCHEMA "${schema}"`)

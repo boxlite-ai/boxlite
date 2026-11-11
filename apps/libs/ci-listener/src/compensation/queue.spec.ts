@@ -11,9 +11,8 @@ import { SqliteStateDatabase } from '../state/sqlite'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { RepositoryScanQueue } from './queue'
 
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
 for (const backend of ['sqlite', 'postgres'] as const) {
-  const suite = backend === 'postgres' && !url ? describe.skip : describe
+  const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
   suite(`CI repository compensation queue ${backend}`, () => {
     let directory: string, schema: string, namespace: string, local: SqliteStateDatabase | undefined
     let connections: DataSource[], database: StateDatabase, state: ListenerState, main: ExecutionLease
@@ -63,14 +62,18 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         database = clock(local)
         other = database
       } else {
-        if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+        if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
           throw new Error('Disposable local PostgreSQL required')
         schema = 'ci_scans_' + randomUUID().replaceAll('-', '')
         for (let i = 0; i < 2; i++)
           connections.push(
             await new DataSource({
               type: 'postgres',
-              url,
+              host: process.env.DB_HOST,
+              port: Number(process.env.DB_PORT || 5432),
+              username: process.env.DB_USERNAME,
+              password: process.env.DB_PASSWORD,
+              database: process.env.DB_DATABASE,
               extra: { options: `-c search_path=${schema},public` },
             }).initialize(),
           )
@@ -100,7 +103,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       run,
       job: 55,
       status: 'queued' as const,
-      labels: ['boxlite-ci-runner'],
+      labels: ['boxlite'],
       runner: null,
     })
     const owner = async () => {
@@ -113,9 +116,25 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await sync()
       expect(await state.acquire('another-scheduler', 300000)).toBeUndefined()
       const claim = await owner()
-      await second.publish(claim, [job()], ['boxlite-ci-runner'])
+      await second.publish(claim, [job()], ['boxlite'])
       expect((await state.read(['notice/1/55']))[0].payload).toMatchObject({ repositoryId: 21 })
       expect(await state.read(['usage/global'])).toEqual([])
+    })
+    it('publishes custom resource demand while skipping invalid and conflicting labels', async () => {
+      await sync()
+      const claim = await owner()
+      const labels = ['boxlite-2vcpu-4gbmem-10gbdisk']
+      await queue.publish(
+        claim,
+        [
+          { ...job(), labels },
+          { ...job(), job: 56, labels: ['boxlite-17vcpu-4gbmem-10gbdisk'] },
+          { ...job(), job: 57, labels: ['boxlite', ...labels] },
+        ],
+        ['boxlite'],
+      )
+      expect((await state.read(['notice/1/55']))[0].payload).toMatchObject({ job: { id: 55 } })
+      expect(await state.read(['notice/1/56', 'notice/1/57'])).toEqual([])
     })
     it('stores one immutable scope definition rather than copying its repository list into every task', async () => {
       await sync(
@@ -212,11 +231,11 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await sync()
       const old = await owner()
       now += 60001
-      await expect(queue.publish(old, [job()], ['boxlite-ci-runner'])).rejects.toBeInstanceOf(LeaseLost)
+      await expect(queue.publish(old, [job()], ['boxlite'])).rejects.toBeInstanceOf(LeaseLost)
       const next = await second.claim('replacement')
       expect(next?.epoch).toBe(old.epoch + 1)
       await expect(queue.finish(old, { success: true, intervalMs: 300000 })).rejects.toBeInstanceOf(LeaseLost)
-      await second.publish(next!, [job()], ['boxlite-ci-runner'])
+      await second.publish(next!, [job()], ['boxlite'])
     })
     it('rejects results after a binding snapshot changes or is removed', async () => {
       await sync()
@@ -224,7 +243,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const changed = scope()
       changed.generation++
       await sync(changed)
-      await expect(queue.publish(old, [job()], ['boxlite-ci-runner'])).rejects.toBeInstanceOf(LeaseLost)
+      await expect(queue.publish(old, [job()], ['boxlite'])).rejects.toBeInstanceOf(LeaseLost)
       await queue.reconcile(main, [])
       expect(await second.claim('other')).toBeUndefined()
       expect(await state.read(['notice/1/55'])).toEqual([])
@@ -240,8 +259,8 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await sync(scope(1, [21, 22]))
       const claim = await owner()
       const candidate = job(claim.repository)
-      await queue.publish(claim, [candidate], ['boxlite-ci-runner'])
-      await queue.publish(claim, [candidate], ['boxlite-ci-runner'])
+      await queue.publish(claim, [candidate], ['boxlite'])
+      await queue.publish(claim, [candidate], ['boxlite'])
       const [prior] = await state.read(['notice/1/55'])
       await state.ingest([
         {
@@ -255,7 +274,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           },
         },
       ])
-      await expect(queue.publish(claim, [candidate], ['boxlite-ci-runner'])).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(queue.publish(claim, [candidate], ['boxlite'])).rejects.toBeInstanceOf(StateCorrupt)
     })
     it('shares installation backoff while another installation proceeds', async () => {
       await sync(scope(1, [21, 22]))

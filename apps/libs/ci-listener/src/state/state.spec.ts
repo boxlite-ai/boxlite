@@ -9,9 +9,8 @@ import { ExecutionLease, ListenerState } from './store'
 import { PostgresStateDatabase, postgresStateTable } from './postgres'
 import { SqliteStateDatabase } from './sqlite'
 
-const databaseUrl = process.env.CI_CONNECT_TEST_DATABASE_URL
 for (const backend of ['sqlite', 'postgres'] as const) {
-  const suite = backend === 'postgres' && !databaseUrl ? describe.skip : describe
+  const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
   suite(`CI shared state ${backend}`, () => {
     let database: StateDatabase, state: ListenerState, namespace: string
     let local: SqliteStateDatabase | undefined, pg: DataSource | undefined
@@ -23,12 +22,16 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         local = new SqliteStateDatabase(directory)
         database = local
       } else {
-        if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(databaseUrl!).hostname))
+        if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
           throw new Error('Disposable local PostgreSQL required')
         schema = 'ci_core_' + randomUUID().replaceAll('-', '')
         pg = await new DataSource({
           type: 'postgres',
-          url: databaseUrl,
+          host: process.env.DB_HOST,
+          port: Number(process.env.DB_PORT || 5432),
+          username: process.env.DB_USERNAME,
+          password: process.env.DB_PASSWORD,
+          database: process.env.DB_DATABASE,
           extra: { options: `-c search_path=${schema},public` },
         }).initialize()
         await pg.query(`CREATE SCHEMA "${schema}"`)
@@ -55,9 +58,11 @@ for (const backend of ['sqlite', 'postgres'] as const) {
     it('quota fence permits a matching version without modifying the policy', async () => {
       const lease = await owner()
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant', expected: null, payload: { limit: 2 } }])
-      await state.commit(lease, [{ key: 'worker/guarded', expected: null, payload: { admitted: true } }], [
-        { key: policy.key, version: policy.version },
-      ])
+      await state.commit(
+        lease,
+        [{ key: 'worker/guarded', expected: null, payload: { admitted: true } }],
+        [{ key: policy.key, version: policy.version }],
+      )
       expect(await state.read([policy.key])).toEqual([policy])
       expect((await state.read(['worker/guarded']))[0].payload).toEqual({ admitted: true })
     })
@@ -66,18 +71,22 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant', expected: null, payload: { limit: 2 } }])
       await state.commit(lease, [{ key: policy.key, expected: policy.version, payload: { limit: 0 } }])
       await expect(
-        state.commit(lease, [{ key: 'worker/stale-policy', expected: null, payload: {} }], [
-          { key: policy.key, version: policy.version },
-        ]),
+        state.commit(
+          lease,
+          [{ key: 'worker/stale-policy', expected: null, payload: {} }],
+          [{ key: policy.key, version: policy.version }],
+        ),
       ).rejects.toBeInstanceOf(StateConflict)
       expect(await state.read(['worker/stale-policy'])).toEqual([])
     })
     it('quota fence rejects a missing permanent policy instead of admitting', async () => {
       const lease = await owner()
       await expect(
-        state.commit(lease, [{ key: 'worker/missing-policy', expected: null, payload: {} }], [
-          { key: 'quota/missing', version: randomUUID() },
-        ]),
+        state.commit(
+          lease,
+          [{ key: 'worker/missing-policy', expected: null, payload: {} }],
+          [{ key: 'quota/missing', version: randomUUID() }],
+        ),
       ).rejects.toBeInstanceOf(StateCorrupt)
       expect(await state.read(['worker/missing-policy'])).toEqual([])
     })

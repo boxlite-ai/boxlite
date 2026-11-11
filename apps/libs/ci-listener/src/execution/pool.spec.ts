@@ -34,7 +34,7 @@ describe('CI shared worker lifecycle', () => {
     image: 'official-runner-test',
     cpus: 2,
     memoryMiB: 2048,
-    labels: ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
+    labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
   }
   let directory: string,
     db: SqliteStateDatabase,
@@ -83,7 +83,7 @@ describe('CI shared worker lifecycle', () => {
       job: jest.fn(async (notice) => ({
         ...notice,
         status: 'queued' as const,
-        labels: ['boxlite-ci-runner'],
+        labels: ['boxlite'],
         runner: null,
       })),
       workers: {
@@ -161,6 +161,82 @@ describe('CI shared worker lifecycle', () => {
     await reconcile()
     await reconcile()
   }
+  const customJob = (labels = ['boxlite-2vcpu-4gbmem-10gbdisk']) => {
+    jest
+      .mocked(backend.job)
+      .mockImplementation(async (notice) => ({ ...notice, status: 'queued', labels, runner: null }))
+  }
+  it('uses the original job resource selection for both launch and registration', async () => {
+    customJob()
+    await tick()
+    expect(backend.workers.create).toHaveBeenCalledWith(
+      expect.objectContaining({ cpus: 2, memoryMiB: 4096, diskGiB: 10 }),
+    )
+    expect(backend.runners).toHaveBeenLastCalledWith(expect.any(Function), undefined, [
+      'self-hosted',
+      'linux',
+      'x64',
+      'boxlite-2vcpu-4gbmem-10gbdisk',
+    ])
+    expect((await allocation()).value.delivery).toBe('done')
+  })
+  it.each([
+    ['boxlite-0vcpu-4gbmem-10gbdisk'],
+    ['boxlite-17vcpu-4gbmem-10gbdisk'],
+    ['boxlite-2vcpu-Infinitygbmem-10gbdisk'],
+    ['boxlite', 'boxlite-2vcpu-4gbmem-10gbdisk'],
+    ['boxlite-2vcpu-4gbmem-10gbdisk', 'macOS'],
+  ])('rejects unsupported resources before reservation: %j', (...labels) => {
+    return (async () => {
+      customJob(labels)
+      await tick()
+      expect((await rows()).allocations.size).toBe(0)
+      expect(backend.workers.create).not.toHaveBeenCalled()
+      expect(backend.runners).not.toHaveBeenCalled()
+    })()
+  })
+  it('rereads resources from a reserved job after restart without persisting resource fields', async () => {
+    const reserved = await journal.reserve(lease, key, demand, limits)
+    expect(Object.keys(reserved!.value)).not.toContain('resources')
+    customJob(['boxlite-4vcpu-8gbmem-20gbdisk'])
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    await reconcile()
+    expect(backend.job).toHaveBeenCalledWith(demand, undefined)
+    expect(backend.workers.create).toHaveBeenCalledWith(
+      expect.objectContaining({ cpus: 4, memoryMiB: 8192, diskGiB: 20 }),
+    )
+    expect(backend.runners).toHaveBeenLastCalledWith(expect.any(Function), undefined, [
+      'self-hosted',
+      'linux',
+      'x64',
+      'boxlite-4vcpu-8gbmem-20gbdisk',
+    ])
+  })
+  it('recovers an uncertain original create before a failing job reread without repeating create', async () => {
+    customJob()
+    loseBox = true
+    await expect(tick()).rejects.toThrow('lost Box response')
+    const original = boxes.values().next().value!.box_id
+    jest.mocked(backend.job).mockRejectedValue(new Error('GitHub temporarily unavailable'))
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    await expect(reconcile()).rejects.toThrow('GitHub temporarily unavailable')
+    expect((await allocation()).value.box).toEqual({ phase: 'known', id: original })
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    customJob()
+    await reconcile()
+    expect((await allocation()).value.delivery).toBe('done')
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+  })
+  it('reparses a new job after the previous worker releases capacity', async () => {
+    customJob()
+    await tick()
+    await finishBox()
+    customJob(['boxlite-1vcpu-1gbmem-1gbdisk'])
+    await tick({ ...demand, job: 56 })
+    expect(backend.workers.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cpus: 1, memoryMiB: 1024, diskGiB: 1 }),
+    )
+  })
   it('journals effects, delivers once, then returns quota only after both original resources are absent', async () => {
     await tick()
     const active = await allocation(),
@@ -480,7 +556,7 @@ describe('CI shared worker lifecycle', () => {
     jest.mocked(backend.job).mockImplementation(async (notice) => ({
       ...notice,
       status: 'completed',
-      labels: ['boxlite-ci-runner'],
+      labels: ['boxlite'],
       runner: 42,
     }))
     await tick()
@@ -504,7 +580,7 @@ describe('CI shared worker lifecycle', () => {
     jest.mocked(backend.job).mockImplementation(async (notice) => ({
       ...notice,
       status: 'queued',
-      labels: ['boxlite-ci-runner', 'macOS'],
+      labels: ['boxlite', 'macOS'],
       runner: null,
     }))
     await tick()

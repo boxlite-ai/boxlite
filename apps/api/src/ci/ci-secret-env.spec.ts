@@ -96,7 +96,7 @@ describe('CI runtime secret ENV configuration', () => {
         action: 'queued',
         installation: { id: 123 },
         repository: { id: 7, owner: { id: 456 } },
-        workflow_job: { id: 8, run_id: 9, status: 'queued', labels: ['boxlite-ci-runner'] },
+        workflow_job: { id: 8, run_id: 9, status: 'queued', labels: ['boxlite'] },
       }),
     )
     const signature = 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex')

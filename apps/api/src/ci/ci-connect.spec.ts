@@ -15,8 +15,7 @@ import { AddCiWebTarget1794000000000 } from '../migrations/pre-deploy/1794000000
 import { AddCiAccountSelection1793894400000 } from '../migrations/pre-deploy/1793894400000-add-ci-account-selection-migration'
 import { Listener, ListenerInbox } from '@boxlite-ai/ci-listener'
 
-const databaseUrl = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = databaseUrl ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI connect persistence (real Postgres)', () => {
   const schema = `ci_${randomUUID().replaceAll('-', '')}`
   const org = randomUUID(),
@@ -56,15 +55,26 @@ integration('CI connect persistence (real Postgres)', () => {
     verifyUserInstallation: jest.fn(),
   }
   beforeAll(async () => {
-    const url = new URL(databaseUrl!)
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw new Error('Disposable local database required')
-    const setup = await new DataSource({ type: 'postgres', url: databaseUrl, entities: [] }).initialize()
+    const setup = await new DataSource({
+      type: 'postgres',
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
+      entities: [],
+    }).initialize()
     await setup.query(`CREATE SCHEMA "${schema}"`)
     await setup.destroy()
     db = await new DataSource({
       type: 'postgres',
-      url: databaseUrl,
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       entities: [],
       extra: { options: `-c search_path=${schema}` },
     }).initialize()
@@ -594,7 +604,7 @@ integration('CI connect persistence (real Postgres)', () => {
     const controller = new Listener({
       state: native.state,
       host,
-      worker: { image: 'runner:test', cpus: 1, memoryMiB: 512, labels: ['boxlite-ci-runner'] },
+      worker: { image: 'runner:test', cpus: 1, memoryMiB: 512, labels: ['boxlite'] },
       capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
       timing: { tickMs: 10, leaseMs: 5000, discoveryMs: 60000 },
     })

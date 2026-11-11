@@ -3,16 +3,23 @@ import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { AddCiListenerState1793700000000 } from './1793700000000-add-ci-listener-state-migration'
 
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = url ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI state rollback protection (real Postgres)', () => {
   const schema = 'ci_rollback_' + randomUUID().replaceAll('-', '')
   const migration = new AddCiListenerState1793700000000()
   let db: DataSource
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw new Error('Disposable local database required')
-    db = await new DataSource({ type: 'postgres', url, extra: { options: `-c search_path=${schema}` } }).initialize()
+    db = await new DataSource({
+      type: 'postgres',
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
+      extra: { options: `-c search_path=${schema}` },
+    }).initialize()
     await db.query(`CREATE SCHEMA "${schema}"`)
   })
   beforeEach(async () => {

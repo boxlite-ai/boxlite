@@ -13,6 +13,7 @@ import {
   WorkerLaunch,
   WorkerState,
   scopeKey,
+  validateWorkerResources,
 } from '@boxlite-ai/ci-listener'
 import { BoxLiteHttp, BoxLiteRequestError } from './boxlite-http'
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -148,6 +149,7 @@ export class BoxLiteWorkers {
     return {
       create: async (launch: WorkerLaunch) => {
         launch = { ...launch, entrypoint: [...launch.entrypoint] }
+        validateWorkerResources(launch)
         const row = await admission(launch.name)
         if (row.value.box.phase !== 'requested' || row.value.effect?.kind !== 'box-create')
           throw new Error('Box create intent missing')
@@ -157,6 +159,7 @@ export class BoxLiteWorkers {
             image: launch.image,
             cpus: launch.cpus,
             memory_mib: launch.memoryMiB,
+            disk_size_gb: launch.diskGiB ?? 10,
             user: 'runner',
             working_dir: '/home/runner',
             entrypoint: launch.entrypoint,

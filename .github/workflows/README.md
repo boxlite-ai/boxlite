@@ -156,7 +156,8 @@ rejects as a missing report rather than as low coverage. Specs choose their own
 environment with a `// @vitest-environment jsdom` pragma.
 
 `API Tests` also runs the shared CI Listener and standalone host suites, using
-the job's disposable PostgreSQL service through `CI_CONNECT_TEST_DATABASE_URL`.
+the job's disposable PostgreSQL service through the same `DB_HOST`, `DB_PORT`,
+`DB_USERNAME`, `DB_PASSWORD` and `DB_DATABASE` settings as other API tests.
 Changes to either CI project select this job on drafts and ready PRs. Their
 LCOV reports are uploaded with the API report under the `api` flag; local checks
 use `make coverage:ci-listener` and `make coverage:github-ci-runner`. Leaving the
