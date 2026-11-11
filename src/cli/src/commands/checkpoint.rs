@@ -20,6 +20,8 @@ pub struct CheckpointArgs {
 pub enum CheckpointCommand {
     /// Capture a box's disk and execution configuration.
     Create(CaptureArgs),
+    /// Import a managed checkpoint through REST.
+    Import(ImportArgs),
     /// List checkpoints independently of source boxes.
     #[command(visible_alias = "ls")]
     List(ListArgs),
@@ -36,6 +38,16 @@ pub struct CaptureArgs {
     pub source: String,
     #[arg(long)]
     pub name: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ImportArgs {
+    pub checkpoint: String,
+    #[arg(long, conflicts_with = "box_id")]
+    pub name: Option<String>,
+    /// Existing idle Box to replace; mutually exclusive with --name.
+    #[arg(long = "box")]
+    pub box_id: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -78,6 +90,12 @@ pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
         CheckpointCommand::Create(args) => {
             let info = checkpoints.create(&args.source, args.name).await?;
             println!("{}", info.id);
+        }
+        CheckpointCommand::Import(args) => {
+            let target = checkpoints
+                .import_box(&args.checkpoint, args.name, args.box_id.as_deref())
+                .await?;
+            println!("{}", target.id());
         }
         CheckpointCommand::List(args) => {
             let format = OutputFormat::from_str(&args.format)?;

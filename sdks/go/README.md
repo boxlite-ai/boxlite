@@ -18,6 +18,11 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ### Managed checkpoints
 
+Checkpoint import belongs to the checkpoint handle, separate from archive import.
+The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
+checkpoint import requests through REST. The runtime facade owns the shared
+checkpoint backend; native archive import and provision remain unchanged.
+
 The source must be stopped before `Create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 

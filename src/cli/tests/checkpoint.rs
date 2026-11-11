@@ -185,17 +185,17 @@ async fn checkpoint_import_inherits_config_and_replacement_keeps_the_public_box_
     let home = TempDir::new().unwrap();
     let server = Server::start(|_| (StatusCode::OK, box_info())).await;
     cli(&home, &server)
-        .args(["import", "--checkpoint", "checkpoint-1", "--name", "worker"])
+        .args(["checkpoint", "import", "checkpoint-1", "--name", "worker"])
         .assert()
         .success()
         .stdout("cloudBox1234\n");
     cli(&home, &server)
         .args([
+            "checkpoint",
             "import",
+            "checkpoint-1",
             "--box",
             "cloudBox1234",
-            "--checkpoint",
-            "checkpoint-1",
         ])
         .assert()
         .success()
@@ -305,7 +305,7 @@ async fn checkpoint_creation_refuses_execution_overrides_before_sending_requests
     ] {
         let mut command = cli(&home, &server);
         command
-            .args(["import", "--checkpoint", "checkpoint-1"])
+            .args(["checkpoint", "import", "checkpoint-1"])
             .args(flags)
             .assert()
             .failure()
@@ -393,8 +393,8 @@ fn checkpoint_commands_require_a_rest_context_without_initializing_a_local_runti
     for args in [
         vec!["checkpoint", "list"],
         vec!["checkpoint", "create", "source"],
-        vec!["import", "--checkpoint", "base", "--name", "worker"],
-        vec!["import", "--checkpoint", "base", "--box", "target"],
+        vec!["checkpoint", "import", "base", "--name", "worker"],
+        vec!["checkpoint", "import", "base", "--box", "target"],
     ] {
         Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
             .env("BOXLITE_HOME", home.path())
@@ -413,4 +413,20 @@ fn checkpoint_commands_require_a_rest_context_without_initializing_a_local_runti
     }
     assert!(!home.path().join("checkpoints").exists());
     assert!(!home.path().join("boxes").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_flags_are_rejected_by_ordinary_archive_import() {
+    let home = TempDir::new().unwrap();
+    let server =
+        Server::start(|_| panic!("archive import must reject checkpoint flags before HTTP")).await;
+    for flags in [["--checkpoint", "base"], ["--box", "target"]] {
+        cli(&home, &server)
+            .args(["import", "saved.boxlite"])
+            .args(flags)
+            .assert()
+            .failure()
+            .stderr(contains("unexpected argument"));
+    }
+    assert!(server.requests.lock().unwrap().is_empty());
 }

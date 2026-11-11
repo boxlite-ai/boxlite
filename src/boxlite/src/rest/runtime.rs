@@ -111,35 +111,29 @@ impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
         }
     }
 
-    async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox> {
+    async fn import_box(
+        &self,
+        key: &str,
+        name: Option<String>,
+        box_id: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
         #[derive(serde::Serialize)]
-        struct Create<'a> {
+        struct Import<'a> {
             checkpoint_id: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
             name: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            box_id: Option<&'a str>,
         }
         let response: BoxResponse = self
             .client
             .post(
                 "/boxes/import",
-                &Create {
+                &Import {
                     checkpoint_id: key,
                     name,
+                    box_id,
                 },
-            )
-            .await?;
-        Ok(litebox_from_rest(Arc::new(RestBox::new(
-            self.client.clone(),
-            response.to_box_info()?,
-        ))))
-    }
-
-    async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox> {
-        let response: BoxResponse = self
-            .client
-            .post(
-                "/boxes/import",
-                &serde_json::json!({"checkpoint_id": key, "box_id": target}),
             )
             .await?;
         Ok(litebox_from_rest(Arc::new(RestBox::new(

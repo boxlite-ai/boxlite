@@ -310,6 +310,7 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         "checkpoint",
         &[
             box_command_scope("create", &[]),
+            box_command_scope("import", &[]),
             box_command_scope("list", &[]),
             box_command_scope("get", &[]),
             box_command_scope("delete", &[]),
@@ -757,7 +758,7 @@ pub enum Commands {
     Create(crate::commands::create::CreateArgs),
     /// Manage disk checkpoints on the selected REST server.
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
-    /// Import an archive or checkpoint; optionally replace an existing box.
+    /// Import a .boxlite archive into a new box.
     Import(crate::commands::import::ImportArgs),
 
     /// List boxes

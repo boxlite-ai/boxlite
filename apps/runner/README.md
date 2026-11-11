@@ -703,7 +703,9 @@ the large archive while retaining a small record that prevents a late export
 job from capturing the changed source again. These rules apply to checkpoint
 jobs; the migration job sequence keeps its existing export/upload contract.
 
-Checkpoint downloads use a private directory per import attempt, including
+Checkpoint downloads stay under the fixed
+`<BOXLITE_HOME_DIR>/work/checkpoints/<checkpoint-id>/` root, in a private
+`.download-<import-job-id>-*` directory per import attempt, including
 duplicate deliveries of the same job. Transfer failures, unexpected lengths,
 SHA-256 mismatches and link destinations are rejected and staging is removed.
 Runner owns these cloud metadata checks and the pinned-image/platform-identity
