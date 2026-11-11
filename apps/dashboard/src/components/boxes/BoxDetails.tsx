@@ -125,8 +125,6 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
       )
     : undefined
   const mountedVolumes = useMemo(() => {
-    // TODO(boxlite-ai/boxlite#2541): filestore mounts carry `filestore.instance`
-    // instead of `volumeId` and render blank here.
     const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
     return mounts.map((mount) => {
       const match = allVolumes.find((v) => v.id === mount.volumeId || v.name === mount.volumeId)

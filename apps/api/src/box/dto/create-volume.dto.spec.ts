@@ -31,3 +31,28 @@ describe('CreateVolumeDto name', () => {
     expect(await errorsFor({ name: 'a' })).toContain('matches')
   })
 })
+
+// The instance name becomes a component of the runner's host mount path
+// (/mnt/boxlite-filestore-<name>), so the grammar must keep out path
+// separators and relative components — the same shape the runner registry
+// accepts, and free of characters a `-v` source could never address.
+describe('CreateVolumeDto filestore instance', () => {
+  async function errorsFor(payload: Record<string, unknown>) {
+    return JSON.stringify(await validate(plainToInstance(CreateVolumeDto, payload)))
+  }
+
+  it('accepts an absent instance (object-storage kind)', async () => {
+    expect(await validate(plainToInstance(CreateVolumeDto, {}))).toHaveLength(0)
+  })
+
+  it('accepts names matching the runner registry grammar', async () => {
+    for (const instance of ['ml-scratch', 'a', 'vol-1']) {
+      expect(await validate(plainToInstance(CreateVolumeDto, { instance }))).toHaveLength(0)
+    }
+  })
+
+  it.each(['ML', '-x', 'a/b', 'a:b', ''])('rejects an instance name outside the registry grammar (%s)', async (instance) => {
+    expect(await errorsFor({ instance })).toContain('matches')
+  })
+
+})

@@ -64,7 +64,13 @@ export class VolumeService {
     createVolumeDto: CreateVolumeDto,
     volumeId: string,
   ): Promise<Volume> {
-    if (!isVolumeStorageConfigured(this.configService)) {
+    const isFilestore = Boolean(createVolumeDto.instance)
+
+    // Only the object-storage kind needs the API's own bucket backend. A
+    // filestore volume's storage is an NFS data directory the runner creates
+    // lazily at first mount, so an API without object storage configured can
+    // still serve filestore volumes — an org can run on filestore volumes alone.
+    if (!isFilestore && !isVolumeStorageConfigured(this.configService)) {
       throw new ServiceUnavailableException('Object storage is not configured')
     }
 
@@ -92,7 +98,13 @@ export class VolumeService {
     }
 
     volume.organizationId = organization.id
-    volume.state = VolumeState.PENDING_CREATE
+    volume.instance = createVolumeDto.instance
+
+    // Filestore volumes have no API-side provisioning step: the data
+    // directory on the NFS instance is created by the runner lazily at first
+    // mount, so the volume is READY the moment the row exists. Object-storage
+    // volumes keep the async PENDING_CREATE path the bucket store walks.
+    volume.state = isFilestore ? VolumeState.READY : VolumeState.PENDING_CREATE
 
     const savedVolume = await this.volumeRepository.save(volume)
     this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
@@ -177,6 +189,19 @@ export class VolumeService {
       )
     }
 
+    // A filestore volume has no API-managed storage to tear down: the NFS data
+    // directory is left in place for ops cleanup, so there is nothing for the
+    // async state machine to do. Tombstone the row directly — and without the
+    // state machine, because the volume manager is dormant on APIs without
+    // object storage configured, which is exactly where filestore-only orgs
+    // live. Object-storage volumes keep the PENDING_DELETE path below.
+    if (volume.instance) {
+      volume.state = VolumeState.DELETED
+      await this.volumeRepository.save(volume)
+      this.logger.debug(`Marked filestore volume ${volumeId} deleted`)
+      return
+    }
+
     // Update state to mark as deleting
     volume.state = VolumeState.PENDING_DELETE
     await this.volumeRepository.save(volume)
@@ -214,14 +239,16 @@ export class VolumeService {
   /**
    * Resolve each selector to the volume it names, or throw.
    *
-   * Returns a selector -> canonical id map rather than void: a selector may be
+   * Returns a selector -> Volume entity map rather than void: a selector may be
    * a *name*, and a name is only unique within an organization. Everything
    * downstream - the persisted box, the runner dispatch, the derived bucket
    * `boxlite-volume-<id>` - treats the stored value as a globally canonical id.
    * Persisting the caller's selector instead would let one tenant name a volume
-   * after another tenant's id and have the runner resolve it there.
+   * after another tenant's id and have the runner resolve it there. Callers that
+   * need only the id derive it from the entity; the entity also carries the
+   * filestore instance a box's mount dispatch must hand the runner.
    */
-  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Map<string, string>> {
+  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Map<string, Volume>> {
     if (!volumeIdOrNames.length) {
       return new Map()
     }
@@ -265,7 +292,7 @@ export class VolumeService {
       }
     }
 
-    return new Map(Array.from(selected, ([selector, volume]) => [selector, volume.id]))
+    return selected
   }
 
   async getOrganizationId(params: { id: string } | { name: string; organizationId: string }): Promise<string> {
@@ -299,13 +326,7 @@ export class VolumeService {
     }
 
     try {
-      // Filestore volumes carry an instance name, not a volumeId; they have
-      // no volume row here to timestamp, so only managed volumes are sent to
-      // the id lookup (an undefined in the In() list would break the query).
-      const volumeIds = event.box.volumes.filter((vol) => vol.volumeId).map((vol) => vol.volumeId)
-      if (!volumeIds.length) {
-        return
-      }
+      const volumeIds = event.box.volumes.map((vol) => vol.volumeId)
       const volumes = await this.volumeRepository.find({ where: { id: In(volumeIds) } })
 
       const results = await Promise.allSettled(

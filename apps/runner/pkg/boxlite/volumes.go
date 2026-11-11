@@ -139,15 +139,10 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 	// Per-call dedup so two volumes on the same Filestore instance run the
 	// ensure-mount once; the per-instance mutex covers cross-request races.
 	filestoreEnsured := make(map[string]bool)
-	// Declared order fixes the NFS data directory suffix ({box_id}-{n}). The
-	// box's volume list is immutable after create (Start rebuilds mounts from
-	// the metadata saved at create time), so the same declaration always
-	// derives the same directory — what makes stop/start keep the data.
-	filestoreIdx := 0
 
 	for _, vol := range volumes {
 		if vol.Filestore != nil {
-			mount, err := c.filestoreVolumeMount(ctx, boxID, &filestoreIdx, vol, filestoreEnsured, volumeMounts)
+			mount, err := c.filestoreVolumeMount(ctx, boxID, vol, filestoreEnsured, volumeMounts)
 			if err != nil {
 				return nil, err
 			}
@@ -197,9 +192,11 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 
 // filestoreVolumeMount prepares one filestore volume reference for binding:
 // resolve the registry entry, then — under the instance's mutex — ensure the
-// NFS mount exists (once per call), create the box's data directory and write
-// the referencing record. `idx` is the running declaration index among the
-// box's filestore volumes — it fixes the {box_id}-{n} suffix; `ensured` dedups
+// NFS mount exists (once per call), create the volume's data directory and
+// write the referencing record. The data directory is named by the volume's
+// id, not the box's: boxes sharing a volume share the directory (the
+// bucket-alignment contract), and a destroyed box's data stays reachable by
+// mounting the volume into a new box. `ensured` dedups
 // the ensure within one call; `priorMounts` are the mounts prepared earlier in
 // this call, so the in-lock record write can include them.
 //
@@ -207,7 +204,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 // in-lock record rescan sound: reclaim counts references from records under
 // the same per-instance mutex, so a mount cannot be reclaimed in the window
 // between "usable" and "referenced" (design §4.5).
-func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, idx *int, vol dto.VolumeDTO, ensured map[string]bool, priorMounts []volumeMount) (volumeMount, error) {
+func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]bool, priorMounts []volumeMount) (volumeMount, error) {
 	inst, err := c.lookupFilestoreInstance(vol.Filestore.Instance)
 	if err != nil {
 		return volumeMount{}, err
@@ -226,8 +223,7 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, idx *in
 		ensured[inst.Name] = true
 	}
 
-	dataDir := filestoreDataDir(rootPath, boxID, *idx)
-	*idx++
+	dataDir := filestoreDataDir(rootPath, vol.VolumeId)
 
 	// NFS permissions are real (unlike the FUSE backends' --dir-mode
 	// fakes), so the directory needs an explicit chmod after mkdir — plain
@@ -269,11 +265,12 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, idx *in
 	return mount, nil
 }
 
-// filestoreDataDir derives the box's data directory inside an instance's NFS
-// export: {mount root}/{box_id}-{n}. n is the volume's declaration index among
-// the box's filestore volumes, 0-based.
-func filestoreDataDir(rootPath string, boxID string, n int) string {
-	return filepath.Join(rootPath, fmt.Sprintf("%s-%d", boxID, n))
+// filestoreDataDir derives the volume's data directory inside an instance's
+// NFS export: {mount root}/{volume_id}. Volumes are shared resources — boxes
+// mounting the same volume land in the same directory, and a destroyed box's
+// data stays reachable through the volume id.
+func filestoreDataDir(rootPath string, volumeId string) string {
+	return filepath.Join(rootPath, volumeId)
 }
 
 // lookupFilestoreInstance resolves a logical name against the registry. A

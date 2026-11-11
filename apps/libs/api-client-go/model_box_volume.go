@@ -21,11 +21,11 @@ var _ MappedNullable = &BoxVolume{}
 
 // BoxVolume struct for BoxVolume
 type BoxVolume struct {
-	// The ID of the managed volume; absent for filestore volumes
-	VolumeId *string `json:"volumeId,omitempty"`
+	// The ID of the volume (bucket-backed or Filestore-backed)
+	VolumeId string `json:"volumeId"`
 	// The mount path for the volume
 	MountPath string `json:"mountPath"`
-	// The Filestore instance reference; absent for managed volumes
+	// The Filestore instance reference; absent for bucket-backed volumes
 	Filestore *BoxVolumeFilestoreRef `json:"filestore,omitempty"`
 	// Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.
 	Subpath *string `json:"subpath,omitempty"`
@@ -38,8 +38,9 @@ type _BoxVolume BoxVolume
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxVolume(mountPath string) *BoxVolume {
+func NewBoxVolume(volumeId string, mountPath string) *BoxVolume {
 	this := BoxVolume{}
+	this.VolumeId = volumeId
 	this.MountPath = mountPath
 	return &this
 }
@@ -52,36 +53,28 @@ func NewBoxVolumeWithDefaults() *BoxVolume {
 	return &this
 }
 
-// GetVolumeId returns the VolumeId field value if set, zero value otherwise.
+// GetVolumeId returns the VolumeId field value
 func (o *BoxVolume) GetVolumeId() string {
-	if o == nil || IsNil(o.VolumeId) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.VolumeId
+
+	return o.VolumeId
 }
 
-// GetVolumeIdOk returns a tuple with the VolumeId field value if set, nil otherwise
+// GetVolumeIdOk returns a tuple with the VolumeId field value
 // and a boolean to check if the value has been set.
 func (o *BoxVolume) GetVolumeIdOk() (*string, bool) {
-	if o == nil || IsNil(o.VolumeId) {
+	if o == nil {
 		return nil, false
 	}
-	return o.VolumeId, true
+	return &o.VolumeId, true
 }
 
-// HasVolumeId returns a boolean if a field has been set.
-func (o *BoxVolume) HasVolumeId() bool {
-	if o != nil && !IsNil(o.VolumeId) {
-		return true
-	}
-
-	return false
-}
-
-// SetVolumeId gets a reference to the given string and assigns it to the VolumeId field.
+// SetVolumeId sets field value
 func (o *BoxVolume) SetVolumeId(v string) {
-	o.VolumeId = &v
+	o.VolumeId = v
 }
 
 // GetMountPath returns the MountPath field value
@@ -109,12 +102,12 @@ func (o *BoxVolume) SetMountPath(v string) {
 }
 
 // GetFilestore returns the Filestore field value if set, zero value otherwise.
-func (o *BoxVolume) GetFilestore() BoxVolumeFilestoreRef {
+func (o *BoxVolume) GetFilestore() *BoxVolumeFilestoreRef {
 	if o == nil || IsNil(o.Filestore) {
-		var ret BoxVolumeFilestoreRef
+		var ret *BoxVolumeFilestoreRef
 		return ret
 	}
-	return *o.Filestore
+	return o.Filestore
 }
 
 // GetFilestoreOk returns a tuple with the Filestore field value if set, nil otherwise
@@ -182,9 +175,7 @@ func (o BoxVolume) MarshalJSON() ([]byte, error) {
 
 func (o BoxVolume) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	if !IsNil(o.VolumeId) {
-		toSerialize["volumeId"] = o.VolumeId
-	}
+	toSerialize["volumeId"] = o.VolumeId
 	toSerialize["mountPath"] = o.MountPath
 	if !IsNil(o.Filestore) {
 		toSerialize["filestore"] = o.Filestore
@@ -205,6 +196,7 @@ func (o *BoxVolume) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
+		"volumeId",
 		"mountPath",
 	}
 

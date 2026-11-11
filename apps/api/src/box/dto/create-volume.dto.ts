@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { IsString, Matches, ValidateIf } from 'class-validator'
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { IsNotEmpty, IsString, Matches, ValidateIf } from 'class-validator'
 
 /**
  * A volume can be mounted by name in place of its id, so a name has to be
@@ -25,6 +25,15 @@ import { IsString, Matches, ValidateIf } from 'class-validator'
  */
 export const VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/
 
+/**
+ * The Filestore instance's logical name pattern. Must stay in agreement with
+ * the runner's registry pattern (`filestoreInstanceNamePattern` in the runner
+ * config): the instance name becomes a component of the runner-side mount path
+ * (/mnt/boxlite-filestore-<name>), so the same constraints apply — no path
+ * separators, no relative components.
+ */
+export const FILESTORE_INSTANCE_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
+
 @ApiSchema({ name: 'CreateVolume' })
 export class CreateVolumeDto {
   @ApiProperty({ required: false, example: 'my-data' })
@@ -38,4 +47,27 @@ export class CreateVolumeDto {
       'If you intended to pass a host directory, use an absolute path.',
   })
   name?: string
+
+  /**
+   * The Filestore instance this volume's data directory lives on. Presence
+   * makes the volume a filestore volume (data on NFS); absence keeps it an
+   * object-storage volume (data in `boxlite-volume-<id>`). The instance must
+   * appear in the target runner's FILESTORE_INSTANCES registry — the API does
+   * not check existence, and a box create referencing an unregistered
+   * instance fails loudly at mount time.
+   */
+  @ApiPropertyOptional({
+    description: 'The Filestore instance the volume stores its data on; filestore volumes only',
+    example: 'ml-scratch',
+  })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @IsNotEmpty()
+  @Matches(FILESTORE_INSTANCE_PATTERN, {
+    message:
+      'instance must be the logical name of a Filestore instance: 1-63 characters of ' +
+      '[a-z0-9] and -, starting alphanumeric. It must match the instance entry in the ' +
+      "target runner's FILESTORE_INSTANCES registry.",
+  })
+  instance?: string
 }

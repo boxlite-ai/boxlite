@@ -16,5 +16,9 @@
 
 export interface CreateVolume {
     'name'?: string;
+    /**
+     * The Filestore instance the volume's data directory lives on; filestore volumes only. The instance must appear in the target runner's FILESTORE_INSTANCES registry — a box referencing an unregistered instance fails loudly at mount time.
+     */
+    'instance'?: string;
 }
 

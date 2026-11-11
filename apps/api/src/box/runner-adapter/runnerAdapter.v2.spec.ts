@@ -149,34 +149,4 @@ describe('RunnerAdapterV2 createBox', () => {
     )
     expect(jobService.createJob.mock.calls[0][5]).not.toHaveProperty('networkBlockAll')
   })
-
-  // The v2 runner protocol is the only one that can mount a filestore volume,
-  // so the reference must survive into the job payload — on the filestore
-  // volume only. A stray `filestore` key on a managed volume (or vice versa)
-  // would leave the runner guessing which mount form each entry takes.
-  it('carries filestore on the filestore volume and no filestore key on managed volumes', async () => {
-    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
-    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-    await adapter.init({ id: 'runner-1' } as any)
-
-    await adapter.createBox(
-      {
-        id: 'box-1',
-        image: 'base',
-        volumes: [
-          { volumeId: 'volume-123', mountPath: '/data' },
-          { volumeId: undefined, mountPath: '/scratch', filestore: { instance: 'ml-scratch' } },
-        ],
-      } as any,
-      'base',
-    )
-
-    const payload = jobService.createJob.mock.calls[0][5]
-    expect(payload.volumes).toEqual([
-      { volumeId: 'volume-123', mountPath: '/data', subpath: undefined },
-      { volumeId: undefined, mountPath: '/scratch', subpath: undefined, filestore: { instance: 'ml-scratch' } },
-    ])
-    expect('filestore' in payload.volumes[0]).toBe(false)
-    expect(payload.volumes[1].filestore).toEqual({ instance: 'ml-scratch' })
-  })
 })

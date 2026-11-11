@@ -401,19 +401,24 @@ moves to another target during the test is left intact and reported as a failure
 
 ## Filestore volume cases
 
-`cases/test_filestore.py` covers volume references that name a Filestore
-instance — `{"filestore": {"instance": "<name>"}, "guest_path": ...}` — instead
-of a managed volume. Instances are **ops-provisioned runner env config**
+`cases/test_filestore.py` covers **Filestore volumes** — Volume rows whose
+data directory lives on a Filestore NFS instance, created through
+`POST /volumes` with an `instance` field. They mount by box volume references
+that carry only `managed_volume`, exactly like bucket-backed volumes.
+Instances themselves are **ops-provisioned runner env config**
 (`FILESTORE_INSTANCES`, a JSON registry of named NFS instances on the runner),
 not API objects the suite can create.
 
 A module gate probes for an instance ONCE before any test runs (the registry
-is runner env config with no listing API, so one create attempt is the only
-honest probe). The gate's outcome decides the whole file:
+is runner env config with no listing API, so one box create attempt is the
+only honest probe). The gate's outcome decides the whole file:
 
-- **Registry holds the instance** → the probe box is deleted and both cases
-  run: the unknown-instance refusal is pinned, then the happy path
-  (write → stop → start → read back) on the proven instance.
+- **Registry holds the instance** → the probe box and volume are deleted and
+  four cases run: the unknown-instance refusal is pinned, the happy path
+  (write → stop → start → read back) runs on the proven instance, two boxes
+  prove data sharing (write in one, read in the other, read again after the
+  first is destroyed), and the lifecycle rules are pinned (in-use refusal →
+  409, free removal → 204, force re-delete → 204).
 - **No registry** (probing the generated default name) → one warning —
   `GCP FileStore instance=[<name>] not existed. Skip test_filestore.py .` —
   and the entire module skips.
@@ -421,8 +426,8 @@ honest probe). The gate's outcome decides the whole file:
   a declared instance is operator intent, so its absence is a misconfiguration
   to fix by hand (correct the injected name, or provision/remove the instance).
 
-Both cases skip when the API key cannot attach volumes (403 without
-READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. Neither is
+All cases skip when the API key cannot attach volumes (403 without
+READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. None is
 marked `smoke` — prod's runner has no Filestore registry either.
 
 Set `FILESTORE_E2E_INSTANCE` to name the instance the gate should probe and
@@ -652,7 +657,7 @@ apps/e2e/
     ├── test_box_lifecycle_policy.py # auto_stop / auto_delete reaping
     ├── test_box_metrics.py          # Per-box metrics through the runner
     ├── test_volumes.py              # Managed volumes: CRUD + data reuse
-    ├── test_filestore.py            # Filestore volumes: loud unknown-instance refusal + data across stop/start
+    ├── test_filestore.py            # Filestore volumes: loud refusal, data across stop/start, cross-box sharing, lifecycle
     ├── test_network_egress.py       # Outbound policy: block-all, allow_net
     ├── test_exec_*.py               # Exec stdout, attach, timeout
     ├── test_copy_roundtrip.py       # Copy in/out
