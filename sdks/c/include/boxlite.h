@@ -876,6 +876,11 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Set nested virtualization for a new box. Runtime experimental authorization
+// is checked by create; the value is saved with the existing BoxConfig.
+enum BoxliteErrorCode boxlite_advanced_options_set_nested_virtualization(CAdvancedBoxOptions *opts,
+                                                                         int enabled);
+
 // Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
 // Copies the path; invalid input leaves the previous option unchanged.
 enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
@@ -1181,16 +1186,6 @@ enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteRuntime *runtime,
                                                 CBoxRemoveBoxCb cb,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
-
-// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
-// A non-null box_id replaces an idle target; the callback owns the Box handle.
-enum BoxliteErrorCode boxlite_checkpoint_import_box(CBoxliteRuntime *runtime,
-                                                    const char *key,
-                                                    const char *name,
-                                                    const char *box_id,
-                                                    CRuntimeImportCb cb,
-                                                    void *user_data,
-                                                    CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
@@ -1758,6 +1753,13 @@ enum BoxliteErrorCode boxlite_options_new(const char *image,
                                           CBoxliteError *out_error);
 
 void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
+
+// Create the box from a REST-managed checkpoint instead of the image.
+//
+// The box inherits the checkpoint's saved settings, so every other option
+// must stay unset; only the name may accompany it. Local runtimes fail the
+// create with an unsupported error.
+void boxlite_options_set_checkpoint(CBoxliteOptions *opts, const char *checkpoint);
 
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
 

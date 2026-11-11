@@ -415,10 +415,10 @@ describe('ApiClient checkpoints', () => {
         data: { source_box_id: 'source', name: 'base' },
         auth: 'Bearer tok',
       },
-      { method: 'post', url: '/v1/org%2Fone/boxes/import', data: { checkpoint_id: 'checkpoint' }, auth: 'Bearer tok' },
+      { method: 'post', url: '/v1/org%2Fone/boxes', data: { checkpoint_id: 'checkpoint' }, auth: 'Bearer tok' },
       {
         method: 'post',
-        url: '/v1/org%2Fone/boxes/import',
+        url: '/v1/org%2Fone/boxes',
         data: { checkpoint_id: 'checkpoint', name: 'worker' },
         auth: 'Bearer tok',
       },

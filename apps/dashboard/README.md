@@ -84,11 +84,11 @@ name-confirmed deletion without a VM or archive storage. Run
 
 ## SSH access
 
-The left **Network** section shows SSH state and its switch. The switch only
+The **Network** section shows SSH state and its switch. The switch only
 enables or disables saved configuration; it does not generate keys or change
 inbound. Status refreshes on click, window focus, and every 30 seconds while
 visible and idle. Reads skip pending operations and preserve mutation errors.
-Unknown/loading states cannot be toggled. The header and sidebar share one
+Unknown/loading states cannot be toggled. The header and Network section share one
 controller and component-scoped private keys.
 
 **Connect via SSH**, beside start/stop, first opens an access confirmation.
@@ -204,7 +204,7 @@ not automatically retried. Pending operations block overlapping actions and clos
 detail refreshes during mutations wait for the mutation to finish. Stale reads and
 responses after stop, permission, account, endpoint or scope changes are ignored.
 The title/close control stays fixed while the dialog body scrolls. Command lines
-wrap without changing copied content. The terminal remains mounted throughout.
+wrap without changing copied content. The overview remains mounted throughout.
 
 Tests cover consent, conditional creation, request ordering, permissions, partial
 success, same-key retry, stale responses, storage isolation and reset cancellation.
@@ -212,6 +212,49 @@ The local MSW preview echoes the generated host public key and fingerprint, reta
 saved configuration across Disable/Enable, and hides disabled listener identity like
 the real service. It exercises the real Dashboard but does not start an SSH server
 or prove a live cloud SSH handshake.
+
+## Box overview and terminal
+
+Each Box has two pages, linked by **Overview** and **Terminal**. The existing
+`/dashboard/boxes/:boxId` URL opens Overview; `/terminal` opens the dedicated
+shell page. The current destination is marked for assistive technology.
+
+Overview contains lifecycle and SSH actions, followed by a compact CPU, memory,
+and disk summary with explicit units. Configuration/Volumes and Network/Activity
+panels stack on narrow screens. Configuration uses aligned description-list
+fields; full image references wrap, and volumes use a table with Volume and
+Mount path headers. Section headings share the same sentence-case typography.
+Overview scrolls with the document so short viewports can still reach every
+section. At narrow widths, terminal status and recovery controls wrap into
+separate rows. The application header uses compact mobile spacing; profile
+and navigation menus stay within the available viewport and scroll when needed.
+Opening or refreshing Overview does not start a shell; refresh reloads box and
+SSH status. Terminal uses the available content height. A stopped Box offers
+**Start box** only to members with Box-write permission; pending starts disable
+the action, and transitional Boxes do not offer another start.
+
+The terminal header shows connection state, a text-size selector, **Clear
+terminal**, and **Scroll to bottom**. These controls preserve the current shell.
+Clear removes the displayed history and scrollback except the current line.
+Text-size choices are 12, 13, 14, and 16px; the choice survives reconnects within
+the mounted Terminal page. Header controls follow the dashboard theme; the
+terminal surface stays black in both themes.
+
+Only an explicit execution-exit frame reports **Session ended**. A dropped
+socket reports **Connection lost**, and connection establishment times out after
+30 seconds. Failed attempts request shell deletion, including shells whose start
+finishes after timeout or unmount. Cleanup is best-effort if the API refuses it.
+**Reconnect** starts a fresh shell. Leaving Terminal for Overview ends its shell;
+returning starts another one.
+
+Container resize notifications coalesce into one animation-frame measurement,
+skip hidden containers, and send only changed character dimensions. Font readiness
+also schedules a fit. These checks bound layout work; they do not establish
+producer backpressure or a throughput benchmark.
+
+Run `make test:apps:dashboard FILTER=Box` for box page, session,
+and lifecycle checks. The local UI preview may use a simulated transport and
+does not prove live guest-shell connectivity.
 
 ## ASCII action buttons
 
@@ -778,6 +821,68 @@ Clicking Images in a compact rail reveals its children. Quota metadata uses read
 12px type. Template columns use a 240px minimum in the available content width;
 short Quickstart code blocks expand naturally. Billing and box details retain all
 data and actions while removing excess whitespace and dotted leaders.
+
+## Measured visual rules
+
+These rules came out of a full crawl of the console. Each has a check that keeps it true.
+
+```
+ rule                         kept true by
+ ───────────────────────────  ───────────────────────────────────────────────
+ six font sizes, no others    src/design-language.test.ts   (ceiling 0, plus 8 display numerals)
+ text contrast 4.5:1          scripts/ui-audit  ──► axe-core color-contrast
+ 24px hit targets             scripts/ui-audit  ──► axe-core target-size
+ no sideways page scroll      scripts/ui-audit  ──► page-hscroll at 390px and 320px
+ whole-pixel rows             scripts/ui-audit  ──► subpixel
+ one line per shared edge     scripts/ui-audit  ──► double-edge
+```
+
+**Type scale.** Text uses `text-label`, `text-meta`, `text-body`, `text-em`, `text-section` or
+`text-page`. Tailwind's stock sizes (`text-sm`, `text-xs`, …) and arbitrary `text-[Npx]` sizes are
+not allowed; the ratchet test counts both. The only exception is display numerals of 32px and over
+on the welcome screens and the stat tile. Line heights in the scale are whole pixels (page 32px,
+body 20px, meta 18px): a ratio such as 1.15 made the title 32.2px tall and blurred every 1px rule
+below it.
+
+**Contrast.** Enabled text reaches 4.5:1 on its surface in both themes.
+
+| Token or surface | Rule |
+| --- | --- |
+| `--muted-foreground` (light) | 42% lightness: 5.00:1 on `--card`, 4.66:1 on `--accent` |
+| `--brand-foreground` | Dark text. White on the brand cyan is 2.5:1; the dark value is 7.3:1 |
+| `--destructive-solid` | Fill for buttons with white text, 4.67:1 in both themes. `--destructive` stays for text and tints |
+| Code blocks | `readableCodeTheme` in `src/lib/readable-code-theme.ts` moves each Prism token colour to the closest value that passes |
+| Terminal | Its surface stays black in both themes; the separate header uses dashboard theme tokens for status and controls |
+
+A row that is busy is not dimmed: opacity pulled its text under 4.5:1. The status cell shows the
+spinner.
+
+**Hit targets.** A control is at least 24px in each direction. Small glyph buttons (copy, close)
+keep their glyph size and get a 24px box. Links inside a sentence are exempt.
+
+**Phone widths.** A list that cannot fit keeps its columns with a `min-w` and scrolls sideways
+inside its own box; the page never scrolls sideways. Volumes, Images, Private registries and API
+keys do this. Hostnames and names truncate with a `title`; they do not break mid-word.
+
+**Segmented controls.** Each segment carries a full border and overlaps its left neighbour by one
+pixel, so shared edges are one line. The theme switcher in the account menu marks selection with a
+raised fill and a bold label; the page tabs mark it with a brighter outline.
+
+**Wording.** Buttons, headers, tabs, dialog titles and labels use sentence case, with product
+nouns capitalised (Box, Volume, Checkpoint, API key). A dialog's title is the label of the button
+that opens it: New Box, New Volume, New Checkpoint, New API key. Units are vCPU, GiB and MiB. A
+destructive confirmation names its object, for example `Delete “web-api”?`.
+
+**Copy actions.** Every copy goes through `copyToClipboard` (`src/lib/copy-text.ts`) or the
+`useCopyToClipboard` hook, and shows success only when the write happened.
+
+**Page titles.** Each page calls `usePageTitle`, so the tab reads `Volumes · BoxLite`.
+
+**Focus.** `src/index.css` gives every focusable element a 2px ring-coloured outline by default.
+Components that draw their own indicator still do; unifying those is not done yet.
+
+To re-measure, see [`scripts/ui-audit/README.md`](./scripts/ui-audit/README.md). The crawl needs a
+local Chrome and the mock preview, so it is a manual check and not part of `make test`.
 
 ## GitHub CI dashboard and browser connect
 

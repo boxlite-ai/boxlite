@@ -6,6 +6,7 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
@@ -25,6 +26,7 @@ describe('BoxliteBoxController asynchronous create HTTP', () => {
         { provide: BoxStateWaiterService, useValue: waiter },
         { provide: CommerceBoxLimitService, useValue: commerce },
         { provide: BoxRequestService, useValue: {} },
+        { provide: CheckpointRecoverService, useValue: {} },
       ],
     })
       .overrideGuard(CombinedAuthGuard)

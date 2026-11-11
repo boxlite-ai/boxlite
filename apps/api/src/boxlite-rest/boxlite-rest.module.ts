@@ -40,7 +40,6 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
 import { BoxRequestService } from './box-request.service'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
-import { BoxliteCheckpointImportController } from './boxlite-checkpoint-import.controller'
 
 @Module({
   imports: [
@@ -55,7 +54,6 @@ import { BoxliteCheckpointImportController } from './boxlite-checkpoint-import.c
   ],
   controllers: [
     BoxliteCheckpointController,
-    BoxliteCheckpointImportController,
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
     CiConnectController,

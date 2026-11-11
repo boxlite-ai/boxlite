@@ -39,10 +39,10 @@ describe('BoxNetworkPanel', () => {
     return onToggleInbound
   }
 
-  // Each row is its key, dotted leader, then value; the text reads key then value.
+  // Each row keeps its label before its value in reading order.
   function row(key: string): string | undefined {
     return [...container.querySelectorAll('div')]
-      .map((element) => element.textContent ?? '')
+      .map((element) => (element.textContent ?? '').toLowerCase())
       .find((text) => text.startsWith(key) && !text.includes('network'))
   }
 
@@ -85,7 +85,7 @@ describe('BoxNetworkPanel', () => {
   ])('with inbound %s and canManage %s, get url disabled is %s', (inbound, canManage, disabled) => {
     render(network(inbound, NetworkMode.ENABLED), vi.fn(), canManage)
 
-    const getUrl = [...container.querySelectorAll('button')].find((button) => button.textContent === 'get url')
+    const getUrl = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Get URL')
     expect(getUrl?.disabled).toBe(disabled)
   })
 })

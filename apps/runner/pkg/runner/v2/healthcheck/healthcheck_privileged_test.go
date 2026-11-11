@@ -37,7 +37,7 @@ func TestHealthcheckReportsPrivilegedSupport(t *testing.T) {
 	for _, scheme := range []string{"http", "https"} {
 		t.Run(scheme, func(t *testing.T) {
 			service.tlsEnabled = scheme == "https"
-			healthcheck := service.newHealthcheck()
+			healthcheck := service.newHealthcheck(false)
 			if _, err := service.client.RunnersAPI.RunnerHealthcheck(context.Background()).RunnerHealthcheck(*healthcheck).Execute(); err != nil {
 				t.Fatal(err)
 			}

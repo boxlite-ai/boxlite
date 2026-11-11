@@ -632,16 +632,28 @@ mod tests {
             checkpoints.get("base").await.unwrap_err(),
             checkpoints.remove("base", false).await.unwrap_err(),
             checkpoints.remove("base", true).await.unwrap_err(),
-            checkpoints
-                .import_box("base", Some("worker".into()), None)
+            runtime
+                .create(
+                    BoxOptions {
+                        rootfs: crate::RootfsSpec::Checkpoint("base".into()),
+                        ..Default::default()
+                    },
+                    Some("worker".into()),
+                )
                 .await
                 .err()
-                .expect("local checkpoint import must fail"),
-            checkpoints
-                .import_box("base", None, Some("target"))
+                .expect("local create from a checkpoint must fail"),
+            runtime
+                .get_or_create(
+                    BoxOptions {
+                        rootfs: crate::RootfsSpec::Checkpoint("base".into()),
+                        ..Default::default()
+                    },
+                    Some("worker".into()),
+                )
                 .await
                 .err()
-                .expect("local checkpoint import must fail"),
+                .expect("local get_or_create from a checkpoint must fail"),
         ];
         for error in errors {
             assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");

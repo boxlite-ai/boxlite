@@ -296,6 +296,7 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^2.1.1",
     "autoprefixer": "10.4.13",
+    "axe-core": "^4.10.0",
     "eslint": "^9.8.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-import": "2.31.0",

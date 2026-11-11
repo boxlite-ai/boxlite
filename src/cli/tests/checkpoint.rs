@@ -181,36 +181,20 @@ async fn checkpoint_create_list_get_delete_use_the_tenant_and_expected_request_s
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn checkpoint_import_inherits_config_and_replacement_keeps_the_public_box_id() {
+async fn create_from_a_checkpoint_sends_only_the_checkpoint_and_name() {
     let home = TempDir::new().unwrap();
     let server = Server::start(|_| (StatusCode::OK, box_info())).await;
     cli(&home, &server)
-        .args(["import", "--checkpoint", "checkpoint-1", "--name", "worker"])
-        .assert()
-        .success()
-        .stdout("cloudBox1234\n");
-    cli(&home, &server)
-        .args([
-            "import",
-            "--box",
-            "cloudBox1234",
-            "--checkpoint",
-            "checkpoint-1",
-        ])
+        .args(["create", "--checkpoint", "checkpoint-1", "--name", "worker"])
         .assert()
         .success()
         .stdout("cloudBox1234\n");
     let requests = server.requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path, "/v1/tenant/boxes/import");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/tenant/boxes");
     assert_eq!(
         requests[0].body,
         json!({"checkpoint_id":"checkpoint-1","name":"worker"})
-    );
-    assert_eq!(requests[1].path, "/v1/tenant/boxes/import");
-    assert_eq!(
-        requests[1].body,
-        json!({"checkpoint_id":"checkpoint-1","box_id":"cloudBox1234"})
     );
 }
 
@@ -305,11 +289,40 @@ async fn checkpoint_creation_refuses_execution_overrides_before_sending_requests
     ] {
         let mut command = cli(&home, &server);
         command
-            .args(["import", "--checkpoint", "checkpoint-1"])
+            .args(["create", "--checkpoint", "checkpoint-1"])
             .args(flags)
             .assert()
             .failure()
-            .stderr(contains("unexpected argument"));
+            .stderr(contains("inherits its saved settings"));
+    }
+    for sources in [
+        vec!["create", "--checkpoint", "checkpoint-1", "alpine"],
+        vec![
+            "create",
+            "--checkpoint",
+            "checkpoint-1",
+            "--rootfs",
+            "/tmp/rootfs",
+        ],
+    ] {
+        cli(&home, &server)
+            .args(sources)
+            .assert()
+            .failure()
+            .stderr(contains("provide only one of"));
+    }
+    // The checkpoint import entry point is gone, as is in-place replacement.
+    for removed in [
+        vec!["checkpoint", "import", "checkpoint-1", "--name", "worker"],
+        vec![
+            "create",
+            "--checkpoint",
+            "checkpoint-1",
+            "--box",
+            "cloudBox1234",
+        ],
+    ] {
+        cli(&home, &server).args(removed).assert().failure();
     }
     assert!(server.requests.lock().unwrap().is_empty());
 }
@@ -393,8 +406,7 @@ fn checkpoint_commands_require_a_rest_context_without_initializing_a_local_runti
     for args in [
         vec!["checkpoint", "list"],
         vec!["checkpoint", "create", "source"],
-        vec!["import", "--checkpoint", "base", "--name", "worker"],
-        vec!["import", "--checkpoint", "base", "--box", "target"],
+        vec!["create", "--checkpoint", "base", "--name", "worker"],
     ] {
         Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
             .env("BOXLITE_HOME", home.path())
@@ -413,4 +425,20 @@ fn checkpoint_commands_require_a_rest_context_without_initializing_a_local_runti
     }
     assert!(!home.path().join("checkpoints").exists());
     assert!(!home.path().join("boxes").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_flags_are_rejected_by_ordinary_archive_import() {
+    let home = TempDir::new().unwrap();
+    let server =
+        Server::start(|_| panic!("archive import must reject checkpoint flags before HTTP")).await;
+    for flags in [["--checkpoint", "base"], ["--box", "target"]] {
+        cli(&home, &server)
+            .args(["import", "saved.boxlite"])
+            .args(flags)
+            .assert()
+            .failure()
+            .stderr(contains("unexpected argument"));
+    }
+    assert!(server.requests.lock().unwrap().is_empty());
 }

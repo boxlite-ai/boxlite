@@ -155,8 +155,11 @@ does not delete the checkpoint. Duplicate or stale callbacks cannot advance a
 newer operation. A reconciliation task replays durable terminal jobs after a
 lost callback or API restart.
 
-`POST /api/v1/boxes/import` accepts JSON `checkpoint_id` and optional `name` to create a
-new public Box from a ready checkpoint. Configuration overrides are rejected.
+`POST /api/v1/boxes` accepts `checkpoint_id` and an optional `name` to create a
+new Box from a ready checkpoint. It returns `201` with the Box and requires Box
+write permission. `checkpoint_id` is mutually exclusive with `image` and
+`rootfs_path`. The Box inherits the checkpoint's saved settings, so any other
+field returns `400`. Requests without `checkpoint_id` are unchanged.
 The existing scheduler selects a compatible ready v2 runner; creation skips the
 warm pool. Box admission, the import operation and its job commit together, so
 quota, name conflicts or a checkpoint deleted during admission leave no job.
@@ -168,42 +171,38 @@ runs outside the database transaction after persisting `deleting`; failures
 retain that state and quota for retry. Checkpoints also protect their referenced
 organization image and matching registry credential after source deletion.
 
-Box source/target selectors and checkpoint selectors resolve an exact ID before
+Capture source selectors and checkpoint selectors resolve an exact ID before
 falling back to a name within the organization. An existing name cannot shadow
-an ID during capture, import or deletion. Checkpoint creation rejects names that
+an ID during capture, Box creation or deletion. Checkpoint creation rejects names that
 match an existing checkpoint ID in that organization.
 
-Checkpoint imports that create a new Box emit the ordinary `BoxEvents.CREATED`
+Creating a Box from a checkpoint emits the ordinary `BoxEvents.CREATED`
 notification after the Box, import job and operation commit. Failed admission
 does not emit it; listener failures are logged without repeating creation.
 
-`POST /api/v1/boxes/import` with JSON `checkpoint_id` and `box_id` replaces an
-existing idle target and requires Box write permission. `name` and `box_id` are
-mutually exclusive; ordinary `POST /boxes` no longer accepts checkpoint selectors. Recovery rechecks organization admission,
-per-Box limits and the existing runner's compatibility before creating an
-`IMPORT_CHECKPOINT` job. The public Box ID remains unchanged. The Box reports
-`restoring` internally while its committed resource/configuration fields remain
-unchanged; a separate operation record reserves the checkpoint configuration.
 The import completion transaction verifies operation ID, target sequence and
-current job ownership, then commits the saved configuration and releases busy.
-The existing desired state controls whether the Box subsequently starts.
+current job ownership, then marks the Box `stopped` and clears its checkpoint
+ownership. The desired state `started` then starts it. Late or replayed callbacks cannot commit
+an older attempt. If that commit fails after native import, reconciliation
+replays the durable success receipt without scheduling another import.
 
-Failed import attempts retain their operation and checkpoint use for retry;
-retrying the same checkpoint preserves logical operation ID and sequence while
-creating a fresh job attempt. Late callbacks cannot commit an older attempt.
-This also covers a terminal runner job whose success receipt is missing or
-invalid: its logical operation stays failed and retryable. A target with an
-active migration is refused even between migration jobs. If configuration
-commit fails after native import, the transaction keeps the previous public
-configuration and current ownership; reconciliation replays the durable success
-receipt without scheduling another import.
-Recovery is a remove/import sequence, so an import failure can leave the old
-native Box absent. The HTTP state wait is bounded to 30 seconds and does not
+A failed import, including a terminal runner job whose success receipt is
+missing or invalid, leaves the Box in `error` and keeps its checkpoint use.
+There is no in-place retry or replacement: delete the Box, then create another
+from the checkpoint. The HTTP state wait is bounded to 30 seconds and does not
 cancel accepted runner work. Every post-admission wait failure includes the
-existing `boxId` error field, even when a terminal failure occurs before timeout.
-Clients must query that identity before submitting another anonymous import.
-Binary archive import/export semantics remain unchanged; cloud binary upload
-is still unavailable and separate from checkpoint admission.
+`boxId` error field, even when a terminal failure occurs before timeout.
+Clients must query that identity before submitting another create.
+The REST SDK includes the admitted identity in its error message as
+`(boxId: ID)`, including terminal import failures, so callers can find the Box.
+
+Checkpoint-created Boxes record the ordinary `box.create` requested event after
+admission, followed by success or exception when the import outcome commits.
+Invalid success receipts record exceptions. Replayed callbacks do not duplicate
+outcomes; a process crash after commit can still lose the in-process log.
+
+`POST /api/v1/boxes/import` is not routed on the cloud API; binary archive
+upload stays unavailable there.
 
 Explicit target deletion cancels its import operation and advances the target
 sequence before scheduling native destruction. Late callbacks cannot commit
@@ -223,7 +222,7 @@ queue. If notification fails, the durable job remains available to polling.
 | Export pending or running | Source `BOX` | Yes | Runner retains its private export directory. |
 | Export receipt accepted | `CHECKPOINT` upload job | No | Checkpoint owns the immutable archive; upload retries reuse it. |
 | Upload receipt accepted | No active capture job | No | Object storage holds the archive; runner staging can be reclaimed. |
-| Recover pending or failed | Target `BOX` | Unchanged | Operation retains checkpoint use and target ownership for replay or retry. |
+| Import pending or failed | New `BOX` | Not applicable | Operation retains checkpoint use and Box ownership until completion or Box deletion. |
 
 Run the transaction and HTTP admission checks with
 `make test:apps:api TEST_FILES='checkpoint|job-state-handler'`, providing
@@ -237,9 +236,9 @@ then operation in that order. The Box lock also serializes first use before a
 coordination record exists.
 
 Export releases `activeJobId` after the native export finishes. Import failure
-retains ownership for retry; success clears it while retaining `sequence`.
-For example, recovery at sequence 7 can retry with a new job ID, while the next
-recovery uses sequence 8 and rejects receipts from sequence 7. Soft deletion
+retains ownership until the Box is deleted; success clears it while retaining
+`sequence`. Deleting a Box with an unfinished import advances `sequence`, so
+receipts from the cancelled import are rejected. Soft deletion
 retains the coordination row; physical Box deletion cascades only that row,
 leaving independent archives and operation history intact.
 
@@ -384,6 +383,10 @@ described in the [DinD guide](../../docs/guides/docker-in-docker.md).
 
 Migration-backed integration suites that query `Box`, including usage accounting,
 run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
+The organization nesting migration adds only the Admin allowlist switch; nesting
+is selected only at Cloud create; restart uses the existing runtime BoxConfig,
+without a new Cloud Box field. See
+[the rollout contract](../../docs/contributing/architecture/platform/api.md#organization-nested-virtualization-allowlist-rc).
 
 ## GitHub CI installation connect (in development)
 

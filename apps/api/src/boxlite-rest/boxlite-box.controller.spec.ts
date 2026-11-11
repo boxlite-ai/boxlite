@@ -17,6 +17,27 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { Context } from '../common/context/context'
 import { CreateBoxDto } from './dto/create-box.dto'
+import { Box } from '../box/entities/box.entity'
+import { Organization } from '../organization/entities/organization.entity'
+
+describe('BoxliteBoxController existing box lookup', () => {
+  it.each([false, true])('reads the existing box for current policy=%s', async (enabled) => {
+    const box = new Box('region-1', 'saved-box')
+    const organization = new Organization()
+    organization.nestedVirtualizationEnabled = enabled
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue(box),
+      toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
+    }
+    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any)
+    const response = await controller.getBox({ organizationId: organization.id, organization } as any, box.name)
+    expect(response.box_id).toBe(box.id)
+    expect(response).not.toHaveProperty('reuse_error')
+    expect(box).not.toHaveProperty('nestedVirtualization')
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith(box.name, organization.id)
+    expect(boxService.toBoxDtoWithExitCode).toHaveBeenCalledWith(box)
+  })
+})
 
 // `openapi/box.openapi.yaml` declares `additionalProperties: false` on
 // CreateBoxRequest, and both other servers enforce it — `boxlite serve` via
@@ -186,6 +207,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxService as any,
       boxStateWaiter as any,
       commerceBoxLimitService as any,
+      {} as any,
     )
     return { controller, boxService }
   }

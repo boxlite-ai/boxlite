@@ -67,10 +67,10 @@ export function RunnersPanel() {
       </div>
       <div className="mt-[14px] min-h-0 flex-1 overflow-auto" aria-busy={runners.isFetching}>
         <table className="w-full min-w-[720px] text-left text-body">
-          <thead className="border-b border-border font-mono text-label uppercase text-muted-foreground">
+          <thead className="border-b border-border font-mono text-meta text-muted-foreground">
             <tr>
               {['Name', 'State', 'Image', 'Resources', 'Created'].map((title) => (
-                <th key={title} className="px-2 py-2 font-normal">
+                <th key={title} className="px-2 py-2 font-medium">
                   {title}
                 </th>
               ))}

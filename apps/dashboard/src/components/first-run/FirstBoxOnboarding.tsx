@@ -56,7 +56,7 @@ export function FirstBoxQuickstart() {
                 {description}
               </span>
             </span>
-            <span aria-hidden className="w-3 shrink-0 text-xs text-brand">
+            <span aria-hidden className="w-3 shrink-0 text-meta text-brand">
               {method === id ? '✓' : ''}
             </span>
           </button>

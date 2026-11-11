@@ -39,7 +39,9 @@ func RunnerInfo(ctx *gin.Context) {
 
 	servicesInfo := runnerInstance.InspectRunnerServices(ctx.Request.Context())
 
-	ctx.JSON(http.StatusOK, runnerInfoResponse(metrics, servicesInfo))
+	response := runnerInfoResponse(metrics, servicesInfo)
+	response.NestedVirtualizationEnabled = runnerInstance.Boxlite.NestedVirtualizationEnabled()
+	ctx.JSON(http.StatusOK, response)
 }
 
 func runnerInfoResponse(collected *metrics.Metrics, servicesInfo []models.RunnerServiceInfo) dto.RunnerInfoResponseDTO {

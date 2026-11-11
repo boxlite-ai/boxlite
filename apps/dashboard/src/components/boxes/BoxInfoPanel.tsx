@@ -22,8 +22,8 @@ interface BoxInfoPanelProps {
 function MetaCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <div className="mb-1 font-display text-xs font-bold text-muted-foreground">{label}</div>
-      <div className="min-w-0 truncate text-sm">{children}</div>
+      <div className="mb-1 font-display text-meta font-bold text-muted-foreground">{label}</div>
+      <div className="min-w-0 truncate text-body">{children}</div>
     </div>
   )
 }
@@ -87,12 +87,12 @@ export function BoxInfoPanel({ box, getRegionName }: BoxInfoPanelProps) {
 
       {labelEntries.length > 0 && (
         <div className="border-t border-border px-5 py-4">
-          <p className="mb-2 text-xs text-muted-foreground">Labels</p>
+          <p className="mb-2 text-meta text-muted-foreground">Labels</p>
           <div className="flex flex-wrap gap-1.5">
             {labelEntries.map(([key, value]) => (
               <span
                 key={key}
-                className="rounded-md border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground"
+                className="rounded-md border border-border bg-muted/40 px-2 py-0.5 text-meta text-muted-foreground"
               >
                 {key}={value}
               </span>

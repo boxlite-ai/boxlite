@@ -167,7 +167,7 @@ function TracesEmptyState() {
 function DetailRow({ label, children, mono = true }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
     <div>
-      <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">{label}</span>
+      <span className="text-muted-foreground text-label uppercase tracking-wider font-semibold">{label}</span>
       <div className={cn('flex items-center gap-1 mt-0.5', mono && 'font-mono')}>{children}</div>
     </div>
   )
@@ -215,9 +215,9 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
         </div>
         <div className="w-1/2 flex flex-col overflow-hidden">
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">Select a span</span>
+            <span className="text-meta font-medium text-muted-foreground">Select a span</span>
           </div>
-          <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+          <div className="flex-1 flex items-center justify-center text-muted-foreground text-body">
             Click a span to see details
           </div>
         </div>
@@ -228,7 +228,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
   if (isError) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 h-[340px] text-muted-foreground">
-        <p className="text-sm">Failed to load spans.</p>
+        <p className="text-body">Failed to load spans.</p>
         <Button variant="outline" size="sm" onClick={() => refetch()}>
           <RefreshCw className="size-4" />
           Retry
@@ -239,7 +239,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
 
   if (!spanTree.length) {
     return (
-      <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-48 text-muted-foreground text-body">
         No spans found for this trace.
       </div>
     )
@@ -249,8 +249,8 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
     <div className="flex h-[340px] border-t border-border">
       <div className="w-1/2 border-r border-border flex flex-col overflow-hidden">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
-          <span className="text-xs font-medium text-muted-foreground">Spans</span>
-          <span className="text-xs text-muted-foreground">({spanTree.length})</span>
+          <span className="text-meta font-medium text-muted-foreground">Spans</span>
+          <span className="text-meta text-muted-foreground">({spanTree.length})</span>
         </div>
         <ScrollArea fade="mask" className="flex-1 min-h-0">
           <div className="py-1">
@@ -272,7 +272,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
                   )}
                   style={{ paddingLeft: `${12 + span.depth * 14}px` }}
                 >
-                  <span className="shrink-0 w-[120px] truncate text-xs">{span.spanName}</span>
+                  <span className="shrink-0 w-[120px] truncate text-meta">{span.spanName}</span>
                   <div className="flex-1 h-4 bg-muted/60 rounded relative overflow-hidden min-w-[60px]">
                     <div
                       className={cn('absolute h-full rounded', statusColor(span.statusCode))}
@@ -282,7 +282,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
                       }}
                     />
                   </div>
-                  <span className="shrink-0 text-[10px] font-mono text-muted-foreground w-[56px] text-right">
+                  <span className="shrink-0 text-meta font-mono text-muted-foreground w-[56px] text-right">
                     {formatNsDuration(span.durationNs)}
                   </span>
                 </button>
@@ -294,13 +294,13 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
 
       <div className="w-1/2 flex flex-col overflow-hidden">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/30 shrink-0">
-          <span className="text-xs font-medium text-muted-foreground">
+          <span className="text-meta font-medium text-muted-foreground">
             {selectedSpan ? 'Span Detail' : 'Select a span'}
           </span>
         </div>
         {selectedSpan ? (
           <ScrollArea fade="mask" className="flex-1 min-h-0">
-            <div className="p-3 space-y-3 text-xs">
+            <div className="p-3 space-y-3 text-meta">
               <DetailRow label="Name" mono={false}>
                 {selectedSpan.spanName}
               </DetailRow>
@@ -324,7 +324,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
                 <DetailRow label="Status">
                   <span
                     className={cn(
-                      'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium',
+                      'inline-flex items-center rounded-full px-2 py-0.5 text-meta font-medium',
                       selectedSpan.statusCode.toUpperCase().includes('ERROR')
                         ? 'bg-destructive/10 text-destructive'
                         : selectedSpan.statusCode.toUpperCase().includes('OK')
@@ -341,11 +341,11 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
               )}
               {Object.keys(selectedSpan.spanAttributes ?? {}).length > 0 && (
                 <div>
-                  <span className="text-muted-foreground text-[10px] uppercase tracking-wider font-semibold">
+                  <span className="text-muted-foreground text-label uppercase tracking-wider font-semibold">
                     Attributes
                   </span>
                   <div className="mt-1.5 rounded border border-border overflow-hidden">
-                    <table className="w-full text-xs">
+                    <table className="w-full text-meta">
                       <tbody>
                         {Object.entries(selectedSpan.spanAttributes).map(([key, val]) => (
                           <tr key={key} className="border-b border-border last:border-b-0">
@@ -363,7 +363,7 @@ function TraceExpandedRow({ boxId, trace }: { boxId: string; trace: TraceSummary
             </div>
           </ScrollArea>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+          <div className="flex-1 flex items-center justify-center text-muted-foreground text-body">
             Click a span to see details
           </div>
         )}
@@ -460,7 +460,7 @@ export function BoxTracesTab({ boxId }: { boxId: string }) {
                           )}
                         />
                       </TableCell>
-                      <TableCell className="font-mono text-xs whitespace-nowrap">
+                      <TableCell className="font-mono text-meta whitespace-nowrap">
                         <div className="flex items-center gap-1">
                           <span>{truncateId(trace.traceId)}</span>
                           <CopyButton
@@ -473,8 +473,8 @@ export function BoxTracesTab({ boxId }: { boxId: string }) {
                         </div>
                       </TableCell>
                       <TableCell className="max-w-xs truncate">{trace.rootSpanName}</TableCell>
-                      <TableCell className="font-mono text-xs">{formatTimestamp(trace.startTime)}</TableCell>
-                      <TableCell className="font-mono text-xs">{formatMsDuration(trace.durationMs)}</TableCell>
+                      <TableCell className="font-mono text-meta">{formatTimestamp(trace.startTime)}</TableCell>
+                      <TableCell className="font-mono text-meta">{formatMsDuration(trace.durationMs)}</TableCell>
                       <TableCell className="text-center">{trace.spanCount}</TableCell>
                     </TableRow>
                     {isExpanded && (
@@ -494,7 +494,7 @@ export function BoxTracesTab({ boxId }: { boxId: string }) {
 
       {data && data.totalPages > 1 && (
         <div className="flex items-center justify-between shrink-0">
-          <span className="text-sm text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             Page {params.tracesPage} of {data.totalPages} ({data.total} total)
           </span>
           <div className="flex items-center gap-2">

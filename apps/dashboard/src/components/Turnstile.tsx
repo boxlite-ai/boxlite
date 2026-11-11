@@ -127,14 +127,14 @@ export function Turnstile({
   return (
     <div className="space-y-3">
       {loading && (
-        <p role="status" className="text-sm text-muted-foreground">
+        <p role="status" className="text-body text-muted-foreground">
           Loading verification…
         </p>
       )}
       <div ref={container} aria-label="Human verification" />
       {error && (
         <>
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-body text-destructive">
             {error}
           </p>
           <Button variant="outline" onClick={() => setAttempt((value) => value + 1)}>
