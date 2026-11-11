@@ -660,6 +660,43 @@ in their source snapshots, preserving entry order and originally empty snapshots
 then apply ID ordering and the snapshot limit. These projections do not modify
 the persisted JSONB arrays.
 
+### `runner_disk_expansion`
+
+One data-disk expansion attempt per row, created by pre-deploy migration
+`1794528002000-add-runner-disk-expansion`. Written only by the runner-disk-expansion
+cron (`runner-disk-expansion.service.ts`); everything else reads it.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `runnerId` | `uuid` | cascades with the runner row |
+| `fromGiB` / `toGiB` | `double precision` | `toGiB` is the requested block-device size; `fromGiB` is the runner-reported filesystem total at request time (~2% below the device) |
+| `accepted` | `boolean` | whether the cloud accepted the request; only accepted rows count against the resize budget |
+| `operation` | `text` | nullable; zone operation name to poll for completion |
+| `status` | `enum` | `pending` \| `confirmed` \| `failed` |
+| `error` | `text` | nullable; `rate_limited`, `not_accepted`, `unconfirmed`, or the raw operation error |
+| `requestedAt` / `confirmedAt` | `timestamptz` | `confirmedAt` set only on `confirmed` |
+
+**Index:** `(runnerId, requestedAt)` — the trailing resize-budget window, the
+rate-limit cooldown, and per-runner history all query by it.
+
+### `runner_disk_usage_sample`
+
+Per-runner disk usage history for the expansion water level, created by pre-deploy
+migration `1794528003000-add-runner-disk-usage-sample`. Each heartbeat-derived
+sample upserts into its bucket keeping the maximum usage seen in it, so a spike
+between rounds survives into the growth calculation; the expansion cron deletes
+rows past the retention window (48h by default). `usedGiB` is the `df` Used
+figure the runner reports as `currentAllocatedDiskGiB`, not a sum of box sizes.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `runnerId` / `bucketAt` | composite primary key | `bucketAt` is the bucket start, truncated to the sampling interval |
+| `usedGiB` | `double precision` | max `df` Used seen in the bucket |
+| `capacityGiB` | `double precision` | filesystem total at the time of the sample |
+
+**Foreign key:** `runnerId` cascades with the runner row.
+
 ### `region`
 
 A placement domain. Two check constraints keep type and ownership consistent,

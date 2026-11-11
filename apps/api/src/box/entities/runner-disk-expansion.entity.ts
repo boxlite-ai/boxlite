@@ -3,15 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
 import { RunnerDiskExpansionStatus } from '../enums/runner-disk-expansion-status.enum'
 
 /**
  * One data-disk expansion attempt against a runner's cloud disk.
  *
- * `fromGiB`/`toGiB` are block-device capacities, not filesystem sizes — ext4
- * metadata keeps the filesystem ~2% smaller, which the confirmation step
- * accounts for. `accepted` records whether the cloud accepted the request at
+ * `toGiB` is the requested block-device size; `fromGiB` records the
+ * runner-reported filesystem total at request time, which sits ~2% below the
+ * device (ext4 metadata — the confirmation step's tolerance accounts for
+ * it). `accepted` records whether the cloud accepted the request at
  * all: the resize budget counts only accepted requests, so a rejected one
  * (including a GCP rate-limit 400) must not spend it. `operation` is the name
  * of the zone operation GCP returned, used to poll for completion.
@@ -51,7 +52,4 @@ export class RunnerDiskExpansion {
 
   @Column({ type: 'timestamp with time zone', nullable: true })
   confirmedAt: Date | null
-
-  @CreateDateColumn({ type: 'timestamp with time zone' })
-  createdAt: Date
 }
