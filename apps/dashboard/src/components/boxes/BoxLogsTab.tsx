@@ -224,37 +224,37 @@ export function BoxLogsTab({ boxId }: { boxId: string }) {
                         )}
                       />
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{formatTimestamp(log.timestamp)}</TableCell>
+                    <TableCell className="font-mono text-meta">{formatTimestamp(log.timestamp)}</TableCell>
                     <TableCell>
                       <SeverityBadge severity={log.severityText} />
                     </TableCell>
-                    <TableCell className="max-w-md truncate font-mono text-xs">{log.body}</TableCell>
+                    <TableCell className="max-w-md truncate font-mono text-meta">{log.body}</TableCell>
                   </TableRow>
                   {expandedRow === index && (
                     <TableRow>
                       <TableCell colSpan={4} className="bg-muted/30 p-4">
                         <div className="space-y-3">
                           <div>
-                            <h4 className="text-sm font-medium mb-1">Full Message</h4>
-                            <pre className="text-xs bg-background p-2 rounded overflow-x-auto whitespace-pre-wrap">
+                            <h4 className="text-body font-medium mb-1">Full Message</h4>
+                            <pre className="text-meta bg-background p-2 rounded overflow-x-auto whitespace-pre-wrap">
                               {log.body}
                             </pre>
                           </div>
                           {log.traceId && (
                             <div>
-                              <h4 className="text-sm font-medium mb-1">Trace ID</h4>
-                              <code className="text-xs bg-background p-1 rounded">{log.traceId}</code>
+                              <h4 className="text-body font-medium mb-1">Trace ID</h4>
+                              <code className="text-meta bg-background p-1 rounded">{log.traceId}</code>
                             </div>
                           )}
                           {log.spanId && (
                             <div>
-                              <h4 className="text-sm font-medium mb-1">Span ID</h4>
-                              <code className="text-xs bg-background p-1 rounded">{log.spanId}</code>
+                              <h4 className="text-body font-medium mb-1">Span ID</h4>
+                              <code className="text-meta bg-background p-1 rounded">{log.spanId}</code>
                             </div>
                           )}
                           {Object.keys(log.logAttributes || {}).length > 0 && (
                             <div>
-                              <h4 className="text-sm font-medium mb-1">Attributes</h4>
+                              <h4 className="text-body font-medium mb-1">Attributes</h4>
                               <div className="relative">
                                 <CopyButton
                                   value={JSON.stringify(log.logAttributes, null, 2)}
@@ -262,7 +262,7 @@ export function BoxLogsTab({ boxId }: { boxId: string }) {
                                   size="icon-xs"
                                   className="absolute top-1.5 right-1.5"
                                 />
-                                <pre className="text-xs bg-background p-2 rounded overflow-x-auto">
+                                <pre className="text-meta bg-background p-2 rounded overflow-x-auto">
                                   {JSON.stringify(log.logAttributes, null, 2)}
                                 </pre>
                               </div>
@@ -281,7 +281,7 @@ export function BoxLogsTab({ boxId }: { boxId: string }) {
 
       {data && data.totalPages > 1 && (
         <div className="flex items-center justify-between shrink-0">
-          <span className="text-sm text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             Page {params.logsPage} of {data.totalPages} ({data.total} total)
           </span>
           <div className="flex items-center gap-2">

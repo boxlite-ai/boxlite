@@ -20,7 +20,7 @@ type Status = 'connecting' | 'open' | 'exited' | 'failed'
 const STATUS_LINE: Record<Exclude<Status, 'open'>, string> = {
   connecting: 'connecting…',
   exited: 'session ended',
-  failed: 'could not connect',
+  failed: 'Could not connect',
 }
 
 /**
@@ -118,12 +118,18 @@ export function BoxTerminal({
   return (
     <div className={cn('relative min-h-0 bg-black', className)}>
       <div ref={containerRef} className="absolute inset-0 p-2" />
+      {/* The terminal surface is black in both themes, so nothing drawn on it may use theme tokens. */}
       {status !== 'open' && (
-        <div className="absolute bottom-2 left-2 flex items-center gap-3 font-mono text-meta text-muted-foreground">
+        <div className="absolute bottom-2 left-2 flex items-center gap-3 font-mono text-meta text-white/70">
           <span>{STATUS_LINE[status]}</span>
           {status !== 'connecting' && (
-            <Button variant="outline" size="sm" onClick={() => setAttempt((n) => n + 1)}>
-              reconnect
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-white/40 bg-transparent text-white hover:bg-white/10 hover:text-white"
+              onClick={() => setAttempt((n) => n + 1)}
+            >
+              Reconnect
             </Button>
           )}
         </div>
@@ -133,7 +139,7 @@ export function BoxTerminal({
           asChild
           variant="secondary"
           size="icon-sm"
-          className="absolute right-2 top-2 opacity-60 hover:opacity-100"
+          className="absolute right-2 top-2 border border-white/30 bg-white/10 text-white hover:bg-white/20 hover:text-white"
           title="Fullscreen"
         >
           <Link to={fullscreenHref} aria-label="Open terminal fullscreen">

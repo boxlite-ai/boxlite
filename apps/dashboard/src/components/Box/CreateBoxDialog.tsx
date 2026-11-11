@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/form-dialog'
 import { AsciiButton } from '@/components/ascii'
 import { AsciiChip, BRAND, PanelNote } from '@/components/ascii'
-import { Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Dialog, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { RoutePath } from '@/enums/RoutePath'
@@ -143,7 +143,7 @@ function Stepper({
     setText(String(next))
   }
   const btn =
-    'flex size-11 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
+    'flex size-11 flex-none items-center justify-center font-mono text-em text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
   return (
     <div className="flex items-stretch border border-border bg-card">
       <button
@@ -166,7 +166,7 @@ function Stepper({
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
         }}
-        className="min-w-0 flex-1 bg-transparent py-[9px] text-center font-mono text-[13px] text-foreground outline-none"
+        className="min-w-0 flex-1 bg-transparent py-[9px] text-center font-mono text-body text-foreground outline-none"
       />
       <button
         type="button"
@@ -205,8 +205,8 @@ function ResourceField({
 }) {
   return (
     <div className="flex flex-col gap-[9px]">
-      <div className="font-mono text-[10px] uppercase tracking-[1px]">
-        {label} <span className="text-muted-foreground">({unit})</span>
+      <div className="font-mono text-label uppercase tracking-[1px]">
+        {label} <span className="normal-case tracking-normal text-muted-foreground">({unit})</span>
       </div>
       <Stepper
         value={value}
@@ -233,7 +233,7 @@ function ResourceField({
 function CappedResourcesNote({ items }: { items: { label: string; unit: string; max: number }[] }) {
   if (items.length === 0) return null
   return (
-    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-warning-foreground">
+    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-meta leading-relaxed text-warning-foreground">
       Adjusted to your organization&apos;s max: {items.map((r) => `${r.label} ${r.max} ${r.unit}`).join(' · ')}. Need
       more?{' '}
       <a
@@ -266,14 +266,14 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
 
   const ROW = 'flex shrink-0 flex-col gap-1 border-t border-border px-4 py-4 sm:px-6'
   const LABEL = 'form-field-label'
-  const FIGURE = 'font-mono text-[20px] font-bold tracking-[-0.5px] sm:text-[24px]'
+  const FIGURE = 'font-mono text-section font-bold tracking-[-0.5px] sm:text-page'
 
   if (!config.billingApiUrl) {
     return (
       <div className={cn(ROW, 'sm:flex-row sm:items-baseline sm:justify-between')}>
         <span className={LABEL}>Price per hour</span>
         <span className={FIGURE}>
-          $0.00 <span className="text-[11px] font-normal text-muted-foreground">/ hr · free in preview</span>
+          $0.00 <span className="text-meta font-normal text-muted-foreground">/ hr · free in preview</span>
         </span>
       </div>
     )
@@ -307,19 +307,22 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
           aria-expanded={breakdownOpen}
           aria-controls="box-price-breakdown"
           onClick={() => setBreakdownOpen((wasOpen) => !wasOpen)}
-          className={cn(LABEL, 'self-start transition-colors hover:text-foreground')}
+          className={cn(
+            LABEL,
+            'mb-0 inline-flex min-h-6 items-center gap-1 self-start transition-colors hover:text-foreground',
+          )}
         >
           <span style={{ color: BRAND }}>{breakdownOpen ? '▾' : '▸'}</span> Est. price per hour
         </button>
         <span className={FIGURE}>
           {formatPriceCents(quote.totalCents)}
-          <span className="text-[11px] font-normal text-muted-foreground"> / hr</span>
+          <span className="text-meta font-normal text-muted-foreground"> / hr</span>
         </span>
       </div>
       {breakdownOpen && (
         <div id="box-price-breakdown" className="mt-1 flex flex-col gap-0.5">
           {quote.lines.map((line) => (
-            <div key={line.code} className="flex items-baseline justify-between gap-3 font-mono text-[11px]">
+            <div key={line.code} className="flex items-baseline justify-between gap-3 font-mono text-meta">
               <span className="text-muted-foreground">
                 {line.label} · {line.quantity} {line.quantityUnit} × {formatPriceCents(line.unitPriceCents, 6)}/
                 {line.quantityUnit}·hr
@@ -458,7 +461,7 @@ function SelectField({
   if (customOpen) {
     return (
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+        <span className="font-mono text-meta font-medium">{label}</span>
         <div className="flex items-stretch">
           <input
             autoFocus
@@ -470,17 +473,17 @@ function SelectField({
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
             }}
-            className="w-[56px] border border-border bg-card px-[10px] py-[7px] text-center font-mono text-[12.5px] text-foreground outline-none focus:border-brand"
+            className="w-[56px] border border-border bg-card px-[10px] py-[7px] text-center font-mono text-meta text-foreground outline-none focus:border-brand"
           />
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label={`${ariaLabel} unit`}
-              className="flex min-w-[64px] items-center justify-between gap-1 border border-l-0 border-border bg-card px-[9px] py-[7px] font-mono text-[12px] text-muted-foreground outline-none data-[state=open]:border-brand"
+              className="flex min-w-[64px] items-center justify-between gap-1 border border-l-0 border-border bg-card px-[9px] py-[7px] font-mono text-meta text-muted-foreground outline-none data-[state=open]:border-brand"
             >
               <span>{DURATION_UNITS.find((u) => u.id === customUnit)?.label}</span>
               <ChevronDown className="size-3 shrink-0" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="font-mono text-[12px]">
+            <DropdownMenuContent align="end" className="font-mono text-meta">
               {DURATION_UNITS.map((u) => (
                 <DropdownMenuItem
                   key={u.id}
@@ -502,16 +505,16 @@ function SelectField({
 
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+      <span className="font-mono text-meta font-medium">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={ariaLabel}
-          className="flex min-w-[104px] items-center justify-between gap-2 border border-border bg-card px-[11px] py-[7px] font-mono text-[12.5px] text-foreground outline-none data-[state=open]:border-brand"
+          className="flex min-w-[104px] items-center justify-between gap-2 border border-border bg-card px-[11px] py-[7px] font-mono text-meta text-foreground outline-none data-[state=open]:border-brand"
         >
           <span>{current?.label ?? formatLifecycleSeconds(value)}</span>
           <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="font-mono text-[12px]">
+        <DropdownMenuContent align="end" className="font-mono text-meta">
           {options.map((o) => (
             <DropdownMenuItem
               key={o.seconds}
@@ -552,14 +555,14 @@ function MountRow({
         <DropdownMenu>
           <DropdownMenuTrigger
             aria-label="Volume"
-            className="flex min-w-0 flex-1 items-center justify-between gap-2 border border-border bg-card px-[11px] py-[8px] font-mono text-[12.5px] outline-none data-[state=open]:border-brand"
+            className="flex min-w-0 flex-1 items-center justify-between gap-2 border border-border bg-card px-[11px] py-[8px] font-mono text-meta outline-none data-[state=open]:border-brand"
           >
             <span className={cn('truncate', !selected && 'text-muted-foreground')}>
               {selected?.name ?? 'Select a volume'}
             </span>
             <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="font-mono text-[12px]">
+          <DropdownMenuContent align="start" className="font-mono text-meta">
             {volumes.length === 0 && <DropdownMenuItem disabled>No volumes yet</DropdownMenuItem>}
             {volumes.map((v) => {
               const ready = v.state === VolumeState.READY
@@ -582,21 +585,21 @@ function MountRow({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <span className="self-center font-mono text-[12px] text-muted-foreground">→</span>
+        <span className="self-center font-mono text-meta text-muted-foreground">→</span>
 
         <input
           value={mount.mountPath}
           onChange={(e) => onChange({ ...mount, mountPath: e.target.value })}
           placeholder="/data"
           aria-label="Mount path"
-          className="min-w-0 flex-1 border border-border bg-card px-[11px] py-[8px] font-mono text-[12.5px] text-foreground outline-none focus:border-brand"
+          className="min-w-0 flex-1 border border-border bg-card px-[11px] py-[8px] font-mono text-meta text-foreground outline-none focus:border-brand"
         />
 
         <button
           type="button"
           onClick={onRemove}
           aria-label="Remove mount"
-          className="shrink-0 border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+          className="shrink-0 border border-border px-[10px] font-mono text-meta text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
         >
           ✕
         </button>
@@ -833,7 +836,8 @@ export const CreateBoxDialog = ({
 
       <DialogContent className={cn('sm:max-w-[560px]', className)}>
         <DialogHeader>
-          <DialogTitle>Create a box for your agent</DialogTitle>
+          <DialogTitle>New Box</DialogTitle>
+          <DialogDescription className="sr-only">Create a Box for your agent.</DialogDescription>
         </DialogHeader>
 
         <FormDialogBody>
@@ -853,7 +857,7 @@ export const CreateBoxDialog = ({
               {/* Submitting an empty name is a real, supported path — the API then assigns
                   an adjective-animal name of its own. Say so here, or the placeholder reads
                   as a promise that the box will be called something like "my-new-box". */}
-              <div id="create-box-name-hint" className="font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <div id="create-box-name-hint" className="font-mono text-meta leading-relaxed text-muted-foreground">
                 Optional — auto-named like <span className="text-foreground">cozy-otter</span>.
               </div>
             </div>
@@ -876,6 +880,7 @@ export const CreateBoxDialog = ({
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     aria-label="Choose a known image"
+                    title="Choose a known image"
                     className="flex shrink-0 items-center px-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground data-[state=open]:text-foreground"
                   >
                     <ChevronDown className="size-3.5" />
@@ -936,7 +941,7 @@ export const CreateBoxDialog = ({
                   selected={sizePreset === p.id}
                   aria-pressed={sizePreset === p.id}
                   onClick={() => applySizePreset(p.id)}
-                  className="px-2 py-[7px] text-[12px]"
+                  className="px-2 py-[7px] text-meta"
                 >
                   {p.label}
                 </AsciiChip>
@@ -948,8 +953,8 @@ export const CreateBoxDialog = ({
                 line too was pure duplication — it only earns its place when
                 there's no other visible readout of the current size. */}
             {sizePreset !== 'custom' && (
-              <div className="font-mono text-[11px] text-muted-foreground">
-                · {cpu} vCPU · {memory} GiB · {disk} GiB
+              <div className="font-mono text-meta text-muted-foreground">
+                {cpu} vCPU · {memory} GiB RAM · {disk} GiB disk
               </div>
             )}
 
@@ -1006,11 +1011,11 @@ export const CreateBoxDialog = ({
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
               aria-expanded={showAdvanced}
-              className="flex w-full items-center justify-between font-mono text-label uppercase tracking-[1.2px] text-muted-foreground transition-colors hover:text-foreground"
+              className="flex min-h-6 w-full items-center justify-between font-mono text-meta font-medium text-foreground transition-colors hover:text-brand"
             >
               <span>
                 <span style={{ color: BRAND }}>{showAdvanced ? '▾' : '▸'}</span> Advanced
-                <span className="ml-2 normal-case tracking-normal text-muted-foreground/70">
+                <span className="ml-2 font-normal text-muted-foreground">
                   volumes · lifecycle
                   {mounts.length > 0 ? ` · ${mounts.length} mount${mounts.length > 1 ? 's' : ''}` : ''}
                 </span>
@@ -1035,7 +1040,7 @@ export const CreateBoxDialog = ({
                   <button
                     type="button"
                     onClick={() => setMounts((prev) => [...prev, { volumeId: '', mountPath: '/data' }])}
-                    className="border border-border px-[10px] py-[4px] font-mono text-[11px] transition-colors hover:border-brand"
+                    className="inline-flex h-7 items-center border border-border px-[10px] font-mono text-meta transition-colors hover:border-brand"
                   >
                     + Mount a volume
                   </button>
@@ -1095,7 +1100,7 @@ export const CreateBoxDialog = ({
                   waking even with auto-stop off, so this is its own row, not a
                   modifier of one. */}
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-[10px] uppercase tracking-[1px]">Wake on access</span>
+                    <span className="font-mono text-meta font-medium">Wake on access</span>
                     <Switch aria-label="Wake on access" checked={autoResume} onCheckedChange={setAutoResumeEnabled} />
                   </div>
                   {/* Wake is served by the API's own REST/WS proxy
@@ -1119,7 +1124,7 @@ export const CreateBoxDialog = ({
                   {/* Same shape as CappedResourcesNote above — left rule, tinted
                   ground, mono 11px — in the destructive tone. */}
                   {deleteDelaySeconds > 0 && (
-                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-destructive">
+                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-mono text-meta leading-relaxed text-destructive">
                       Permanent. The box and everything on its disk are gone — this cannot be undone.
                     </p>
                   )}
@@ -1136,7 +1141,7 @@ export const CreateBoxDialog = ({
             <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
             {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
             {(lifecycleError || mountError) && (
-              <p className="border-t border-border px-6 pt-3 font-mono text-[11px] text-destructive">
+              <p className="border-t border-border px-6 pt-3 font-mono text-meta text-destructive">
                 {lifecycleError ?? mountError}
               </p>
             )}

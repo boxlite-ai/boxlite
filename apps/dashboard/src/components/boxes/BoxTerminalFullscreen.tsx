@@ -30,7 +30,7 @@ export default function BoxTerminalFullscreen() {
     body = (
       <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
         <Spinner className="size-4" />
-        <span className="text-sm">Loading box...</span>
+        <span className="text-body">Loading box...</span>
       </div>
     )
   } else if (boxIsError || !box) {

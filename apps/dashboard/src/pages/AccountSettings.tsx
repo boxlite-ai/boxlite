@@ -29,7 +29,7 @@ const AccountSettings: React.FC<{ linkedAccountsEnabled: boolean }> = ({ linkedA
           <Card>
             <CardContent>
               <div className="flex sm:flex-row flex-col justify-between sm:items-center gap-2">
-                <div className="text-sm">
+                <div className="text-body">
                   <div className="text-muted-foreground">
                     <p className="font-semibold text-foreground">Privacy Preferences</p>
                     Manage which tracking technologies are used for analytics and marketing.

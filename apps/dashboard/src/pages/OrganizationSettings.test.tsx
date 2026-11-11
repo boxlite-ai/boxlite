@@ -80,13 +80,13 @@ describe('Organization settings tabs', () => {
     })
   }
 
-  it('opens General with metadata and loads members only after choosing Member', async () => {
+  it('opens General with metadata and loads members only after choosing Members', async () => {
     await renderPage()
     expect(document.querySelector<HTMLInputElement>('#organization-name')?.value).toBe('Acme')
     expect([...document.querySelectorAll('input')].some((input) => input.value === 'org-1')).toBe(true)
     expect(mocks.api.organizationsApi.listOrganizationInvitations).not.toHaveBeenCalled()
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['General', 'Member'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['General', 'Members'])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     await act(async () => tabs[1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
     expect(document.querySelector('output')?.textContent).toBe('/dashboard/settings?tab=member')
@@ -102,10 +102,10 @@ describe('Organization settings tabs', () => {
     expect(document.querySelector('output')?.textContent).toBe('/dashboard/ci/connects')
   })
 
-  it('opens Member directly from a bookmarked tab URL', async () => {
+  it('opens Members directly from a bookmarked tab URL', async () => {
     await renderPage('/dashboard/settings?tab=member')
     expect(document.querySelector('h1 + p')?.textContent).toBe('Manage settings and members for Acme.')
-    expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Member')
+    expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Members')
     expect(document.querySelector('tbody')?.textContent).toContain('owner@example.com')
   })
 

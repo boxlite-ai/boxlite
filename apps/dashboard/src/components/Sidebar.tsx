@@ -127,23 +127,26 @@ const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] 
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
     <div className="px-2 py-2">
-      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
+      <div className="px-1 pb-2 font-mono text-meta uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
       <ToggleGroup
         type="single"
         value={theme}
         onValueChange={(value) => {
           if (value) setTheme(value as Theme)
         }}
-        variant="outline"
         size="sm"
-        className="grid w-full grid-cols-3 gap-0 border border-border"
+        className="grid w-full grid-cols-3 gap-0"
       >
         {themeOptions.map((option) => (
           <ToggleGroupItem
             key={option.value}
             value={option.value}
             aria-label={`Use ${option.label.toLowerCase()} theme`}
-            className="h-9 justify-center gap-1.5 rounded-none border-0 border-r border-border text-xs text-muted-foreground transition-colors last:border-r-0 hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_0_0_1px_hsl(var(--border-selected))]"
+            // Every segment carries all four edges and overlaps its left neighbour by a
+            // pixel, so shared edges collapse into one line (same idea as the segmented
+            // tabs). Selection is a soft raised fill and a bold label, not a brighter
+            // outline: inside a small menu an outlined segment reads as a heavy box.
+            className="-ml-px h-9 justify-center gap-1.5 rounded-none border border-border text-meta text-muted-foreground transition-colors first:ml-0 hover:bg-accent/50 hover:text-foreground data-[state=on]:bg-accent data-[state=on]:font-semibold data-[state=on]:text-foreground"
           >
             {option.icon}
             <span>{option.label}</span>
@@ -312,7 +315,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
       <aside
         aria-label="Feature navigation"
         style={{ '--navigation-width': expanded ? '224px' : '64px' } as CSSProperties}
-        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-mono text-[13px] md:block"
+        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-mono text-body md:block"
       >
         <div
           ref={panelRef}
@@ -393,7 +396,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                 className="flex w-full shrink-0 flex-col items-center gap-2"
               >
                 {showLabels && (
-                  <div className="w-full px-3 pb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <div className="w-full px-3 pb-1 text-label uppercase tracking-[0.12em] text-muted-foreground">
                     {section.label}
                   </div>
                 )}
@@ -465,7 +468,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                               to={child.path}
                               aria-current={currentChild === child ? 'page' : undefined}
                               className={cn(
-                                'flex min-h-9 items-center gap-2 pl-7 pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                                'flex min-h-9 items-center gap-2 pl-7 pr-2 text-meta text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
                                 currentChild === child && 'bg-accent text-foreground hover:bg-accent',
                               )}
                             >
@@ -534,7 +537,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                     to={item.path}
                     aria-current={isActive(item.path) ? 'page' : undefined}
                     className={cn(
-                      'flex min-h-9 items-center gap-2 pl-7 pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                      'flex min-h-9 items-center gap-2 pl-7 pr-2 text-meta text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
                       isActive(item.path) && 'bg-accent text-foreground hover:bg-accent',
                     )}
                   >
@@ -572,7 +575,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
         <header
           aria-label="Application navigation"
           className={cn(
-            'sticky z-40 flex h-[var(--app-header-height,60px)] w-full shrink-0 items-center border-b border-border bg-background font-mono text-[13px]',
+            'sticky z-40 flex h-[var(--app-header-height,60px)] w-full shrink-0 items-center border-b border-border bg-background font-mono text-body',
             isBannerVisible ? 'top-16 md:top-12' : 'top-0',
           )}
         >
@@ -605,9 +608,9 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             <DropdownMenuTrigger
               aria-label="Open profile menu"
               title="Profile"
-              className="mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-[13px] font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              className="mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
             >
-              <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
+              <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-meta font-bold text-brand-foreground">
                 {user?.profile.picture ? (
                   <img src={user.profile.picture} alt={userName} className="h-full w-full object-cover" />
                 ) : (
@@ -619,9 +622,9 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             </DropdownMenuTrigger>
             <DropdownMenuContent side="bottom" align="end" sideOffset={8} className="min-w-[18rem]">
               <DropdownMenuLabel className="flex flex-col gap-0.5">
-                <span className="truncate text-[13px] font-semibold text-foreground">{userName}</span>
+                <span className="truncate text-body font-semibold text-foreground">{userName}</span>
                 {user?.profile.email && user.profile.email !== userName && (
-                  <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">
+                  <span className="truncate font-mono text-meta font-normal text-muted-foreground">
                     {user.profile.email}
                   </span>
                 )}
@@ -632,7 +635,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               {/* The selection persists in localStorage, so the chosen organization opens on the next login. */}
               {organizations.length > 1 && (
                 <>
-                  <DropdownMenuLabel className="font-mono text-[11px] font-normal uppercase tracking-[0.18em] text-muted-foreground">
+                  <DropdownMenuLabel className="font-mono text-meta font-normal uppercase tracking-[0.18em] text-muted-foreground">
                     Organizations
                   </DropdownMenuLabel>
                   {organizations.map((organization) => {
@@ -648,7 +651,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                         <Check className={cn('size-4', isSelected ? 'opacity-100' : 'opacity-0')} />
                         <span className="truncate">{organization.name}</span>
                         {organization.isDefaultForAuthenticatedUser && (
-                          <span className="ml-auto text-[11px] text-muted-foreground">Personal</span>
+                          <span className="ml-auto text-meta text-muted-foreground">Personal</span>
                         )}
                       </DropdownMenuItem>
                     )

@@ -33,7 +33,7 @@ function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
       <span className="text-label leading-none text-brand">▸</span>
-      <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
+      <span className="text-meta uppercase tracking-[2px]">{title}</span>
       <span className="flex-1" />
       {right}
     </div>
@@ -71,7 +71,7 @@ function InlineAction({
       // The two actions on this sheet are the ones that make a box reachable
       // from outside; they get a button's weight, not a footnote's.
       className={cn(
-        'border border-border px-[9px] py-[3px] font-mono text-[10px] uppercase tracking-[1px] text-foreground',
+        'border border-border px-[9px] py-[3px] font-mono text-label uppercase tracking-[1px] text-foreground',
         'transition-colors hover:border-brand',
         'disabled:pointer-events-none disabled:opacity-40',
       )}

@@ -16,7 +16,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-primary font-semibold text-primary-foreground hover:[&:not(:disabled)]:opacity-85',
-        destructive: 'bg-destructive font-semibold text-white hover:[&:not(:disabled)]:opacity-85',
+        destructive: 'bg-destructive-solid font-semibold text-white hover:[&:not(:disabled)]:opacity-85',
         outline:
           'border-border bg-transparent text-foreground hover:[&:not(:disabled)]:border-brand hover:[&:not(:disabled)]:bg-card aria-expanded:[&:not(:disabled)]:border-brand aria-expanded:[&:not(:disabled)]:bg-card',
         secondary: 'border-border bg-secondary text-secondary-foreground hover:[&:not(:disabled)]:border-brand',
@@ -30,7 +30,7 @@ const buttonVariants = cva(
         sm: 'h-7 gap-1.5 px-2.5 text-meta',
         lg: 'h-10 px-6',
         icon: 'size-9',
-        'icon-xs': 'size-6 text-xs',
+        'icon-xs': 'size-6 text-meta',
         'icon-sm': 'size-7 p-0',
         'icon-lg': 'size-10',
       },

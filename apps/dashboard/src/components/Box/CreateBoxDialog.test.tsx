@@ -1162,7 +1162,9 @@ describe('CreateBoxDialog trigger slot', () => {
    * Checks whether the dialog is currently open by looking for its title text.
    */
   function dialogIsOpen() {
-    return [...document.querySelectorAll('*')].some((el) => el.textContent === 'Create a box for your agent')
+    return [...document.querySelectorAll('*')].some(
+      (el) => el.getAttribute('data-slot') === 'dialog-title' && el.textContent === 'New Box',
+    )
   }
 
   it('opens on the supplied control and returns focus there after Cancel', async () => {

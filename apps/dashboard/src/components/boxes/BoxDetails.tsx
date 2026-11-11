@@ -41,10 +41,12 @@ import { getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Check, Container, Copy, MoreVertical, Pause, Play, RefreshCw, RotateCcw, Trash2 } from '@/components/ui/icon'
+import { Check, Container, Copy, MoreVertical, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { generatePath, Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import { copyToClipboard } from '@/lib/copy-text'
 import { toast } from 'sonner'
 import { BoxNetworkSection } from './BoxNetworkSection'
 import { BoxTerminalTab } from './BoxTerminalTab'
@@ -78,7 +80,7 @@ function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
       <span className="text-label leading-none text-brand">▸</span>
-      <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
+      <span className="text-meta uppercase tracking-[2px]">{title}</span>
       <span className="flex-1" />
       {right}
     </div>
@@ -150,6 +152,7 @@ export default function BoxDetails() {
   }, [navigate, searchParams, selectedOrganization, user?.profile.sub])
 
   const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
+  usePageTitle(box ? getBoxDisplayName(box) : 'Box')
 
   // Volumes this box mounts, with the stored handle resolved back to a name.
   const { data: allVolumes = [] } = useVolumesQuery()
@@ -252,37 +255,41 @@ export default function BoxDetails() {
     }
   }
 
-  const copyId = () => {
+  const copyId = async () => {
     const id = box ? getBoxPublicId(box) : null
     if (!id) return
-    try {
-      navigator.clipboard?.writeText(id)
-    } catch {
-      /* clipboard may be unavailable */
+    if (!(await copyToClipboard(id))) {
+      toast.error('Could not copy to clipboard')
+      return
     }
     setCopied(true)
     setTimeout(() => setCopied(false), 1300)
   }
 
-  const copyName = () => {
+  const copyName = async () => {
     if (!box) return
-    try {
-      navigator.clipboard?.writeText(getBoxDisplayName(box))
-    } catch {
-      /* clipboard may be unavailable */
+    if (!(await copyToClipboard(getBoxDisplayName(box)))) {
+      toast.error('Could not copy to clipboard')
+      return
     }
     setCopiedName(true)
     setTimeout(() => setCopiedName(false), 1300)
   }
 
   return (
-    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-[13px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-body">
       {/* breadcrumb */}
-      <div className="flex flex-none items-center gap-[9px] text-[12px] text-muted-foreground">
-        <button type="button" onClick={() => navigate(RoutePath.BOXES)} className="hover:text-foreground">
-          boxes
+      <div className="flex flex-none items-center gap-[9px] text-meta text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => navigate(RoutePath.BOXES)}
+          className="inline-flex min-h-6 items-center hover:text-foreground"
+        >
+          Boxes
         </button>
-        <span className="text-border">/</span>
+        <span aria-hidden="true" className="text-muted-foreground">
+          /
+        </span>
         <span className="text-foreground">{box ? getBoxDisplayName(box) : boxId?.toLowerCase()}</span>
       </div>
 
@@ -290,11 +297,11 @@ export default function BoxDetails() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
           <Container className="size-8" strokeWidth={1.3} />
           <div className="text-foreground">Box not found</div>
-          <div className="text-[12px]">Are you sure you&apos;re in the right organization?</div>
+          <div className="text-meta">Are you sure you&apos;re in the right organization?</div>
           <button
             type="button"
             onClick={() => navigate(RoutePath.BOXES)}
-            className="mt-2 border border-border px-4 py-2 text-[13px] transition-colors hover:bg-card"
+            className="mt-2 border border-border px-4 py-2 text-body transition-colors hover:bg-card"
           >
             Back to Boxes
           </button>
@@ -331,8 +338,9 @@ export default function BoxDetails() {
                 <button
                   type="button"
                   onClick={copyName}
-                  title="copy name"
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  title="Copy name"
+                  aria-label="Copy name"
+                  className="inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
                 >
                   {copiedName ? (
                     <Check className="size-[15px]" style={{ color: STATUS.running }} />
@@ -341,7 +349,7 @@ export default function BoxDetails() {
                   )}
                 </button>
               </span>
-              <span className="flex flex-none items-center gap-2 text-[13px]">
+              <span className="flex flex-none items-center gap-2 text-body">
                 <span
                   className="size-[8px] rounded-[2px]"
                   style={{ background: statusOf(box).color, boxShadow: `0 0 6px ${statusOf(box).color}` }}
@@ -351,25 +359,26 @@ export default function BoxDetails() {
             </div>
 
             <div className="flex flex-none flex-wrap items-center gap-2 sm:gap-[10px]">
+              {/* SSH comes first in every state, then the state action, then the menu and refresh. */}
+              <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} statusContainer={sshStatusContainer} />
               {writePermitted && isRecoverable(box) && (
                 <button
                   type="button"
                   onClick={handleRecover}
                   disabled={actionsDisabled}
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
+                  className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
                 >
-                  <RotateCcw className="size-[14px]" /> recover
+                  <RotateCcw className="size-[14px]" /> Recover
                 </button>
               )}
-              <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} statusContainer={sshStatusContainer} />
               {writePermitted && isStartable(box) && (
                 <button
                   type="button"
                   onClick={handleStart}
                   disabled={actionsDisabled}
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
+                  className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
                 >
-                  <Play className="size-[14px]" fill="currentColor" /> start
+                  <Play className="size-[14px]" fill="currentColor" /> Start
                 </button>
               )}
               {writePermitted && isStoppable(box) && (
@@ -377,9 +386,9 @@ export default function BoxDetails() {
                   type="button"
                   onClick={handleStop}
                   disabled={actionsDisabled}
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
+                  className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
                 >
-                  <Pause className="size-[13px]" fill="currentColor" /> stop
+                  <Square className="size-[12px]" fill="currentColor" /> Stop
                 </button>
               )}
               {writePermitted &&
@@ -390,16 +399,16 @@ export default function BoxDetails() {
                   <button
                     type="button"
                     disabled
-                    className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
+                    className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium text-muted-foreground"
                   >
-                    <RefreshCw className="size-[14px] animate-spin" /> working…
+                    <RefreshCw className="size-[14px] animate-spin" /> Working…
                   </button>
                 )}
               {deletePermitted && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     aria-label="Open box actions"
-                    className="flex size-10 items-center justify-center border border-border outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:bg-background sm:size-[34px]"
+                    className="flex size-9 items-center justify-center border border-border outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:bg-background sm:size-[34px]"
                   >
                     <MoreVertical className="size-[18px]" />
                   </DropdownMenuTrigger>
@@ -416,8 +425,9 @@ export default function BoxDetails() {
               <button
                 type="button"
                 onClick={handleRefresh}
-                title="refresh"
-                className="flex size-10 items-center justify-center border border-border transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:size-[34px]"
+                title="Refresh"
+                aria-label="Refresh"
+                className="flex size-9 items-center justify-center border border-border transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:size-[34px]"
               >
                 <span ref={refreshRef} className="inline-flex">
                   <RefreshCw className="size-4" />
@@ -437,8 +447,9 @@ export default function BoxDetails() {
                   <button
                     type="button"
                     onClick={copyId}
-                    title="copy"
-                    className="text-muted-foreground hover:text-foreground"
+                    title="Copy Box ID"
+                    aria-label="Copy Box ID"
+                    className="inline-flex size-6 items-center justify-center text-muted-foreground hover:text-foreground"
                   >
                     {copied ? (
                       <Check className="size-[14px]" style={{ color: STATUS.running }} />
@@ -466,9 +477,9 @@ export default function BoxDetails() {
               </SpecRow>
               <SpecRow label="region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
 
-              <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
-              <SpecRow label="memory">{box.memory} gib</SpecRow>
-              <SpecRow label="disk">{box.disk} gib</SpecRow>
+              <SpecRow label="cpu">{box.cpu} vCPU</SpecRow>
+              <SpecRow label="memory">{box.memory} GiB</SpecRow>
+              <SpecRow label="disk">{box.disk} GiB</SpecRow>
 
               {/* Read-only by construction: mounts are fixed when the box is
                   created and there is no attach/detach endpoint, so this
@@ -507,9 +518,7 @@ export default function BoxDetails() {
               {box.errorReason && (
                 <>
                   <SectionHeader title="error" />
-                  <p className="text-[12px] leading-relaxed" style={{ color: STATUS.error }}>
-                    {box.errorReason}
-                  </p>
+                  <p className="text-meta leading-relaxed text-destructive-foreground">{box.errorReason}</p>
                   {/* The API's wording for a private pull with no credential.
                       The fix is on the registries page, so the error carries the way there. */}
                   {box.image && /no registry login/.test(box.errorReason) && (
