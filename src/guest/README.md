@@ -2,6 +2,42 @@
 
 The Linux guest agent receives volume instructions through the guest initialization RPC. `storage::mount_volumes` dispatches legacy volumes and mounts aggregate exports through one virtio-fs root, then binds each export at its resolved guest destination. The planner mounts aggregate roots first, then orders every destination by depth, including legacy shares and block devices. A parent binding therefore cannot hide a nested mount just created by the same batch. Its guard owns all successful mounts in the batch and rolls them back in reverse order if mounting or later initialization fails; `commit` preserves them after initialization succeeds. Before a block mount returns successfully to that batch, its helper owns cleanup: a resize or other post-mount initialization error unmounts the device and reports any cleanup failure alongside the original error.
 
+## Keyed execution startup
+
+The additive `Execution.ExecKeyed` RPC requires internal metadata
+`idempotency-key: <random-token>.<deadline-unix-ms>`. Normal `Exec` keeps its
+existing behavior. The caller fixes a deadline at request acceptance, at most
+24 hours ahead (one minute of clock skew is allowed). Unsupported guests reject
+the separate RPC instead of silently ignoring retry identity.
+
+The guest reserves the token before starting a command. Matching payloads share
+one startup task and its result, including completed short commands; changed
+payloads return `idempotency_mismatch`. Caller cancellation cannot cancel the
+owned startup task after effects begin. Output retention and inventory eviction
+do not remove this association. Errors explicitly proven to occur before process
+startup release the request reservation: for example, creating a previously
+missing working directory allows the same payload and key to retry. User lookup
+failures before zygote submission are also retryable. Unclassified spawn or
+post-spawn handshake failures remain retained; they do not authorize another
+command start. A missing executable reported as a completed 126/127 execution
+remains a completed result, not a retryable startup error.
+
+Expired tokens fail before lookup. A monotonic elapsed-time floor preserves the
+highest observed wall time, so forward jumps followed by clock rollback cannot
+make reclaimed tokens valid again. Time validation, cleanup and reservation share
+one registry lock, so queued retries recheck expiry after contention. The startup
+task uses the same effective clock before starting effects. New requests reclaim expired entries only
+after startup has published its result, so a delayed old RPC cannot repeat the
+command and unfinished tasks remain counted. The registry admits up to 4096
+unexpired or unfinished requests and returns resource exhaustion at capacity.
+VM termination loses these associations; callers must bind retries to a VM
+generation and refuse to run uncertain work in a replacement VM.
+
+`make test:unit:guest FILTER=keyed_execution` runs a real shell counter through
+concurrent startup, mismatch and completed-execution retries.
+`make test:unit:guest FILTER=service::exec::requests` checks expiry, delayed
+tokens, cleanup and pending-capacity boundaries.
+
 The same guest agent bootstraps itself as native PID 1 or as a child of libkrun's init, with shared container and RPC behavior.
 
 ## Startup ownership

@@ -1,6 +1,7 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
+import type { BindBoxRequest } from '../../boxlite-rest/box-request.service'
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { randomUUID } from 'node:crypto'
@@ -49,6 +50,7 @@ export class CheckpointRecoverService {
     checkpointKey: string,
     name: string | undefined,
     maxCreatedBoxes: number | undefined,
+    bindRequest?: BindBoxRequest,
   ): Promise<Box> {
     if (name !== undefined && (!name || name.length > 128 || name.includes('\0')))
       throw new BadRequestException('Invalid box name')
@@ -91,6 +93,7 @@ export class CheckpointRecoverService {
           await this.schedule(manager, checkpoint, box, manager.create(BoxCheckpointState, { boxId: box.id }))
           await manager.save(Box, box)
         },
+        bindRequest,
       )
     }
     try {

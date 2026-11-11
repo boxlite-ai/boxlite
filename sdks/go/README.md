@@ -109,6 +109,24 @@ func main() {
 }
 ```
 
+### Keyed startup
+
+`ExecutionOptions.IdempotencyKey` accepts an internal random token followed by
+`.` and a fixed Unix-millisecond deadline, at most 24 hours ahead. Reusing the
+same token and payload resolves to one guest execution; a changed payload fails.
+`ExpectedStartedAt` binds the command to the VM start time in Unix milliseconds.
+Keyed startup requires an already running box and never starts a replacement VM.
+These options require the additive native `boxlite_box_exec_keyed` entry point
+and guest `ExecKeyed` RPC; older guests reject the call explicitly.
+
+A keyed `StartExecution` returns a control handle: use `ID`, `Wait`, `Signal`
+and `Kill`, then release it with `Close`. Acquire streams separately through
+`box.Executions().Attach(ctx, execution.ID(), options)`. Startup and retries do
+not acquire stdin or output; closing a retry cannot send EOF to the original
+process. Existing calls without a key keep eager stream setup and teardown.
+The guest rejects expired tokens, retains unfinished startup at capacity, and
+cannot recover an association after VM termination.
+
 ### Live Execution Discovery and Recovery
 
 `box.Executions().List(ctx)` returns `[]ExecutionInfo` from the live guest,

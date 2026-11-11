@@ -1,3 +1,4 @@
+import { BoxRequestService } from './box-request.service'
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -104,6 +105,7 @@ describe('Checkpoint REST authentication and request admission', () => {
       imports: [PassportModule.register({ session: false })],
       controllers: [BoxliteCheckpointController, BoxliteBoxController],
       providers: [
+        { provide: BoxRequestService, useValue: {} },
         { provide: CheckpointService, useValue: checkpoints },
         { provide: CheckpointRecoverService, useValue: recovery },
         { provide: BoxService, useValue: boxes },

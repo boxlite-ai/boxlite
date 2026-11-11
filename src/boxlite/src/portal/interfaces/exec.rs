@@ -107,12 +107,59 @@ impl ExecutionInterface {
         tracing::debug!(command = %command.command, "exec RPC: sending request");
 
         // Start execution
-        let exec_response = self.client.exec(request).await?.into_inner();
+        let exec_response = if let Some(key) = &command.idempotency_key {
+            let mut request = tonic::Request::new(request);
+            request.metadata_mut().insert(
+                "idempotency-key",
+                key.parse().map_err(|_| {
+                    BoxliteError::InvalidArgument("invalid execution idempotency key".into())
+                })?,
+            );
+            self.client
+                .exec_keyed(request)
+                .await
+                .map_err(|status| match status.code() {
+                    tonic::Code::InvalidArgument => {
+                        BoxliteError::InvalidArgument(status.message().into())
+                    }
+                    tonic::Code::FailedPrecondition => {
+                        BoxliteError::InvalidState(status.message().into())
+                    }
+                    tonic::Code::ResourceExhausted => {
+                        BoxliteError::ResourceExhausted(status.message().into())
+                    }
+                    tonic::Code::Unimplemented => {
+                        BoxliteError::Unsupported(status.message().into())
+                    }
+                    _ => status.into(),
+                })?
+                .into_inner()
+        } else {
+            self.client.exec(request).await?.into_inner()
+        };
         if let Some(err) = exec_response.error {
             return Err(map_exec_error(&err.reason, err.detail));
         }
 
         let execution_id = exec_response.execution_id.clone();
+        if command.idempotency_key.is_some() {
+            // Keyed startup returns controls; output is acquired by explicit
+            // attach. Retrying must never open a second stdin pump whose
+            // release would send EOF to the original process.
+            ExecProtocol::spawn_wait(
+                self.client.clone(),
+                execution_id.clone(),
+                result_tx,
+                shutdown_token,
+            );
+            return Ok(ExecComponents {
+                execution_id,
+                stdin_tx: None,
+                stdout_rx,
+                stderr_rx,
+                result_rx,
+            });
+        }
 
         tracing::debug!(execution_id = %execution_id, "spawning background streams");
 
@@ -952,6 +999,9 @@ impl OutputTracker {
 fn map_exec_error(reason: &str, detail: String) -> BoxliteError {
     match reason {
         "invalid_argument" => BoxliteError::InvalidArgument(detail),
+        "idempotency_mismatch" => {
+            BoxliteError::InvalidArgument(format!("idempotency_mismatch: {detail}"))
+        }
         _ => BoxliteError::Internal(format!("{}: {}", reason, detail)),
     }
 }

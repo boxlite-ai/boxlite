@@ -1,6 +1,10 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
+import { BoxRequestService } from '../../boxlite-rest/box-request.service'
+import { AddBoxRequests1794390000000 } from '../../migrations/pre-deploy/1794390000000-add-box-requests-migration'
+import { BoxliteBoxController } from '../../boxlite-rest/boxlite-box.controller'
+import { BoxDto } from '../dto/box.dto'
 import { randomUUID } from 'node:crypto'
 import { ConfigService } from '@nestjs/config'
 import { DataSource, Repository } from 'typeorm'
@@ -59,6 +63,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   let service: CheckpointService
   let receiver: CheckpointJobReceiver
   let recovery: CheckpointRecoverService
+  let requests: BoxRequestService
   let repository: BoxRepository
   const events = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) }
   const organization = { id: organizationId } as Organization
@@ -101,6 +106,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schema}"`)
     await dataSource.synchronize()
+    const migrationRunner = dataSource.createQueryRunner()
+    await new AddBoxRequests1794390000000().up(migrationRunner)
+    await migrationRunner.release()
+    requests = new BoxRequestService(dataSource)
     checkpoints = dataSource.getRepository(Checkpoint)
     boxes = dataSource.getRepository(Box)
     states = dataSource.getRepository(BoxCheckpointState)
@@ -128,6 +137,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   })
 
   afterAll(async () => {
+    await requests?.onModuleDestroy()
     if (!dataSource?.isInitialized) return
     try {
       await dataSource.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
@@ -137,6 +147,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   })
 
   beforeEach(async () => {
+    await dataSource.query('TRUNCATE box_request')
     uploadNotifications.lpush.mockReset().mockResolvedValue(1)
     await dataSource.query(
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
@@ -230,6 +241,65 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  it('replays checkpoint creation and recovers a bound box after response loss', async () => {
+    const checkpoint = await readyCheckpoint()
+    const waiter = {
+      waitForStarted: jest.fn(async (id: string) => BoxDto.fromBox(await boxes.findOneByOrFail({ id }))),
+    }
+    const controller = new BoxliteBoxController(
+      { findOneByIdOrName: (id: string) => boxes.findOneByOrFail({ id }) } as never,
+      waiter as never,
+      { resolveMaxCreatedBoxes: async () => undefined } as never,
+      recovery,
+      requests,
+    )
+    const key = randomUUID()
+    const payload = { checkpoint_id: checkpoint.id, name: 'keyed-checkpoint' }
+    const auth = { organization, organizationId, userId: 'owner' }
+    const call = (dto = payload) =>
+      controller.createBox(auth as never, dto as never, Context.user(), {
+        headers: { 'idempotency-key': key },
+      } as never)
+    const first = await call()
+    await expect(call()).resolves.toEqual(first)
+    expect(await boxes.countBy({ name: payload.name })).toBe(1)
+    await expect(call({ ...payload, name: 'different' })).rejects.toMatchObject({ status: 422 })
+    // Simulate business commit surviving while response persistence is lost.
+    await dataSource.query('UPDATE box_request SET response = NULL WHERE "boxId" = $1', [first.box_id])
+    await expect(call()).resolves.toEqual(first)
+    expect(await dataSource.getRepository(CheckpointOperation).countBy({ boxId: first.box_id })).toBe(1)
+    expect(await boxes.countBy({ name: payload.name })).toBe(1)
+  })
+
+  it('retains checkpoint request binding when waiting fails and retries without another import', async () => {
+    const checkpoint = await readyCheckpoint()
+    const waiter = { waitForStarted: jest.fn().mockRejectedValue(new ServiceUnavailableException('wait unavailable')) }
+    const controller = new BoxliteBoxController(
+      { findOneByIdOrName: (id: string) => boxes.findOneByOrFail({ id }) } as never,
+      waiter as never,
+      { resolveMaxCreatedBoxes: async () => undefined } as never,
+      recovery,
+      requests,
+    )
+    const key = randomUUID()
+    const call = () =>
+      controller.createBox(
+        { organization, organizationId, userId: 'owner' } as never,
+        { checkpoint_id: checkpoint.id, name: 'wait-retry' } as never,
+        Context.user(),
+        { headers: { 'idempotency-key': key } } as never,
+      )
+    await expect(call()).rejects.toMatchObject({ response: { boxId: expect.any(String) } })
+    const box = await boxes.findOneByOrFail({ name: 'wait-retry' })
+    const binding = await dataSource.query('SELECT "boxId" FROM box_request')
+    expect(binding).toEqual([{ boxId: box.id }])
+    waiter.waitForStarted.mockResolvedValue(BoxDto.fromBox(box))
+    const recovered = await call()
+    expect(recovered.box_id).toBe(box.id)
+    await expect(call()).resolves.toEqual(recovered)
+    expect(await dataSource.getRepository(CheckpointOperation).countBy({ boxId: box.id })).toBe(1)
+  })
 
   it.each(['success', 'failed', 'invalid-receipt'])(
     'records the committed checkpoint-create outcome once for %s',

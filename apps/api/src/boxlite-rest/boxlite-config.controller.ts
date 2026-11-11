@@ -7,6 +7,7 @@
 import { Controller, Get, Optional } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { IDEMPOTENCY_KEY_LIFETIME } from './box-request.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
@@ -19,6 +20,7 @@ export class BoxliteConfigController {
   getConfig() {
     return {
       capabilities: {
+        idempotency_key_lifetime: IDEMPOTENCY_KEY_LIFETIME,
         checkpoints_enabled:
           this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
         privileged_enabled: true,

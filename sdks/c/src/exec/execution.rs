@@ -281,7 +281,27 @@ pub unsafe extern "C" fn boxlite_box_exec(
     out_execution: *mut *mut CExecutionHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    box_exec(handle, cmd, out_execution, out_error)
+    box_exec(handle, cmd, ptr::null(), 0, out_execution, out_error)
+}
+
+/// Additive ABI entry point: the original BoxliteCommand layout stays stable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_exec_keyed(
+    handle: *mut CBoxHandle,
+    cmd: *const BoxliteCommand,
+    key: *const c_char,
+    expected_started_at: i64,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_exec(
+        handle,
+        cmd,
+        key,
+        expected_started_at,
+        out_execution,
+        out_error,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -394,6 +414,8 @@ pub unsafe extern "C" fn boxlite_execution_free(execution: *mut CExecutionHandle
 unsafe fn box_exec(
     handle: *mut BoxHandle,
     cmd: *const BoxliteCommand,
+    key: *const c_char,
+    expected_started_at: i64,
     out_execution: *mut *mut ExecutionHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -413,7 +435,7 @@ unsafe fn box_exec(
         *out_execution = ptr::null_mut();
 
         let handle_ref = &*handle;
-        let command = match parse_boxlite_command(&*cmd) {
+        let mut command = match parse_boxlite_command(&*cmd) {
             Ok(command) => command,
             Err(e) => {
                 let code = error_to_code(&e);
@@ -422,6 +444,20 @@ unsafe fn box_exec(
             }
         };
 
+        if !key.is_null() {
+            let Some(key) = crate::util::parse_c_str(key) else {
+                write_error(
+                    out_error,
+                    BoxliteError::InvalidArgument("key must be UTF-8".into()),
+                );
+                return BoxliteErrorCode::InvalidArgument;
+            };
+            command = command.idempotency_key(key);
+            if expected_started_at != 0 {
+                command = command.expected_started_at(expected_started_at);
+            }
+        }
+
         // Synchronous handle creation: block on the underlying exec call,
         // which only sets up channels; it does not spawn the process loop.
         let lite = handle_ref.handle.clone();
@@ -429,8 +465,11 @@ unsafe fn box_exec(
 
         match result {
             Ok(execution) => {
-                *out_execution =
-                    Box::into_raw(Box::new(ExecutionHandle::new(execution, handle_ref, true)));
+                *out_execution = Box::into_raw(Box::new(ExecutionHandle::new(
+                    execution,
+                    handle_ref,
+                    key.is_null(),
+                )));
                 BoxliteErrorCode::Ok
             }
             Err(e) => {
@@ -1037,6 +1076,71 @@ mod tests {
             tokio_rt: runtime,
             process_completed: Arc::new(AtomicBool::new(false)),
             exit_dispatched: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn keyed_exec_validates_key_and_rejects_remote_runtime_without_execution() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .starts_with("GET /v1/boxes/ffi-box ")
+            );
+            let body = r#"{"box_id":"ffi-box","status":"running","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine","cpus":1,"memory_mib":512}"#;
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let runtime = boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(format!(
+            "http://{address}"
+        )))
+        .unwrap();
+        let tokio_rt = crate::runtime::create_tokio_runtime().unwrap();
+        let handle = tokio_rt.block_on(runtime.get("ffi-box")).unwrap().unwrap();
+        server.join().unwrap();
+        let mut handle = BoxHandle {
+            box_id: handle.id().clone(),
+            handle: Arc::new(handle),
+            tokio_rt,
+            queue: Arc::new(EventQueue::new()),
+        };
+        let cmd = BoxliteCommand {
+            command: c"true".as_ptr(),
+            args: ptr::null(),
+            argc: 0,
+            env_pairs: ptr::null(),
+            env_count: 0,
+            workdir: ptr::null(),
+            user: ptr::null(),
+            timeout_secs: 0.0,
+            tty: 0,
+        };
+        let invalid_key = [0xff_u8, 0];
+        for (key, expected) in [
+            (c"request".as_ptr(), BoxliteErrorCode::Unsupported),
+            (
+                invalid_key.as_ptr().cast(),
+                BoxliteErrorCode::InvalidArgument,
+            ),
+        ] {
+            let mut output = ptr::dangling_mut();
+            let mut error = FFIError::default();
+            let code = unsafe {
+                boxlite_box_exec_keyed(&mut handle, &cmd, key, 1234, &mut output, &mut error)
+            };
+            assert_eq!(code, expected);
+            assert!(output.is_null());
+            assert!(!error.message.is_null());
+            unsafe { crate::boxlite_error_free(&mut error) };
         }
     }
 

@@ -52,6 +52,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+import { BindBoxRequest, BoxRequestService } from './box-request.service'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -86,6 +87,7 @@ export class BoxliteBoxController {
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
     private readonly checkpointRecoverService: CheckpointRecoverService,
+    private readonly boxRequests?: BoxRequestService,
   ) {}
 
   @Post()
@@ -132,10 +134,6 @@ export class BoxliteBoxController {
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
-    if (dto.checkpoint_id !== undefined) {
-      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
-    }
-
     // Attaching a managed volume grants the box read/write access to its data,
     // so it is authorized independently of WRITE_BOXES: the caller must hold the
     // volume permissions too. WRITE_BOXES alone must not reach another key's
@@ -145,12 +143,33 @@ export class BoxliteBoxController {
     }
 
     const organization = authContext.organization
-    const createBoxDto = createBoxToCreateBox(dto)
-    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
-
-    const box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
-    if (request) request[AUDIT_TARGET_ID] = box.id
-    return boxToBoxResponse(box)
+    const create = async (bindRequest?: BindBoxRequest, boxId?: string) => {
+      if (dto.checkpoint_id !== undefined) {
+        return this.createBoxFromCheckpoint(authContext, dto, ctx, request, bindRequest, boxId)
+      }
+      let box
+      if (boxId) {
+        const persisted = await this.boxService.findOneByIdOrName(boxId, organization.id)
+        box = await this.boxService.toBoxDto(persisted)
+      } else {
+        const createBoxDto = createBoxToCreateBox(dto)
+        const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+        box = await this.boxService.create(createBoxDto, organization, ctx, {
+          maxCreatedBoxes,
+          ...(bindRequest && { bindRequest }),
+        })
+      }
+      if (request) request[AUDIT_TARGET_ID] = box.id
+      return boxToBoxResponse(box)
+    }
+    const key = request?.headers['idempotency-key']
+    if (key === undefined) return create()
+    return this.boxRequests.run(
+      [organization.id, authContext.userId, 'createBox'],
+      Array.isArray(key) ? key.join(',') : key,
+      dto,
+      create,
+    )
   }
 
   /** Admit an inherited configuration, record its request, then wait without losing its identity. */
@@ -159,6 +178,8 @@ export class BoxliteBoxController {
     dto: CreateBoxDto,
     ctx: Context,
     request?: Request,
+    bindRequest?: BindBoxRequest,
+    recoveredBoxId?: string,
   ): Promise<BoxResponseDto> {
     const overrides = Object.entries(dto)
       .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
@@ -175,14 +196,20 @@ export class BoxliteBoxController {
       throw new BadRequestException('Invalid box name')
     }
 
-    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
-    const box = await this.checkpointRecoverService.createBox(
-      authContext.organization,
-      dto.checkpoint_id,
-      dto.name,
-      maxCreatedBoxes,
-    )
-    recordBoxRequested('box.create', box, ctx)
+    let box
+    if (recoveredBoxId) {
+      box = await this.boxService.findOneByIdOrName(recoveredBoxId, authContext.organizationId)
+    } else {
+      const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
+      box = await this.checkpointRecoverService.createBox(
+        authContext.organization,
+        dto.checkpoint_id,
+        dto.name,
+        maxCreatedBoxes,
+        ...(bindRequest ? [bindRequest] : []),
+      )
+      recordBoxRequested('box.create', box, ctx)
+    }
     if (request) request[AUDIT_TARGET_ID] = box.id
     try {
       return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))

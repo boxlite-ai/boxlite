@@ -305,6 +305,11 @@ impl BoxBackend for RestBox {
         ))
     }
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
+        if command.idempotency_key.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "keyed exec requires a local runtime".into(),
+            ));
+        }
         let box_id = self.box_id_str();
         if command.user.is_some() {
             self.client.require_exec_user_enabled().await?;

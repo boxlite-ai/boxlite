@@ -10,6 +10,7 @@ import { CheckpointRecoverService } from '../box/services/checkpoint-recover.ser
 import { BoxState } from '../box/enums/box-state.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { BoxRequestService } from './box-request.service'
 
 describe('BoxliteBoxController asynchronous create HTTP', () => {
   let app: INestApplication, endpoint: string
@@ -24,6 +25,7 @@ describe('BoxliteBoxController asynchronous create HTTP', () => {
         { provide: BoxService, useValue: boxService },
         { provide: BoxStateWaiterService, useValue: waiter },
         { provide: CommerceBoxLimitService, useValue: commerce },
+        { provide: BoxRequestService, useValue: {} },
         { provide: CheckpointRecoverService, useValue: {} },
       ],
     })

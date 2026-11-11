@@ -117,6 +117,7 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  bindRequest?: import('../../boxlite-rest/box-request.service').BindBoxRequest
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
@@ -322,7 +323,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options.maxCreatedBoxes)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options)
           }
         }
       }
@@ -393,10 +394,21 @@ export class BoxService {
       // and a name collision, which the insert itself settles, come after it.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
-        const insert = () =>
-          options.onPersist
+        const insert = () => {
+          if (options.bindRequest) {
+            return this.boxRepository.insert(
+              box,
+              options.maxCreatedBoxes,
+              options.onPersist,
+              undefined,
+              undefined,
+              options.bindRequest,
+            )
+          }
+          return options.onPersist
             ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
             : this.boxRepository.insert(box, options.maxCreatedBoxes)
+        }
         return createBoxDto.name
           ? insert()
           : persistWithGeneratedBoxName(box.id, (name) => {
@@ -430,7 +442,7 @@ export class BoxService {
     createBoxDto: CreateBoxDto,
     organization: Organization,
     ctx: Context,
-    maxCreatedBoxes?: number,
+    options: BoxCreationOptions,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
@@ -471,12 +483,12 @@ export class BoxService {
       ? await this.boxRepository.update(warmPoolBox.id, {
           updateData: { ...updateData, name: createBoxDto.name },
           entity: warmPoolBox,
-          maxCreatedBoxes,
+          ...options,
         })
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
           this.boxRepository.update(warmPoolBox.id, {
             updateData: { ...updateData, name },
-            maxCreatedBoxes,
+            ...options,
           }),
         )
 

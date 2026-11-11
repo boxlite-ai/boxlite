@@ -9,12 +9,24 @@ use std::pin::Pin;
 
 struct ExitRecoveryGuest {
     main_id: String,
+    allow_keyed: bool,
 }
 
 #[tonic::async_trait]
 impl ExecutionService for ExitRecoveryGuest {
     async fn exec(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
         panic!("recovering an execution must not start a command");
+    }
+
+    async fn exec_keyed(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+        assert!(
+            self.allow_keyed,
+            "recovering an execution must not start a keyed command"
+        );
+        Ok(Response::new(ExecResponse {
+            execution_id: "auxiliary".into(),
+            ..Default::default()
+        }))
     }
 
     async fn list_executions(
@@ -92,7 +104,10 @@ async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() 
     fixture.server.abort();
     fixture.server = tokio::spawn(async move {
         Server::builder()
-            .add_service(ExecutionServer::new(ExitRecoveryGuest { main_id }))
+            .add_service(ExecutionServer::new(ExitRecoveryGuest {
+                main_id,
+                allow_keyed: false,
+            }))
             .serve_with_incoming(incoming)
             .await
             .expect("serve execution guest");
@@ -259,4 +274,74 @@ async fn list_executions_rejects_paused_and_leaves_idle_boxes_unstarted() {
         assert_eq!(persisted.status, status);
         assert_eq!(persisted.pid, None);
     }
+}
+
+#[tokio::test]
+async fn keyed_exec_refuses_stopped_or_changed_generation_before_container_start() {
+    let gate = Arc::new(StartGate::default());
+    let fixture = running_box_for_start_test(gate.clone()).await;
+    let started = fixture
+        .box_impl
+        .state
+        .read()
+        .started_at
+        .unwrap()
+        .timestamp_millis();
+    for expected in [started - 1, started + 1] {
+        let result = fixture
+            .box_impl
+            .exec(
+                BoxCommand::new("must-not-run")
+                    .idempotency_key("request")
+                    .expected_started_at(expected),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidState(message)) if message == "execution VM generation changed")
+        );
+    }
+    fixture.box_impl.state.write().status = BoxStatus::Stopped;
+    let result = fixture
+        .box_impl
+        .exec(BoxCommand::new("must-not-run").idempotency_key("request"))
+        .await;
+    assert!(
+        matches!(result, Err(BoxliteError::InvalidState(message)) if message.contains("not running"))
+    );
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn keyed_exec_matching_generation_reaches_guest_without_stream_ownership() {
+    let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let incoming =
+        tonic::transport::server::TcpIncoming::from_listener(listener, true, None).unwrap();
+    fixture.server.abort();
+    fixture.server = tokio::spawn(async move {
+        Server::builder()
+            .add_service(ExecutionServer::new(ExitRecoveryGuest {
+                main_id: "main".into(),
+                allow_keyed: true,
+            }))
+            .serve_with_incoming(incoming)
+            .await
+            .unwrap();
+    });
+    let box_impl = Arc::get_mut(&mut fixture.box_impl).unwrap();
+    box_impl.live.get_mut().unwrap().guest_session =
+        GuestSession::new(BoxTransport::tcp(address.port()));
+    let started = box_impl.state.read().started_at.unwrap().timestamp_millis();
+    let mut execution = box_impl
+        .exec(
+            BoxCommand::new("true")
+                .idempotency_key("request")
+                .expected_started_at(started),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execution.id(), "auxiliary");
+    assert!(execution.stdin().is_none());
+    assert_eq!(execution.wait().await.unwrap().exit_code, -libc::SIGHUP);
 }

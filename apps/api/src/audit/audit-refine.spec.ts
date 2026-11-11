@@ -1,3 +1,4 @@
+import { BoxRequestService } from '../boxlite-rest/box-request.service'
 import { Test } from '@nestjs/testing'
 import { Reflector } from '@nestjs/core'
 import { INestApplication, RequestTimeoutException } from '@nestjs/common'
@@ -78,6 +79,7 @@ describe('audit refinement contracts', () => {
     const module = await Test.createTestingModule({
       controllers: [BoxliteProxyController, BoxliteVolumeController, BoxliteDomainController, BoxliteImageController],
       providers: [
+        { provide: BoxRequestService, useValue: {} },
         {
           provide: BoxService,
           useValue: {
@@ -168,7 +170,11 @@ describe('audit refinement contracts', () => {
     async (path) => {
       const res = await fetch(base + path, { method: 'DELETE' })
       expect(res.status).toBe(204)
-      expect(volume.delete).toHaveBeenCalledWith('volume-id', Context.user({ userId: 'user', authMethod: 'jwt' }), false)
+      expect(volume.delete).toHaveBeenCalledWith(
+        'volume-id',
+        Context.user({ userId: 'user', authMethod: 'jwt' }),
+        false,
+      )
       expect(audit.createLog).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'delete', targetId: 'volume-id', organizationId: 'org' }),
       )

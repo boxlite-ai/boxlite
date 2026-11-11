@@ -106,6 +106,8 @@ use boxlite_shared::errors::BoxliteError;
 pub(crate) enum SpawnFailure {
     Rejected(CommandRejection),
     Failed(BoxliteError),
+    /// Rejected before sending work to a spawner; no command effects occurred.
+    BeforeSpawn(BoxliteError),
 }
 
 impl From<BoxliteError> for SpawnFailure {
@@ -118,7 +120,7 @@ impl std::fmt::Display for SpawnFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rejected(rejection) => f.write_str(&rejection.message),
-            Self::Failed(error) => std::fmt::Display::fmt(error, f),
+            Self::Failed(error) | Self::BeforeSpawn(error) => std::fmt::Display::fmt(error, f),
         }
     }
 }
@@ -130,7 +132,7 @@ impl SpawnFailure {
     pub(crate) fn into_error(self) -> BoxliteError {
         match self {
             Self::Rejected(rejection) => BoxliteError::Execution(rejection.message),
-            Self::Failed(error) => error,
+            Self::Failed(error) | Self::BeforeSpawn(error) => error,
         }
     }
 }

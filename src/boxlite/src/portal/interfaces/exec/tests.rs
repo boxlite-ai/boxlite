@@ -26,6 +26,7 @@ impl Drop for CancelOnDrop {
 }
 
 struct RecordingExecutionService {
+    unkeyed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     waits: mpsc::UnboundedSender<WaitCall>,
     attaches: mpsc::UnboundedSender<(String, oneshot::Receiver<()>)>,
 }
@@ -33,7 +34,29 @@ struct RecordingExecutionService {
 #[tonic::async_trait]
 impl ExecutionService for RecordingExecutionService {
     async fn exec(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+        self.unkeyed_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Err(Status::unimplemented("exec is not used by these tests"))
+    }
+
+    async fn exec_keyed(
+        &self,
+        request: Request<ExecRequest>,
+    ) -> Result<Response<ExecResponse>, Status> {
+        let status = match request.get_ref().program.as_str() {
+            "unsupported" => Some(Status::unimplemented("keyed execution is unavailable")),
+            "invalid" => Some(Status::invalid_argument("payload mismatch")),
+            "expired" => Some(Status::failed_precondition("request expired")),
+            "full" => Some(Status::resource_exhausted("request capacity reached")),
+            _ => None,
+        };
+        if let Some(status) = status {
+            return Err(status);
+        }
+        Ok(Response::new(ExecResponse {
+            execution_id: "keyed".into(),
+            ..Default::default()
+        }))
     }
 
     async fn list_executions(
@@ -94,6 +117,7 @@ impl ExecutionService for RecordingExecutionService {
 }
 
 struct RpcFixture {
+    unkeyed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     interface: ExecutionInterface,
     waits: mpsc::UnboundedReceiver<WaitCall>,
     attaches: mpsc::UnboundedReceiver<(String, oneshot::Receiver<()>)>,
@@ -106,7 +130,9 @@ impl RpcFixture {
         let address = listener.local_addr().unwrap();
         let (waits_tx, waits) = mpsc::unbounded_channel();
         let (attaches_tx, attaches) = mpsc::unbounded_channel();
+        let unkeyed_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let service = RecordingExecutionService {
+            unkeyed_calls: unkeyed_calls.clone(),
             waits: waits_tx,
             attaches: attaches_tx,
         };
@@ -127,6 +153,7 @@ impl RpcFixture {
             .await
             .unwrap();
         Self {
+            unkeyed_calls,
             interface: ExecutionInterface::new(channel),
             waits,
             attaches,
@@ -151,6 +178,90 @@ async fn within_deadline<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(2), future)
         .await
         .expect("execution RPC did not complete before test deadline")
+}
+
+#[tokio::test]
+async fn keyed_unsupported_guest_returns_typed_error_without_unkeyed_fallback() {
+    let mut fixture = RpcFixture::new().await;
+    let result = fixture
+        .interface
+        .exec(
+            BoxCommand::new("unsupported").idempotency_key("internal.deadline"),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(BoxliteError::Unsupported(message)) if message == "keyed execution is unavailable")
+    );
+    assert_eq!(
+        fixture
+            .unkeyed_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(fixture.waits.try_recv().is_err());
+    assert!(fixture.attaches.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn keyed_rpc_errors_preserve_admission_classification_without_fallback() {
+    let mut fixture = RpcFixture::new().await;
+    for program in ["invalid", "expired", "full"] {
+        let result = fixture
+            .interface
+            .exec(
+                BoxCommand::new(program).idempotency_key("internal.deadline"),
+                CancellationToken::new(),
+            )
+            .await;
+        match program {
+            "invalid" => assert!(
+                matches!(result, Err(BoxliteError::InvalidArgument(message)) if message == "payload mismatch")
+            ),
+            "expired" => assert!(
+                matches!(result, Err(BoxliteError::InvalidState(message)) if message == "request expired")
+            ),
+            "full" => assert!(
+                matches!(result, Err(BoxliteError::ResourceExhausted(message)) if message == "request capacity reached")
+            ),
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(
+        fixture
+            .unkeyed_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(fixture.waits.try_recv().is_err());
+    assert!(fixture.attaches.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn keyed_replay_does_not_create_stdin_or_output_ownership() {
+    let mut fixture = RpcFixture::new().await;
+    for _ in 0..2 {
+        let components = fixture
+            .interface
+            .exec(
+                BoxCommand::new("cat").idempotency_key("internal.deadline"),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(components.execution_id, "keyed");
+        assert!(
+            components.stdin_tx.is_none(),
+            "dropping a retry must not send stdin EOF"
+        );
+        let wait = fixture.next_wait().await;
+        wait.result.send(Ok(WaitResponse::default())).unwrap();
+        drop(components);
+    }
+    assert!(
+        fixture.attaches.try_recv().is_err(),
+        "keyed startup leaves output acquisition to attach"
+    );
 }
 
 #[tokio::test]

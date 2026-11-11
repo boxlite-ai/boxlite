@@ -475,7 +475,26 @@ impl BoxImpl {
         }
         self.ensure_usable_without_rerunning_main("exec")?;
 
-        let live = self.live_state().await?;
+        // Keyed recovery must never select a boot/restart pipeline after the
+        // runner's generation check races a VM exit.
+        let live = if command.idempotency_key.is_some() {
+            self.existing_live_state().await?
+        } else {
+            self.live_state().await?
+        };
+
+        if let Some(expected) = command.expected_started_at
+            && self
+                .state
+                .read()
+                .started_at
+                .map(|time| time.timestamp_millis())
+                != Some(expected)
+        {
+            return Err(BoxliteError::InvalidState(
+                "execution VM generation changed".into(),
+            ));
+        }
 
         // Inject container ID into environment if not already set
         let command = if command

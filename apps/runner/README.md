@@ -4,6 +4,15 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
+The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
+Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
+API for SDK clients and the control-plane API. One runner process hosts many
+boxes; each box hosts many executions; each execution can be attached to at
+at most one client at a time. Keyed startup serializes only requests with the
+same Box ID and internal token through SDK startup and output adoption. A slow
+startup does not hold a runner-wide lock over other Boxes or request tokens;
+request locks are removed after their last holder or waiter finishes.
+
 ## Nested virtualization capability
 
 Cloud requests nesting when creating a Box. Runner captures its process
@@ -234,6 +243,7 @@ process inside a VM. The endpoints below split create / status / kill
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
+| `GET` | `exec-generation` | `BoxliteExecGeneration` | Running VM identity for keyed startup; 409 when stopped |
 | `POST` | `exec` | `BoxliteExec` | Create execution; returns `{execution_id}` |
 | `GET` | `executions` | `BoxliteListExecutions` | Live guest inventory, including main; never boots a stopped box |
 | `GET` | `executions/:id/attach` | `BoxliteExecAttach` | WebSocket upgrade; bidirectional stdio + control |
@@ -241,6 +251,24 @@ process inside a VM. The endpoints below split create / status / kill
 | `POST` | `executions/:id/signal` | `BoxliteExecSignal` | Send a cooperative signal (whitelist) |
 | `POST` | `executions/:id/resize` | `BoxliteExecResize` | Resize TTY (cols, rows) — TTY-only |
 | `DELETE` | `executions/:id` | `BoxliteExecKill` | Atomic kill + evict |
+
+For keyed startup the API supplies an internal `Idempotency-Key` token with a
+fixed deadline and `X-Boxlite-Exec-Generation`. Both runner and runtime check
+the observed VM start time; keyed exec never boots a replacement VM. Guest
+startup survives caller disconnects and retries resolve to the original result.
+Expired tokens are rejected before lookup, allowing safe reclamation of finished
+request records. Pending startup remains counted against the 4096-entry bound.
+A key cannot choose an unlimited retention period: the guest rejects deadlines
+more than 24 hours ahead (plus one minute of clock skew). Roll out the keyed
+RPC in guest/runtime/runner before enabling keyed execution in the API; an old
+guest returns an unsupported-operation error.
+
+Keyed startup creates a control handle only. The existing lazy attach path
+acquires output and stdin once; releasing a retry handle neither kills the
+process nor sends stdin EOF. Unkeyed execution keeps its eager stream behavior. Keyed commands retain the
+runner orphan and maximum-lifetime cleanup rules. If the guest startup result
+still exists after ordinary output/status retention expires, retries return the
+original ID; output expiry does not authorize another spawn.
 
 Inventory returns the guest's real `execution_id`, `argv`, `started_at` (Unix
 milliseconds), `tty`, and `is_main_session`. Status, signal, resize, kill, and
@@ -875,6 +903,7 @@ make test:apps:runner
 
 # Just the attach + exec_manager suites
 make test:apps:runner FILTER='Attach|ExecManager'
+make test:apps:runner FILTER='TestBoxliteExec.*HTTP'
 
 # With race detector (recommended; cleanupLoop ticker + attach goroutines)
 make test:apps:runner GOTEST_FILTER='-race'
@@ -935,3 +964,12 @@ Omission retains the one-core default; explicit zero, non-finite values, and exc
 The HTTP and v2 job paths preserve the number through the Go SDK; recovery validates it before destroying the old Box.
 Fractional Linux allocations use the Runtime's cgroup quota and rounded-up guest topology, with its existing best-effort membership behavior.
 Upgrade all Runners and matching native libraries before enabling fractional creation in the API, including migration destinations.
+
+The keyed execution controller keeps SDK metadata/startup behind `executionBackend`.
+HTTP tests substitute that boundary while exercising Gin parsing, VM generation
+checks, option forwarding and error status mapping without a VM. The production
+adapter still delegates startup to `ExecManager`; its initialization failures
+remain server errors on startup, while the generation lookup retains its 404
+lookup contract. Malformed startup JSON is rejected before SDK lookup, so request
+validation remains observable even if the runner is unavailable. Runtime generation tests exercise real guest RPC handling,
+and C ABI tests validate malformed keys and unsupported remote-runtime requests.

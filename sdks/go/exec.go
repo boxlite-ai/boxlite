@@ -54,11 +54,16 @@ func envMapToCStringArray(env map[string]string) (**C.char, int) {
 
 // ExecutionOptions configures a streaming command execution.
 type ExecutionOptions struct {
-	TTY      bool
-	Stdout   io.Writer
-	Stderr   io.Writer
-	OnStdout func([]byte)
-	OnStderr func([]byte)
+	// IdempotencyKey is <random-token>.<deadline-unix-ms>, fixed at acceptance.
+	// Keyed startup returns controls; acquire streams with Executions().Attach.
+	// Retries resolve to one execution while this VM lives.
+	IdempotencyKey    string
+	ExpectedStartedAt int64
+	TTY               bool
+	Stdout            io.Writer
+	Stderr            io.Writer
+	OnStdout          func([]byte)
+	OnStderr          func([]byte)
 	// Env is the environment given to the executed process. nil/empty
 	// inherits the container default. The map is serialised into a flat
 	// [k0, v0, k1, v1, ...] C array in deterministic key order.
@@ -270,7 +275,15 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 
 	var handle *C.CExecutionHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_exec(b.handle, &cCommand, &handle, &cerr)
+	var code uint32
+	if cfg.IdempotencyKey != "" {
+		key := toCString(cfg.IdempotencyKey)
+		defer C.free(unsafe.Pointer(key))
+		code = C.boxlite_box_exec_keyed(b.handle, &cCommand, key, C.int64_t(cfg.ExpectedStartedAt), &handle, &cerr)
+	} else {
+		code = C.boxlite_box_exec(b.handle, &cCommand, &handle, &cerr)
+	}
+
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

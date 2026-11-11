@@ -24,6 +24,7 @@ boxlite-shared.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 base64 = "0.22"
 bytes = "1"
 tracing = "0.1"

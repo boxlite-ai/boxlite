@@ -23,6 +23,7 @@ import {
   ForbiddenException,
   HttpCode,
   HttpStatus,
+  HttpException,
   ParseIntPipe,
   Post,
   Query,
@@ -51,6 +52,8 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { BoxRequestService } from './box-request.service'
+import axios from 'axios'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -110,6 +113,7 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
+    private readonly boxRequests?: BoxRequestService,
   ) {}
 
   @All(':boxId/exec')
@@ -128,6 +132,48 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    const key = req.headers?.['idempotency-key']
+    if (req.method === 'POST' && key !== undefined) {
+      let box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+      if (!box) throw new NotFoundException(`Box ${boxId} not found`)
+      req[AUDIT_TARGET_ID] = box.id
+      this.recordProxiedOperation('box.exec', box, requestContext(req), res)
+      await this.prepareActivity(box, res)
+      const scope = [authContext.organizationId, authContext.userId, 'startExecution', box.id]
+      const value = Array.isArray(key) ? key.join(',') : key
+      const result = await this.boxRequests.run(scope, value, req.body, async (_bind, generation, associate) => {
+        if (!generation && box.autoResume) {
+          await this.autoResume.ensureReady(box.id, authContext.organization)
+          box = await this.boxService.findOneByIdOrName(box.id, authContext.organizationId)
+        }
+        const runner = await this.runnerService.findOne(box.runnerId)
+        if (!runner) throw new NotFoundException(`Runner for box ${boxId} not found`)
+        const base = runner.apiUrl || runner.proxyUrl
+        if (!base) throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
+        const headers = { Authorization: `Bearer ${runner.apiKey}` }
+        const info = await axios.get(`${base}/v1/boxes/${encodeURIComponent(box.id)}/exec-generation`, {
+          headers,
+          maxRedirects: 0,
+          timeout: 10000,
+          validateStatus: () => true,
+        })
+        if (info.status !== 200) throw new HttpException(info.data, info.status)
+        if (generation && generation !== info.data.generation) {
+          throw new ConflictException('The original execution VM is unavailable; refusing to repeat the command')
+        }
+        const token = await associate(info.data.generation)
+        const response = await axios.post(`${base}/v1/boxes/${encodeURIComponent(box.id)}/exec`, req.body, {
+          headers: { ...headers, 'Idempotency-Key': token, 'X-Boxlite-Exec-Generation': info.data.generation },
+          maxRedirects: 0,
+          timeout: 300000,
+          validateStatus: () => true,
+        })
+        if (response.status !== 201) throw new HttpException(response.data, response.status)
+        return response.data
+      })
+      res.status(201).json(result)
+      return
+    }
     return this.proxyToRunner(
       authContext,
       boxId,
@@ -521,31 +567,7 @@ export class BoxliteProxyController {
       this.recordProxiedOperation(opts.operation, box, requestContext(req), res)
     }
 
-    if (policy.activity) {
-      // Persist activity before the readiness gate. The lifecycle sweeper rechecks
-      // this Redis-buffered timestamp after taking its state lock, closing the
-      // request-vs-AutoStop race without holding a lock through cold start.
-      await this.boxService
-        .updateLastActivityAt(box.id, new Date())
-        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
-    }
-
-    if (policy.activity && typeof box.autoStop === 'number' && box.autoStop > 0) {
-      // A long-running operation (a file upload/download, a streaming exec) is
-      // still activity for its whole lifetime, not just its first request.
-      // Refresh the idle timer periodically so the AutoStop sweeper does not
-      // reap the box mid-transfer; stop once the response completes or errors.
-      const stopHeartbeat = this.startActivityHeartbeat(box.id, box.autoStop)
-      let stopped = false
-      const stop = (): void => {
-        if (stopped) return
-        stopped = true
-        stopHeartbeat()
-      }
-      res.once('close', stop)
-      res.once('finish', stop)
-      res.once('error', stop)
-    }
+    if (policy.activity) await this.prepareActivity(box, res)
 
     opts?.admit?.(box, boxId)
 
@@ -619,6 +641,33 @@ export class BoxliteProxyController {
     // The asynchronous box lookup may have outlived the response's terminal event.
     if (res.writableFinished) onFinish()
     else if (res.destroyed || res.closed) onClose()
+  }
+
+  private async prepareActivity(box: Box, res: Response): Promise<void> {
+    // Persist activity before the readiness gate. The lifecycle sweeper rechecks
+    // this Redis-buffered timestamp after taking its state lock, closing the
+    // request-vs-AutoStop race without holding a lock through cold start.
+    await this.boxService
+      .updateLastActivityAt(box.id, new Date())
+      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+
+    if (typeof box.autoStop === 'number' && box.autoStop > 0) {
+      // A long-running operation (a file upload/download, a streaming exec) is
+      // still activity for its whole lifetime, not just its first request.
+      // Refresh the idle timer periodically so the AutoStop sweeper does not
+      // reap the box mid-transfer; stop once the response completes or errors.
+      const stopHeartbeat = this.startActivityHeartbeat(box.id, box.autoStop)
+      let stopped = false
+      const stop = (): void => {
+        if (stopped) return
+        stopped = true
+        stopHeartbeat()
+      }
+      res.once('close', stop)
+      res.once('finish', stop)
+      res.once('error', stop)
+      if (res.writableFinished || res.destroyed || res.closed) stop()
+    }
   }
 
   private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {

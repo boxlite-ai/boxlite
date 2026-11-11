@@ -113,6 +113,72 @@ func TestInventoryRecoveryDoesNotReapAnExistingSession(t *testing.T) {
 	}
 }
 
+type blockedStartBox struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b blockedStartBox) StartExecution(context.Context, string, []string, *sdk.ExecutionOptions) (*sdk.Execution, error) {
+	b.entered <- struct{}{}
+	<-b.release
+	return nil, errors.New("controlled startup rejection")
+}
+func (b blockedStartBox) Executions() *sdk.Executions { return nil }
+
+func TestKeyedStartDoesNotBlockOtherRequests(t *testing.T) {
+	for _, other := range []struct{ box, key string }{{"other-box", "token"}, {"box", "other-token"}} {
+		t.Run(other.box+other.key, func(t *testing.T) {
+			manager := newQuietManager(t)
+			first := blockedStartBox{make(chan struct{}, 1), make(chan struct{})}
+			second := blockedStartBox{make(chan struct{}, 1), make(chan struct{})}
+			finished := make(chan struct{}, 2)
+			start := func(b blockedStartBox, box, key string) {
+				_, _ = manager.Start(context.Background(), b, box, StartOptions{IdempotencyKey: key})
+				finished <- struct{}{}
+			}
+			go start(first, "box", "token")
+			<-first.entered
+			go start(second, other.box, other.key)
+			progress := false
+			select {
+			case <-second.entered:
+				progress = true
+			case <-time.After(time.Second):
+			}
+			close(first.release)
+			close(second.release)
+			<-finished
+			<-finished
+			if !progress {
+				t.Fatal("unrelated keyed request blocked behind slow startup")
+			}
+		})
+	}
+}
+
+func TestKeyedStartupRetainsOrphanAndLifetimeCleanup(t *testing.T) {
+	for _, lifetime := range []bool{false, true} {
+		manager := newQuietManager(t)
+		handle := &stubExecHandle{}
+		execution := registerStub(t, manager, "keyed", handle)
+		execution.recovered = true
+		execution.ownsCleanup = true
+		manager.SetReapingForTest(time.Second, time.Second, time.Hour)
+		age := 2 * time.Second
+		if lifetime {
+			age = 2 * time.Hour
+		}
+		manager.runCleanupOnce(execution.created.Add(age))
+		signals, killed := handle.snapshot()
+		if lifetime && killed != 1 {
+			t.Fatalf("keyed startup escaped lifetime cap: %d", killed)
+		}
+		if !lifetime && len(signals) != 1 {
+			t.Fatalf("keyed startup escaped orphan escalation: %v", signals)
+		}
+	}
+}
+
 type inventoryExecHandle struct {
 	stubExecHandle
 	done chan struct{}
@@ -124,8 +190,9 @@ func (h *inventoryExecHandle) Wait(context.Context) (int, error) {
 }
 
 type inventoryExecutionSource struct {
-	entries []sdk.ExecutionInfo
-	handle  *inventoryExecHandle
+	entries     []sdk.ExecutionInfo
+	handle      *inventoryExecHandle
+	attachError error
 }
 
 func (s *inventoryExecutionSource) list(context.Context) ([]sdk.ExecutionInfo, error) {
@@ -137,7 +204,26 @@ func (s *inventoryExecutionSource) get(context.Context, string) (execHandle, err
 }
 
 func (s *inventoryExecutionSource) attach(context.Context, string, io.Writer, io.Writer) (execHandle, io.Writer, error) {
+	if s.attachError != nil {
+		return nil, nil, s.attachError
+	}
 	return nil, nil, errors.New("control recovery must not acquire output")
+}
+
+func TestKeyedReplayReturnsIdentityAfterOutputRetentionExpires(t *testing.T) {
+	for _, code := range []sdk.ErrorCode{sdk.ErrNotFound, sdk.ErrSessionReaped, sdk.ErrAlreadyExists} {
+		manager := newQuietManager(t)
+		source := &inventoryExecutionSource{attachError: &sdk.Error{Code: code, Message: "output unavailable"}}
+		exec := &ManagedExec{Done: make(chan struct{}), stdoutBus: newStreamBus(1024), stderrBus: newStreamBus(1024)}
+		id, err := manager.adoptKeyed(context.Background(), source, exec, &stubExecHandle{}, "original")
+		if code == sdk.ErrAlreadyExists {
+			if err == nil {
+				t.Fatal("reader conflict must stay explicit")
+			}
+		} else if err != nil || id != "original" {
+			t.Fatalf("lost retained startup identity: id=%q err=%v", id, err)
+		}
+	}
 }
 
 func TestResolveReplacesRetainedMainOnlyWhenLiveAgain(t *testing.T) {

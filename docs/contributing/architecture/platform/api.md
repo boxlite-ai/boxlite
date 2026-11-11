@@ -563,6 +563,49 @@ is exhausted, requests return HTTP 429 with `Retry-After-authenticated` before
 catalog changes or registry credential operations run; switching API surfaces
 does not reset it.
 
+`POST /boxes` and `POST /boxes/{boxId}/exec` accept a UUID `Idempotency-Key`.
+Keys are scoped to organization, authenticated user and operation (also box for
+exec). During the 24-hour window advertised by `/v1/config`, matching payloads
+replay the original successful JSON response; changed payloads return 422 and
+an overlapping request returns 409. The window starts when the request is
+accepted and replay does not extend it. An expired key starts a new request.
+For example, a creation rejected by the box quota can succeed with the same key
+after capacity is released; replaying that success at full quota returns the
+original box. Authorization checks still apply to replays.
+
+The PostgreSQL request ledger binds fresh creation and warm-pool assignment in
+the resource transaction, so an API crash after creation recovers that box.
+Recovery converts the persisted entity through the same Box DTO mapping as normal
+creation, preserving memory units, reported status and network settings before
+saving the response for later replays. Checkpoint-backed creation uses the same
+ledger and binds the new Box in the checkpoint import transaction. A failed
+startup wait still returns that Box ID; retrying its key rejoins the existing
+Box rather than scheduling another import.
+Keyed execution uses a random internal token carrying the fixed deadline and
+binds retries to one running VM generation. The guest retains startup results
+independently of process/output retention, rejects expired tokens and safely
+reclaims expired completed request entries. Unresolved startup remains counted;
+a guest holds at most 4096 unexpired or unresolved requests and rejects new work
+at capacity. An uncertain execution cannot resume a replacement VM. This does
+not guarantee exactly-once external effects across VM termination; old guests
+without the keyed RPC reject the operation. Keyed and ordinary execution requests
+share activity preparation: activity-store failures are logged rather than
+rejecting execution, and a response-lifetime heartbeat prevents AutoStop during
+long startup requests. The heartbeat ends on response completion, close or error.
+The dedicated lock pool retries initialization after a transient connection failure;
+it bounds each API process to four active keyed requests and returns retryable 503
+when full. This is shared process capacity, not a tenant fairness guarantee.
+Keyed runner HTTPS calls verify the runner certificate and do not follow redirects.
+Private runner CAs must be trusted by the API's Node process, for example through
+`NODE_EXTRA_CA_CERTS` set before starting the API. Untrusted or hostname-mismatched
+certificates are rejected. Unlike the historical ordinary proxy's `secure: false`,
+keyed HTTPS requires this trust configuration; deployments using private runner
+certificates must provide it. HTTP runner endpoints retain their existing behavior. An older guest's missing keyed RPC returns an unsupported
+operation error and never falls back to starting an unkeyed command.
+The native keyed RPC preserves payload rejection, expired-request and capacity
+errors as InvalidArgument, InvalidState and ResourceExhausted respectively; these
+errors do not start ordinary execution or acquire execution streams.
+
 Resource permissions are enforced per route. A box mutation — create, start,
 stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an
 attach ticket, and the network routes — requires `write:boxes`; deleting a box requires
