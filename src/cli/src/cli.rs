@@ -831,8 +831,9 @@ pub enum Commands {
     ///
     /// With no operation option, generate or reuse CLI-managed client and host keys,
     /// prepare guest SSH, and log in as box. Healthy managed services are not reconfigured.
+    /// Use --install-ssh-config to install an alias for plain `ssh BOX`.
     /// Use --configure, --status, --enable, --disable, --tunnel, or --proxy
-    /// for another operation. All operations support local and cloud contexts.
+    /// for another operation. All operations support local and remote boxes.
     Ssh(crate::commands::ssh::SshArgs),
 
     /// Agent instances and turns

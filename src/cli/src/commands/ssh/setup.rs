@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cli::GlobalFlags;
 
-pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<i32> {
+pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Result<i32> {
     require_openssh()?;
     let connection = ConnectionTarget {
         context: global.resolved_context(),
@@ -34,12 +34,25 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<i32> {
             (global.create_runtime_with_options(options)?, home)
         }
     };
-    let sandbox = runtime.get(target).await?.context("No such box")?;
+    let sandbox = runtime.get(&args.target).await?.context("No such box")?;
     if connection.rest.is_some() {
         crate::credentials::create_secure_dir(&home)?;
     }
     let home = fs::canonicalize(home).context("resolve runtime home")?;
     let scope = connection.remote_scope()?;
+    let install = if args.install_ssh_config {
+        let alias = args
+            .alias
+            .as_deref()
+            .unwrap_or_else(|| sandbox.name().unwrap_or(sandbox.id().as_str()))
+            .to_ascii_lowercase();
+        let identity =
+            serde_json::to_string(&(home.as_path(), scope.as_deref(), sandbox.id().as_str()))?;
+        let proxy = connection.proxy_command(global, &home, sandbox.id().as_str())?;
+        Some((alias, identity, proxy))
+    } else {
+        None
+    };
     let directory = match &scope {
         Some(scope) => home
             .join("ssh/remote")
@@ -59,6 +72,37 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<i32> {
     }
     .to_ascii_lowercase();
     let paths = super::connect::ConnectionPaths::new(&directory)?;
+    let installation = if let Some((alias, identity, proxy)) = install {
+        let stanza = format!(
+            "Host {alias}\n\
+             \x20 HostName {host_alias}\n\
+             \x20 User box\n\
+             \x20 BatchMode yes\n\
+             \x20 IdentitiesOnly yes\n\
+             \x20 IdentityAgent none\n\
+             \x20 StrictHostKeyChecking yes\n\
+             \x20 GlobalKnownHostsFile /dev/null\n\
+             \x20 UserKnownHostsFile {}\n\
+             \x20 IdentityFile {}\n\
+             \x20 HostKeyAlias {host_alias}\n\
+             \x20 UpdateHostKeys no\n\
+             \x20 ControlMaster no\n\
+             \x20 ControlPath none\n\
+             \x20 ConnectTimeout 15\n\
+             \x20 ProxyCommand {proxy}\n",
+            paths.known_hosts, paths.identity,
+        );
+        let overwrite = args.overwrite;
+        Some(
+            tokio::task::spawn_blocking(move || {
+                let plan = super::install::Installation::new(&alias, &identity, overwrite)?;
+                Ok::<_, anyhow::Error>((plan, alias, stanza))
+            })
+            .await??,
+        )
+    } else {
+        None
+    };
     let credentials = directory.clone();
     let (config, credentials_existed, expected_host_key) = tokio::task::spawn_blocking(move || {
         let credentials_existed = match fs::symlink_metadata(&credentials) {
@@ -72,6 +116,19 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<i32> {
     })
     .await??;
     let status = prepare_ssh(&sandbox, config, credentials_existed, &expected_host_key).await?;
+    if let Some((plan, alias, stanza)) = installation {
+        tokio::task::spawn_blocking(move || {
+            super::connect::write_known_hosts(
+                &directory.join("known_hosts"),
+                &host_alias,
+                &expected_host_key,
+            )?;
+            plan.commit(&stanza)
+        })
+        .await??;
+        eprintln!("Installed SSH configuration. Connect with: ssh {alias}");
+        return Ok(0);
+    }
     super::connect::execute(&sandbox, &status, paths, &host_alias, &expected_host_key).await
 }
 
@@ -94,6 +151,57 @@ impl ConnectionTarget {
                 Ok(format!("{:x}", Sha256::digest(identity)))
             })
             .transpose()
+    }
+
+    fn proxy_command(&self, global: &GlobalFlags, home: &Path, id: &str) -> Result<String> {
+        let mut command = String::new();
+        let mut argument = |value: &str| -> Result<()> {
+            if value.chars().any(char::is_control) {
+                bail!("SSH proxy arguments cannot contain control characters");
+            }
+            if !command.is_empty() {
+                command.push(' ');
+            }
+            command.push('\'');
+            for character in value.chars() {
+                // OpenSSH expands percent tokens before the user's shell parses argv.
+                match character {
+                    '%' => command.push_str("%%"),
+                    '\'' => command.push_str("'\\''"),
+                    _ => command.push(character),
+                }
+            }
+            command.push('\'');
+            Ok(())
+        };
+        let executable = std::env::current_exe().context("locate BoxLite executable")?;
+        argument(super::connect::ssh_path(&executable)?)?;
+        argument("--home")?;
+        argument(super::connect::ssh_path(home)?)?;
+        if self.rest.is_none()
+            && let Some(config) = &global.config
+        {
+            let config = fs::canonicalize(config).context("resolve runtime config")?;
+            argument("--config")?;
+            argument(super::connect::ssh_path(&config)?)?;
+        }
+        if let Some(rest) = &self.rest {
+            argument(&format!("--context={}", self.context))?;
+            argument(&format!(
+                "--path-prefix={}",
+                rest.path_prefix.as_deref().unwrap_or("")
+            ))?;
+            argument("ssh")?;
+            argument("--proxy")?;
+            argument(&format!("--proxy-endpoint={}", rest.url))?;
+        } else {
+            argument("ssh")?;
+            argument("--proxy")?;
+            argument("--proxy-local")?;
+        }
+        argument("--")?;
+        argument(id)?;
+        Ok(command)
     }
 }
 

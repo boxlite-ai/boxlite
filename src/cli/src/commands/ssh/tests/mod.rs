@@ -139,7 +139,8 @@ fn operations_are_options_and_connect_is_the_default() {
                 || args.enable
                 || args.disable
                 || args.tunnel
-                || args.proxy)
+                || args.proxy
+                || args.install_ssh_config)
         );
     }
     assert!(parse(&[]).is_err());
@@ -156,6 +157,7 @@ fn operation_options_are_exclusive_and_require_a_box() {
         "--disable",
         "--tunnel",
         "--proxy",
+        "--install-ssh-config",
     ];
     for (index, operation) in operations.iter().enumerate() {
         assert!(parse(&[operation]).is_err());
@@ -169,6 +171,41 @@ fn operation_options_are_exclusive_and_require_a_box() {
 }
 
 #[test]
+fn installation_and_generated_proxy_options_require_their_operation() {
+    for options in [
+        vec!["--alias", "dev-cloud"],
+        vec!["--overwrite"],
+        vec!["--proxy-local"],
+        vec!["--proxy-endpoint", "https://example.invalid"],
+    ] {
+        let error = parse(&[vec!["dev"], options].concat()).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+    for options in [
+        vec!["--status", "--alias", "dev-cloud"],
+        vec!["--proxy", "--overwrite"],
+        vec!["--install-ssh-config", "--proxy-local"],
+        vec![
+            "--install-ssh-config",
+            "--proxy-endpoint",
+            "https://example.invalid",
+        ],
+        vec![
+            "--proxy",
+            "--proxy-local",
+            "--proxy-endpoint",
+            "https://example.invalid",
+        ],
+    ] {
+        let error = parse(&[vec!["dev"], options].concat()).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::MissingRequiredArgument | ErrorKind::ArgumentConflict
+        ));
+    }
+}
+
+#[test]
 fn configuration_and_listener_options_are_scoped_to_their_operation() {
     for operation in [
         None,
@@ -176,6 +213,7 @@ fn configuration_and_listener_options_are_scoped_to_their_operation() {
         Some("--enable"),
         Some("--disable"),
         Some("--proxy"),
+        Some("--install-ssh-config"),
         Some("--tunnel"),
     ] {
         for (flag, value) in [

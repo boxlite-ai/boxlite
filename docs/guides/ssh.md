@@ -134,8 +134,9 @@ echo $? # 42
 
 Automatic login ignores user and system SSH config (`-F /dev/null`), disables
 agent authentication and connection sharing, and enforces strict host checking.
-It never edits `~/.ssh/config`. Use explicit `--proxy` or `--tunnel` with your
-own OpenSSH invocation when custom client options are needed.
+Default login does not edit `~/.ssh/config`. To use plain `ssh BOX`, explicitly
+[install a managed alias](#managed-openssh-aliases). Use `--proxy` or `--tunnel`
+with your own OpenSSH invocation when custom client options are needed.
 
 For a cloud box, select its existing connection context:
 
@@ -188,6 +189,73 @@ against the same home: the runtime holds an exclusive home lock for the session.
   attempt a login and wake a stopped box; SSH keys remain the access control.
   Revoke it with `boxlite network tunnel BOX PORT --revoke`. CLI exit does not stop
   the remote box.
+
+### Managed OpenSSH aliases
+
+Install an alias without opening an interactive session:
+
+```bash
+boxlite ssh dev --install-ssh-config
+ssh dev
+
+boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
+ssh dev-cloud
+```
+
+The installer uses the same credentials, host-key verification and SSH preparation
+rules as default login, but does not open a tunnel or launch SSH. It adds one
+leading Include to `~/.ssh/config` and writes its entries in
+`~/.boxlite/ssh/config`, independently of the runtime/credential `--home`.
+Existing user configuration is preserved in `~/.ssh/config.boxlite-backup`
+before the first edit; reinstalling does not replace that backup. New managed
+directories/files use 0700/0600 permissions. Unsafe ownership, writable
+permissions, symlinks and ambiguous configurations fail rather than being
+silently rewritten. Marked entries are checked for manual edits; use the CLI
+to update their target instead of editing the generated stanza.
+
+The default SSH alias is the resolved box name, falling back to its complete ID.
+Aliases must be a single ASCII hostname-like value; unsupported names require
+`--alias NAME`. Aliases are stored in lowercase; use that spelling with `ssh`.
+The actual proxy target is always the complete, case-sensitive box ID.
+Installing the same alias for the same home and
+target updates it idempotently. A different target gives two choices:
+
+```bash
+# Retain the original alias and install another.
+boxlite ssh dev --install-ssh-config --alias dev-cloud
+# Repoint only the existing BoxLite-managed alias.
+boxlite ssh dev --install-ssh-config --overwrite
+```
+
+`--overwrite` does not change the old box, delete its keys, or overwrite a
+handwritten Host block. Matching explicit Host patterns in user configuration,
+including conventional nested Includes, are conflicts. General `Host *` defaults
+are permitted. Include paths support conventional quoting, relative paths,
+`~/` and globbing. Other token/environment expansions and Match conditions other
+than `Match all` are refused; the installer never executes `Match exec`.
+
+Generated ProxyCommands use the CLI's absolute executable path and capture runtime
+home/configuration for local boxes, or credential home, context, effective URL and
+routing prefix for remote boxes. Changing the saved default context cannot
+redirect the alias. Local aliases force the embedded runtime without introducing
+a `local` context. Remote aliases retain their installed endpoint even if the
+context's endpoint later changes; authentication still reads that context's
+current credentials. No API token or private key is embedded in SSH configuration.
+Reinstall after moving the CLI executable or intentionally changing the target.
+
+OpenSSH owns the session, so its normal command/PTY options work:
+
+```bash
+ssh dev 'printf "installed-alias-ok\n"'
+```
+
+The installed proxy only connects to enabled SSH; it never configures or enables
+it. Use `boxlite ssh dev` to prepare it again when needed. Installation releases
+the local runtime when it exits, so use a detached box if it must remain running.
+An active local alias connection holds the same exclusive home lock as `--proxy`.
+Remove an alias from the managed file to stop using it; deleting a remote box does
+not automatically remove its SSH configuration or local credentials.
+
 
 ## HTTP control with `boxlite serve`
 

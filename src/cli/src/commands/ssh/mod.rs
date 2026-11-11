@@ -15,6 +15,7 @@ use crate::commands::network::tunnel::{forward_until_interrupted, parse_socket_a
 use crate::formatter;
 
 mod connect;
+mod install;
 mod proxy;
 mod setup;
 
@@ -22,8 +23,16 @@ mod setup;
 mod tests;
 
 #[derive(Args, Debug)]
-#[command(group(ArgGroup::new("operation").args(["configure", "status", "enable", "disable", "tunnel", "proxy"])))]
+#[command(group(ArgGroup::new("operation").args(["configure", "status", "enable", "disable", "tunnel", "proxy", "install_ssh_config"])))]
 #[command(group(ArgGroup::new("credentials").args(["ssh_config", "host_key"])))]
+#[command(group(ArgGroup::new("installation_options")
+    .args(["alias", "overwrite"]).multiple(true)
+    .requires("install_ssh_config")
+    .conflicts_with_all(["configure", "status", "enable", "disable", "tunnel", "proxy"])))]
+#[command(group(ArgGroup::new("proxy_target")
+    .args(["proxy_local", "proxy_endpoint"])
+    .requires("proxy")
+    .conflicts_with_all(["configure", "status", "enable", "disable", "tunnel", "install_ssh_config"])))]
 pub struct SshArgs {
     /// Box ID or name
     #[arg(value_name = "BOX")]
@@ -54,20 +63,39 @@ pub struct SshArgs {
     #[arg(long)]
     pub proxy: bool,
 
+    /// Prepare guest SSH and install an alias in your OpenSSH configuration.
+    #[arg(long)]
+    pub install_ssh_config: bool,
+
+    /// SSH alias to install instead of the box name (or ID for unnamed boxes).
+    #[arg(long, value_name = "NAME")]
+    pub alias: Option<String>,
+
+    /// Replace a conflicting BoxLite-managed SSH alias, never a handwritten Host.
+    #[arg(long)]
+    pub overwrite: bool,
+
+    // Generated ProxyCommands need a stable backend without a new context model.
+    #[arg(long, hide = true)]
+    pub proxy_local: bool,
+
+    #[arg(long, hide = true, value_name = "URL")]
+    pub proxy_endpoint: Option<String>,
+
     #[command(flatten)]
     pub source: ConfigSource,
 
     /// Bind a local TCP port/address or unix:/absolute/path socket
     #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address,
           default_value = "127.0.0.1:0", requires = "tunnel",
-          conflicts_with_all = ["configure", "status", "enable", "disable", "proxy"])]
+          conflicts_with_all = ["configure", "status", "enable", "disable", "proxy", "install_ssh_config"])]
     pub listen: SocketAddress,
 }
 
 /// Exactly one source: a complete `SshConfig` JSON file, or one login built
 /// from key files.
 #[derive(Args, Debug)]
-#[group(requires = "configure", conflicts_with_all = ["status", "enable", "disable", "tunnel", "proxy"])]
+#[group(requires = "configure", conflicts_with_all = ["status", "enable", "disable", "tunnel", "proxy", "install_ssh_config"])]
 pub struct ConfigSource {
     /// Complete SshConfig JSON file; supports several accounts and CAs
     #[arg(long, value_name = "FILE",
@@ -154,10 +182,10 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
         return print_status(&sandbox.ssh().configure(config).await?).map(|_| 0);
     }
     if args.proxy {
-        return proxy::execute(&args.target, global).await.map(|_| 0);
+        return proxy::execute(&args, global).await.map(|_| 0);
     }
     if !(args.status || args.enable || args.disable || args.tunnel) {
-        return setup::execute(&args.target, global).await;
+        return setup::execute(&args, global).await;
     }
     let (_runtime, sandbox) = find_box(global, &args.target).await?;
     let status = if args.enable {

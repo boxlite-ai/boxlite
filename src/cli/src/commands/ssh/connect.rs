@@ -21,8 +21,8 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::time::timeout;
 
 pub(super) struct ConnectionPaths {
-    identity: String,
-    known_hosts: String,
+    pub(super) identity: String,
+    pub(super) known_hosts: String,
     known_hosts_path: PathBuf,
 }
 
@@ -83,7 +83,7 @@ pub(super) async fn execute(
     result
 }
 
-fn ssh_config_path(path: &Path) -> Result<String> {
+pub(super) fn ssh_path(path: &Path) -> Result<&str> {
     let value = path.to_str().context("SSH command paths must be UTF-8")?;
     if value.chars().any(char::is_control) || value.contains("${") {
         bail!(
@@ -91,6 +91,11 @@ fn ssh_config_path(path: &Path) -> Result<String> {
             path.display()
         );
     }
+    Ok(value)
+}
+
+pub(super) fn ssh_config_path(path: &Path) -> Result<String> {
+    let value = ssh_path(path)?;
 
     // These quotes belong to ssh_config parsing, not to a shell. Percent
     // tokens must remain literal when OpenSSH expands the file path.
@@ -108,7 +113,11 @@ fn ssh_config_path(path: &Path) -> Result<String> {
     Ok(encoded)
 }
 
-fn write_known_hosts(path: &Path, host_alias: &str, expected_host_key: &str) -> Result<()> {
+pub(super) fn write_known_hosts(
+    path: &Path,
+    host_alias: &str,
+    expected_host_key: &str,
+) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => super::setup::check_private(path, false)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

@@ -9,13 +9,23 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::cli::GlobalFlags;
 
-pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
+pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Result<()> {
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     tokio::select! {
         result = async {
-            let (_runtime, sandbox) = super::find_box(global, target).await?;
+            let (_runtime, sandbox) = if args.proxy_local {
+                let runtime = global.create_runtime_with_options(global.resolve_runtime_options()?)?;
+                let sandbox = runtime.get(&args.target).await?.context("No such box")?;
+                (runtime, sandbox)
+            } else if let Some(endpoint) = &args.proxy_endpoint {
+                let mut pinned = global.clone();
+                pinned.url = Some(endpoint.clone());
+                super::find_box(&pinned, &args.target).await?
+            } else {
+                super::find_box(global, &args.target).await?
+            };
             let status = sandbox.ssh().status().await?;
             let connection = super::ssh_tunnel(&sandbox, &status).await?.connect().await?;
             let (reader, writer) = connection.into_split();

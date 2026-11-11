@@ -319,6 +319,57 @@ fn configure_fixture(home: &Path) -> Value {
     serde_json::from_slice(&output).unwrap()
 }
 
+fn install_command(home: &Path, user_home: &Path) -> Command {
+    let mut command = cli(home);
+    command
+        .env("HOME", user_home)
+        .args(["ssh", "dev", "--install-ssh-config"]);
+    command
+}
+
+fn installed_ssh(home: &Path, user_home: &Path, alias: &str) -> Command {
+    let mut command = Command::new("ssh");
+    isolated(&mut command, home);
+    command
+        .env("HOME", user_home)
+        .arg("-F")
+        .arg(user_home.join(".ssh/config"))
+        .args(["-o", "ConnectTimeout=5", alias]);
+    command
+}
+
+fn assert_installed_proxy(cloud: &Cloud, root: &str, token: &str) {
+    let state = cloud.state.lock().unwrap();
+    let target = format!("{root}/boxes/-remote");
+    assert_eq!(state.requests.len(), 3, "lookup, SSH status, tunnel");
+    assert!(
+        state.requests.iter().all(|(_, path, auth)| {
+            path.starts_with(&format!("{root}/boxes/")) && auth == &format!("Bearer {token}")
+        }),
+        "{:?}",
+        state.requests
+    );
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|(method, path, _)| {
+                method == Method::POST && path == &format!("{target}/network/tunnel?port=22")
+            })
+            .count(),
+        1
+    );
+    assert_eq!(state.connects.len(), 1);
+    assert!(
+        state.connects[0].starts_with("CONNECT ")
+            && state.connects[0]
+                .to_ascii_lowercase()
+                .contains(&format!("x-boxlite-authorization: bearer {token}")),
+        "{}",
+        state.connects[0]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_control_options_preserve_context_authentication_and_saved_configuration() {
     let cloud = Cloud::start(false).await;
@@ -1191,4 +1242,325 @@ async fn cloud_connect_cancels_pending_tunnel_preparation(
         state.connects.is_empty(),
         "cancellation must not launch an SSH connection"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_install_prepares_without_connecting_and_repeats_idempotently() {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    install_command(home.path(), user_home.path())
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+
+    let directory = only_credential_directory(home.path());
+    let client_key = std::fs::read(directory.join("client_key")).unwrap();
+    let host_key = std::fs::read(directory.join("host_key")).unwrap();
+    let known_hosts = std::fs::read(directory.join("known_hosts")).unwrap();
+    let config = std::fs::read(user_home.path().join(".ssh/config")).unwrap();
+    let managed = std::fs::read(user_home.path().join(".boxlite/ssh/config")).unwrap();
+    install_command(home.path(), user_home.path())
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+    assert_eq!(
+        std::fs::read(directory.join("client_key")).unwrap(),
+        client_key
+    );
+    assert_eq!(std::fs::read(directory.join("host_key")).unwrap(), host_key);
+    assert_eq!(
+        std::fs::read(directory.join("known_hosts")).unwrap(),
+        known_hosts
+    );
+    assert_eq!(
+        std::fs::read(user_home.path().join(".ssh/config")).unwrap(),
+        config
+    );
+    assert_eq!(
+        std::fs::read(user_home.path().join(".boxlite/ssh/config")).unwrap(),
+        managed
+    );
+    {
+        let mut state = cloud.state.lock().unwrap();
+        assert_eq!(state.configs.len(), 1);
+        assert_eq!(state.generation, 1);
+        assert_eq!(
+            state.configs[0]["host_private_key"],
+            String::from_utf8(host_key).unwrap()
+        );
+        assert!(state.connects.is_empty());
+        assert!(
+            state
+                .requests
+                .iter()
+                .all(|(_, path, _)| !path.contains("/network/tunnel")),
+            "{:?}",
+            state.requests
+        );
+        state.requests.clear();
+    }
+
+    // This listener deliberately cannot authenticate SSH; CONNECT is the evidence.
+    installed_ssh(home.path(), user_home.path(), "dev")
+        .assert()
+        .code(255)
+        .stdout(predicates::str::is_empty());
+    assert_installed_proxy(&cloud, "/v1/team", "stored-key");
+    assert_eq!(cloud.state.lock().unwrap().generation, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_install_conflicts_before_guest_writes_and_overwrites_only_selected_alias() {
+    let cloud = Cloud::start(false).await;
+    let other = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let other_home = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    cloud.save_context(other_home.path(), "cloud", "team");
+    let credentials = home.path().join("credentials.toml");
+    let mut profiles: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&credentials).unwrap()).unwrap();
+    profiles["profiles"]["other"]["url"] = toml::Value::String(other.url.clone());
+    profiles["profiles"]["other"]["path_prefix"] = toml::Value::String("second".into());
+    std::fs::write(&credentials, toml::to_string(&profiles).unwrap()).unwrap();
+    std::fs::create_dir(user_home.path().join(".ssh")).unwrap();
+    let handwritten = "Host handwritten\n  HostName 192.0.2.1\n";
+    std::fs::write(user_home.path().join(".ssh/config"), handwritten).unwrap();
+
+    for flags in [vec![], vec!["--alias", "keep"]] {
+        install_command(home.path(), user_home.path())
+            .args(flags)
+            .assert()
+            .success();
+    }
+    let config = std::fs::read(user_home.path().join(".ssh/config")).unwrap();
+    let managed = std::fs::read(user_home.path().join(".boxlite/ssh/config")).unwrap();
+    let identities = credential_directories(home.path());
+    for (candidate_home, flags) in [
+        (home.path(), vec!["--context", "other"]),
+        (other_home.path(), vec![]),
+    ] {
+        install_command(candidate_home, user_home.path())
+            .args(flags)
+            .assert()
+            .failure()
+            .stdout(predicates::str::is_empty())
+            .stderr(predicates::str::contains("--alias"))
+            .stderr(predicates::str::contains("--overwrite"));
+        assert_eq!(
+            std::fs::read(user_home.path().join(".boxlite/ssh/config")).unwrap(),
+            managed
+        );
+    }
+    assert_eq!(credential_directories(home.path()), identities);
+    assert!(credential_directories(other_home.path()).is_empty());
+    assert_eq!(cloud.state.lock().unwrap().attempted_configs.len(), 1);
+    assert!(other.state.lock().unwrap().attempted_configs.is_empty());
+    assert!(
+        cloud
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(method, path, _)| {
+                method != Method::DELETE && !path.ends_with("/ssh/enable")
+            })
+    );
+    assert!(cloud.state.lock().unwrap().connects.is_empty());
+    assert!(other.state.lock().unwrap().connects.is_empty());
+
+    install_command(home.path(), user_home.path())
+        .args(["--context", "other", "--alias", "alternate"])
+        .assert()
+        .success();
+    install_command(home.path(), user_home.path())
+        .args(["--context", "other", "--alias", "dev", "--overwrite"])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(user_home.path().join(".ssh/config")).unwrap(),
+        config
+    );
+    assert!(
+        std::fs::read_to_string(user_home.path().join(".ssh/config"))
+            .unwrap()
+            .ends_with(handwritten)
+    );
+    assert_eq!(cloud.state.lock().unwrap().configs.len(), 1);
+    assert_eq!(other.state.lock().unwrap().configs.len(), 1);
+    for (alias, endpoint, root) in [
+        ("keep", &cloud, "/v1/team"),
+        ("alternate", &other, "/v1/second"),
+        ("dev", &other, "/v1/second"),
+    ] {
+        {
+            let mut state = endpoint.state.lock().unwrap();
+            state.requests.clear();
+            state.connects.clear();
+        }
+        installed_ssh(home.path(), user_home.path(), alias)
+            .assert()
+            .code(255)
+            .stdout(predicates::str::is_empty());
+        assert_installed_proxy(endpoint, root, "stored-key");
+    }
+}
+
+#[rstest::rstest]
+#[case::named("-cloud ' \" \\ % ; $(touch injected)")]
+#[case::default_context("default")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_install_freezes_routing_and_quotes_real_proxy_arguments(#[case] context: &str) {
+    let cloud = Cloud::start(false).await;
+    let other = Cloud::start(false).await;
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home ' \" \\ % ; $(touch injected)");
+    let user_home = temp.path().join("user ' \" \\ % ; $(touch injected)");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&user_home).unwrap();
+    let prefix = "-team ' \" \\ % ; $(touch injected)";
+    cloud.save_context(&home, context, prefix);
+    let credentials = home.join("credentials.toml");
+    let mut profiles: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&credentials).unwrap()).unwrap();
+    profiles["profiles"][context]["api_key"] = toml::Value::String("selected-key".into());
+    std::fs::write(&credentials, toml::to_string(&profiles).unwrap()).unwrap();
+    install_command(&home, &user_home)
+        .current_dir(temp.path())
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+    let root = {
+        let mut state = cloud.state.lock().unwrap();
+        assert!(state.connects.is_empty());
+        assert_eq!(state.configs.len(), 1);
+        let root = state
+            .requests
+            .iter()
+            .find_map(|(_, path, _)| path.strip_suffix("/boxes/dev"))
+            .expect("installation resolves the name")
+            .to_owned();
+        assert_ne!(root, "/v1", "nonempty prefix must be retained");
+        assert!(
+            state
+                .requests
+                .iter()
+                .all(|(_, _, auth)| auth == "Bearer selected-key")
+        );
+        state.requests.clear();
+        root
+    };
+    profiles["profiles"][context]["url"] = toml::Value::String(other.url.clone());
+    profiles["profiles"][context]["path_prefix"] = toml::Value::String("changed".into());
+    profiles["profiles"]["other"]["api_key"] = toml::Value::String("wrong-key".into());
+    std::fs::write(&credentials, toml::to_string(&profiles).unwrap()).unwrap();
+    std::fs::write(home.join("cli.toml"), "current_context = 'other'\n").unwrap();
+
+    installed_ssh(&home, &user_home, "dev")
+        .current_dir(temp.path())
+        .env("BOXLITE_HOME", temp.path().join("wrong-home"))
+        .env("BOXLITE_CONTEXT", "other")
+        .env("BOXLITE_PROFILE", "other")
+        .env("BOXLITE_REST_URL", &other.url)
+        .env("BOXLITE_REST_PATH_PREFIX", "ambient")
+        .assert()
+        .code(255)
+        .stdout(predicates::str::is_empty());
+    assert_installed_proxy(&cloud, &root, "selected-key");
+    assert!(other.state.lock().unwrap().requests.is_empty());
+    assert!(other.state.lock().unwrap().connects.is_empty());
+    assert!(
+        !temp.path().join("injected").exists(),
+        "shell injection executed"
+    );
+    assert_eq!(cloud.state.lock().unwrap().generation, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_install_url_only_preserves_explicit_empty_prefix() {
+    let cloud = Cloud::start(false).await;
+    let other = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    install_command(home.path(), user_home.path())
+        .args(["--url", &cloud.url, "--path-prefix="])
+        .env("BOXLITE_API_KEY", "environment-key")
+        .env("BOXLITE_REST_PATH_PREFIX", "ignored")
+        .assert()
+        .success()
+        .stdout(predicates::str::is_empty());
+    assert!(!home.path().join("credentials.toml").exists());
+    {
+        let mut state = cloud.state.lock().unwrap();
+        assert_eq!(state.configs.len(), 1);
+        assert!(state.connects.is_empty());
+        assert!(state.requests.iter().all(|(_, path, auth)| {
+            path.starts_with("/v1/boxes/")
+                && auth == "Bearer environment-key"
+                && !path.contains("/network/tunnel")
+        }));
+        state.requests.clear();
+    }
+    other.save_context(home.path(), "other", "changed");
+    installed_ssh(home.path(), user_home.path(), "dev")
+        .env("BOXLITE_CONTEXT", "other")
+        .env("BOXLITE_PROFILE", "other")
+        .env("BOXLITE_REST_URL", &other.url)
+        .env("BOXLITE_REST_PATH_PREFIX", "ambient")
+        .env("BOXLITE_API_KEY", "environment-key")
+        .assert()
+        .code(255)
+        .stdout(predicates::str::is_empty());
+    assert_installed_proxy(&cloud, "/v1", "environment-key");
+    assert!(other.state.lock().unwrap().requests.is_empty());
+}
+
+#[rstest::rstest]
+#[case::stale_context(false)]
+#[case::malformed_credentials(true)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_local_proxy_bypasses_remote_selection(#[case] malformed: bool) {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    std::fs::write(
+        home.path().join("cli.toml"),
+        "current_context = 'removed'\n",
+    )
+    .unwrap();
+    if malformed {
+        std::fs::write(home.path().join("credentials.toml"), "[not valid TOML").unwrap();
+    }
+    let output = cli(home.path())
+        .env("HOME", user_home.path())
+        .env("BOXLITE_CONTEXT", "removed")
+        .env("BOXLITE_PROFILE", "removed")
+        .env("BOXLITE_REST_URL", &cloud.url)
+        .env("BOXLITE_REST_PATH_PREFIX", "ambient")
+        .env("BOXLITE_API_KEY", "environment-key")
+        .args([
+            "ssh",
+            "--proxy",
+            "--proxy-local",
+            "--",
+            "missing-local-install-box",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicates::str::is_empty())
+        .get_output()
+        .clone();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!error.contains("context `"), "{error}");
+    assert!(!error.contains("context preferences"), "{error}");
+    assert!(!error.contains("credentials.toml"), "{error}");
+    assert!(!error.contains("unexpected argument"), "{error}");
+    assert!(cloud.state.lock().unwrap().requests.is_empty());
+    assert!(cloud.state.lock().unwrap().connects.is_empty());
+    // Stub builds may fail runtime qualification before looking up this missing box.
 }

@@ -303,9 +303,28 @@ With no operation flag, `boxlite ssh dev` prepares CLI-managed Ed25519 keys and
 logs in as `box` using system OpenSSH. Both `ssh` and `ssh-keygen` must be on PATH.
 Saved keys are reused; healthy SSH with a matching host identity is not
 reconfigured. Changed host identities are rejected rather than overwritten.
-Choose one operation with `--configure`, `--status`, `--enable`, `--disable`,
-`--tunnel`, or `--proxy`; all support local boxes and cloud contexts.
+Choose one operation with `--install-ssh-config`, `--configure`, `--status`,
+`--enable`, `--disable`, `--tunnel`, or `--proxy`; all support local and remote boxes.
 `--configure` retains full configuration control and prints status JSON.
+
+To connect later with plain OpenSSH, install an alias once:
+
+```bash
+boxlite ssh dev --install-ssh-config
+ssh dev
+boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
+ssh dev-cloud
+```
+
+Installation prepares SSH and exits without logging in. The default alias is the
+resolved box name, or its full ID for unnamed boxes. Reinstalling the same target
+updates its entry; a different target requires `--alias NAME` or `--overwrite`.
+Overwrite replaces only BoxLite-managed entries, never handwritten Host blocks.
+The CLI adds one Include to `~/.ssh/config` and keeps its entries separately in
+`~/.boxlite/ssh/config`. Installed aliases pin home, backend, endpoint, context and
+routing, while credentials remain in the existing store. See the
+[installation guide](../../docs/guides/ssh.md#managed-openssh-aliases) for safety
+checks and lifecycle behavior.
 
 `--proxy` forwards only stdin/stdout; `--tunnel` remains available for a local TCP
 listener. Both require enabled SSH. `--enable` restores saved SSH configuration;

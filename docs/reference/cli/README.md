@@ -909,6 +909,7 @@ boxlite network tunnel mybox 3000 --revoke
 ```
 boxlite ssh --configure BOX CONFIG
 boxlite ssh BOX
+boxlite ssh BOX --install-ssh-config [--alias NAME] [--overwrite]
 boxlite ssh --status BOX
 boxlite ssh --enable BOX
 boxlite ssh --disable BOX
@@ -922,8 +923,8 @@ CONFIG := --ssh-config FILE
 Control the guest SSH server of a local box or a REST box (`--url`/`--context`).
 With no operation option, `boxlite ssh BOX` prepares CLI-managed credentials and
 logs in immediately using system OpenSSH.
-Choose at most one of `--configure`, `--status`, `--enable`, `--disable`,
-`--tunnel`, or `--proxy`; options may precede or follow BOX.
+Choose at most one of `--install-ssh-config`, `--configure`, `--status`, `--enable`,
+`--disable`, `--tunnel`, or `--proxy`; options may precede or follow BOX.
 These replace the former SSH subcommands: for example, `ssh enable dev` becomes
 `ssh dev --enable`, and `ssh setup dev` becomes `ssh dev`.
 Default login saves client and host keys locally; complete `--configure`
@@ -935,12 +936,14 @@ These commands add no HTTP routes. Backend requirements differ:
 |----------|---------------|--------------|
 | `--configure`, `--status`, `--enable`, `--disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
 | default login | CLI-managed credentials and an OpenSSH session through a loopback forwarder | Requires SSH control and tunnel support; unavailable through `boxlite serve` |
+| `--install-ssh-config` | Prepare managed SSH and install a native OpenSSH alias | Requires SSH control; does not open a tunnel during installation |
 | `--proxy`, `--tunnel` | Stdio connection or local listener through the existing tunnel | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
 | Operation | Effect | stdout |
 |------------|--------|--------|
 | `--configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
 | default login | Generate/reuse local keys; configure new/generation-zero identities, enable disabled saved SSH, otherwise read status and connect | Remote session output only |
+| `--install-ssh-config` | Prepare SSH, update the managed Host entry and Include, then exit without logging in | Empty; connection guidance goes to stderr |
 | `--status` | Read state; never starts the box | `SshStatus` JSON |
 | `--enable` | Enable saved configuration on a running box; preserve healthy connections | `SshStatus` JSON |
 | `--disable` | Stop SSH on a running box; never starts the box | `SshStatus` JSON |
@@ -952,6 +955,23 @@ Connect directly:
 ```bash
 boxlite ssh dev
 ```
+
+Install once to use plain OpenSSH:
+
+```bash
+boxlite ssh dev --install-ssh-config
+ssh dev
+boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
+```
+
+The default alias is the resolved box name, or full ID for unnamed boxes.
+Reinstalling the same target is idempotent; conflicting aliases require
+`--alias NAME` or `--overwrite`. Overwrite affects only BoxLite-managed entries,
+not handwritten Host blocks. The installer preserves existing user configuration,
+adds one leading Include and stores entries at `~/.boxlite/ssh/config`.
+Generated proxies fix the backend/home and remote context/endpoint/routing without
+storing API tokens. See [managed aliases](../../guides/ssh.md#managed-openssh-aliases)
+for file safety, collision handling and lifecycle rules.
 
 Custom configuration always replaces the whole SSH configuration and disconnects
 clients. Default login does so only for a new managed identity or disabled
@@ -995,6 +1015,9 @@ See the [SSH guide](../../guides/ssh.md#cli) for lifecycle and signal handling.
 
 | Flag | Description |
 |------|-------------|
+| `--install-ssh-config` | Prepare managed SSH and install an alias; exclusive with the other operations. |
+| `--alias NAME` | Installed OpenSSH alias instead of the box name/ID; requires `--install-ssh-config`. |
+| `--overwrite` | Repoint a conflicting BoxLite-managed alias; requires `--install-ssh-config`. |
 | `--ssh-config FILE` | Complete `SshConfig` JSON ([schema](../../guides/ssh.md#http-control-with-boxlite-serve)): several accounts, authorized keys, CAs. |
 | `--host-key FILE` | Unencrypted OpenSSH host private key. Requires `--login` and `--authorized-key`. |
 | `--login NAME` | The single login accepted for `--authorized-key`. |
