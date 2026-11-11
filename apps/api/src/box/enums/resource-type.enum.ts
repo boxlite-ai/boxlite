@@ -8,4 +8,5 @@ export enum ResourceType {
   BOX = 'BOX',
   ARTIFACT = 'ARTIFACT',
   BACKUP = 'BACKUP',
+  CHECKPOINT = 'CHECKPOINT',
 }

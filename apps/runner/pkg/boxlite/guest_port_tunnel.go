@@ -28,7 +28,7 @@ var ErrBoxNotRunning = errors.New("box is not running")
 // handle (first call after a runner restart) whose box exits on its own in
 // that window is still booted by that call.
 func (c *Client) runningBox(ctx context.Context, boxID string) (*boxlite.Box, error) {
-	info, err := c.runtime.GetInfo(ctx, boxID)
+	info, err := c.nativeBoxInfo(ctx, boxID)
 	if err != nil {
 		return nil, fmt.Errorf("read state of box %s: %w", boxID, err)
 	}

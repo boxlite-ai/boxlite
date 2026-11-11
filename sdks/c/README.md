@@ -7,6 +7,30 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 
+## Managed checkpoints
+
+The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+`boxlite_checkpoint_create`, `list`, `get`, `remove` and `import_box` require a
+REST runtime and use its existing post-and-drain event queue. Local runtimes
+deliver an unsupported-operation error through the same callback queue.
+Import accepts optional name and box_id; they are mutually exclusive. A non-null
+box_id replaces the selected target; otherwise import creates a new Box.
+Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
+or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
+`boxlite_free_checkpoint_list`. List entries belong to the list. Import
+callbacks own a Box handle, released with `boxlite_box_free`, which does not
+delete the native Box. Error pointers are borrowed during callback dispatch.
+
+Cloud capture may initially report `creating`; wait for `ready` before use.
+New imports and replacements inherit all saved execution settings, and replacement
+preserves the public Box ID. Force removal ignores absence and never bypasses active use.
+Storage and replacement coordination belong to the server. Existing native archive
+export/import remains available.
+`boxlite_box_name` returns an owned name string, released with
+`boxlite_free_string`, or null for an unnamed Box.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -1386,6 +1410,7 @@ cargo build -p boxlite-c
 See `sdks/c/tests/` for the test suite.
 
 - `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- `make test:unit:ffi FILTER=checkpoint` exercises checkpoint create/list/get/import/remove through loopback HTTP and the real post-and-drain queue, including callback-owned metadata, Box handles and errors. Native binding coverage runs these Rust FFI tests alongside the C executable tests; no VM is needed.
 - `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
 - `FREE_STR_CALLS` counts string frees across the whole test process. A Rust test that frees a counted FFI payload, or reads the counter, must hold `FREE_STR_LOCK` for as long as it does so, even if it never reads the counter. Without the lock, plain `cargo test` threads count its frees in another test's delta. nextest's process-per-test runs hide this.

@@ -354,6 +354,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,

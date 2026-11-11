@@ -5,6 +5,7 @@
  */
 
 import { otelSdk } from './tracing'
+import { installCiWebhookBodyParser } from './ci/ci-webhook-body'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { NestFactory } from '@nestjs/core'
 import { NestExpressApplication } from '@nestjs/platform-express'
@@ -59,6 +60,7 @@ async function bootstrap() {
     // after authentication.
     bodyParser: false,
   })
+  installCiWebhookBodyParser(app)
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
   useApiBodyParsers(app)

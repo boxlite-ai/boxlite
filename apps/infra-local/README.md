@@ -28,8 +28,32 @@ make status    # one-screen health across L1 + L2
 make down      # stop L2 (add ARGS=--all to also stop L1)
 ```
 
-First run pulls 11 images; later runs reuse their cache. Log
-in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
+First run pulls 11 images; later runs reuse their cache. Before the first login,
+configure [local registration](#local-registration), then sign in at
+<http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
+
+### Local registration
+
+Local registration is automatic by default. The API template has no Turnstile
+sitekey, so local development and E2E startup need no Cloudflare credentials or
+hostname configuration.
+
+To exercise protected registration, use a dedicated Managed Turnstile development widget
+with `localhost` authorized (add `127.0.0.1` if you browse that address). Put its
+sitekey and secret in the gitignored `apps/api/.env`:
+
+```dotenv
+TURNSTILE_SITEKEY=your-development-widget-sitekey
+TURNSTILE_SECRET_KEY=your-development-widget-secret
+TURNSTILE_EXPECTED_HOSTNAMES=localhost,127.0.0.1
+TURNSTILE_TIMEOUT_MS=5000
+```
+
+Restart with `make restart COMPONENTS=api` and reload the Dashboard. Registration
+requires access to Cloudflare and keeps the same hostname and action checks as
+deployed environments. Existing local `.env` files are preserved: add these
+settings to enable protection. Remove or empty `TURNSTILE_SITEKEY` to return to
+automatic registration. Ordinary access by existing accounts does not run a new challenge.
 
 ## Commands
 

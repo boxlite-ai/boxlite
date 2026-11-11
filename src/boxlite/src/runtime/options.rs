@@ -943,7 +943,7 @@ impl BoxOptions {
         match self.cpus {
             Some(cpus) if self.cpus_beyond_guest_kernel().is_some() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
-                    "cpus must be between 0.01 and {MAX_CPUS} (the guest kernel brings up at \
+                    "cpus must be between 0.125 and {MAX_CPUS} (the guest kernel brings up at \
                      most {MAX_CPUS} vCPUs), got {cpus}"
                 )),
             ),
@@ -2215,7 +2215,7 @@ mod tests {
 
     #[test]
     fn fractional_cpus_common_validation_ignores_execution_host() {
-        for cpus in [0.01, 0.125, 1.5] {
+        for cpus in [0.125, 0.126, 1.5] {
             for jailer_enabled in [false, true] {
                 let mut options = BoxOptions {
                     cpus: Some(cpus),
@@ -2230,7 +2230,7 @@ mod tests {
 
     #[test]
     fn fractional_cpus_local_validation_requires_host_support() {
-        for cpus in [None, Some(2.0), Some(0.01), Some(1.5)] {
+        for cpus in [None, Some(2.0), Some(0.125), Some(1.5)] {
             for jailer_enabled in [false, true] {
                 let mut options = BoxOptions {
                     cpus,

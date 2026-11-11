@@ -33,6 +33,34 @@ Other commands use `--agent ID` and `--turn TURN` to select existing work.
 See the [agent CLI reference](../../docs/reference/cli/README.md#boxlite-agent)
 for commands, grouped options and error behavior.
 
+## GitHub CI connect (in development)
+
+`boxlite --context dev ci connect GITHUB_ACCOUNT` binds a GitHub App installation
+using the selected remote BoxLite context and a browser device authorization.
+Public repositories are enabled by default. Use `--allow-private-repositories` to include private repositories, and `--no-browser`
+to print the authorization URL without opening it. The account may be a personal
+GitHub account or organization.
+
+The command requires BoxLite organization ownership and GitHub installation ownership.
+An API key needs `write:boxes` and `delete:boxes`. Current and future App-selected
+repositories follow the binding. A conflicting binding is rejected rather than replaced.
+
+The authorization poll is a POST without a body, so the CLI declares `Content-Length: 0` on it.
+Some gateways answer a POST without a length with HTTP 411 before it reaches the API.
+
+After connecting, use `runs-on: boxlite` for the configured worker defaults or
+`runs-on: boxlite-2vcpu-4gbmem-10gbdisk` for 2 vCPU, 4 GiB RAM and 10 GiB disk.
+Both hosted and standalone execution enforce the backend's resource and quota
+checks. See [resource labels](../../apps/libs/ci-listener/README.md#resource-labels)
+for accepted quantities and conflicting-label rules.
+
+The current API reports `provisioning` after binding; runner capacity is not ready yet.
+The API deployment also needs the CI Login OAuth App credentials for authenticated GitHub account-type lookup; user authorization still uses the matching Personal or Organization CI App.
+
+See the [Listener README](../../apps/github-ci-runner/README.md#hosted-connect)
+for deployment status and authentication requirements. CI logs and results remain in GitHub
+Actions; running jobs use ordinary Box management commands.
+
 ## Installation
 
 ### One-line install (Linux & macOS Apple Silicon)
@@ -125,6 +153,41 @@ boxlite rm mybox
 boxlite pull alpine:latest
 boxlite images
 ```
+
+## Checkpoint management
+
+Checkpoints are managed by the selected REST server. Local runtimes return
+an unsupported-operation error. Each checkpoint captures a stopped box's disk
+and execution configuration, survives source deletion, and can create multiple
+boxes. It does not capture memory or running processes.
+
+```bash
+# Use a REST context, or pass --url with the selected server.
+boxlite --url https://api.example.com stop source
+boxlite --url https://api.example.com checkpoint create source --name dev-base
+boxlite --url https://api.example.com checkpoint list
+boxlite --url https://api.example.com checkpoint get dev-base
+
+# Saved execution settings are inherited; configuration overrides are refused.
+boxlite --url https://api.example.com import --checkpoint dev-base --name worker
+
+# Replace an idle stopped or failed box, preserving its public Box ID.
+boxlite --url https://api.example.com import --checkpoint dev-base --box worker
+boxlite --url https://api.example.com checkpoint delete dev-base
+```
+
+A capture can initially report `creating`; wait for `ready` before import.
+Capture never automatically stops a Box. Name and replacement target are
+mutually exclusive. Deleting a checkpoint leaves previously imported boxes
+intact; `--force` tolerates absence and never bypasses active use.
+
+Storage, capture coordination, and replacement retries belong to the server.
+The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
+Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
+management routes. Existing binary archive export/import remains available.
+The cloud runner validates downloaded archives through its separate native
+archive helper before using ordinary native import; this creates no local
+checkpoint catalog or recovery records.
 
 ## Connecting to a remote server
 

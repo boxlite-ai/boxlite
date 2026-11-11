@@ -2095,7 +2095,7 @@ mod tests {
     async fn create_rejects_cpus_outside_guest_kernel_range() {
         let (runtime, _dir) = create_test_runtime();
         let local = LocalRuntime(Arc::clone(&runtime));
-        for cpus in [0.0, 17.0, 24.0] {
+        for cpus in [0.0, 0.124, 17.0, 24.0] {
             let name = format!("cpus-{cpus}");
             let options = BoxOptions {
                 cpus: Some(cpus),
@@ -2104,7 +2104,7 @@ mod tests {
             let error = RuntimeBackend::create(&local, options, Some(name.clone()))
                 .await
                 .err()
-                .expect("cpus outside 0.01..=16 must be rejected at create");
+                .expect("cpus outside 0.125..=16 must be rejected at create");
 
             assert!(
                 matches!(error, BoxliteError::InvalidArgument(_)),

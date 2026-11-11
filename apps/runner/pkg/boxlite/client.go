@@ -419,25 +419,44 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
+	if err != nil {
+		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
 	if err != nil {
 		return "", "", err
 	}
-
-	// API sends cores / GB / GB as small integers (see apps/api Box entity).
-	cpus := int(boxDto.CpuQuota)
-	if cpus < 1 {
-		cpus = 1
+	operation, err := c.checkpointOperations().Lock(ctx, boxDto.Id)
+	if err != nil {
+		return "", "", err
 	}
+	defer operation.Close()
+	if err := operation.CheckIdle(); err != nil {
+		return "", "", err
+	}
+	candidate, err := operation.UnpublishedCandidate()
+	if err != nil {
+		return "", "", err
+	}
+	if candidate != "" {
+		if err := c.runtime.ForceRemove(ctx, candidate); err != nil && !boxlite.IsNotFound(err) {
+			return "", "", err
+		}
+	}
+	if err := operation.Invalidate(); err != nil {
+		return "", "", err
+	}
+
 	memoryMiB := int(boxDto.MemoryQuota * 1024)
 	if memoryMiB < 128 {
 		memoryMiB = 128
 	}
 	opts := []boxlite.BoxOption{
 		boxlite.WithName(boxDto.Id),
-		boxlite.WithCPUs(float64(cpus)),
+		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),
@@ -510,6 +529,19 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	opts = append(opts, boxlite.WithNetwork(network))
+	if err := ctx.Err(); err != nil {
+		if len(volumeMounts) > 0 {
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
+				c.logger.WarnContext(cleanupCtx, "failed to remove cancelled box volume mount record", "box", boxDto.Id, "error", cleanupErr)
+			}
+		}
+		return "", "", err
+	}
+	// Native creation cannot be cancelled after admission. Keep the target
+	// lease until it finishes; preparation above still obeys caller cancellation.
+	ctx = context.WithoutCancel(ctx)
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
@@ -519,7 +551,20 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// failing with "already exists", which the API would surface as a 400.
 	// The created flag (new vs adopted) is irrelevant here: either way the box
 	// now exists locally and the job can proceed, so it is discarded.
-	bx, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	id, err := c.nativeBoxID(boxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	var bx *boxlite.Box
+	if id != boxDto.Id {
+		bx, err = c.runtime.Get(ctx, id)
+	}
+	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
+		if err := operation.ClearPublished(); err != nil {
+			return "", "", err
+		}
+		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
@@ -603,6 +648,12 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return "", err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
@@ -622,6 +673,12 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 
 // Stop stops a running box.
 func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
@@ -636,10 +693,25 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	operation, err := c.checkpointOperations().Lock(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	if err := operation.Invalidate(); err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
 	c.forgetBox(boxId)
 
-	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {
+	ids, err := operation.NativeTargets()
+	if err != nil {
 		return err
+	}
+	for _, id := range ids {
+		if err := c.runtime.ForceRemove(ctx, id); err != nil && !boxlite.IsNotFound(err) {
+			return err
+		}
 	}
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
@@ -696,7 +768,7 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 // and eviction cannot free the old one (see evictBox), so the runner would
 // accumulate dead handles for as long as it ran.
 func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error) {
-	info, err := c.runtime.GetInfo(ctx, boxId)
+	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
 		if boxlite.IsNotFound(err) {
 			return models.BoxInfo{BoxState: enums.BoxStateUnknown}, nil
@@ -810,7 +882,7 @@ func (c *Client) BoxMetrics(ctx context.Context, boxId string) (*boxlite.BoxMetr
 
 // ListInfo returns info for all boxes managed by this runtime.
 func (c *Client) ListInfo(ctx context.Context) ([]boxlite.BoxInfo, error) {
-	return c.runtime.ListInfo(ctx)
+	return c.listPublicBoxes(ctx)
 }
 
 // GetBox retrieves a box handle from cache or fetches it from the runtime.
@@ -852,7 +924,11 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 		c.evictBox(boxId, cached)
 	}
 
-	bx, err := c.runtime.Get(ctx, boxId)
+	id, err := c.nativeBoxID(boxId)
+	if err != nil {
+		return nil, err
+	}
+	bx, err := c.runtime.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("box %s not found: %w", boxId, err)
 	}

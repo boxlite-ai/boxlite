@@ -388,6 +388,21 @@ udevadm trigger --name-match=kvm || true`,
       condition: volumeConditionFor(volumePrefix),
     })
 
+    /*
+     * Checkpoint archives: a host uploads one on export and downloads one on
+     * restore, resolving Application Default Credentials as gcsfuse does. A
+     * binding on the one bucket, so it needs no condition, and object access
+     * only — `objectUser`, not admin. It includes delete, which a redelivered
+     * export needs to overwrite the archive it wrote before.
+     */
+    if (request.checkpointBucket) {
+      new gcp.storage.BucketIAMMember('RunnerCheckpointObjects', {
+        bucket: request.checkpointBucket,
+        role: 'roles/storage.objectUser',
+        member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      })
+    }
+
     const assignments = request.fleet
 
     const instances = assignments.map(({ slot, token }) => {
