@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, EntityManager, FindOptionsWhere, In, Not } from 'typeorm'
+import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
@@ -79,6 +79,32 @@ type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
+
+  /** Bound background lookups without inheriting waits from the query cache. */
+  async findOne({ lockTimeoutMs, ...options }: FindOneOptions<Box> & { lockTimeoutMs?: number }): Promise<Box | null> {
+    if (lockTimeoutMs === undefined) return super.findOne(options)
+    return this.manager.transaction(async (manager) => {
+      await manager.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`])
+      return manager.findOne(Box, { ...options, cache: false })
+    })
+  }
+
+  /** Read stable stop candidates without waiting indefinitely on a table lock. */
+  async findRunningForStop(organizationIds: string[]): Promise<Pick<Box, 'id' | 'organizationId' | 'createdAt'>[]> {
+    return this.manager.transaction(async (manager) => {
+      await manager.query("SELECT set_config('lock_timeout', $1, true)", ['500ms'])
+      return manager.find(Box, {
+        where: {
+          state: BoxState.STARTED,
+          desiredState: BoxDesiredState.STARTED,
+          pending: false,
+          organizationId: In(organizationIds),
+        },
+        select: { id: true, organizationId: true, createdAt: true },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      })
+    })
+  }
 
   /** Serialize runtime application and persistence against concurrent box writes. */
   async replaceOutbound(
@@ -322,11 +348,15 @@ export class BoxRepository extends BaseRepository<Box> {
     params: {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
+      lockTimeoutMs?: number
     },
   ): Promise<Box> {
-    const { updateData, whereCondition } = params
+    const { updateData, whereCondition, lockTimeoutMs } = params
 
     const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
+      if (lockTimeoutMs !== undefined) {
+        await entityManager.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`])
+      }
       const whereClause = {
         ...whereCondition,
         id,

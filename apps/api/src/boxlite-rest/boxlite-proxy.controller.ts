@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Audit, AUDIT_TARGET_ID } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 import {
   Controller,
   All,
@@ -45,6 +48,9 @@ import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
+import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
+import { Context } from '../common/context/context'
+import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -79,6 +85,8 @@ function requireSshObservable(box: Box, boxId: string): void {
     throw new ConflictException(`Box ${boxId} is ${box.state}; SSH can be read once it is started or stopped`)
   }
 }
+/** A proxied call that is a business operation: a command started, or files uploaded. */
+type ProxiedOperation = 'box.exec' | 'box.file_upload'
 
 function requireSshRunning(box: Box, boxId: string): void {
   const state = reportedBoxState(box)
@@ -106,6 +114,13 @@ export class BoxliteProxyController {
 
   @All(':boxId/exec')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.EXECUTE,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+  })
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -121,11 +136,20 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
+      { operation: req.method === 'POST' ? 'box.exec' : undefined },
     )
   }
 
   @All(':boxId/executions/:execId/signal')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.SIGNAL_EXECUTION,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+    requestMetadata: { executionId: (req) => req.params.execId },
+  })
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -207,6 +231,14 @@ export class BoxliteProxyController {
 
   @Delete(':boxId/executions/:execId')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.TERMINATE_EXECUTION,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['DELETE'],
+    completion: 'response',
+    requestMetadata: { executionId: (req) => req.params.execId },
+  })
   async proxyExecKill(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -234,6 +266,13 @@ export class BoxliteProxyController {
 
   @All(':boxId/files')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.UPLOAD_FILES,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['PUT'],
+    completion: 'response',
+  })
   async proxyFiles(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -250,7 +289,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
-      { proxyTimeoutMs: 0 },
+      { proxyTimeoutMs: 0, operation: req.method === 'PUT' ? 'box.file_upload' : undefined },
     )
   }
 
@@ -277,6 +316,13 @@ export class BoxliteProxyController {
   // it, because every accepted call restarts the guest listener.
   @Post(':boxId/ssh')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.CONFIGURE_SSH,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+  })
   async configureSsh(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -318,6 +364,13 @@ export class BoxliteProxyController {
 
   @Post(':boxId/ssh/enable')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.ENABLE_SSH,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['POST'],
+    completion: 'response',
+  })
   async enableSsh(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -339,6 +392,13 @@ export class BoxliteProxyController {
 
   @Delete(':boxId/ssh')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.DISABLE_SSH,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    methods: ['DELETE'],
+    completion: 'response',
+  })
   async disableSsh(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -362,15 +422,31 @@ export class BoxliteProxyController {
   @Header('Cache-Control', 'no-store')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.OK)
+  @Audit({
+    action: AuditAction.CREATE_TUNNEL,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: { port: (req) => req.query.port },
+  })
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
+    @UserContext() ctx: Context,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
+    @Req() request?: Request,
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
+    return recordOutcomes(
+      { name: 'tunnel.create', correlationId: box.id, organizationId: box.organizationId, ctx },
+      () => this.openTunnel(box, boxId, port, authContext.organizationId, options),
+      (error) => (error instanceof ConflictException ? 'conflict' : 'internal'),
+    )
+  }
 
+  private async openTunnel(box: Box, boxId: string, port: number, organizationId: string, options: PrepareTunnelDto) {
     // Tunnel URLs expose the box to the public internet, so only a box with
     // inbound access enabled can use one. Any other box is reached through
     // the authenticated API.
@@ -396,7 +472,7 @@ export class BoxliteProxyController {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 
-    const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
+    const uri = await this.boxService.getNetworkTunnelUrl(boxId, organizationId, port)
     const access = await this.tunnelService.prepare(box.id, port, options.isPublic ?? true)
     return { uri, ...access }
   }
@@ -406,12 +482,20 @@ export class BoxliteProxyController {
   @Delete(':boxId/network/tunnel')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Audit({
+    action: AuditAction.REVOKE_TUNNEL,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: { port: (req) => req.query.port },
+  })
   async revokeNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
+    @Req() request?: Request,
   ): Promise<void> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
     await this.tunnelService.revoke(box.id, port)
   }
 
@@ -425,11 +509,16 @@ export class BoxliteProxyController {
     policy: ProxyActivityPolicy,
     // admit throws to refuse the request after activity is recorded and before
     // any resume.
-    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission; operation?: ProxiedOperation },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
       throw new NotFoundException(`Box ${boxId} not found`)
+    }
+
+    req[AUDIT_TARGET_ID] = box.id
+    if (opts?.operation) {
+      this.recordProxiedOperation(opts.operation, box, requestContext(req), res)
     }
 
     if (policy.activity) {
@@ -499,6 +588,37 @@ export class BoxliteProxyController {
     }
 
     return createProxyMiddleware(proxyOptions)(req, res, next)
+  }
+
+  /**
+   * Records the operation as requested now and its outcome when the response
+   * ends: the runner's (or a gateway error's) status decides success, and a
+   * client that disconnects first leaves an exception.
+   */
+  private recordProxiedOperation(name: ProxiedOperation, box: Box, ctx: Context, res: Response): void {
+    const event = {
+      name,
+      correlationId: box.id,
+      organizationId: box.organizationId,
+      ctx,
+    }
+    recordBusinessEvent({ ...event, outcome: 'requested' })
+    let recorded = false
+    const finish = (exceptionType?: string) => {
+      if (recorded) return
+      recorded = true
+      res.off('finish', onFinish)
+      res.off('close', onClose)
+      if (exceptionType) recordBusinessEvent({ ...event, outcome: 'exception', exceptionType })
+      else recordBusinessEvent({ ...event, outcome: 'success' })
+    }
+    const onFinish = () => finish(res.statusCode >= 400 ? `http_${res.statusCode}` : undefined)
+    const onClose = () => finish('client_closed')
+    res.once('finish', onFinish)
+    res.once('close', onClose)
+    // The asynchronous box lookup may have outlived the response's terminal event.
+    if (res.writableFinished) onFinish()
+    else if (res.destroyed || res.closed) onClose()
   }
 
   private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {

@@ -112,7 +112,8 @@ pub(crate) struct CreateBoxRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rootfs_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpus: Option<u8>,
+    #[serde(serialize_with = "crate::runtime::cpu_count::serialize_optional")]
+    pub cpus: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mib: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -361,6 +362,8 @@ pub(crate) struct CreateBoxSecret {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<String>,
     pub placeholder: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
 }
 
 impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
@@ -370,6 +373,7 @@ impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
             value: secret.value.clone(),
             hosts: secret.hosts.clone(),
             placeholder: secret.placeholder.clone(),
+            header: secret.header.clone(),
         }
     }
 }
@@ -387,7 +391,8 @@ pub(crate) struct BoxResponse {
     pub last_activity_at: Option<String>,
     pub pid: Option<u32>,
     pub image: String,
-    pub cpus: u8,
+    #[serde(serialize_with = "crate::runtime::cpu_count::serialize")]
+    pub cpus: f64,
     pub memory_mib: u32,
     /// The stored guest privilege mode, unknown when an older server omits it.
     #[serde(default)]
@@ -1007,6 +1012,23 @@ mod tests {
     }
 
     #[test]
+    fn create_box_secret_carries_a_configured_header() {
+        let mut secret = crate::runtime::options::Secret {
+            name: "gemini".into(),
+            value: "key".into(),
+            hosts: vec!["generativelanguage.googleapis.com".into()],
+            placeholder: "<BOXLITE_SECRET:gemini>".into(),
+            header: Some("x-goog-api-key".into()),
+        };
+        let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
+        assert_eq!(json["header"], "x-goog-api-key");
+
+        secret.header = None;
+        let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
+        assert!(json.get("header").is_none());
+    }
+
+    #[test]
     fn test_create_box_request_serialization() {
         use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
 
@@ -1014,7 +1036,7 @@ mod tests {
         // server versions.
         let opts = BoxOptions {
             rootfs: RootfsSpec::Image("python:3.11".into()),
-            cpus: Some(2),
+            cpus: Some(2.0),
             memory_mib: Some(512),
             network: NetworkSpec::Enabled {
                 allow_net: vec!["api.openai.com".into()],
@@ -1027,6 +1049,7 @@ mod tests {
             value: "sk-test".into(),
             hosts: vec!["api.openai.com".into()],
             placeholder: "<BOXLITE_SECRET:openai>".into(),
+            header: None,
         }]);
         req.auto_stop = Some(900);
         req.auto_delete = Some(604800);
@@ -1052,7 +1075,7 @@ mod tests {
 
         let opts = BoxOptions {
             rootfs: RootfsSpec::Image("alpine:latest".into()),
-            cpus: Some(4),
+            cpus: Some(4.0),
             memory_mib: Some(1024),
             network: NetworkSpec::Enabled {
                 allow_net: vec!["api.openai.com".into()],
@@ -1065,6 +1088,7 @@ mod tests {
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
+                header: None,
             }],
             volumes: vec![VolumeSpec::managed_volume("volume-123", "/data")],
             auto_stop: Some(1800),
@@ -1075,7 +1099,7 @@ mod tests {
         assert_eq!(req.name.as_deref(), Some("test-box"));
         assert_eq!(req.image.as_deref(), Some("alpine:latest"));
         assert!(req.rootfs_path.is_none());
-        assert_eq!(req.cpus, Some(4));
+        assert_eq!(req.cpus, Some(4.0));
         assert_eq!(req.memory_mib, Some(1024));
         // inbound is Enabled (non-default) → nested shape required.
         let json = serde_json::to_value(&req).unwrap();
@@ -1370,7 +1394,7 @@ mod tests {
         assert_eq!(resp.name.as_deref(), Some("mybox"));
         assert_eq!(resp.status, "running");
         assert_eq!(resp.pid, Some(1234));
-        assert_eq!(resp.cpus, 2);
+        assert_eq!(resp.cpus, 2.0);
         assert_eq!(resp.auto_stop, 900);
         assert_eq!(resp.auto_delete, 0);
         assert!(
@@ -1422,7 +1446,7 @@ mod tests {
             last_activity_at: None,
             pid: Some(1234),
             image: "python:3.11".to_string(),
-            cpus: 2,
+            cpus: 2.0,
             memory_mib: 512,
             privileged: None,
             labels: HashMap::new(),
@@ -1435,7 +1459,7 @@ mod tests {
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
         assert_eq!(info.image, "python:3.11");
-        assert_eq!(info.cpus, 2);
+        assert_eq!(info.cpus, 2.0);
         assert_eq!(info.memory_mib, 512);
         assert!(info.network.is_none());
         assert_eq!(info.auto_stop, 1800);
@@ -1453,7 +1477,7 @@ mod tests {
             last_activity_at: Some("2024-01-01T00:02:30Z".to_string()),
             pid: None,
             image: "python:3.11".to_string(),
-            cpus: 2,
+            cpus: 2.0,
             memory_mib: 512,
             privileged: None,
             labels: HashMap::new(),
@@ -1491,7 +1515,7 @@ mod tests {
             last_activity_at: None,
             pid: Some(5678),
             image: "alpine:latest".to_string(),
-            cpus: 1,
+            cpus: 1.0,
             memory_mib: 256,
             privileged: None,
             labels: HashMap::new(),
@@ -1522,7 +1546,7 @@ mod tests {
             last_activity_at: None,
             pid: None,
             image: "alpine:latest".to_string(),
-            cpus: 1,
+            cpus: 1.0,
             memory_mib: 256,
             privileged: None,
             labels: HashMap::new(),
@@ -1598,7 +1622,7 @@ mod tests {
             last_activity_at: None,
             pid: Some(1234),
             image: "python:3.11".to_string(),
-            cpus: 2,
+            cpus: 2.0,
             memory_mib: 512,
             privileged: None,
             labels: HashMap::new(),

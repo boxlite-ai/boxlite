@@ -624,4 +624,43 @@ mod tests {
             "the error must say the disk is not a usable qcow2, got: {error}"
         );
     }
+    #[test]
+    fn fractional_cpus_archive_versions_and_legacy_options() {
+        use crate::litebox::archive::build_zstd_tar_archive;
+        use crate::runtime::layout::FilesystemLayout;
+        let dir = TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(dir.path().join("home"), Default::default());
+        std::fs::create_dir_all(layout.temp_dir()).unwrap();
+        let container_path = dir.path().join("container");
+        std::fs::write(&container_path, b"test disk").unwrap();
+        let manifest_path = dir.path().join(MANIFEST_FILENAME);
+        let archive_path = dir.path().join("box.boxlite");
+        for version in [1, 2, 3, 4, 5, 6, 7, 8] {
+            let mut manifest = v3_manifest(BoxOptions {
+                cpus: Some(if version == 6 { 1.5 } else { 2.0 }),
+                ..Default::default()
+            });
+            manifest.version = version;
+            std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            build_zstd_tar_archive(&archive_path, &manifest_path, &container_path, 1).unwrap();
+            let result = extract_and_validate(&archive_path, &layout);
+            if version > 6 {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains(&format!("version {version}")));
+            } else {
+                assert_eq!(
+                    result.unwrap().0.box_options.unwrap().cpus,
+                    manifest.box_options.unwrap().cpus
+                );
+            }
+        }
+        let mut value = serde_json::to_value(v3_manifest(BoxOptions::default())).unwrap();
+        for field in ["cpu_limit", "cpu_limit_millicpu"] {
+            value["box_options"][field] = serde_json::json!(125);
+            let error = serde_json::from_value::<ArchiveManifest>(value.clone()).unwrap_err();
+            assert!(error.to_string().contains(field));
+            value["box_options"][field] = serde_json::Value::Null;
+            serde_json::from_value::<ArchiveManifest>(value.clone()).unwrap();
+        }
+    }
 }

@@ -121,6 +121,13 @@ export async function requestSsh(
   return status
 }
 
+/**
+ * Build shell-safe login and SSH commands for the Dashboard's endpoint context.
+ * Both commands discard inherited REST URL and API key overrides; the proxy
+ * selects the supplied organization without changing the parent shell or CLI defaults.
+ * Uses keyPath when provided, otherwise the generated key filename in the current directory.
+ * Rejects unsafe endpoints, identifiers, and ambiguous private-key paths.
+ */
 export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string, keyPath?: string) {
   if (!/^[a-zA-Z0-9_-]+$/.test(boxId)) throw new Error('Invalid box ID')
   const quote = (value: string) => {
@@ -134,8 +141,9 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   const endpoint = url.href.replace(/\/$/, '')
   // A dedicated context keeps saved/ambient context changes from redirecting SSH.
   // Login and proxy select the same endpoint-specific credentials without changing
-  // the user's current context or overwriting their default profile.
-  const cli = `env -u BOXLITE_REST_URL boxlite --context ${quote(`dashboard:${endpoint}`)}`
+  // the user's current context or overwriting their default profile. Clear the
+  // ambient API key too: it otherwise overrides the context's saved credential.
+  const cli = `env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context ${quote(`dashboard:${endpoint}`)}`
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
   const proxy = `${cli} --path-prefix=${quote(organizationId)} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`

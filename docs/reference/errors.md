@@ -58,15 +58,9 @@ sudo usermod -aG kvm $USER
 Invalid box configuration.
 
 **Cause:**
-- Invalid CPU count (< 1 or > host CPUs)
 - Invalid memory size (< 128 or > 65536)
 - Invalid paths in volumes
 - Invalid port numbers
-
-**Example:**
-```text
-Error: configuration error: CPU count must be between 1 and 8
-```
 
 **Solution:**
 - Verify configuration parameters are within valid ranges
@@ -312,6 +306,10 @@ Error: invalid state: cannot execute on stopped box
 - Create new box if needed
 
 ### `InvalidArgument(String)`
+
+CPU allocations outside the supported range or precision return this error.
+For example, `cpus=0` returns `invalid argument: cpus must be finite and between 0.01 and 255`.
+The bundled guest kernel additionally limits new boxes to 16 vCPUs; see [CPU configuration](../guides/resource-limits.md#cpu-configuration).
 
 The request itself is wrong; retrying it unchanged fails the same way. Over REST it is HTTP 400.
 

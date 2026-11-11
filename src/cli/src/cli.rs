@@ -1270,9 +1270,9 @@ impl CapabilityFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ResourceFlags {
-    /// Number of CPUs (1-16 with the bundled guest kernel)
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
-    pub cpus: Option<u8>,
+    /// CPU allocation (0.01-16); fractional values require a Linux execution host
+    #[arg(long, value_parser = clap::value_parser!(f64))]
+    pub cpus: Option<f64>,
 
     /// Memory limit (in MiB)
     #[arg(long)]
@@ -2315,26 +2315,19 @@ mod tests {
         assert!(opts.path_prefix.is_none());
     }
 
-    /// `--cpus` must reach the runtime unchanged: it owns the vCPU ceiling, and
-    /// clamping here used to turn `--cpus 1000` into a silent 255.
+    /// Numeric values reach the runtime unchanged; it owns CPU validation.
     #[test]
-    fn test_resource_flags_cpus_passed_through_unclamped() {
-        for bad in ["0", "1000"] {
-            assert!(
-                Cli::try_parse_from(["boxlite", "run", "--cpus", bad, "alpine"]).is_err(),
-                "--cpus {bad} must be rejected while parsing"
-            );
+    fn fractional_cpus_resource_flags_preserve_numbers() {
+        for cpus in ["0.125", "1.5", "2", "2.0", "0", "1000"] {
+            let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", cpus, "alpine"]).unwrap();
+            let Commands::Run(run) = cli.command else {
+                panic!("expected run");
+            };
+            let mut opts = BoxOptions::default();
+            run.resource.apply_to(&mut opts);
+            assert_eq!(opts.cpus, Some(cpus.parse().unwrap()));
         }
-
-        let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", "24", "alpine"])
-            .expect("--cpus 24 parses; the runtime decides whether it fits");
-        let Commands::Run(run) = cli.command else {
-            panic!("expected run");
-        };
-        let mut opts = BoxOptions::default();
-        run.resource.apply_to(&mut opts);
-
-        assert_eq!(opts.cpus, Some(24));
+        assert!(Cli::try_parse_from(["boxlite", "run", "--cpus", "invalid", "alpine"]).is_err());
     }
 
     #[test]

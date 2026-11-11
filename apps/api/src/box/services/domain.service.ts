@@ -193,7 +193,7 @@ export class DomainService {
    * for the organization. A name the organization does not hold is a 404; one
    * already released is left as it is. The port's own declaration is untouched.
    */
-  async unbind(organizationId: string, rawDomain: string): Promise<void> {
+  async unbind(organizationId: string, rawDomain: string): Promise<string> {
     const hostname = this.fullHostname(rawDomain, 'Unbind')
     // TypeORM answers an UPDATE with [rows, rowCount]; the count says whether
     // the organization holds the name, bound or not.
@@ -205,6 +205,7 @@ export class DomainService {
     if (released === 0) {
       throw new NotFoundException(`This organization holds no domain ${hostname}`)
     }
+    return hostname
   }
 
   /**

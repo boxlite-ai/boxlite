@@ -6,26 +6,35 @@
 import { ActorKind } from './actor-kind.enum'
 import { PlatformReason } from './platform-reason.enum'
 
+/** The person behind a request, and how and from where they called. */
+export interface RequestActor {
+  userId: string
+  authMethod: 'api_key' | 'jwt'
+  clientSource?: string
+  sdkVersion?: string
+}
+
 /**
- * What the caller of an operation decides about it: who started it and, for the
- * platform, why. Callers pass it explicitly; build one with the factories, which
- * allow a reason only on a platform context.
+ * Who started an operation, including a person's identity or a platform reason
+ * and optional database lock-wait budget. Callers use the explicit factories.
  */
 export class Context {
   private constructor(
     readonly actorKind: ActorKind,
     readonly reason?: PlatformReason,
+    readonly actor?: RequestActor,
+    readonly lockTimeoutMs?: number,
   ) {}
 
-  static user(): Context {
-    return new Context(ActorKind.USER)
+  static user(actor?: RequestActor): Context {
+    return new Context(ActorKind.USER, undefined, actor)
   }
 
-  static admin(): Context {
-    return new Context(ActorKind.ADMIN)
+  static admin(actor?: RequestActor): Context {
+    return new Context(ActorKind.ADMIN, undefined, actor)
   }
 
-  static platform(reason: PlatformReason): Context {
-    return new Context(ActorKind.PLATFORM, reason)
+  static platform(reason: PlatformReason, options: { lockTimeoutMs?: number } = {}): Context {
+    return new Context(ActorKind.PLATFORM, reason, undefined, options.lockTimeoutMs)
   }
 }

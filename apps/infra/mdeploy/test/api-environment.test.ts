@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
+import { valuesOfGroup } from 'mstage/select-group'
 import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
@@ -14,6 +15,47 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
+
+for (const home of ['aws', 'gcp'] as const) {
+  for (const minimum of [undefined, '1', '3', '63']) {
+    test(`${home} delivers the platform subdomain minimum ${minimum ?? '(unset)'} from the stage group`, () => {
+      const path = new URL('../../mstage.env.json', import.meta.url)
+      const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+      const key = 'PLATFORM_SUBDOMAIN_MIN_LENGTH'
+      const required = Object.fromEntries(
+        declared.envSelectGroup.api!
+          .filter((name) => name !== key && !declared.envOptional.api!.includes(name))
+          .map((name) => [name, 'fixture']),
+      )
+      const selected = valuesOfGroup({
+        group: 'api',
+        groups: declared.envSelectGroup,
+        optional: declared.envOptional.api,
+        where: path.pathname,
+        values: { ...required, ...(minimum === undefined ? {} : { [key]: minimum }) },
+      })
+      const { environment, secrets } = apiEnvironmentFrom({
+        environment: { ...base, ...selected },
+        declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+        region: home === 'aws' ? 'us-east-1' : 'us-east1',
+        stage: 'dev',
+        home,
+      })
+      assert.equal(environment[key], minimum)
+      assert.equal(Object.hasOwn(environment, key), minimum !== undefined)
+      assert.equal(Object.hasOwn(secrets, key), false)
+    })
+  }
+}
+
+test('PostHog events use the deployed stage on both clouds', () => {
+  for (const home of ['aws', 'gcp'] as const) {
+    const { environment } = apiEnvironmentFrom({
+      environment: base, declaration: groups([]), region: 'us-east1', stage: 'dev', home,
+    })
+    assert.equal(environment.POSTHOG_ENVIRONMENT, 'dev', home)
+  }
+})
 
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)

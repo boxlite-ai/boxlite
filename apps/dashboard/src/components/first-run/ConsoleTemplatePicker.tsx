@@ -91,17 +91,17 @@ export function ConsoleTemplatePicker() {
               ))}
             </TabsList>
           </Tabs>
-          <a
-            href="https://docs.boxlite.ai/cloud/use-your-image"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-          >
-            Custom image <span aria-hidden="true">↗</span>
-          </a>
         </div>
-        <div className="template-catalog">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <a
+          href="https://docs.boxlite.ai/cloud/use-your-image"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+        >
+          Custom image <span aria-hidden="true">↗</span>
+        </a>
+        <div className="template-catalog mt-3">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-3">
             {visible.map((item) => (
               <button
                 key={item.id}
@@ -117,8 +117,8 @@ export function ConsoleTemplatePicker() {
                 className={cn(
                   'group flex min-h-24 flex-col justify-start rounded-none border p-4 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand disabled:opacity-45',
                   activeId === item.id
-                    ? 'border-brand/70 bg-accent'
-                    : 'border-border bg-card hover:border-foreground/40 hover:bg-accent',
+                    ? 'border-border-selected bg-accent'
+                    : 'border-border bg-card hover:border-border-hover hover:bg-accent',
                 )}
               >
                 <div className="flex items-center gap-2.5">
@@ -126,7 +126,7 @@ export function ConsoleTemplatePicker() {
                   <span className="font-display text-xs font-semibold">{item.name}</span>
                   {activeId === item.id && <span className="ml-auto text-xs text-brand">✓</span>}
                 </div>
-                <p className="mt-2 font-display text-label leading-relaxed text-muted-foreground">{item.description}</p>
+                <p className="mt-2 font-display text-xs leading-relaxed text-muted-foreground">{item.description}</p>
               </button>
             ))}
           </div>
@@ -146,7 +146,7 @@ export function ConsoleTemplatePicker() {
         </div>
         <label className="mt-5 grid gap-2 font-display text-xs text-muted-foreground">
           Image
-          <code className="break-all font-mono text-label leading-relaxed text-foreground">{image}</code>
+          <code className="break-all font-mono text-xs leading-relaxed text-foreground">{image}</code>
         </label>
         <label className="mt-5 grid gap-2 font-display text-xs text-muted-foreground">
           Box name
@@ -158,7 +158,7 @@ export function ConsoleTemplatePicker() {
             className="w-full rounded-none border border-border/60 bg-transparent p-2.5 text-foreground outline-none focus:border-brand disabled:border-transparent disabled:bg-transparent disabled:p-0"
           />
         </label>
-        <p className="mt-4 font-mono text-label text-muted-foreground">
+        <p className="mt-4 font-mono text-xs text-muted-foreground">
           {selected?.cpu ?? 1} vCPU · {selected?.memoryGiB ?? 1} GiB · {selected?.diskGiB ?? 10} GiB disk · Cloud
         </p>
         {selected?.preparation && (

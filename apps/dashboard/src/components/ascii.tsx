@@ -229,7 +229,7 @@ export function AsciiChip({
         // and it measured 2.49:1 on the light theme, so brand is kept for
         // things that are live rather than for marking a click.
         selected
-          ? 'border-foreground/45 bg-card font-semibold text-foreground'
+          ? 'border-border-selected bg-card font-semibold text-foreground'
           : 'border-border text-muted-foreground hover:text-foreground',
         className,
       )}

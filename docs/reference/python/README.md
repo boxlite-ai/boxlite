@@ -206,7 +206,7 @@ Configuration options for creating a box.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
-| `cpus` | `int` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
+| `cpus` | `float` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
@@ -214,7 +214,7 @@ Configuration options for creating a box.
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
-| `secrets` | `List[Secret]` | `[]` | Outbound HTTPS secret substitution rules |
+| `secrets` | `List[Secret]` | `[]` | Secrets injected into the `Authorization` header of outbound HTTPS requests |
 | `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `auto_delete` | `int \| None` | `None` | `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. `None` keeps the runtime's default (`auto_remove` locally) |
 | `auto_remove` | `bool` | `True` | Deprecated: use `auto_delete`. Auto cleanup when stopped |
@@ -308,7 +308,7 @@ secrets=[
         name="openai",
         value="sk-...",
         hosts=["api.openai.com"],
-        # placeholder defaults to "<BOXLITE_SECRET:openai>"
+        # placeholder is a dummy guest value, default "<BOXLITE_SECRET:openai>"
     )
 ]
 ```
@@ -385,7 +385,7 @@ Metadata about a box.
 | `started_at` | `str \| None` | Time when the box most recently entered `Running` (RFC 3339); `None` if not recorded or unavailable over REST |
 | `last_activity_at` | `str \| None` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; `None` for a local box, which records no activity |
 | `image` | `str` | OCI image used |
-| `cpus` | `int` | Allocated CPU cores |
+| `cpus` | `float` | Configured CPU allocation; guest vCPUs are rounded up for fractions |
 | `memory_mib` | `int` | Allocated memory in MiB |
 | `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
 
@@ -684,7 +684,7 @@ from boxlite import SimpleBox
 SimpleBox(
     image: str,
     memory_mib: int = None,
-    cpus: int = None,
+    cpus: float = None,
     runtime: Boxlite = None,
     name: str = None,
     auto_remove: bool = True,
@@ -696,7 +696,7 @@ SimpleBox(
 |-----------|------|---------|-------------|
 | `image` | `str` | Required | Container image to use |
 | `memory_mib` | `int` | System default | Memory limit in MiB |
-| `cpus` | `int` | System default | Number of CPU cores |
+| `cpus` | `float` | System default | Number of CPU cores |
 | `runtime` | `Boxlite` | Global default | Runtime instance |
 | `name` | `str` | None | Optional unique name |
 | `auto_remove` | `bool` | `True` | Remove box when stopped |
@@ -747,7 +747,7 @@ from boxlite import CodeBox
 CodeBox(
     image: str = "python:slim",
     memory_mib: int = None,
-    cpus: int = None,
+    cpus: float = None,
     runtime: Boxlite = None,
     **kwargs
 )
@@ -757,7 +757,7 @@ CodeBox(
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `run()` | `(code: str, timeout: int = None) -> str` | Execute Python code (async) |
+| `run()` | `(code: str, timeout: float \| None = None) -> str` | Execute Python code (async) |
 | `run_script()` | `(script_path: str) -> str` | Execute Python script file (async) |
 | `install_package()` | `(package: str) -> str` | Install package with pip (async) |
 | `install_packages()` | `(*packages: str) -> str` | Install multiple packages (async) |
@@ -958,7 +958,7 @@ InteractiveBox(
     shell: str = "/bin/sh",
     tty: bool = None,
     memory_mib: int = None,
-    cpus: int = None,
+    cpus: float = None,
     runtime: Boxlite = None,
     name: str = None,
     auto_remove: bool = True,
@@ -1073,6 +1073,25 @@ from boxlite import SyncCodeBox
 with SyncCodeBox() as cb:
     result = cb.run("print('Hello, World!')")
     print(result)
+```
+
+Both `CodeBox.run()` and `SyncCodeBox.run()` accept a `timeout` in seconds and
+forward it to `exec()`, which passes it to the guest as `timeout_secs`. The
+guest sends SIGTERM and then SIGKILL when the deadline passes. `run()` does not
+raise on a timeout: it returns whatever the snippet wrote to stdout before it
+was terminated.
+
+The deadline applies to the process the guest started. A child that keeps the
+stdout pipe open after it is killed -- a grandchild that inherited the
+descriptor, for example -- can still hold the read side open, so the call may
+wait for that pipe to close. The timeout bounds the workload, not every
+reader of its output.
+
+```python
+with SyncCodeBox() as cb:
+    # A runaway snippet is killed after half a second; whatever it printed
+    # before then is returned.
+    output = cb.run("while True: pass", timeout=0.5)
 ```
 
 ### Architecture

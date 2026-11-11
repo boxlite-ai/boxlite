@@ -19,7 +19,7 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub rootfs_path: Option<String>,
     #[serde(default)]
-    pub cpus: Option<u8>,
+    pub cpus: Option<f64>,
     #[serde(default)]
     pub memory_mib: Option<u32>,
     #[serde(default)]
@@ -53,7 +53,7 @@ pub(super) struct CreateBoxRequest {
     pub auto_resume: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
-    /// Secret placeholder rules for outbound HTTPS requests. Placeholder
+    /// Secrets injected into outbound HTTPS request headers. Placeholder
     /// defaults to `<BOXLITE_SECRET:{name}>` when omitted — applied in
     /// `build_box_options`, matching the Go SDK's own default.
     #[serde(default)]
@@ -161,7 +161,8 @@ pub(super) struct BoxResponse {
     pub updated_at: String,
     pub pid: Option<u32>,
     pub image: String,
-    pub cpus: u8,
+    #[serde(serialize_with = "boxlite::runtime::cpu_count::serialize")]
+    pub cpus: f64,
     pub memory_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privileged: Option<bool>,

@@ -55,7 +55,7 @@ const SEGMENTED_TRIGGER = [
   'text-muted-foreground hover:text-foreground',
   // `relative z-10` so the brightened outline wins the collapse against its
   // neighbours instead of being half-covered by them.
-  'data-[state=active]:relative data-[state=active]:z-10 data-[state=active]:border-foreground/45',
+  'data-[state=active]:relative data-[state=active]:z-10 data-[state=active]:border-border-selected',
   'data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:text-foreground',
 ].join(' ')
 

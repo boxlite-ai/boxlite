@@ -460,7 +460,7 @@ pub struct BoxInfo {
     pub image: String,
 
     /// Allocated CPU count
-    pub cpus: u8,
+    pub cpus: f64,
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
@@ -791,8 +791,8 @@ Options for constructing a box.
 
 ```rust
 pub struct BoxOptions {
-    /// Number of CPUs (default: 2)
-    pub cpus: Option<u8>,
+    /// CPU allocation (default: 1); fractions require a Linux execution host
+    pub cpus: Option<f64>,
 
     /// Memory in MiB (default: 512)
     pub memory_mib: Option<u32>,
@@ -821,7 +821,7 @@ pub struct BoxOptions {
     /// Inbound reachability of exposed services
     pub inbound_network: NetworkSpec,
 
-    /// Outbound HTTPS secret substitution rules
+    /// Secrets injected into a request header on outbound HTTPS requests
     pub secrets: Vec<Secret>,
 
     /// Port mappings
@@ -850,7 +850,7 @@ use boxlite::{AdvancedBoxOptions, ContainerCapabilities};
 use boxlite::runtime::options::{BoxOptions, RootfsSpec, VolumeSpec, PortSpec};
 
 let options = BoxOptions {
-    cpus: Some(4),
+    cpus: Some(4.0),
     memory_mib: Some(2048),
     rootfs: RootfsSpec::Image("python:3.11".to_string()),
     env: vec![
@@ -1109,14 +1109,15 @@ frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 
-Outbound HTTPS secret substitution rule.
+Secret injected into a request header on outbound HTTPS requests to `hosts`.
 
 ```rust
 pub struct Secret {
     pub name: String,
     pub hosts: Vec<String>,
-    pub placeholder: String, // default: <BOXLITE_SECRET:{name}>
+    pub placeholder: String, // dummy guest value; default: <BOXLITE_SECRET:{name}>
     pub value: String,
+    pub header: Option<String>, // default: Authorization, written as `Bearer {value}`
 }
 ```
 
@@ -1536,7 +1537,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configure box
     let options = BoxOptions {
-        cpus: Some(2),
+        cpus: Some(2.0),
         memory_mib: Some(1024),
         rootfs: RootfsSpec::Image("python:3.11-slim".to_string()),
         volumes: vec![

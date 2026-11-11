@@ -4,17 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import {
-  Injectable,
-  NestInterceptor,
-  ExecutionContext,
-  CallHandler,
-  OnApplicationShutdown,
-  Logger,
-} from '@nestjs/common'
+import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common'
 import { Observable } from 'rxjs'
 import { tap } from 'rxjs/operators'
-import { PostHog } from 'posthog-node'
+import { AnalyticsService } from '../analytics/services/analytics.service'
 import { Request } from 'express'
 import { CreateOrganizationDto } from '../organization/dto/create-organization.dto'
 import { OrganizationDto } from '../organization/dto/organization.dto'
@@ -48,33 +41,19 @@ type CommonCaptureProps = {
 }
 
 @Injectable()
-export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdown {
-  private readonly posthog?: PostHog
+export class MetricsInterceptor implements NestInterceptor {
   private readonly version: string
   private readonly logger = new Logger(MetricsInterceptor.name)
 
-  constructor(private readonly configService: TypedConfigService) {
+  constructor(
+    private readonly configService: TypedConfigService,
+    private readonly analytics: AnalyticsService,
+  ) {
     this.version = this.configService.getOrThrow('version')
-
-    if (!this.configService.get('posthog.apiKey')) {
-      this.logger.warn('POSTHOG_API_KEY is not set, metrics will not be recorded')
-      return
-    }
-
-    if (!this.configService.get('posthog.host')) {
-      this.logger.warn('POSTHOG_HOST is not set, metrics will not be recorded')
-      return
-    }
-
-    // Initialize PostHog client
-    // Make sure to set POSTHOG_API_KEY in your environment variables
-    this.posthog = new PostHog(this.configService.getOrThrow('posthog.apiKey'), {
-      host: this.configService.getOrThrow('posthog.host'),
-    })
   }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    if (!this.posthog) {
+    if (!this.analytics.enabled) {
       return next.handle()
     }
 
@@ -243,167 +222,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
         }
         break
     }
-
-    if (!request.route.path.startsWith('/api/toolbox/:boxId/toolbox')) {
-      return
-    }
-
-    const path = request.route.path.replace('/api/toolbox/:boxId/toolbox', '')
-
-    switch (path) {
-      case '/project-dir':
-        this.captureToolboxCommand(props, request.params.boxId, 'project-dir_get')
-        break
-      case '/files':
-        switch (request.method) {
-          case 'GET':
-            this.captureToolboxCommand(props, request.params.boxId, 'files_list')
-            break
-          case 'DELETE':
-            this.captureToolboxCommand(props, request.params.boxId, 'files_delete')
-            break
-        }
-        break
-      case '/files/download':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_download')
-        break
-      case '/files/find':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_find')
-        break
-      case '/files/folder':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_folder_create')
-        break
-      case '/files/info':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_info')
-        break
-      case '/files/move':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_move')
-        break
-      case '/files/permissions':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_permissions')
-        break
-      case '/files/replace':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_replace')
-        break
-      case '/files/search':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_search')
-        break
-      case '/files/upload':
-        this.captureToolboxCommand(props, request.params.boxId, 'files_upload')
-        break
-      case '/git/add':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_add')
-        break
-      case '/git/branches':
-        switch (request.method) {
-          case 'GET':
-            this.captureToolboxCommand(props, request.params.boxId, 'git_branches_list')
-            break
-          case 'POST':
-            this.captureToolboxCommand(props, request.params.boxId, 'git_branches_create')
-            break
-        }
-        break
-      case '/git/clone':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_clone')
-        break
-      case '/git/commit':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_commit')
-        break
-      case '/git/history':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_history')
-        break
-      case '/git/pull':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_pull')
-        break
-      case '/git/push':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_push')
-        break
-      case '/git/status':
-        this.captureToolboxCommand(props, request.params.boxId, 'git_status')
-        break
-      case '/process/execute':
-        this.captureToolboxCommand(props, request.params.boxId, 'process_execute', {
-          command: request.body.command,
-          cwd: request.body.cwd,
-          exit_code: response.exitCode,
-          timeout_sec: request.body.timeout,
-        })
-        break
-      case '/process/session':
-        switch (request.method) {
-          case 'GET':
-            this.captureToolboxCommand(props, request.params.boxId, 'process_session_list')
-            break
-          case 'POST':
-            this.captureToolboxCommand(props, request.params.boxId, 'process_session_create', {
-              session_id: request.body.sessionId,
-            })
-            break
-        }
-        break
-      case '/process/session/:sessionId':
-        switch (request.method) {
-          case 'GET':
-            this.captureToolboxCommand(props, request.params.boxId, 'process_session_get', {
-              session_id: request.params.sessionId,
-            })
-            break
-          case 'DELETE':
-            this.captureToolboxCommand(props, request.params.boxId, 'process_session_delete', {
-              session_id: request.params.sessionId,
-            })
-            break
-        }
-        break
-      case '/process/session/:sessionId/exec':
-        this.captureToolboxCommand(props, request.params.boxId, 'process_session_execute', {
-          session_id: request.params.sessionId,
-          command: request.body.command,
-        })
-        break
-      case '/process/session/:sessionId/command/:commandId':
-        this.captureToolboxCommand(props, request.params.boxId, 'process_session_command_get', {
-          session_id: request.params.sessionId,
-          command_id: request.params.commandId,
-        })
-        break
-      case '/process/session/:sessionId/command/:commandId/logs':
-        this.captureToolboxCommand(props, request.params.boxId, 'process_session_command_logs', {
-          session_id: request.params.sessionId,
-          command_id: request.params.commandId,
-        })
-        break
-      case '/lsp/completions':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_completions')
-        break
-      case '/lsp/did-close':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_did_close')
-        break
-      case '/lsp/did-open':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_did_open')
-        break
-      case '/lsp/document-symbols':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_document_symbols')
-        break
-      case '/lsp/start':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_start', {
-          language_id: request.body.languageId,
-        })
-        break
-      case '/lsp/stop':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_stop', {
-          language_id: request.body.languageId,
-        })
-        break
-      case '/lsp/box-symbols':
-        this.captureToolboxCommand(props, request.params.boxId, 'lsp_box_symbols', {
-          language_id: request.query.languageId,
-          path_to_project: request.query.pathToProject,
-          query: request.query.query,
-        })
-        break
-    }
   }
 
   private captureCreateApiKey(props: CommonCaptureProps) {
@@ -492,11 +310,7 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     request: CreateOrganizationDto,
     response: OrganizationDto,
   ) {
-    if (!this.posthog) {
-      return
-    }
-
-    this.posthog.groupIdentify({
+    this.analytics.groupIdentify({
       groupType: 'organization',
       groupKey: response.id,
       properties: {
@@ -666,25 +480,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     )
   }
 
-  private captureToolboxCommand(
-    props: CommonCaptureProps,
-    boxId: string,
-    command: string,
-    extraProps?: Record<string, any>,
-  ) {
-    this.capture('api_toolbox_command', props, 'api_toolbox_command_failed', {
-      box_id: boxId,
-      toolbox_command: command,
-      ...extraProps,
-    })
-  }
-
   private capture(event: string, props: CommonCaptureProps, errorEvent?: string, extraProps?: Record<string, any>) {
-    if (!this.posthog) {
-      return
-    }
-
-    this.posthog.capture({
+    this.analytics.capture({
       distinctId: props.distinctId,
       event: props.error ? errorEvent || event : event,
       groups: this.captureCommonGroups(props),
@@ -707,11 +504,5 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
 
   private captureCommonGroups(props: CommonCaptureProps) {
     return props.organizationId ? { organization: props.organizationId } : undefined
-  }
-
-  onApplicationShutdown(/*signal?: string*/) {
-    if (this.posthog) {
-      this.posthog.shutdown()
-    }
   }
 }

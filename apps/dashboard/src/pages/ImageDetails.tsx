@@ -140,7 +140,7 @@ const ImageDetails: React.FC = () => {
   const tagTaken = image?.aliases.includes(pinForm.alias) ?? false
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <button
         type="button"
         onClick={() => navigate(RoutePath.IMAGES)}

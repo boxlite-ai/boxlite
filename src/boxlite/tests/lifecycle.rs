@@ -58,7 +58,7 @@ async fn create_generates_unique_ids() {
 #[tokio::test]
 async fn create_stores_custom_options() {
     let options = BoxOptions {
-        cpus: Some(4),
+        cpus: Some(4.0),
         memory_mib: Some(1024),
         ..common::alpine_opts()
     };
@@ -76,7 +76,7 @@ async fn create_stores_custom_options() {
     let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
 
     // Verify metadata was stored correctly
-    assert_eq!(info.cpus, 4);
+    assert_eq!(info.cpus, 4.0);
     assert_eq!(info.memory_mib, 1024);
     assert!(info.created_at.timestamp() > 0);
 
@@ -433,7 +433,7 @@ async fn litebox_info_returns_correct_metadata() {
         .expect("info should be available");
     assert_eq!(info.id, box_id);
     assert_eq!(info.status, BoxStatus::Configured);
-    assert_eq!(info.cpus, 1); // Default value
+    assert_eq!(info.cpus, 1.0); // Default value
     assert_eq!(info.memory_mib, 1024); // Default value
 
     // Cleanup

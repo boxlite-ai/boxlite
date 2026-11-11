@@ -38,8 +38,6 @@ import type { PaginatedLogs } from '../models';
 // @ts-ignore
 import type { PaginatedTraces } from '../models';
 // @ts-ignore
-import type { ToolboxProxyUrl } from '../models';
-// @ts-ignore
 import type { TraceSpan } from '../models';
 // @ts-ignore
 import type { UpdateBoxStateDto } from '../models';
@@ -450,50 +448,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             if (skipReconcilingBoxes !== undefined) {
                 localVarQueryParameter['skipReconcilingBoxes'] = skipReconcilingBoxes;
             }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Get toolbox proxy URL for a box
-         * @param {string} boxId ID of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getToolboxProxyUrl: async (boxId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getToolboxProxyUrl', 'boxId', boxId)
-            const localVarPath = `/box/{boxId}/toolbox-proxy-url`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -1104,20 +1058,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Get toolbox proxy URL for a box
-         * @param {string} boxId ID of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getToolboxProxyUrl(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ToolboxProxyUrl>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getToolboxProxyUrl(boxId, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getToolboxProxyUrl']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary List all boxes
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [verbose] Include verbose output
@@ -1356,17 +1296,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
         },
         /**
          * 
-         * @summary Get toolbox proxy URL for a box
-         * @param {string} boxId ID of the box
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getToolboxProxyUrl(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ToolboxProxyUrl> {
-            return localVarFp.getToolboxProxyUrl(boxId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary List all boxes
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [verbose] Include verbose output
@@ -1582,18 +1511,6 @@ export class BoxApi extends BaseAPI {
      */
     public getBoxesForRunner(xBoxLiteOrganizationID?: string, states?: string, skipReconcilingBoxes?: boolean, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).getBoxesForRunner(xBoxLiteOrganizationID, states, skipReconcilingBoxes, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Get toolbox proxy URL for a box
-     * @param {string} boxId ID of the box
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getToolboxProxyUrl(boxId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getToolboxProxyUrl(boxId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

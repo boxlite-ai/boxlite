@@ -2384,11 +2384,16 @@ components:
           description: OCI image reference or rootfs path
           example: python:3.11-slim
         cpus:
-          type: integer
-          minimum: 1
-          maximum: 32
-          description: Allocated vCPU cores
-          example: 2
+          type: number
+          minimum: 0.01
+          maximum: 255
+          multipleOf: 0.001
+          description: |
+            Configured CPU allocation. Fractional values use ceil(cpus) guest vCPUs
+            and an aggregate bandwidth quota on the Linux execution host;
+            integers retain existing topology behavior.
+            This reports configuration, not a reservation or proof of enforcement.
+          example: 1.5
         memory_mib:
           type: integer
           minimum: 128
@@ -2519,11 +2524,23 @@ components:
             Path to a pre-built rootfs (alternative to `image`).
             Mutually exclusive with `image`.
         cpus:
-          type: integer
-          minimum: 1
+          type: number
+          minimum: 0.01
           maximum: 16
-          description: Number of vCPUs to allocate
-          example: 2
+          multipleOf: 0.001
+          description: |
+            Creation-only CPU allocation; omitted values retain the server default.
+            Integers (including 2.0) configure vCPU topology without an additional bandwidth quota.
+            Fractional values use ceil(cpus) guest vCPUs and require a Linux execution host,
+            the jailer, and a writable cgroup v2 CPU quota with a 100 ms period.
+            These host requirements apply to the server; a macOS REST client can request
+            fractional CPUs from a supporting Linux server.
+            Quota-write errors prevent startup; cgroup joining remains best-effort,
+            so membership failure can leave a running Box without enforcement.
+            Clients POST directly without a CPU capability probe and verify that successful
+            fractional responses report exactly the requested cpus; they never retry by rounding
+            or dropping it. Integer request JSON remains integral for older servers.
+          example: 1.5
         memory_mib:
           type: integer
           minimum: 128
@@ -2575,8 +2592,10 @@ components:
           items:
             $ref: "#/components/schemas/SecretSpec"
           description: |
-            Secret placeholder rules for outbound HTTPS requests.
-            Matching requests replace `placeholder` with `value` on the host side.
+            Secrets injected into a request header on outbound HTTPS requests.
+            Requests to a secret's hosts carry its value. A host that echoes the
+            injected header returns the value to the guest, so bind secrets only to
+            trusted hosts.
         detach:
           type: boolean
           description: Box survives parent process exit
@@ -2843,24 +2862,24 @@ components:
 
     SecretSpec:
       type: object
-      description: Outbound HTTPS secret substitution rule
-      required: [name, value]
+      description: Secret injected into a request header on outbound HTTPS requests to its hosts
+      required: [name, value, hosts]
       properties:
         name:
           type: string
           description: Human-readable secret name
         value:
           type: string
-          description: Real secret value. Never enters the guest VM.
+          description: Real secret value. Not stored in the guest VM; a host that echoes the injected header returns it to the guest.
         hosts:
           type: array
           items:
             type: string
-          description: Matching hosts for this secret. Empty means no host restriction.
+          description: Matching hosts where this secret will be injected. Required, at least one host.
         placeholder:
           type: string
           description: |
-            Placeholder string visible inside the guest.
+            Dummy value for the guest environment; the proxy never parses it.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
 
     Snapshot:

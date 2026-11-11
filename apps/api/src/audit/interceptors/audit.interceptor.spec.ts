@@ -38,8 +38,7 @@ describe('AuditInterceptor', () => {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
       updateLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
     }
-    const configService = { get: jest.fn() }
-    const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
+    const interceptor = new AuditInterceptor(reflector, auditService as any)
     const request = {
       url: '/admin/runners?regionId=region-1',
       ip: '127.0.0.1',
@@ -105,8 +104,7 @@ describe('AuditInterceptor', () => {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-2' }),
       updateLog: jest.fn().mockResolvedValue({ id: 'audit-2' }),
     }
-    const configService = { get: jest.fn() }
-    const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
+    const interceptor = new AuditInterceptor(reflector, auditService as any)
     const request = {
       url: '/organizations/org-1/suspend',
       ip: '127.0.0.1',

@@ -45,7 +45,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
             let mut env = ctx.config.options.env.clone();
             // Inject secret placeholder env vars (e.g., BOXLITE_SECRET_OPENAI=<BOXLITE_SECRET:openai>).
-            // The MITM proxy substitutes real values at the network boundary.
+            // The MITM proxy injects real values into request headers on the host.
             env.extend(ctx.config.options.secrets.iter().map(|s| s.env_pair()));
 
             (

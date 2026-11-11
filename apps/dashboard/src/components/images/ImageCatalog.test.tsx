@@ -148,11 +148,11 @@ describe('the image list', () => {
     state.images = images
     await renderCatalog()
 
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(images.length)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(images.length)
     const search = document.querySelector<HTMLInputElement>('input[placeholder="Filter images…"]')
     expect(search?.nextElementSibling?.textContent).toBe(String(images.length))
     for (const template of BOX_TEMPLATES) {
-      expect(buttonWithTitle(`New box from ${template.name}`)).toBeUndefined()
+      expect(buttonWithTitle(`New Box from ${template.name}`)).toBeUndefined()
     }
   })
 
@@ -170,7 +170,7 @@ describe('the image list', () => {
     if (!search) throw new Error('filter field missing')
     await act(async () => typeInto(search, BOX_TEMPLATES[0].image))
 
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(0)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(0)
     expect(document.body.textContent).toContain('No image matches')
     expect(search.nextElementSibling?.textContent).toBe('0')
   })
@@ -181,10 +181,10 @@ describe('the image list', () => {
       state.images = images
       await renderCatalog()
       const actions = [...document.querySelectorAll('button')].filter(
-        (button) => button.textContent?.trim() === 'New box',
+        (button) => button.textContent?.trim() === 'New Box',
       )
       expect(actions).toHaveLength(images.length)
-      expect(actions.every((button) => button.title.startsWith('New box from '))).toBe(true)
+      expect(actions.every((button) => button.title.startsWith('New Box from '))).toBe(true)
     },
   )
 
@@ -227,7 +227,7 @@ describe('the image list', () => {
     ]
     await renderCatalog()
 
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(2)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(2)
     expect(buttonWithTitle(`Remove ${name}`)).toBeDefined()
     await act(async () => buttonWithTitle(`Remove ${name}`)!.click())
     await act(async () => confirmButton()!.click())
@@ -290,7 +290,7 @@ describe('the image list', () => {
       expect.objectContaining({ description: 'usage unavailable' }),
     )
     expect(document.body.textContent).not.toContain('Custom images')
-    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(0)
+    expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(0)
   })
 })
 
@@ -300,7 +300,7 @@ describe('starting a box', () => {
   it('opens the box create with the row’s reference filled in', async () => {
     await renderCatalog()
 
-    await act(async () => buttonWithTitle('New box from quay.io/acme/app:v1')?.click())
+    await act(async () => buttonWithTitle('New Box from quay.io/acme/app:v1')?.click())
 
     expect(state.newBoxOpen).toBe(true)
     expect(state.newBoxImage).toBe('quay.io/acme/app:v1')
@@ -311,7 +311,7 @@ describe('starting a box', () => {
     state.images = [BUILT_IN_IMAGE]
     await renderCatalog()
 
-    await act(async () => buttonWithTitle('New box from python')?.click())
+    await act(async () => buttonWithTitle('New Box from python')?.click())
 
     expect(mocks.navigate).toHaveBeenCalledWith('/dashboard/quickstart?method=console&template=python')
   })
@@ -320,7 +320,7 @@ describe('starting a box', () => {
     state.deniedPermissions = [OrganizationRolePermissionsEnum.WRITE_BOXES]
     await renderCatalog()
 
-    expect([...document.querySelectorAll('button')].filter((b) => b.textContent === 'New box')).toHaveLength(0)
+    expect([...document.querySelectorAll('button')].filter((b) => b.textContent === 'New Box')).toHaveLength(0)
     expect(state.newBoxOpen).toBe(false)
   })
 })

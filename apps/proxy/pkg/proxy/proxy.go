@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -67,6 +68,9 @@ type Proxy struct {
 	boxInboundCache            common_cache.ICache[bool]
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
+	previewOpenCache           common_cache.ICache[bool]
+	previewOpenOnce            sync.Once
+	previewOpenGroup           singleflight.Group
 	guestPortTransport         *http.Transport
 	wakeGroup                  singleflight.Group
 	guestPortGroup             singleflight.Group
@@ -175,7 +179,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	router.Any("/*path", proxy.handleHTTP)
 
 	httpServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
+		Addr:              net.JoinHostPort(os.Getenv("BOXLITE_LISTEN_HOST"), fmt.Sprint(config.ProxyPort)),
 		Handler:           sanitizeTunnelRequests(connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

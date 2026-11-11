@@ -251,3 +251,49 @@ describe('usageExportConfig while export is disabled', () => {
     )
   })
 })
+
+describe('usageExportConfig with internal reads enabled', () => {
+  const internalReads = (overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+    BILLING_API_URL: 'https://public.test:4443/api/billing/',
+    USAGE_EXPORT_TOKEN: 'shared-token',
+    USAGE_EXPORT_ENABLED: 'false',
+    USAGE_ALLOCATION_SNAPSHOT_ENABLED: 'false',
+    ...overrides,
+  })
+
+  it.each([
+    ['http://internal.test:4100', 'http://internal.test:4100'],
+    ['http://internal.test:4100/service/', 'http://internal.test:4100/service'],
+  ])('uses the explicit internal base %s and preserves its path prefix', (url, expected) => {
+    expect(usageExportConfig(internalReads({ USAGE_EXPORT_URL: url }))).toEqual(
+      expect.objectContaining({
+        url: expected,
+        token: 'shared-token',
+        enabled: false,
+        allocationSnapshotEnabled: false,
+      }),
+    )
+  })
+
+  it.each([undefined, '', '   '])('defaults an unset internal base %p to the public origin', (url) => {
+    expect(usageExportConfig(internalReads({ USAGE_EXPORT_URL: url }))).toEqual(
+      expect.objectContaining({ url: 'https://public.test:4443', token: 'shared-token' }),
+    )
+  })
+
+  it.each([
+    ['a bare hostname', 'internal.test', /USAGE_EXPORT_URL must be an absolute http\(s\) URL/],
+    ['a non-HTTP scheme', 'ftp://internal.test', /USAGE_EXPORT_URL must use http or https/],
+    ['a query', 'https://internal.test/service?route=one', /USAGE_EXPORT_URL must not carry a query or fragment/],
+    ['a fragment', 'https://internal.test/service#route', /USAGE_EXPORT_URL must not carry a query or fragment/],
+    ['userinfo', 'https://reader:secret@internal.test/service', /^USAGE_EXPORT_URL must not carry credentials$/],
+  ])('rejects %s even when both exporters are disabled', (_case, url, expected) => {
+    expect(() => usageExportConfig(internalReads({ USAGE_EXPORT_URL: url }))).toThrow(expected)
+  })
+
+  it.each([undefined, '', '   '])('requires authentication even when both exporters are disabled: %p', (token) => {
+    expect(() => usageExportConfig(internalReads({ USAGE_EXPORT_TOKEN: token }))).toThrow(
+      /USAGE_EXPORT_TOKEN is required/,
+    )
+  })
+})

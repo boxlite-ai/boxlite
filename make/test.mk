@@ -19,6 +19,7 @@ export FAIL_FAST
 # native name selector, so match semantics are per-runner (nextest/ctest/
 # go: regex, pytest -k / vitest -t: expression/substring).
 export FILTER
+PHONY_TARGETS += test\:fractional-cpus\:acceptance
 
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions
 # that cannot be expressed as a simple positive FILTER pattern.
@@ -281,6 +282,10 @@ test\:vmm\:boot:
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_build.py"
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_box_build.py"
 
+# CPU bandwidth acceptance requires a delegated CPU controller (or root).
+test\:fractional-cpus\:acceptance: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite --test fractional_cpus $(CARGOTEST_FILTER) -- --ignored --test-threads=1 --nocapture
+
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:
 	@test "$$(uname -s -m)" = "Linux x86_64" || { echo "Linux x86_64 is required" >&2; exit 1; }
@@ -326,7 +331,14 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # init restarts, once through the public Vm::new as the M1 smoke test.
 test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
+
+# Exercise the production guest mount adapter inside a real initramfs guest.
+PHONY_TARGETS += test\:integration\:vmm\:mounts
+test\:integration\:vmm\:mounts: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
+test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-init
+	@cargo test -p boxlite-vmm --lib --no-run
+	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests::guest_mounts:: -- --ignored --test-threads=1
 
 # Boot the real kernel through the native engine inside boxlite-shim: the M1 initramfs to its marker,
 # a typed Unsupported failure into the exit file, and an alpine box through the runtime up to
@@ -362,7 +374,7 @@ test\:unit\:guest:
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(GUEST_RUNNER_CONFIG) --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 $(if $(FILTER),$(FILTER),capabilit spec::tests sysctl::tests); \
 	fi
 
 # Keep ordinary guest mount tests unprivileged. Only explicitly ignored tests
@@ -448,7 +460,7 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 			$(CARGOTEST_FILTER); \
 	fi
 
-# OpenCode agent adapter tests (requires VM environment). Ignored by the suite above:
+# OpenCode agent adapter and `boxlite agent` CLI tests (requires VM). Ignored by the suites above:
 # each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
 test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
@@ -459,6 +471,13 @@ test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite --features krun,gvproxy,test-support,native --test agents_opencode --no-fail-fast -- \
+			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
+	fi && \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli --test agents --run-ignored only \
+			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-cli --test agents --no-fail-fast -- \
 			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
@@ -701,12 +720,63 @@ test\:install-script:
 	@bash scripts/release/test_install.sh
 
 # ─── E2E: SDK → API → Runner → VM ───────────────────────────────────────────
+export FILTER E2E_ARGS
+E2E_STATE_DIR ?= $(PROJECT_ROOT)/target/e2e
+E2E_PYTHON ?= $(PROJECT_ROOT)/.venv-e2e/bin/python
+export E2E_PYTHON
+# A command-line E2E_STATE_DIR must win over an inherited BOXLITE_E2E_STATE_DIR,
+# or down would tear down the stale state dir while builds fill the new one.
+ifeq ($(origin E2E_STATE_DIR),command line)
+BOXLITE_E2E_STATE_DIR = $(E2E_STATE_DIR)
+else
+BOXLITE_E2E_STATE_DIR ?= $(E2E_STATE_DIR)
+endif
+export BOXLITE_E2E_STATE_DIR
+
 test\:e2e\:setup:
-	@apps/e2e/bootstrap.sh
-	@python3 apps/e2e/fixture_setup.py
+	@python3 apps/e2e/local.py setup
+
+test\:e2e\:up:
+	@python3 apps/e2e/local.py up
+
+test\:e2e\:down:
+	@python3 apps/e2e/local.py down
+
+test\:e2e\:doctor:
+	@python3 apps/e2e/local.py doctor
+
+test\:e2e\:status:
+	@python3 apps/e2e/local.py status
 
 test\:e2e:
-	@cd apps/e2e && python3 -m pytest cases/ -v
+	@python3 apps/e2e/local.py run
+
+test\:e2e\:deps:
+	@python3 apps/e2e/python_env.py "$(E2E_PYTHON)"
+
+test\:e2e\:deps\:apps:
+	@cd apps && corepack yarn install --immutable
+
+test\:e2e\:deps\:node:
+	@cd sdks/node && node scripts/check-lockfile.mjs && npm ci --no-audit --no-fund
+
+test\:e2e\:build\:python:
+	@"$(E2E_PYTHON)" -m uv pip install --python "$(E2E_PYTHON)" --no-deps --no-build-isolation --config-settings 'build-args=--locked --profile dev' --editable sdks/python
+
+test\:e2e\:build\:minio:
+	@python3 apps/e2e/minio.py --state-dir "$(E2E_STATE_DIR)"
+
+# Go's build cache does not track external CGO archives.
+test\:e2e\:build\:runner:
+	@python3 apps/e2e/build_runner.py "$(abspath $(E2E_STATE_DIR))"
+
+test\:e2e\:build\:proxies:
+	@mkdir -p "$(E2E_STATE_DIR)/bin"
+	@cd apps/proxy && go build -o "$(abspath $(E2E_STATE_DIR))/bin/proxy" ./cmd/proxy
+	@cd apps/image-service && go build -o "$(abspath $(E2E_STATE_DIR))/bin/registry-proxy" ./cmd/registry-proxy
+
+test\:e2e\:build\:node:
+	@cd sdks/node && npm run build:native -- -- --locked && npm run build
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh

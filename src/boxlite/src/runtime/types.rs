@@ -474,7 +474,8 @@ pub struct BoxInfo {
     pub image: String,
 
     /// Allocated CPU count.
-    pub cpus: u8,
+    #[serde(serialize_with = "crate::runtime::cpu_count::serialize")]
+    pub cpus: f64,
 
     /// Allocated memory in MiB.
     pub memory_mib: u32,
@@ -528,7 +529,7 @@ pub struct BoxInfo {
     pub started_at: Option<DateTime<Utc>>,
 
     /// When the box was last active, as recorded by the control plane from
-    /// toolbox and proxy traffic — the clock AutoStop measures idleness
+    /// execution, file and proxy traffic — the clock AutoStop measures idleness
     /// against. `None` when no activity has been recorded yet.
     ///
     /// Local runtimes never report this: AutoStop needs an idle sweeper they
@@ -570,7 +571,7 @@ impl BoxInfo {
                 RootfsSpec::Image(r) => r.clone(),
                 RootfsSpec::RootfsPath(p) => format!("rootfs:{}", p),
             },
-            cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
+            cpus: config.options.cpus.unwrap_or(f64::from(DEFAULT_CPUS)),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             privileged: Some(config.options.advanced.privileged),
             network: Some(NetworkInfo::new(
@@ -922,7 +923,7 @@ mod tests {
             },
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("python:3.11".to_string()),
-                cpus: Some(4),
+                cpus: Some(4.0),
                 memory_mib: Some(1024),
                 ..Default::default()
             },
@@ -941,7 +942,7 @@ mod tests {
         assert_eq!(info.created_at, config.created_at);
         assert_eq!(info.pid, state.pid);
         assert_eq!(info.image, "python:3.11");
-        assert_eq!(info.cpus, 4);
+        assert_eq!(info.cpus, 4.0);
         assert_eq!(info.memory_mib, 1024);
         assert!(
             published_ports(&info).is_some_and(<[PublishedPort]>::is_empty),

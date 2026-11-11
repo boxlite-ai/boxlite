@@ -23,6 +23,14 @@ Node's native loader to exercise the published ESM package and its bundled domai
 Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
 Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
 
+### Listener configuration tests
+
+`BOXLITE_LISTEN_HOST` selects the API listener address; unset or empty retains
+`0.0.0.0`, while the managed local E2E launcher supplies `127.0.0.1`.
+`make test:apps:api TEST_FILES=main.spec.ts` exercises the real bootstrap entry
+with infrastructure dependencies mocked and checks the address passed to Nest's
+listener for all three cases. It does not start PostgreSQL or a VM.
+
 ## Registration email policy
 
 The first API request from a new OIDC identity requires an email address.
@@ -44,6 +52,47 @@ Deploy the API after upgrading the package to apply the new list.
 
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
+
+## Background lifecycle requests
+
+Automated stop requests use `BoxService.stop` with a platform operation context.
+A stable `started` Box moves to `pending=true`, `desiredState=stopped`, and emits
+the normal Stop event. The existing manager and Runner complete the transition.
+Conditional repository updates serialize competing lifecycle requests and reject
+a Stop if the Box's organization changed after lookup.
+
+The worker processes candidates sequentially within a 30-second submission
+window. It waits for each submitted operation and saves the last attempted
+creation timestamp and ID in a shared Redis checkpoint before releasing its lease.
+The next run starts after that position and wraps around, including when a different
+worker acquires the lease or the previous Box no longer appears in the candidates.
+Only the current lease owner may save progress. Failed attempts advance it too.
+The checkpoint uses the lease key as a Redis hash tag, preserving the lease key
+while keeping both keys in one slot. Lease acquisition waits at most one second;
+cancellation releases any lease returned after that wait ends.
+
+Background Stop lookups and updates limit each database lock wait to 500 ms. A lock
+timeout rolls back the transaction before processing the next candidate; a later
+run can retry that Box. The setting ends with the transaction and does not affect
+ordinary user Stop requests. Bounded lookups bypass the query cache and retain
+ID-first lookup with name fallback. Candidate reads use a separate transaction with the
+same lock wait bound, so a table lock cannot keep the scan waiting indefinitely.
+
+The automatic stop worker cancels pending work in `beforeApplicationShutdown` and
+awaits submitted operations before releasing its lease. This finishes before HTTP
+connections drain, so a long request cannot keep a worker submitting new stops.
+Cancellation does not undo an accepted Stop intent. Integration tests check
+persisted intent and lifecycle events; physical Runner shutdown requires
+end-to-end verification.
+
+Use `make coverage:api TEST_FILES='<spec pattern>'` for focused coverage checks.
+This selects test files while retaining the configured coverage sources and exclusions.
+A pattern matching no test files fails. PostgreSQL/Redis integration suites require
+`DB_HOST`, `REDIS_HOST`, and the corresponding connection settings; they skip when
+either host is unset.
+The `api:test` cache includes PostgreSQL and Redis hosts, ports, usernames, passwords,
+and the database name, so changing connection settings invalidates cached results.
+Coverage runs bypass the cache.
 
 ## Box startup timeouts
 
@@ -151,19 +200,128 @@ accept this field before rolling out the added response property.
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
+The same sanitized attributes reach PostHog through the client shared with HTTP metrics.
+Activity does not require the optional logging ClickHouse instance.
 
-| Event                                  | Recorded by                                       | Outcomes                      |
-| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
-| `user.registration`                    | `UserService.create`, through `recordOutcomes`    | requested, success, exception |
-| `user.login`                           | `LoginEventRecorder`                              | success                       |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested                     |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes   | success, exception            |
+| Event | Recorded by | Outcomes |
+| --- | --- | --- |
+| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
+| `user.login` | `LoginEventRecorder` | success |
+| `org.active` | `OrganizationActivityInterceptor`, best effort on a person's first request in an organization each UTC hour; a process exit or lost Redis acknowledgment after claiming the key can suppress the rest of that hour | success |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
+| `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
+| `api_key.create` | `ApiKeyService`, including platform bootstrap | requested, success, exception |
+| `volume.create`, `volume.delete` | `VolumeService`, shared by REST and Dashboard | requested, success, exception |
+| `box.open` | Authenticated preview proxy through the last-activity endpoint | success (sampled anonymous presence) |
+
+Volume success means the command entered the lifecycle queue, not that backing storage is ready or deleted.
+Force-deleting a missing or already-deleting volume is a no-op and emits no event. Mutation failures carry fixed
+categories, never resource names, key material or database error messages. API-key correlation is a fresh UUID
+for the attempt; volume correlation is the volume ID.
+
+Browser presence requires an admitted GET with `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`.
+The proxy sends `X-BoxLite-Preview-Open: 1` to the existing last-activity route; only the proxy role may trigger
+an observation. The API derives organization from the stored box and leaves user/actor unknown. Assets, iframes,
+polls and denied requests do not emit it; admission does not prove the guest rendered successfully.
+Per-box proxy singleflight and a separate 60-second cooldown bound attempts (including failed delivery), with a
+two-second request timeout. API Redis NX/EX 60 deduplicates across replicas; Redis failure suppresses the event.
+The API waits at most 1.5 seconds for the complete preview sequence, including the activity
+lock, buffered timestamp, deduplication and box lookup. A deadline suppresses the event and
+subsequent steps; ordinary heartbeat waits and errors keep their existing behavior. Already
+submitted shared Redis commands cannot be cancelled: a late lock can consume its throttle
+TTL without buffering activity, and an in-flight timestamp or expiring NX marker may still
+land. This deadline bounds handler waiting, not the shared Redis queue.
+Forwarding continues on telemetry failure. Reloads collapse and delivery is best effort: this is neither a
+navigation count nor a visitor count, and it does not add to requested-operation totals.
+
+API/proxy warnings identify the box and failing observation stage; proxy HTTP failures also
+identify the status, and transport failures distinguish timeouts. Raw database, Redis and URL
+error strings are excluded because they may contain credentials or user data.
+
+The preview marker is internal to the proxy/API exchange and is absent from the public OpenAPI parameters;
+ordinary heartbeat clients keep their existing signature and need no new header.
+
+At most 1,440 preview events per continuously active box/day reach PostHog. Include these sampled
+observations when reviewing the project's ingestion budget and retention settings.
+
+For v2 runners, JobStateHandler records a `box.start` success or exception after persisting
+the START_BOX job result. Accepted start requests retain their organization and caller context.
+Activity adds no database column or migration and remains best-effort telemetry, not an
+exactly-once outbox. Legacy v0 runners retain request events; terminal start outcomes are
+outside this contract, including instance recreation across synchronization cycles.
+
+Caller-attribution tests cover JWT and API-key administrators and both proxied exec/upload
+error categories without changing authentication policy.
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
-recorded in different places, so one call cannot cover both.
+recorded in different places, so one call cannot cover both. A proxied call that fails with an
+HTTP status records `http_<status>`; a client that disconnects first records `client_closed`.
+An already finished/closed response is accounted for after the box lookup, and outcome
+listeners are removed once recorded. Organization-presence Redis warnings use fixed categories,
+not raw error strings.
 
-An event names its entity only by `correlation.id` (the user id or the box id). It carries no
-`org.id`: the box table holds a box's organization, and the organization tables a user's.
+An event names its entity by `correlation.id`: the user id for `user.*` and `org.active`, the box
+id for box and tunnel events (volume ID or an API-key attempt UUID for those mutations). It also carries `organization.id`, so an organization's activity
+can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
+registration carries its default organization on success only.
+
+### Querying Activity in PostHog
+
+The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
+Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both AWS and GCP.
+Without the key or host, analytics is disabled while business operations and operational logs continue.
+AnalyticsService owns disabled-source and capture-error handling; the interceptor skips request extraction
+when analytics is disabled.
+Delivery is queued and best effort; application shutdown waits up to five seconds for the shared client.
+SDK diagnostics are separate from the sanitized business-event payload. Retention follows the PostHog
+project; BoxLite does not provision a second store or guarantee 400 days of history.
+
+An Activity consumer needs the PostHog **API origin** (for example `https://us.posthog.com`, distinct
+from an ingestion origin such as `https://us.i.posthog.com`), project ID and a backend-only personal
+API key scoped to that project with **Query Read** permission. The producer's project capture key
+cannot authorize reads. Keep the query key out of browser code.
+
+Send a `POST /api/projects/<project-id>/query/` request with `Authorization: Bearer <query-read-key>`
+and `Content-Type: application/json`. For example, this illustrative HogQL query counts requested
+operations and failures in a half-open UTC window, grouped into Shanghai days:
+
+```json
+{
+  "name": "customer_activity_days",
+  "query": {
+    "kind": "HogQLQuery",
+    "query": "SELECT toString(toDate(toTimeZone(timestamp, 'Asia/Shanghai'))) AS day, countIf(properties['event.outcome'] = 'requested') AS operations, countIf(properties['event.outcome'] = 'exception') AS failures FROM events WHERE properties.activity_schema = '1' AND properties.environment = '<producer-environment>' AND properties['organization.id'] = '<organization-id>' AND timestamp >= fromUnixTimestamp64Milli(1793030400000) AND timestamp < fromUnixTimestamp64Milli(1793203200000) GROUP BY day ORDER BY day DESC LIMIT 32"
+  }
+}
+```
+
+Replace the example organization/environment and bounds with validated values; never interpolate raw
+request text into SQL. Use explicit limits, bounded requests and strict response validation. PostHog
+returns `columns` and positional `results` arrays, unlike ClickHouse's JSON object rows. See the
+[Query API](https://posthog.com/docs/api/queries) and [supported SQL functions](https://posthog.com/docs/sql/clickhouse-functions).
+The example documents the contract; it has not been executed against a live PostHog project.
+
+| Activity field | PostHog value |
+| --- | --- |
+| Event/time | `event`, `timestamp` (the original event emission time) |
+| Outcome/entity | `properties['event.outcome']`, `properties['correlation.id']` |
+| Organization/person | `properties['organization.id']`, optional `properties['user.id']` |
+| Actor/reason/failure | `properties['actor.kind']`, `properties['event.reason']`, `properties['exception.type']` |
+| Client/auth | `properties['client.source']`, `properties['sdk.version']`, `properties['auth.method']` |
+
+Always filter `properties.activity_schema = '1'` and the exact configured producer environment, including
+nested queries. Legacy `api_*` events remain available for existing analytics but are not Activity rows.
+Organization-scoped events also carry the existing `organization` group. Unknown people use namespaced
+anonymous/platform distinct IDs with person profiles disabled; do not treat those IDs as people.
+`user.login` has no organization: associate it only with users observed in the requested organization
+and time window. Registration has an organization only on success.
+
+For steps, select the fields above, group equal steps per minute, and request the UI limit plus one
+to report truncation. Include requested/exception outcomes plus successes for `org.active`, `box.open`,
+`user.login` and `user.registration`; ordinary success records confirm requests already listed.
+Only requested outcomes contribute to operation totals. Preview presence remains anonymous and sampled.
 
 ### Who asked: the operation context
 
@@ -175,16 +333,58 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context                    | `actor.kind` | `event.reason`                                           |
-| -------------------------- | ------------ | -------------------------------------------------------- |
-| `Context.user()`           | `user`       | —                                                        |
-| `Context.admin()`          | `admin`      | —                                                        |
-| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| Context | `actor.kind` | `event.reason` |
+| --- | --- | --- |
+| `Context.user(actor?)` | `user` | — |
+| `Context.admin(actor?)` | `admin` | — |
+| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `auto_resume` |
 
 - Only the platform gives a reason; user and admin contexts have none.
+- A request handler names its caller with `@UserContext() ctx`, or `requestContext(req)` where it
+  already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
+  sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`. Values must be 1–64 ASCII
+  characters using letters, digits, `_`, `.`, `+`, `/`, space or `-`; invalid values are omitted.
+- The Dashboard sends source `dashboard`. The shared native REST transport sends source
+  `sdk` and its compiled BoxLite version on HTTP and API WebSocket requests, including file
+  operations. Rust, Python, Node, C, Go and the CLI use that transport; the label identifies
+  the SDK transport, not a particular language or a verified caller. Guest tunnel traffic
+  is not labeled. Older or third-party clients may still omit these optional headers.
+  HTTP test servers with explicit CORS allowlists must also permit `X-BoxLite-Source`.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
+- Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
+- The shared request context selects admin/user from the authenticated role, including tunnels,
+  proxied exec/uploads and decorated mutation handlers. Client headers cannot choose actor kind;
+  requested and terminal events retain the same caller identity. Service callers with no person
+  keep their existing user context without an actor; explicit admin/platform decisions stay separate.
 - Add caller-decided fields to `Context`, not new service parameters.
+
+### Maintaining Activity coverage
+
+Test both the Dashboard volume controller and the REST controller: each must forward the
+caller's context to the shared service. API-key tests should exercise generated keys and
+`ensureApiKeyValue` with a missing configured key, preserving platform bootstrap attribution
+and keeping key material out of events. Ordinary heartbeats must update activity without
+writing a preview cooldown or emitting `box.open`.
+
+Include administrator and member principals in HTTP tests of the shared request decorator.
+With authentication guards stubbed, these tests establish caller attribution, not access policy.
+The HTTP suite mounts both Dashboard and REST volume routes for create/delete, preserving the
+ID generated by the service through readiness lookup and response conversion. The marker test
+instead runs the real organization/resource guards: an authorized member heartbeat must return
+201 while ignoring a client-supplied preview marker. Recorder-failure and per-box cooldown
+isolation cases protect the best-effort observation contract. If cancellation arrives during throttle-lock acquisition,
+release only the acquired owner before skipping the timestamp write, so the next heartbeat is not
+throttled by a cancelled observation. Successful writes retain the normal throttle TTL.
+With `REDIS_HOST` set, the throttle suite exercises cancellation and ownership replacement against real Redis.
+
+Run `make coverage:api` from the repository root to include these paths in the API LCOV
+report at `target/coverage/api/lcov.info`. The patch coverage requirement remains 90%; a
+passing test suite alone does not establish coverage of these caller boundaries.
+
+Run `make test:apps:dashboard FILTER='sends the dashboard activity source'` to check the Dashboard's
+source header on authenticated requests. This target filters test names;
+omit `FILTER` to run all Dashboard unit tests.
 
 ## Admin organization metadata
 
@@ -469,3 +669,118 @@ R2 reuses successful `user.login` records from `LoginEventRecorder`, with the us
 first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
 qualifying token-use record as return activity; it does not require a new interactive login.
 No additional event or issuer-claim configuration is required. Redis/log failures can omit records.
+
+## Toolbox rollout compatibility
+
+Box responses retain deprecated `toolboxProxyUrl: ""` for old Runner decoders;
+the field no longer supplies a URL or performs Region/cache lookups. New Go clients
+accept its absence. The nullable `region.toolboxProxyUrl` column and existing values
+remain, although the new API no longer maps it. This release has no column-drop migration.
+Remove the response field and column in a later release only after all dependent
+Runners/API instances have upgraded and the rollback window is resolved.
+Startup loads migrations recursively: naming a directory `post-deploy` does not defer execution.
+
+Run `make test:apps:api TEST_FILES='box-toolbox-compat|toolbox-retention'` with `DB_*`
+set for PostgreSQL coverage. To include actual old/new Go decoder checks, install Go 1.23+
+and set `LEGACY_API_CLIENT_ROOT` to an exported pre-change `apps/libs/api-client-go` directory.
+
+## Mutation auditing
+
+Business writes use `@Audit` to insert a pending `audit_log` row before the handler runs.
+If insertion fails, the mutation is refused. Completion failures leave a pending row
+for reconciliation; audit status is the HTTP outcome, not an execution's exit code.
+
+The portable REST aliases share auditing for volume creation/deletion, image deletion,
+domain claim/bind/unbind, execution start/signal/termination, file upload, SSH
+configuration/enable/disable, and tunnel creation/revocation. Organization experimental
+configuration and attach-ticket issuance are audited too. Resource names resolved by
+handlers become canonical target IDs without another lookup. Domain unbind records an
+update to the normalized hostname because the organization still owns the domain.
+
+`GET /api/object-storage/push-access` audits temporary storage credential issuance
+against the authenticated organization, despite using GET. Audit insertion must succeed
+before STS is called. Audit records omit returned credentials and use a fixed failure
+description without changing the API's error response.
+
+Box creation, startup, recovery and volume creation retain the resolved target ID before subsequent
+conversion or waiting can fail. Failures before a Box is returned or resolved retain
+the original request identifier, or no target for creation. Recovery still returns its
+current DTO on timeout; a reported error remains a failed operation.
+Startup uses the first resolved Box ID for its mutation, with an ID-only lookup and
+organization check, so reusing the original name cannot redirect the operation.
+Leaving an organization targets that organization; linking or unlinking an account
+targets the secondary `provider|userId`. Invalid identity fields leave the target empty.
+
+Proxy operations use response completion: `finish` records the response status;
+`close` before completion or a response error records unknown (`0`). Completion is
+claimed once before persisting, and its listeners are removed. A client disconnect
+while the initial insert is pending prevents forwarding once that insert returns.
+`finish` confirms server-side transmission, not client receipt.
+
+Before forwarding, response-completion audits acquire a five-minute database lease,
+renewed every minute. Active uploads and streaming responses remain pending beyond
+30 minutes. A failed renewal closes the response; a crashed owner's expired lease
+allows the usual age-based reconciliation. Completion stops renewal and conditionally
+updates only the still-pending, unexpired row, so a late response cannot overwrite an
+unknown result or recreate a published record. Lease writes have five-second deadlines.
+Deploy the additive lease-column migration before the API; all reconcilers must be
+upgraded before this protection applies. Remove new API writers before rolling back
+the column.
+
+Audit metadata excludes command arguments, including the entire `cmd` and `entrypoint`
+fields on Box creation, as well as file contents, SSH secrets, tunnel tokens,
+attach tickets, and raw configuration bodies. Terminal resize, file download, metrics,
+runner/box/job callbacks, preview readiness and access exchanges, and onboarding helpers
+receive no new audit. Webhook portal access remains unchanged.
+MCP calls inherit the target REST operation's audit without a second MCP record.
+Attach-ticket metadata accepts only string execution IDs; invalid objects and arrays
+are excluded before request validation runs.
+
+WebSocket attach upgrades create a pending `attach` row after authorization and
+Box/Runner resolution, before forwarding. An insert failure refuses the connection.
+Runner acceptance completes it with `101`, without waiting for disconnect; this
+observes the upstream handshake, not proof of client receipt. A refused handshake
+records the upstream HTTP status; failure or an observed disconnect before acceptance
+records unknown (`0`) and produces no `detach`.
+
+The first observed socket close after acceptance inserts a separate `detach` row.
+For example, `attach(connectionId=X, status=101)` pairs with
+`detach(connectionId=X, status=200, durationMs=...)`. Both retain the verified actor,
+organization, canonical Box ID and execution ID. Metadata contains `connectionId`,
+`connectedAt`, and, on detach, `disconnectedAt`, monotonic `durationMs` and `hadError`.
+Detach status `200` means the close event was observed; it is neither an HTTP response
+nor a WebSocket close code. `hadError` only describes transport errors observed before
+the first close, not the user's intent or the WebSocket close-frame reason.
+
+The proxy does not inspect terminal frames for auditing. Successful long connections
+are already finalized and do not enter the 30-minute pending-log reconciliation.
+Completion or detach persistence failures emit a fixed diagnostic without interrupting
+an established connection; a failed completion remains eligible for reconciliation.
+Process termination can leave no detach record; this does not infer a disconnect time.
+API Key, JWT and one-time ticket authentication share this lifecycle and retain their
+existing authorization policy. Completed detach inserts also honor `audit.consoleLogEnabled`.
+
+Each attach audit write has a five-second deadline, including pool acquisition and
+transaction cleanup. A timeout refuses an initial upgrade or emits a diagnostic for
+completion/detach. Active database connections are closed on expiry; transaction-local
+SQL timeouts bound server work. A timed-out commit can have an uncertain result and
+is not retried. Completion logs are emitted only after a successful commit.
+At most eight bounded audit writes per API instance may remain unfinished, including
+timed-out callers still waiting for a pool connection. Excess writes fail immediately.
+Late pool acquisitions are released without executing SQL. If pool acquisition never
+settles, those slots remain occupied; this bounds retention rather than guaranteeing
+pool recovery. Closed attach sessions remove their listeners and socket/request references
+without waiting for persistence. Handler-completion HTTP audits retain their existing
+write behavior; response-completion audits use the bounded lease writes described above.
+
+Account-link adoption audits only after signature and identity validation. It records
+the primary/secondary IDs and the local ownership migration result, without an arbitrary
+organization association. Local success does not claim that subsequent Auth0 linking
+succeeded. Retry attempts are recorded even when adoption is already complete.
+
+Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|audit-response-lease.spec|audit-response-lifetime.integration.spec|1794196800000'`;
+set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
+Run `make test:apps:api TEST_FILES='attach-audit.*spec|audit-write-deadline.*spec|audit-backfill.*spec|boxlite-ws-proxy.service.spec'`
+for real local WebSocket lifecycle and authentication tests.
+See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
+for backfill limits and index details.

@@ -249,7 +249,7 @@ async fn build_config(
         security: options.advanced.security.clone(),
         nested_virtualization: options.advanced.nested_virtualization,
         // VM resources
-        cpus: options.cpus,
+        cpus: options.cpu_count()?.map(|cpu| cpu.vcpus()),
         memory_mib: options.memory_mib,
         kernel: prepared_kernel.clone(),
         // Filesystem and devices

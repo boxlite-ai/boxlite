@@ -182,7 +182,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `string` | - | OCI image URI |
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
-| `cpus` | `number` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
+| `cpus` | `number` | `1` | CPU allocation (0.01–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
 | `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
@@ -190,7 +190,7 @@ Configuration options for creating a box.
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
 | `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
-| `secrets` | `Secret[]` | `[]` | Outbound HTTPS secret substitution rules |
+| `secrets` | `Secret[]` | `[]` | Secrets injected into the `Authorization` header of outbound HTTPS requests |
 | `advanced` | `AdvancedBoxOptions` | `{}` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `autoDelete` | `number` | - | `0` keeps the box after stop; above `0`, a remote runtime deletes it that many seconds after stop and a local runtime at stop. Unset keeps the runtime's default: `autoRemove` locally, the server's policy on a remote runtime |
 | `autoRemove` | `boolean` | `false` | Deprecated: use `autoDelete`. Auto cleanup when stopped |
@@ -282,8 +282,8 @@ OCI `EXPOSE` declarations do not publish host ports.
 interface Secret {
   name: string;
   value: string;
-  hosts?: string[];
-  placeholder?: string; // Default: `<BOXLITE_SECRET:${name}>`
+  hosts?: string[]; // Required at create: at least one host
+  placeholder?: string; // Dummy guest value. Default: `<BOXLITE_SECRET:${name}>`
 }
 ```
 

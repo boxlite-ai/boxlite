@@ -1,4 +1,9 @@
 PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps fmt\:apps\:proxy
+PHONY_TARGETS += audit\:apps
+
+# Match mbuild publication's production dependency gate without installing packages.
+audit\:apps:
+	@cd apps && corepack yarn npm audit --severity high --environment production
 
 clippy\:vmm:
 	@cargo clippy -p boxlite-hypervisor -p boxlite-vmm --all-targets -- -D warnings
@@ -212,6 +217,9 @@ fmt\:apps\:secret-server:
 lint\:apps\:secret-server:
 	@cd apps/secret-server && GOWORK=off go vet ./...
 	@cd apps/secret-server && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+fmt\:proxy:
+	@cd apps/proxy && gofmt -w pkg/proxy
 
 fmt\:check\:go:
 	@echo "🔍 Checking Go formatting..."

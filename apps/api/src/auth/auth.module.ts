@@ -17,11 +17,14 @@ import { TypedConfigModule } from '../config/typed-config.module'
 import { OidcMetadataService } from '../config/oidc-metadata.service'
 import { FailedAuthTrackerService } from './failed-auth-tracker.service'
 import { LoginEventRecorder } from './login-event.recorder'
+import { APP_INTERCEPTOR } from '@nestjs/core'
+import { OrganizationActivityInterceptor } from './organization-activity.interceptor'
 import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
 import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
 import { McpDelegation } from './mcp-delegation'
+import { AuditModule } from '../audit/audit.module'
 @Module({
   imports: [
     PassportModule.register({
@@ -34,6 +37,7 @@ import { McpDelegation } from './mcp-delegation'
     ApiKeyModule,
     BoxModule,
     RegionModule,
+    AuditModule,
   ],
   controllers: [LogoutController, AccountLinkController],
   providers: [
@@ -78,6 +82,7 @@ import { McpDelegation } from './mcp-delegation'
     FailedAuthTrackerService,
     LoginEventRecorder,
     McpDelegation,
+    { provide: APP_INTERCEPTOR, useClass: OrganizationActivityInterceptor },
   ],
   exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService, McpDelegation],
 })

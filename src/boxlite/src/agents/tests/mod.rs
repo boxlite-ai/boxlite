@@ -27,6 +27,14 @@ fn offline_agent() -> Agent {
     Agent::new(opencode::Session::new(server, &info).unwrap())
 }
 
+/// The ID is what another process passes to `Agents::get`; it needs no state support.
+#[test]
+fn agent_id_is_the_native_session_id_even_without_state_support() {
+    let agent = offline_agent();
+    assert_eq!(agent.id(), "ses_test");
+    assert!(agent.state().is_err(), "OpenCode still lacks agent.state");
+}
+
 fn unsupported_message<T>(result: BoxliteResult<T>) -> String {
     match result.err().expect("operation must fail") {
         BoxliteError::Unsupported(message) => message,

@@ -53,6 +53,7 @@ import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
 import { BoxAutoResumeService } from './services/box-auto-resume.service'
 import { BoxMigrationService } from './services/box-migration.service'
+import { BoxBillingStateService } from './services/box-billing-state.service'
 import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
 import { Tunnel } from './entities/tunnel.entity'
 import { Domain } from './entities/domain.entity'
@@ -106,6 +107,7 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
     BoxStateWaiterService,
     BoxAutoResumeService,
     BoxMigrationService,
+    BoxBillingStateService,
     BoxMigrationManager,
     BoxMigrationJobReceiver,
     TunnelService,

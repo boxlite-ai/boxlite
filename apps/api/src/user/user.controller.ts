@@ -15,6 +15,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Req,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common'
@@ -40,6 +41,15 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { Context } from '../common/context/context'
+import { Request } from 'express'
+import { requestActor } from '../common/decorators/user-context.decorator'
+
+// Audit resolvers run before validation pipes; malformed input has no target identity.
+function linkedAccountTargetId(provider: unknown, userId: unknown): string | null {
+  return typeof provider === 'string' && provider.length > 0 && typeof userId === 'string' && userId.length > 0
+    ? `${provider}|${userId}`
+    : null
+}
 
 @ApiTags('users')
 @Controller('users')
@@ -95,8 +105,8 @@ export class UserController {
       }),
     },
   })
-  async create(@Body() createUserDto: CreateUserDto): Promise<User> {
-    return this.userService.create(createUserDto, Context.admin())
+  async create(@Body() createUserDto: CreateUserDto, @Req() req: Request): Promise<User> {
+    return this.userService.create(createUserDto, Context.admin(requestActor(req)))
   }
 
   @Get()
@@ -181,6 +191,8 @@ export class UserController {
   })
   @Audit({
     action: AuditAction.LINK_ACCOUNT,
+    targetType: AuditTarget.USER,
+    targetIdFromRequest: (req) => linkedAccountTargetId(req.body?.provider, req.body?.userId),
     requestMetadata: {
       body: (req: TypedRequest<CreateLinkedAccountDto>) => ({
         provider: req.body?.provider,
@@ -257,6 +269,8 @@ export class UserController {
   })
   @Audit({
     action: AuditAction.UNLINK_ACCOUNT,
+    targetType: AuditTarget.USER,
+    targetIdFromRequest: (req) => linkedAccountTargetId(req.params.provider, req.params.providerUserId),
     requestMetadata: {
       params: (req) => ({
         provider: req.params.provider,
@@ -284,44 +298,6 @@ export class UserController {
       })
     } catch (error) {
       this.logger.error('Failed to unlink account', error?.message || String(error))
-      throw new UnauthorizedException()
-    }
-  }
-
-  @Post('/mfa/sms/enroll')
-  @ApiOperation({
-    summary: 'Enroll in SMS MFA',
-    operationId: 'enrollInSmsMfa',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'SMS MFA enrollment URL',
-    type: String,
-  })
-  async enrollInSmsMfa(@AuthContext() authContext: IAuthContext): Promise<string> {
-    if (!this.configService.get('oidc.managementApi.enabled')) {
-      this.logger.warn('OIDC Management API is not enabled')
-      throw new NotFoundException()
-    }
-
-    const token = await this.getManagementApiToken()
-
-    try {
-      const response = await axios.post(
-        this.managementApiUrl('guardian', 'enrollments', 'ticket'),
-        {
-          user_id: authContext.userId,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      )
-
-      return response.data.ticket_url
-    } catch (error) {
-      this.logger.error('Failed to enable SMS MFA', error?.message || String(error))
       throw new UnauthorizedException()
     }
   }

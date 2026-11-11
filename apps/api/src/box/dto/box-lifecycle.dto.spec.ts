@@ -17,7 +17,7 @@ describe('BoxDto lifecycle policy exposure', () => {
     box.organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
     box.osUser = 'boxlite'
 
-    const dto = BoxDto.fromBox(box, 'https://proxy.boxlite.dev/toolbox')
+    const dto = BoxDto.fromBox(box)
 
     expect(dto).not.toHaveProperty('autoArchiveInterval')
   })

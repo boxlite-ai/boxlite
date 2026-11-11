@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
@@ -44,7 +45,7 @@ func Start(ctx context.Context, cfg *config.Config, api *apiclient.APIClient) er
 		return fmt.Errorf("open the secret store: %w", err)
 	}
 
-	address := fmt.Sprintf(":%d", cfg.Port)
+	address := net.JoinHostPort(os.Getenv("BOXLITE_LISTEN_HOST"), fmt.Sprint(cfg.Port))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", address, err)

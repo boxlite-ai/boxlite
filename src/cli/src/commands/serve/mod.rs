@@ -1305,7 +1305,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
     // for an empty placeholder (unlike the Go SDK), so defaulting here is what
     // keeps a placeholder-less secret from silently injecting an empty env var
-    // and no MITM substitution — the same failure class POL-303 fixes on Cloud.
+    // — the same failure class POL-303 fixes on Cloud.
     let secrets: Vec<boxlite::runtime::options::Secret> = req
         .secrets
         .as_ref()
@@ -1320,6 +1320,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                         .clone()
                         .filter(|p| !p.is_empty())
                         .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
+                    header: None,
                 })
                 .collect()
         })
@@ -2111,6 +2112,22 @@ mod tests {
     mod executions;
     mod ssh;
 
+    #[test]
+    fn fractional_cpus_survive_serve_request_conversion() {
+        for cpus in ["0.125", "1.5", "2", "2.0"] {
+            let request: CreateBoxRequest =
+                serde_json::from_str(&format!(r#"{{"image":"alpine","cpus":{cpus}}}"#)).unwrap();
+            assert_eq!(
+                build_box_options(&request).unwrap().cpus,
+                Some(cpus.parse().unwrap())
+            );
+        }
+        let error = serde_json::from_str::<CreateBoxRequest>(r#"{"cpu_limit":0.5}"#)
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("cpu_limit"));
+    }
+
     // --- API-key auth decision (pure; no runtime/network needed) ---
 
     #[test]
@@ -2286,7 +2303,7 @@ mod tests {
         assert_eq!(secret.value, "sk-test");
         assert_eq!(secret.hosts, vec!["api.openai.com"]);
         // Placeholder omitted on the wire: serve applies the same default the
-        // Go SDK does, so a placeholder-less secret still substitutes.
+        // Go SDK does, so a placeholder-less secret still has a dummy guest value.
         assert_eq!(secret.placeholder, "<BOXLITE_SECRET:openai>");
     }
 

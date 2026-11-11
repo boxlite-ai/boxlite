@@ -9,7 +9,8 @@ import Redis from 'ioredis'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, In } from 'typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
+import { randomUUID } from 'node:crypto'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -38,12 +39,25 @@ export class BoxActivityService {
    *
    * Relies on the periodic flush to the database.
    */
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
     const lockKey = `box:update-last-activity:${boxId}`
+    const owner = new LockCode(randomUUID())
     const acquired = await this.redisLockProvider.lock(
       lockKey,
       this.configService.getOrThrow('boxActivity.throttleTtlSeconds'),
+      owner,
     )
+    if (signal?.aborted) {
+      if (acquired) {
+        try {
+          await this.redisLockProvider.releaseLease(lockKey, owner)
+        } catch {
+          this.logger.warn('Could not release cancelled activity throttle', { boxId })
+        }
+      }
+      signal.throwIfAborted()
+    }
     if (!acquired) {
       return
     }

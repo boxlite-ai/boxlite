@@ -38,6 +38,88 @@ received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
 and `journalctl -u boxlite-runner`. If that meta-test passes, every other
 case in this suite is using the same fixtures and the same path.
 
+## Managed local E2E (preferred)
+
+`make test:e2e:setup` starts the dependency services with Docker Compose and runs the current-source API/Runner/proxies as host processes; fixtures and a real guest smoke follow. State lives in `target/e2e/`; no sudo or system services are used.
+
+Initialize submodules once (`git submodule update --init --recursive`, or `make setup`), then:
+
+```bash
+nix develop -c make test:e2e:doctor
+nix develop -c make test:e2e:setup
+make test:e2e FILTER=exec_working_dir
+make test:e2e:down
+```
+
+`make test:e2e:down` also terminates `bwrap`/`boxlite-shim` processes left in this checkout's runtime home by an interrupted run, removes their box directories, and fails if any process survives. The jailer starts every shim with `setsid()`, so signalling the runner's process group never reaches them.
+
+The fixed host ports support one managed stack at a time on a host, including across users; coordinate shared hosts and run stacks sequentially. `status` takes the lifecycle lock without reserving an unused stack. Lifecycle commands share a user-wide lock and persist the owning checkout and state directory until a successful `down`. Another checkout or `E2E_STATE_DIR` fails before changing resources; stop the owner using its original checkout and state directory first. Compose projects and runtime homes include the user, checkout and state identity and cannot be overridden by inherited Compose settings. Switching state after teardown therefore does not reuse volumes encrypted with another state's keys. PID records are published atomically.
+
+Runtime roots and the coordination directory are opened without following symlinks,
+checked for the current user's ownership, and made private. Foreign-owned or
+group/other-writable runtime parents are refused rather than repaired. Safe owned
+0755 parents from older launchers are tightened to 0700. Inside that private root,
+owned Runner-created box directories are tightened to 0700, including directories
+from earlier runs with umask 002; foreign owners and symlinks remain rejected.
+Host services inherit umask 077. Teardown also verifies
+the `boxes` directory and its children before recursively removing anything.
+
+Before replacing the Runner, startup reaps owned box process trees only when
+their `shim.pid` cannot identify a live process. PID/start-time verification and
+legacy PID handling follow runtime recovery; recoverable guests are preserved.
+This does not replace the runtime's database reconciliation or VM adoption.
+
+`E2E_PYTHON` accepts absolute paths, bare interpreter names found on `PATH`, or paths relative to the repository root. An existing interpreter must belong to a virtual environment; a bare system `python3` is not accepted. The same resolved interpreter is used for dependency sync, SDK installation, fixtures and pytest, including recursive Make invocations. A command-line `E2E_STATE_DIR` overrides an inherited `BOXLITE_E2E_STATE_DIR`; relative state paths are anchored at the repository root.
+
+An existing virtual environment created with `--without-pip` is supported:
+dependency setup bootstraps pip through that interpreter's bundled `ensurepip`
+before installing the pinned uv version. To select another Python version, create
+its virtual environment first and point `E2E_PYTHON` at its existing interpreter;
+unsupported executable names are rejected before creating a new environment.
+
+The source-run API reads the repository's `openapi/` through `BOXLITE_OPENAPI_DIR`; packaged deployments retain the bundled-assets default. This avoids requiring generated copies beneath `apps/api/src/assets` for local startup.
+
+Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `MINIO_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
+
+`setup`, `up` and `test:e2e` reuse an unchanged healthy stack. The launcher hashes tracked and non-ignored untracked working-tree inputs, including submodule sources, and the launch environment/interpreter. Test directories and Markdown documentation are excluded; changing pytest cases, `FILTER` or `E2E_ARGS` therefore does not reinstall dependencies or restart services. Product or configuration changes conservatively rebuild components and restart all host services. Dependency manifests have a separate fingerprint, so source-only changes skip dependency installation when the Python environment and package directories still exist.
+
+Reuse also requires the expected build artifacts, matching host PID/start-time records, responsive dependency and HTTP health checks, and a ready registered Runner. Missing records, artifacts or unhealthy services trigger preparation. Successful startup and fixture setup publish the reuse record; a failed preparation invalidates it. Delete `target/e2e/stack-inputs.json` to force preparation, or also delete `dependencies-inputs.json` to force dependency sync after manually altering installed packages. This cache assumes installed packages and generated artifacts have not been manually replaced; it does not fingerprint toolchain installations or external data.
+
+The Runner build fingerprints `target/debug/libboxlite.a` and forces Go recompilation when its content changes, because Go's cache does not track external CGO archives. A failed build never advances that fingerprint.
+
+This invalidation follows [Go's documented external C-library cache limitation](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching). Compose isolation follows its [project-name boundary](https://docs.docker.com/compose/how-tos/project-name/); a separate user-wide owner reservation is still needed because project names do not isolate host ports.
+
+Startup failure or interruption stops newly started host services and box processes, preserves pre-existing guest process identities, removes newly created dependency containers, and preserves existing dependency containers, volumes and logs. Build failures occur before stopping existing services. A restart intentionally replaces the old host processes; failed replacements are stopped rather than left half-running. Failed startup retains ownership so recovery or teardown uses the same checkout/state.
+
+Each dependency-readiness subprocess shares its check's remaining deadline, so
+a connected but unresponsive Redis or PostgreSQL cannot block startup forever.
+`status` fails if any required API/Runner/proxy PID record is missing or stale,
+including before startup and after teardown.
+
+Explicit paths supplied through `E2E_ARGS` suppress default whole-suite selection,
+just like paths passed directly to `run.sh`:
+
+```bash
+make test:e2e E2E_ARGS='cases/test_lifecycle.py -x'
+```
+
+Stacks created before checkout-specific Compose projects used the shared `boxlite-e2e` project and fixed encryption keys. Stop those stacks with the old launcher before upgrading. Their volumes are not adopted or deleted automatically; keep their original state and keys if data must be migrated. The new launcher creates a separate project and must not be used to clean up an old project's resources.
+
+Compose uses the configured Docker connection; Podman users must explicitly set
+`DOCKER_HOST=unix:///path/to/podman.sock`. Only one engine is needed: a `docker`
+command supplied by Podman does not imply a Docker daemon at `/var/run/docker.sock`.
+For rootless Podman, use `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
+with its API socket running. The launcher saves Docker connection environment
+variables in `target/e2e/compose-engine.json` after the first successful Compose
+command and reuses them for all lifecycle commands. Failed initial connections
+leave no selection, so correcting `DOCKER_HOST` and retrying works. Keep the
+selected Docker context unchanged until teardown;
+a newly available Podman socket never changes the selected engine automatically.
+
+The launcher script tests keep real `/proc` process checks Linux-only and mock process discovery in platform-independent lifecycle tests. Runtime process tests resolve `sleep` through `PATH`, preserving its executable name for multicall coreutils on NixOS; neither `/bin/sleep` nor a renamed sleep applet is required.
+
+Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain Docker with Compose v2, `/dev/kvm`, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The devshell includes `docker-compose`; Ubuntu can use `docker-compose-v2`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
+
 ## Prereqs
 
 `BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged

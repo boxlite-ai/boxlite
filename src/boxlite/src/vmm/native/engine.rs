@@ -128,6 +128,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
         cmdline: build_cmdline(spec, kernel.command_line.as_deref()),
         initramfs: kernel.initramfs.clone(),
         disks,
+        filesystem: None,
     })
 }
 

@@ -1,3 +1,4 @@
+import { Context } from '../common/context/context'
 /*
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
@@ -109,7 +110,14 @@ describe('API key authorization', () => {
     'allows a permission subset $permissions',
     async ({ permissions }) => {
       expect((await create(permissions)).status).toBe(201)
-      expect(createApiKey).toHaveBeenCalledWith('org-1', 'owner-1', 'delegated-key', permissions, undefined)
+      expect(createApiKey).toHaveBeenCalledWith(
+        'org-1',
+        'owner-1',
+        'delegated-key',
+        permissions,
+        Context.user({ userId: 'owner-1', authMethod: 'api_key' }),
+        undefined,
+      )
     },
   )
 

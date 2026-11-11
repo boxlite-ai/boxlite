@@ -277,7 +277,7 @@ Configuration options for creating a box.
 **Parameters:**
 
 - `image: str` - OCI image URI (default: `"python:slim"`)
-- `cpus: int` - Number of CPUs (default: 1, range: 1–16, the guest kernel's limit)
+- `cpus: float` - CPU allocation (default: 1, range: 0.01–16, step: 0.001); fractions require a Linux execution host
 - `memory_mib: int` - Memory in MiB (default: 512, range: 128-65536)
 - `disk_size_gb: int | None` - Container disk size in GB, never smaller than the image (default: None, the image size)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
@@ -291,7 +291,7 @@ Configuration options for creating a box.
     pass `False` for a private cloud tunnel. Call `forward()` for a listener;
     connections reuse the declaration and cannot undo revocation. See
     [private tunnel examples](../../docs/concepts/networking.md#private-cloud-tunnels).
-- `secrets: List[Secret]` - Host-side HTTPS secret substitution rules
+- `secrets: List[Secret]` - Secrets injected into the `Authorization` header of outbound HTTPS requests
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set

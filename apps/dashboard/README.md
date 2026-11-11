@@ -88,7 +88,9 @@ The first connection requires running the displayed login command to create that
 context. Login supplies the Dashboard endpoint; the proxy supplies the organization
 with `--path-prefix` and uses `ssh --proxy -- BOX`, matching
 [the cloud CLI syntax](https://github.com/boxlite-ai/boxlite/pull/2327).
-Both commands remove `BOXLITE_REST_URL` from their child environment. Their explicit
+Both commands remove `BOXLITE_REST_URL` and `BOXLITE_API_KEY` from their child
+environment, so an unrelated exported API key cannot override the credential saved
+by the displayed login command. This leaves the parent shell unchanged. Their explicit
 `--context` takes precedence over `BOXLITE_CONTEXT`, legacy `BOXLITE_PROFILE`, and
 the saved current context. Login updates only the dedicated profile; it does not
 change the current context or overwrite other profiles. Switching contexts in
@@ -97,16 +99,18 @@ to a different endpoint under the same dedicated context name can still redirect
 it; rerun the displayed login command to restore that context.
 
 To troubleshoot the generated context, run
-`env -u BOXLITE_REST_URL boxlite --context 'dashboard:<endpoint>' context show`
-and `env -u BOXLITE_REST_URL boxlite --context 'dashboard:<endpoint>' context ls`,
+`env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context 'dashboard:<endpoint>' context show`
+and `env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context 'dashboard:<endpoint>' context ls`,
 substituting the exact name from the generated command. Check that its endpoint
 matches the Dashboard. For manually written CLI commands, `BOXLITE_CONTEXT`,
 `BOXLITE_PROFILE`, `BOXLITE_REST_URL`, and the saved current context still affect
 selection; `env -u BOXLITE_REST_URL boxlite context show` shows the effective
 context without the URL override. `boxlite context use NAME` changes the saved
 current context for manual commands; explicit flags and environment context
-selectors take precedence over that saved choice. `BOXLITE_API_KEY` still overrides stored bearer
-credentials, including for generated commands; check it if authentication fails.
+selectors take precedence over that saved choice. For manually written commands,
+`BOXLITE_API_KEY` still overrides stored bearer credentials. If login succeeds but
+a manual command returns HTTP 401, check for that override; the generated SSH
+commands explicitly remove it.
 
 Empty/invalid paths hide the command. `~/`, spaces, quotes,
 backslashes and literal percent signs are supported; control characters and
@@ -633,3 +637,76 @@ The signed-out landing state uses a centered, borderless column, a semantic head
 and one primary Sign in action. Its presentation shares dashboard theme tokens;
 ordinary unauthenticated visits still redirect to the hosted identity provider,
 while an explicit logout retains the existing manual sign-in guard.
+
+## Expandable left navigation
+
+Desktop navigation uses a 64px icon rail by default. Expand navigation reveals
+labels in a 224px sidebar; the choice is saved as `boxlite-navigation-expanded`
+in localStorage, with an in-memory fallback when storage is unavailable.
+Hover the compact logo for 350ms to preview the full sidebar as an overlay;
+content keeps its position. Moving into the menu keeps it open; leaving closes it
+after 150ms, unless a child has keyboard focus. Escape dismisses the preview and
+returns focus to the logo. The top Collapse button also dismisses the preview;
+clicking the logo pins the expanded sidebar.
+Hover never changes the saved preference; touch uses the explicit click control.
+Images has an independent disclosure for its existing Images and Private
+registries routes. Child links use 14px thin-line icons, a shared inset and
+full-width selection; primary icons remain 18px. Navigation data accepts
+second-level children without adding speculative destinations. Entering a child route reveals its group; the active
+route remains highlighted when the whole sidebar collapses.
+
+The desktop sidebar spans the viewport height (minus any announcement). Its logo
+shows the full wordmark when expanded and the icon when compact. The right column
+contains a 48px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+Welcome keeps its simplified header.
+
+Management is a primary disclosure after Domains, with Billing and Organization
+children. Clicking it in compact mode expands the sidebar and reveals the group;
+entering a management route opens the group, while manual collapse remains possible.
+Organization switching, theme and logout remain in the account menu.
+
+Links retain accessible names in compact mode and show right-side tooltips on
+hover/focus. The middle navigation scrolls on short screens; the footer pins the
+Quickstart as the last action. Collapse sits beside the logo in both pinned
+expansion and hover preview, and is hidden in the compact rail without a preview.
+Clicking the compact logo expands navigation without changing the route.
+Keyboard focus moves to the replacement toggle. Selected navigation uses the
+accent surface, distinct from the quieter hover surface.
+
+Dashboard owns `--app-header-height`, `--app-banner-height` and
+`--app-content-height`. List/detail/fullscreen layouts consume these variables
+to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcement
+height consistently. Preserve `min-w-0` on the content region when adding routes.
+
+Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
+section label. Management remains a separate primary entry. Compact navigation
+keeps the group accessible name without squeezing in a visual label.
+
+Expanded navigation highlights only the current child, using the same full row
+width as primary items. Active parents retain foreground emphasis without a
+second selection rectangle. Child indentation comes from padding, with no tree line.
+
+Sidebar branding always renders the same 43.2px-high wordmark asset
+(20% above the original 36px). Compact mode clips the text area instead of substituting a differently padded icon image, so
+the visible symbol keeps the same size and position across expansion.
+
+Neutral outlines use border, border-hover and border-selected tokens. In dark mode
+these are 16%, 23% and 30% neutral lightness, avoiding foreground-alpha outlines
+whose brightness jumps against dark cards. Selection also retains its text, fill
+or current badge; keyboard-focus indicators are unchanged.
+
+## Resource screen visual rules
+
+The compact Box list exposes a named “Box cards” region; its filter-recovery
+checks locate that accessible region independently of responsive CSS classes.
+
+True empty lists hide column headers and paging; filtered-empty lists retain context.
+Boxes and TanStack-backed tables share ResourcePagination. Totals and fetching stay
+with the caller; a later empty page always retains a Previous action, while a single
+page hides navigation arrows. Pagination follows the data rather than the viewport.
+Desktop image navigation lives in the expandable rail, with mobile-only page tabs.
+Clicking Images in a compact rail reveals its children. Quota metadata uses readable
+12px type. Template columns use a 240px minimum in the available content width;
+short Quickstart code blocks expand naturally. Billing and box details retain all
+data and actions while removing excess whitespace and dotted leaders.

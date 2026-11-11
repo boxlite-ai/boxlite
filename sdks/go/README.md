@@ -262,7 +262,7 @@ password field, and `NewRegistryCredential` prints `Password:[redacted]` with
 - The deprecated flat fields `NetworkSpec{Mode, AllowNet}` still configure the outbound direction. Setting them together with `Outbound` is rejected when the options are built. `NetworkInfo.Mode` and `NetworkInfo.AllowNet` likewise remain readable as views onto `NetworkInfo.Outbound`.
 - `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
 - A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
-- `WithSecret(boxlite.Secret{...})` configures host-side HTTPS secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
+- `WithSecret(boxlite.Secret{...})` injects a secret into the `Authorization` header of outbound HTTPS requests to `Hosts`, which is required; `Placeholder` is a dummy guest value that defaults to `<BOXLITE_SECRET:{Name}>`.
 - Container capabilities live under advanced options:
 
   ```go
@@ -279,6 +279,15 @@ password field, and `NewRegistryCredential` prints `Password:[redacted]` with
 Port publication is local-only. Remote runtimes reject it with guidance to use
 the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
+
+### Fractional CPUs
+
+Use `WithCPUs(0.5)` for half a CPU of aggregate time on a Linux execution host, or `WithCPUs(1.5)` for two guest vCPUs sharing 1.5 CPUs.
+`BoxInfo.CPUs` is a `float64`, reported through the initial native callback without extra information requests.
+Integer inputs retain existing behavior; fractional values are immutable and local macOS execution rejects them.
+A macOS REST client can request fractional CPUs from a supporting Linux server.
+Rebuild against the matching C header/library because CPU fields and parameters now use `double`.
+See [fractional CPUs](../../docs/guides/resource-limits.md#fractional-cpus-linux) for validation, cgroup delegation, and REST support.
 
 ## Service Tunnels
 

@@ -598,7 +598,7 @@ typedef struct CBoxInfo {
   char *status;
   int running;
   int pid;
-  int cpus;
+  double cpus;
   int memory_mib;
   uint32_t auto_stop;
   uint32_t auto_delete;
@@ -1385,7 +1385,7 @@ enum BoxliteErrorCode boxlite_box_executions_list(CBoxHandle *handle,
 void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
 
 enum BoxliteErrorCode boxlite_simple_new(const char *image,
-                                         int cpus,
+                                         double cpus,
                                          int memory_mib,
                                          CBoxliteSimple **out_box,
                                          CBoxliteError *out_error);
@@ -1679,7 +1679,7 @@ void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
 
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
 
-void boxlite_options_set_cpus(CBoxliteOptions *opts, int cpus);
+void boxlite_options_set_cpus(CBoxliteOptions *opts, double cpus);
 
 void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
 

@@ -61,6 +61,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { mutationFailureType, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -78,12 +79,10 @@ import { Redis } from 'ioredis'
 import {
   BOX_LOOKUP_CACHE_TTL_MS,
   BOX_ORG_ID_CACHE_TTL_MS,
-  TOOLBOX_PROXY_URL_CACHE_TTL_S,
   boxLookupCacheKeyById,
   boxLookupCacheKeyByName,
   boxOrgIdCacheKeyById,
   boxOrgIdCacheKeyByName,
-  toolboxProxyUrlCacheKey,
 } from '../utils/box-lookup-cache.util'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
@@ -110,6 +109,9 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
+
+// Leave room inside the proxy's two-second delivery timeout.
+const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
@@ -389,7 +391,7 @@ export class BoxService {
             })
       })
 
-      recordBoxRequested('box.create', insertedBox.id, ctx)
+      recordBoxRequested('box.create', insertedBox, ctx)
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -472,7 +474,7 @@ export class BoxService {
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
 
-    recordWarmPoolClaim(updatedBox.id, ctx)
+    recordWarmPoolClaim(updatedBox, ctx)
 
     // Treat this as a newly started box
     this.eventEmitter.emit(
@@ -735,12 +737,18 @@ export class BoxService {
     return boxes
   }
 
-  async findOneByIdOrName(boxIdOrName: string, organizationId?: string, returnDestroyed?: boolean): Promise<Box> {
+  async findOneByIdOrName(
+    boxIdOrName: string,
+    organizationId?: string,
+    returnDestroyed?: boolean,
+    lockTimeoutMs?: number,
+  ): Promise<Box> {
     const stateFilter = returnDestroyed ? {} : { state: Not(BoxState.DESTROYED) }
     const organizationFilter = organizationId ? { organizationId } : {}
 
     // Public Box ID is the primary key. Name remains a user-facing fallback within an organization.
     let box = await this.boxRepository.findOne({
+      lockTimeoutMs,
       where: {
         id: boxIdOrName,
         ...organizationFilter,
@@ -754,6 +762,7 @@ export class BoxService {
 
     if (!box) {
       box = await this.boxRepository.findOne({
+        lockTimeoutMs,
         where: {
           name: boxIdOrName,
           ...organizationFilter,
@@ -884,14 +893,22 @@ export class BoxService {
       whereCondition: { pending: box.pending, state: box.state },
     })
 
-    recordBoxRequested('box.delete', updatedBox.id, ctx)
+    recordBoxRequested('box.delete', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+  async start(
+    boxIdOrName: string,
+    organization: Organization,
+    ctx: Context,
+    options?: { idOnly?: boolean },
+  ): Promise<Box> {
+    const box = options?.idOnly
+      ? await this.findOne(boxIdOrName)
+      : await this.findOneByIdOrName(boxIdOrName, organization.id)
+    if (box.organizationId !== organization.id) throw new NotFoundException('Box not found')
 
     const region = await this.regionService.findOne(box.region)
     if (!region) {
@@ -929,6 +946,8 @@ export class BoxService {
       whereCondition: { pending: false, state: box.state },
     })
 
+    recordBoxRequested('box.start', updatedBox, ctx)
+
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
     return updatedBox
@@ -957,6 +976,8 @@ export class BoxService {
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
+    recordBoxRequested('box.start', updated, Context.platform(PlatformReason.AUTO_RESUME))
+
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
     this.eventEmitter.emit(
       BoxEvents.DESIRED_STATE_UPDATED,
@@ -966,7 +987,7 @@ export class BoxService {
   }
 
   async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId, undefined, ctx.lockTimeoutMs)
 
     this.assertBoxNotErrored(box)
 
@@ -989,17 +1010,18 @@ export class BoxService {
 
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { pending: false, state: box.state },
+      whereCondition: { pending: false, state: box.state, organizationId: box.organizationId },
+      lockTimeoutMs: ctx.lockTimeoutMs,
     })
 
-    recordBoxRequested('box.stop', updatedBox.id, ctx)
+    recordBoxRequested('box.stop', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
 
     return updatedBox
   }
 
-  async recover(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async recover(boxIdOrName: string, organization: Organization, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     if (box.state !== BoxState.ERROR) {
@@ -1048,7 +1070,7 @@ export class BoxService {
 
     // Now that box is in STOPPED state, use the normal start flow
     // This handles state validation and event emission.
-    return await this.start(box.id, organization)
+    return await this.start(box.id, organization, ctx)
   }
 
   async updateInboundEnabled(boxIdOrName: string, inboundEnabled: boolean, organizationId?: string): Promise<Box> {
@@ -1064,13 +1086,52 @@ export class BoxService {
     })
   }
 
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
-    await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
-  }
-
-  async getToolboxProxyUrl(boxId: string): Promise<string> {
-    const box = await this.findOne(boxId)
-    return this.resolveToolboxProxyUrl(box.region)
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
+    if (!previewOpen) return this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+    const controller = new AbortController()
+    const { signal } = controller
+    let operation = 'update_activity'
+    let timeout: ReturnType<typeof setTimeout>
+    const observe = async () => {
+      await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt, signal)
+      signal.throwIfAborted()
+      operation = 'deduplicate'
+      const first = await this.redis.set(`box:preview-open:${boxId}`, '1', 'EX', 60, 'NX')
+      signal.throwIfAborted()
+      if (first !== 'OK') return
+      operation = 'load_box'
+      const box = await this.findOne(boxId)
+      signal.throwIfAborted()
+      operation = 'record_event'
+      recordBusinessEvent({
+        name: 'box.open',
+        outcome: 'success',
+        correlationId: box.id,
+        organizationId: box.organizationId,
+      })
+    }
+    try {
+      await Promise.race([
+        observe(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            const error = new Error('Preview activity deadline exceeded')
+            controller.abort(error)
+            reject(error)
+          }, PREVIEW_ACTIVITY_TIMEOUT_MS)
+        }),
+      ])
+    } catch (error) {
+      // Preserve activity-buffer failures; only preview observation/timeouts fail closed.
+      if (operation === 'update_activity' && !signal.aborted) throw error
+      this.logger.warn('Preview activity observation could not be recorded', {
+        boxId,
+        operation,
+        errorType: signal.aborted ? 'timeout' : mutationFailureType(error),
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   /**
@@ -1082,8 +1143,8 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, reads] = await this.resolveDtoMetadata(box)
-    return BoxDto.fromBox(box, toolboxProxyUrl, reads)
+    const reads = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, reads)
   }
 
   /**
@@ -1092,9 +1153,8 @@ export class BoxService {
    * a caller polling a creating box reads it through
    * {@link toBoxDtoWithExitCode}, and that is the caller progress is for.
    */
-  private async resolveDtoMetadata(box: Box): Promise<[string, BoxDtoReads]> {
-    const [toolboxProxyUrl, lastActivityAt, preparing] = await Promise.all([
-      this.resolveToolboxProxyUrl(box.region),
+  private async resolveDtoMetadata(box: Box): Promise<BoxDtoReads> {
+    const [lastActivityAt, preparing] = await Promise.all([
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
@@ -1107,7 +1167,7 @@ export class BoxService {
         return new Set<string>()
       }),
     ])
-    return [toolboxProxyUrl, { lastActivityAt, preparingImage: preparing.has(box.id) }]
+    return { lastActivityAt, preparingImage: preparing.has(box.id) }
   }
 
   /**
@@ -1125,11 +1185,11 @@ export class BoxService {
    * Only the two endpoints that answer a tenant's read use this.
    */
   async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
-    const [[toolboxProxyUrl, reads], exitCode] = await Promise.all([
+    const [reads, exitCode] = await Promise.all([
       this.resolveDtoMetadata(box),
       this.boxExitCodeService.getExitCode(box),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, { ...reads, exitCode })
+    return BoxDto.fromBox(box, { ...reads, exitCode })
   }
 
   /**
@@ -1141,8 +1201,7 @@ export class BoxService {
    * client that needs it reads the box itself.
    */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const [urlMap, activityMap, preparing] = await Promise.all([
-      this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
+    const [activityMap, preparing] = await Promise.all([
       this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
         this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
         return new Map<string, Date>()
@@ -1153,76 +1212,8 @@ export class BoxService {
       }),
     ])
     return boxes.map((s) => {
-      const url = urlMap.get(s.region)
-      if (!url) {
-        throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
-      }
-      return BoxDto.fromBox(s, url, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
+      return BoxDto.fromBox(s, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
     })
-  }
-
-  async resolveToolboxProxyUrl(regionId: string): Promise<string> {
-    const cacheKey = toolboxProxyUrlCacheKey(regionId)
-    const cached = await this.redis.get(cacheKey)
-    if (cached) {
-      return cached
-    }
-
-    const region = await this.regionService.findOne(regionId)
-    const url = region?.toolboxProxyUrl
-      ? region.toolboxProxyUrl.replace(/\/+$/, '') + '/toolbox'
-      : this.configService.getOrThrow('proxy.toolboxUrl')
-
-    this.redis.setex(cacheKey, TOOLBOX_PROXY_URL_CACHE_TTL_S, url).catch((err) => {
-      this.logger.warn(`Failed to cache toolbox proxy URL for region ${regionId}: ${err.message}`)
-    })
-    return url
-  }
-
-  async resolveToolboxProxyUrls(regionIds: string[]): Promise<Map<string, string>> {
-    const unique = [...new Set(regionIds)]
-    const result = new Map<string, string>()
-
-    const pipeline = this.redis.pipeline()
-    for (const id of unique) {
-      pipeline.get(toolboxProxyUrlCacheKey(id))
-    }
-    const cached = await pipeline.exec()
-
-    const uncached: string[] = []
-    for (let i = 0; i < unique.length; i++) {
-      const err = cached?.[i]?.[0]
-      if (err) {
-        this.logger.warn(`Failed to get cached toolbox proxy URL for region ${unique[i]}: ${err.message}`)
-      }
-      const val = cached?.[i]?.[1] as string | null
-      if (val) {
-        result.set(unique[i], val)
-      } else {
-        uncached.push(unique[i])
-      }
-    }
-
-    if (uncached.length > 0) {
-      const regions = await this.regionService.findByIds(uncached)
-      const regionMap = new Map(regions.map((r) => [r.id, r]))
-      const fallback = this.configService.getOrThrow('proxy.toolboxUrl')
-      const setPipeline = this.redis.pipeline()
-      for (const id of uncached) {
-        const region = regionMap.get(id)
-        const url = region?.toolboxProxyUrl ? region.toolboxProxyUrl.replace(/\/+$/, '') + '/toolbox' : fallback
-        result.set(id, url)
-        setPipeline.setex(toolboxProxyUrlCacheKey(id), TOOLBOX_PROXY_URL_CACHE_TTL_S, url)
-      }
-      const setResults = await setPipeline.exec()
-      setResults?.forEach(([err], i) => {
-        if (err) {
-          this.logger.warn(`Failed to cache toolbox proxy URL for region ${uncached[i]}: ${err.message}`)
-        }
-      })
-    }
-
-    return result
   }
 
   private async getValidatedOrDefaultRegion(organization: Organization, regionIdOrName?: string): Promise<Region> {

@@ -12,6 +12,7 @@ export type AuditLogMetadata = Record<string, any>
 @Entity()
 @Index(['createdAt'])
 @Index(['organizationId', 'createdAt'])
+@Index('idx_audit_log_pending_created_at', ['createdAt'], { where: '"statusCode" IS NULL' })
 export class AuditLog {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -38,6 +39,9 @@ export class AuditLog {
 
   @Column({ nullable: true })
   statusCode?: number
+
+  @Column({ type: 'timestamptz', nullable: true, select: false })
+  leaseExpiresAt?: Date
 
   @Column({ nullable: true })
   errorMessage?: string

@@ -78,7 +78,7 @@ type BoxInfo struct {
 	State      State
 	Running    bool
 	PID        int
-	CPUs       int
+	CPUs       float64
 	MemoryMiB  int
 	Network    *NetworkInfo
 	AutoStop   uint32
@@ -92,7 +92,7 @@ type BoxInfo struct {
 	// workload lifecycle outcomes.
 	StartedAt time.Time
 	// LastActivityAt is when the box was last active, as recorded by the
-	// control plane from toolbox and proxy traffic — the clock AutoStop
+	// control plane from execution, file and proxy traffic — the clock AutoStop
 	// measures idleness against. The zero time means no activity was
 	// recorded, which is always the case for local runtimes.
 	LastActivityAt time.Time
@@ -227,7 +227,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		State:      State(cString(info.status)),
 		Running:    info.running != 0,
 		PID:        pid,
-		CPUs:       int(info.cpus),
+		CPUs:       float64(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
 		Network:    cNetworkInfoToGo(info.network),
 		AutoStop:   uint32(info.auto_stop),

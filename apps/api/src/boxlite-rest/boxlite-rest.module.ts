@@ -24,9 +24,19 @@ import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { AuditModule } from '../audit/audit.module'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule, RegistryModule],
+  imports: [
+    BoxModule,
+    AuthModule,
+    ApiKeyModule,
+    OrganizationModule,
+    UserModule,
+    ImageModule,
+    RegistryModule,
+    AuditModule,
+  ],
   controllers: [
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,

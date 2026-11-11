@@ -148,9 +148,10 @@ export interface Box {
      */
     'runnerId'?: string;
     /**
-     * The toolbox proxy URL for the box
+     * Deprecated compatibility field; always empty. Clients must tolerate its absence in a future release.
+     * @deprecated
      */
-    'toolboxProxyUrl': string;
+    'toolboxProxyUrl'?: string;
     /**
      * What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled
      */

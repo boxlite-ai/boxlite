@@ -401,6 +401,27 @@ describe('BoxTable empty state', () => {
     expect(onOpenQuickstart).toHaveBeenCalledTimes(buttons.length)
   })
 
+  it('offers filter recovery in the compact empty list', () => {
+    const onFiltersChange = vi.fn()
+    renderEmpty({ filters: { idOrName: 'missing' }, onFiltersChange })
+    const mobile = document.querySelector('[role="region"][aria-label="Box cards"]')!
+    expect(mobile.textContent).toContain('No matching Boxes')
+    const clear = [...mobile.querySelectorAll('button')].find((button) => button.textContent === 'Clear filter')!
+    act(() => clear.click())
+    expect(onFiltersChange).toHaveBeenCalledWith({ idOrName: undefined })
+    expect(mobile.textContent).not.toContain('Open Quickstart')
+  })
+
+  it('distinguishes an empty search and offers to clear its filter', () => {
+    const onFiltersChange = vi.fn()
+    renderEmpty({ filters: { idOrName: 'missing' }, onFiltersChange })
+    expect(document.body.textContent).toContain('No matching Boxes')
+    expect(quickstartButtons()).toHaveLength(0)
+    const clear = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Clear filter')!
+    act(() => clear.click())
+    expect(onFiltersChange).toHaveBeenCalledWith({ idOrName: undefined })
+  })
+
   it('still explains itself when no guide is available to open', () => {
     renderEmpty()
 

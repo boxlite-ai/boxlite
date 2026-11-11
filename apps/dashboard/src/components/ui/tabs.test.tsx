@@ -58,7 +58,7 @@ describe('segmented tabs', () => {
     expect(inactive.className).not.toContain('opacity-55')
     expect(active.className).not.toContain(':opacity-100')
     expect(active.className).toContain('data-[state=active]:bg-background')
-    expect(active.className).toContain('data-[state=active]:border-foreground/45')
+    expect(active.className).toContain('data-[state=active]:border-border-selected')
     expect(active.className).not.toContain('bg-[hsl(var(--brand)')
     expect(active.className).not.toContain('hsl(var(--brand))]')
   })

@@ -33,7 +33,7 @@ class RuntimeHarness:
         *,
         image: str = "alpine:latest",
         name: str | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         memory_mib: int | None = None,
         working_dir: str | None = None,
         env: list[tuple[str, str]] | None = None,
@@ -223,7 +223,7 @@ class TestBoxManagement:
         assert isinstance(info.created_at, str)
         assert info.state.pid is None or isinstance(info.state.pid, int)
         assert isinstance(info.image, str)
-        assert isinstance(info.cpus, int)
+        assert isinstance(info.cpus, float)
         assert isinstance(info.memory_mib, int)
 
     async def test_multiple_boxes_isolated(self, runtime):

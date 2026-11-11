@@ -89,7 +89,7 @@ func TestIntegrationAllowNet(t *testing.T) {
 	}
 }
 
-func TestIntegrationSecretSubstitution(t *testing.T) {
+func TestIntegrationSecretHeaderInjection(t *testing.T) {
 	rt := newTestRuntime(t)
 	box := createStartedBox(
 		t,
@@ -110,12 +110,14 @@ func TestIntegrationSecretSubstitution(t *testing.T) {
 	)
 
 	script := strings.Join([]string{
-		"import os, urllib.request",
+		"import json, os, urllib.request",
 		"req = urllib.request.Request(",
 		"    'https://httpbingo.org/headers',",
-		"    headers={'Authorization': 'Bearer ' + os.environ['BOXLITE_SECRET_TESTKEY']},",
+		"    headers={'Authorization': 'Bearer dummy', 'X-Probe': os.environ['BOXLITE_SECRET_TESTKEY']},",
 		")",
-		"print(urllib.request.urlopen(req, timeout=20).read().decode())",
+		"headers = json.load(urllib.request.urlopen(req, timeout=20))['headers']",
+		"print('probe=' + headers['X-Probe'][0])",
+		"print('authorization=' + headers['Authorization'][0])",
 	}, "\n")
 
 	result, err := box.Exec(context.Background(), "python3", "-c", script)
@@ -125,10 +127,11 @@ func TestIntegrationSecretSubstitution(t *testing.T) {
 	if result.ExitCode != 0 {
 		t.Fatalf("unexpected exit code: %d stderr=%q", result.ExitCode, result.Stderr)
 	}
-	if !strings.Contains(result.Stdout, "super-secret-value") {
-		t.Fatalf("expected substituted secret in response, got %q", result.Stdout)
+	// This echo host returns the injected header, so the value is expected there.
+	if !strings.Contains(result.Stdout, "authorization=Bearer super-secret-value") {
+		t.Fatalf("expected injected Authorization header, got %q", result.Stdout)
 	}
-	if strings.Contains(result.Stdout, "<BOXLITE_SECRET:testkey>") {
-		t.Fatalf("placeholder leaked to upstream response: %q", result.Stdout)
+	if !strings.Contains(result.Stdout, "probe=<BOXLITE_SECRET:testkey>") {
+		t.Fatalf("expected placeholder to stay verbatim in other headers, got %q", result.Stdout)
 	}
 }
