@@ -24,11 +24,20 @@ import (
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
-type checkpointPreparationFixture struct {
+type archiveSource struct{ Path, SHA256, PinnedImage string }
+
+func (f *preparedImportFixture) prepare(ctx context.Context) (*boxlite.PreparedImport, error) {
+	target := "target"
+	return f.runtime.PrepareImport(ctx, f.source.Path, boxlite.ImportOptions{
+		Image: f.source.PinnedImage, Env: map[string]*string{"BOXLITE_BOX_ID": &target}, PreflightStartup: true,
+	})
+}
+
+type preparedImportFixture struct {
 	runtime  *boxlite.Runtime
 	registry *httptest.Server
 	home     string
-	source   boxlite.CheckpointArchiveSource
+	source   archiveSource
 	started  chan struct{}
 	release  chan struct{}
 	once     sync.Once
@@ -37,14 +46,14 @@ type checkpointPreparationFixture struct {
 
 // The real local runtime pulls from this loopback OCI registry. Blocking its
 // manifest response lets cancellation precede native completion without timing
-// assumptions; Rust already owns a derived archive when the request arrives.
-func newCheckpointPreparationFixture(t *testing.T) *checkpointPreparationFixture {
+// assumptions; Rust already owns validated staging when the request arrives.
+func newPreparedImportFixture(t *testing.T) *preparedImportFixture {
 	t.Helper()
 	// Exercise the loopback registry directly even when the developer uses an
 	// HTTP proxy for unrelated image pulls.
 	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
-	f := &checkpointPreparationFixture{home: t.TempDir(), started: make(chan struct{}), release: make(chan struct{})}
+	f := &preparedImportFixture{home: t.TempDir(), started: make(chan struct{}), release: make(chan struct{})}
 	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Env":["IMAGE_DEFAULT=keep"]},"rootfs":{"type":"layers","diff_ids":[]}}`)
 	manifest, err := json.Marshal(map[string]any{
 		"schemaVersion": 2,
@@ -91,14 +100,14 @@ func newCheckpointPreparationFixture(t *testing.T) *checkpointPreparationFixture
 	return f
 }
 
-func (f *checkpointPreparationFixture) unblock() { f.once.Do(func() { close(f.release) }) }
+func (f *preparedImportFixture) unblock() { f.once.Do(func() { close(f.release) }) }
 
 func checkpointDigest(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }
 
-func checkpointSourceFixture(t *testing.T, image string) boxlite.CheckpointArchiveSource {
+func checkpointSourceFixture(t *testing.T, image string) archiveSource {
 	t.Helper()
 	// Empty standalone QCOW2 v2: header, refcount table, refcount block and L1
 	// occupy four clusters; no guest data is allocated. This tests the archive
@@ -157,69 +166,118 @@ func checkpointSourceFixture(t *testing.T, image string) boxlite.CheckpointArchi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return boxlite.CheckpointArchiveSource{Path: path, SHA256: checkpointDigest(data), PinnedImage: image}
+	return archiveSource{Path: path, SHA256: checkpointDigest(data), PinnedImage: image}
 }
 
-func TestCheckpointArchivePreparationLocalCallbackOwnsDerivedArchive(t *testing.T) {
-	f := newCheckpointPreparationFixture(t)
+func TestPreparedImportCommitsStagingWithoutSourceAndOnlyOnce(t *testing.T) {
+	f := newPreparedImportFixture(t)
 	f.unblock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	prepared, err := f.runtime.PrepareCheckpointArchive(ctx, f.source, map[string]string{"BOXLITE_BOX_ID": "target"})
+	prepared, err := f.prepare(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer prepared.Close()
-	path := prepared.Path()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if path == f.source.Path || prepared.SHA256() != checkpointDigest(data) || prepared.SizeBytes() != uint64(len(data)) {
-		t.Fatalf("callback returned mismatched derived archive metadata: %q, %s, %d", path, prepared.SHA256(), prepared.SizeBytes())
+	info, err := prepared.Info()
+	if err != nil || info.Version != 3 || !info.HasDiskChecksum || !strings.Contains(string(info.BoxOptions), "source") {
+		t.Fatalf("source metadata: %#v %v", info, err)
 	}
 	if f.configs.Load() == 0 {
-		t.Fatal("local preparation did not fetch the pinned OCI config")
+		t.Fatal("preflight did not fetch OCI config")
 	}
 	if boxes, err := f.runtime.ListInfo(ctx); err != nil || len(boxes) != 0 {
-		t.Fatalf("preparation changed boxes: %v %v", boxes, err)
+		t.Fatalf("preparation created boxes: %v %v", boxes, err)
 	}
-	imported, err := f.runtime.Import(ctx, path, "target")
+	if _, err := prepared.Commit(ctx, "bad\x00name"); !boxlite.IsInvalidArgument(err) {
+		t.Fatalf("invalid name: %v", err)
+	}
+	rejected, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := prepared.Commit(rejected, "target"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled admission: %v", err)
+	}
+	if _, err := prepared.Info(); err != nil {
+		t.Fatalf("rejection consumed staging: %v", err)
+	}
+	assertCheckpointSourceUnchanged(t, f.source)
+	if err := os.Remove(f.source.Path); err != nil {
+		t.Fatal(err)
+	}
+	imported, err := prepared.Commit(ctx, "target")
 	if err != nil {
-		t.Fatalf("existing native Import rejected prepared archive: %v", err)
+		t.Fatalf("commit depended on removed source: %v", err)
 	}
-	t.Cleanup(func() { _ = imported.Close() })
-	accepted, err := f.runtime.GetInfo(ctx, "target")
-	if err != nil || accepted.ID != imported.ID() || accepted.ID == "target" || accepted.Name != "target" || accepted.State != boxlite.StateStopped || accepted.CPUs != 1 || accepted.MemoryMiB != 128 {
-		t.Fatalf("native import did not preserve target identity/resources: %#v %v", accepted, err)
+	defer imported.Close()
+	if _, err := prepared.Commit(ctx, "duplicate"); err == nil {
+		t.Fatal("owner committed twice")
 	}
 	if err := prepared.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Close retained derived archive: %v", err)
+	if _, err := prepared.Info(); err == nil {
+		t.Fatal("closed owner exposes native pointer")
 	}
-	if prepared.Path() != "" || prepared.SHA256() != "" || prepared.SizeBytes() != 0 {
-		t.Fatal("closed owner exposes native metadata")
-	}
-	if current, err := f.runtime.GetInfo(ctx, "target"); err != nil || current.ID != accepted.ID {
-		t.Fatalf("derived archive cleanup removed the accepted child: %#v %v", current, err)
-	}
-	assertCheckpointSourceUnchanged(t, f.source)
-	invalid := f.source
-	invalid.SHA256 = strings.Repeat("f", 64)
-	if _, err := f.runtime.PrepareCheckpointArchive(ctx, invalid, nil); err == nil {
-		t.Fatal("local C callback accepted a mismatched archive digest")
+	accepted, err := f.runtime.GetInfo(ctx, "target")
+	if err != nil || accepted.ID != imported.ID() || accepted.State != boxlite.StateStopped || accepted.CPUs != 1 || accepted.MemoryMiB != 128 {
+		t.Fatalf("commit or Close lost the accepted box: %#v %v", accepted, err)
 	}
 }
 
-func TestCheckpointArchivePreparationCancellationDisposesLateNativeSuccess(t *testing.T) {
-	f := newCheckpointPreparationFixture(t)
+func TestPreparedImportConcurrentCommitAndClose(t *testing.T) {
+	f := newPreparedImportFixture(t)
+	f.unblock()
+	for attempt := 0; attempt < 8; attempt++ {
+		prepared, err := f.prepare(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		results := make(chan *boxlite.Box, 2)
+		var workers sync.WaitGroup
+		for range 2 {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				<-start
+				imported, err := prepared.Commit(t.Context(), "")
+				if err == nil && imported == nil {
+					t.Error("successful commit returned no box")
+				}
+				results <- imported
+			}()
+		}
+		workers.Add(1)
+		go func() { defer workers.Done(); <-start; _ = prepared.Close() }()
+		close(start)
+		workers.Wait()
+		close(results)
+		accepted := 0
+		for imported := range results {
+			if imported != nil {
+				accepted++
+				if _, err := imported.Info(t.Context()); err != nil {
+					t.Fatalf("concurrent Close invalidated committed box: %v", err)
+				}
+				_ = imported.Close()
+			}
+		}
+		if accepted > 1 {
+			t.Fatalf("staging committed %d times", accepted)
+		}
+		if _, err := prepared.Commit(t.Context(), "retry"); err == nil {
+			t.Fatal("closed/consumed owner accepted retry")
+		}
+	}
+}
+
+func TestPreparedImportCancellationDisposesLateNativeSuccess(t *testing.T) {
+	f := newPreparedImportFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	finished := make(chan error, 1)
 	go func() {
-		prepared, err := f.runtime.PrepareCheckpointArchive(ctx, f.source, nil)
+		prepared, err := f.prepare(ctx)
 		if prepared != nil {
 			_ = prepared.Close()
 			finished <- errors.New("canceled preparation returned an owner")
@@ -236,7 +294,7 @@ func TestCheckpointArchivePreparationCancellationDisposesLateNativeSuccess(t *te
 	}
 	var derived string
 	if err := filepath.WalkDir(filepath.Join(f.home, "tmp"), func(path string, entry fs.DirEntry, err error) error {
-		if err == nil && entry.Name() == "import.boxlite" {
+		if err == nil && entry.Name() == "disk.qcow2" {
 			derived = path
 		}
 		return err
@@ -244,7 +302,7 @@ func TestCheckpointArchivePreparationCancellationDisposesLateNativeSuccess(t *te
 		t.Fatal(err)
 	}
 	if derived == "" {
-		t.Fatal("accepted operation has no retained derived archive")
+		t.Fatal("accepted operation has no retained staging disk")
 	}
 	cancel()
 	select {
@@ -284,7 +342,7 @@ func TestCheckpointArchivePreparationCancellationDisposesLateNativeSuccess(t *te
 	}
 	verify, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
-	prepared, err := f.runtime.PrepareCheckpointArchive(verify, f.source, nil)
+	prepared, err := f.prepare(verify)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +352,26 @@ func TestCheckpointArchivePreparationCancellationDisposesLateNativeSuccess(t *te
 	assertCheckpointSourceUnchanged(t, f.source)
 }
 
-func assertCheckpointSourceUnchanged(t *testing.T, source boxlite.CheckpointArchiveSource) {
+func TestPreparedImportOwnerSurvivesRuntimeCloseForCleanup(t *testing.T) {
+	f := newPreparedImportFixture(t)
+	f.unblock()
+	prepared, err := f.prepare(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepared.Commit(t.Context(), "closed"); !errors.Is(err, boxlite.ErrRuntimeClosed) {
+		t.Fatalf("commit after runtime close: %v", err)
+	}
+	if err := prepared.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertCheckpointSourceUnchanged(t, f.source)
+}
+
+func assertCheckpointSourceUnchanged(t *testing.T, source archiveSource) {
 	t.Helper()
 	data, err := os.ReadFile(source.Path)
 	if err != nil {

@@ -49,7 +49,7 @@ pub(crate) static FREE_STR_CALLS: std::sync::atomic::AtomicUsize =
 pub(crate) static FREE_STR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub type CBoxliteRuntime = runtime::RuntimeHandle;
-pub type CPreparedCheckpointArchive = archive::PreparedCheckpointArchiveHandle;
+pub type CPreparedImport = archive::PreparedImportHandle;
 pub type CCheckpointInfo = checkpoints::CCheckpointInfo;
 pub type CCheckpointList = checkpoints::CCheckpointList;
 pub type CBoxHandle = box_handle::BoxHandle;

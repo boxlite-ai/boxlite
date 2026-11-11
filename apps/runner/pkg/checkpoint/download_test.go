@@ -35,7 +35,9 @@ func (s *downloadStore) Download(_ context.Context, key, path string) error {
 	if s.damage == "symlink" {
 		return os.Symlink(s.linkTarget, path)
 	}
-	if s.damage != "" {
+	if s.damage == "corrupt" {
+		data[len(data)-1] ^= 1
+	} else if s.damage != "" {
 		data = data[:len(data)-1]
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
@@ -94,7 +96,7 @@ func TestCheckpointDownloadUsesPrivateIndependentImportAttempts(t *testing.T) {
 }
 
 func TestCheckpointDownloadRemovesFailedPartialOrLinkedStaging(t *testing.T) {
-	for _, damage := range []string{"failed", "short", "symlink"} {
+	for _, damage := range []string{"failed", "short", "corrupt", "symlink"} {
 		t.Run(damage, func(t *testing.T) {
 			artifacts, record, store := uploaded(t)
 			store.damage = damage

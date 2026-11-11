@@ -277,6 +277,18 @@ func TestCheckpointNativeAdapterLookupAndRemoval(t *testing.T) {
 	}
 }
 
+// The SDK integration suite checks native staging ownership; this adapter
+// fixture checks target forwarding, errors and cache publication.
+type stagedTestImport struct {
+	runtime *sdk.Runtime
+	path    string
+}
+
+func (s stagedTestImport) Close() error { return nil }
+func (s stagedTestImport) Commit(ctx context.Context, target string) (*sdk.Box, error) {
+	return s.runtime.Import(ctx, s.path, target)
+}
+
 func TestCheckpointNativeAdapterImportAndPreflight(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
@@ -305,10 +317,10 @@ func TestCheckpointNativeAdapterImportAndPreflight(t *testing.T) {
 				t.Fatal(err)
 			}
 			native := nativeCheckpointRecovery{client: client, target: "target"}
-			if _, err := native.Import(t.Context(), path, "another-target"); err == nil {
+			if _, err := native.Import(t.Context(), stagedTestImport{client.runtime, path}, "another-target"); err == nil {
 				t.Fatal("adapter accepted a different target")
 			}
-			id, err := native.Import(t.Context(), path, "target")
+			id, err := native.Import(t.Context(), stagedTestImport{client.runtime, path}, "target")
 			if fail {
 				if err == nil || len(client.boxes) != 0 {
 					t.Fatalf("failed import cached a handle: %q %v", id, err)

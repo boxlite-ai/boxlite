@@ -20,7 +20,7 @@ func TestCheckpointCallbacksRefuseMissingStaleAndWrongReceivers(t *testing.T) {
 	}{
 		{"metadata", func(data unsafe.Pointer) { goBoxliteOnCheckpointInfo(nil, nil, data) }},
 		{"list", func(data unsafe.Pointer) { goBoxliteOnCheckpointList(nil, nil, data) }},
-		{"archive", func(data unsafe.Pointer) { goBoxliteOnCheckpointArchive(nil, nil, data) }},
+		{"prepared-import", func(data unsafe.Pointer) { goBoxliteOnPrepareImport(nil, nil, data) }},
 	} {
 		t.Run(callback.name, func(t *testing.T) {
 			callback.call(nil)

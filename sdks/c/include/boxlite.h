@@ -173,7 +173,7 @@ typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
 
-typedef struct PreparedCheckpointArchiveHandle PreparedCheckpointArchiveHandle;
+typedef struct PreparedImportHandle PreparedImportHandle;
 
 // Opaque handle to a REST runtime's registry logins, released with
 // `boxlite_registry_free`.
@@ -262,17 +262,16 @@ typedef struct CAgentEventsOptions {
 
 typedef struct RuntimeHandle CBoxliteRuntime;
 
-typedef struct PreparedCheckpointArchiveHandle CPreparedCheckpointArchive;
+typedef struct PreparedImportHandle CPreparedImport;
 
-// Owns a prepared checkpoint archive until it is explicitly freed, including
-// the temporary files needed by the existing archive import operation.
-typedef void (*CCheckpointArchiveCb)(CPreparedCheckpointArchive*, CBoxliteError*, void*);
-
-// Box export completion.
-typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
+// Owns validated import staging until commit or explicit release.
+typedef void (*CPrepareImportCb)(CPreparedImport*, CBoxliteError*, void*);
 
 // Runtime import completion.
 typedef void (*CRuntimeImportCb)(CBoxHandle*, CBoxliteError*, void*);
+
+// Box export completion.
+typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
 typedef struct OptionsHandle CBoxliteOptions;
 
@@ -1085,31 +1084,31 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
 
-// Validate a checkpoint archive and pinned OCI startup configuration, returning
-// a private archive for the existing import API. `platform_env_json_or_null`
-// may contain only reserved target identity keys. Inputs are copied before
-// returning. The callback owns its handle; keep it until import completes.
-enum BoxliteErrorCode boxlite_runtime_prepare_checkpoint_archive(CBoxliteRuntime *runtime,
-                                                                 const char *archive_path,
-                                                                 const char *archive_sha256,
-                                                                 const char *pinned_image,
-                                                                 const char *platform_env_json_or_null,
-                                                                 CCheckpointArchiveCb cb,
-                                                                 void *user_data,
-                                                                 CBoxliteError *out_error);
+// Extract and validate an archive without creating a box. Optional JSON uses
+// ImportOptions (image, env values or null to remove keys, preflight_startup).
+// The callback owns its prepared handle. Keep the source until completion.
+enum BoxliteErrorCode boxlite_runtime_prepare_import(CBoxliteRuntime *runtime,
+                                                     const char *archive_path,
+                                                     const char *options_json_or_null,
+                                                     CPrepareImportCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
 
-// Borrow the prepared path; it remains valid until the archive owner is freed.
-const char *boxlite_prepared_checkpoint_archive_path(const CPreparedCheckpointArchive *handle);
+// Borrow source metadata JSON until this owner is freed; null returns null.
+const char *boxlite_prepared_import_info_json(const CPreparedImport *handle);
 
-// Borrow the derived archive's lowercase SHA-256 hex until the owner is freed.
-const char *boxlite_prepared_checkpoint_archive_sha256(const CPreparedCheckpointArchive *handle);
+// Commit already validated staging without rereading the source. Synchronous
+// rejection keeps staging available; accepted work consumes it exactly once.
+// The owner may be freed after this function returns; the task owns the disks.
+enum BoxliteErrorCode boxlite_prepared_import_commit(CPreparedImport *handle,
+                                                     const char *name_or_null,
+                                                     CRuntimeImportCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
 
-// Return the derived archive length; a null owner returns zero.
-uint64_t boxlite_prepared_checkpoint_archive_size_bytes(const CPreparedCheckpointArchive *handle);
-
-// Delete the private derived archive without touching its source or any box.
-// A null handle is accepted. Never free it while import is still using it.
-void boxlite_prepared_checkpoint_archive_free(CPreparedCheckpointArchive *handle);
+// Release uncommitted staging or the consumed wrapper; never deletes a box.
+// Null is accepted. Serialize freeing with calls that access the same pointer.
+void boxlite_prepared_import_free(CPreparedImport *handle);
 
 // Submit a box export.
 //

@@ -67,11 +67,11 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
-    async fn prepare_checkpoint_archive(
+    async fn prepare_import(
         &self,
-        _source: super::checkpoint_archive::CheckpointArchiveSource,
-        _platform_env: Option<std::collections::BTreeMap<String, String>>,
-    ) -> BoxliteResult<super::checkpoint_archive::PreparedCheckpointArchive> {
+        _archive: BoxArchive,
+        _options: super::ImportOptions,
+    ) -> BoxliteResult<super::PreparedImport> {
         Err(BoxliteError::Unsupported(
             "archive preparation requires a native runtime".into(),
         ))

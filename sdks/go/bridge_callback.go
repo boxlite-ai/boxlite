@@ -93,29 +93,29 @@ func freeBoxliteStringPayload(value **C.char) {
 	freeBoxliteString(*value)
 }
 
-func freeCheckpointArchivePayload(value **C.CPreparedCheckpointArchive) {
+func freePrepareImportPayload(value **C.CPreparedImport) {
 	if value != nil && *value != nil {
-		C.boxlite_prepared_checkpoint_archive_free(*value)
+		C.boxlite_prepared_import_free(*value)
 	}
 }
 
-//export goBoxliteOnCheckpointArchive
-func goBoxliteOnCheckpointArchive(archive *C.CPreparedCheckpointArchive, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+//export goBoxliteOnPrepareImport
+func goBoxliteOnPrepareImport(archive *C.CPreparedImport, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
-		freeCheckpointArchivePayload(&archive)
+		freePrepareImportPayload(&archive)
 		return
 	}
-	if !claimOrFreePayload(h, &archive, freeCheckpointArchivePayload) {
+	if !claimOrFreePayload(h, &archive, freePrepareImportPayload) {
 		return
 	}
 	defer h.Delete()
-	ch, ok := h.Value().(chan handleResult[*C.CPreparedCheckpointArchive])
+	ch, ok := h.Value().(chan handleResult[*C.CPreparedImport])
 	if !ok {
-		freeCheckpointArchivePayload(&archive)
+		freePrepareImportPayload(&archive)
 		return
 	}
-	ch <- handleResult[*C.CPreparedCheckpointArchive]{value: archive, err: errorFromCError(errPtr)}
+	ch <- handleResult[*C.CPreparedImport]{value: archive, err: errorFromCError(errPtr)}
 }
 
 //export goBoxliteOnCreateBox

@@ -1875,12 +1875,12 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         self.0.import_box(archive, name).await
     }
 
-    async fn prepare_checkpoint_archive(
+    async fn prepare_import(
         &self,
-        source: super::checkpoint_archive::CheckpointArchiveSource,
-        platform_env: Option<std::collections::BTreeMap<String, String>>,
-    ) -> BoxliteResult<super::checkpoint_archive::PreparedCheckpointArchive> {
-        super::checkpoint_archive::prepare(Arc::clone(&self.0), source, platform_env).await
+        archive: BoxArchive,
+        options: super::ImportOptions,
+    ) -> BoxliteResult<super::PreparedImport> {
+        super::import::prepare_import(Arc::clone(&self.0), archive, options).await
     }
 
     fn shutdown_sync(&self) {

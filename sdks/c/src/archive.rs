@@ -1,42 +1,40 @@
 //! Path-based box archive import and export for the C SDK.
 //!
-//! Inputs are copied before the entrypoint returns, and completions are
-//! delivered by the runtime's existing post-and-drain event queue.
+//! Inputs are copied before returning; completions use the runtime drain queue.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use boxlite::runtime::checkpoint_archive::{CheckpointArchiveSource, PreparedCheckpointArchive};
-use boxlite::{BoxArchive, BoxliteError, ExportOptions};
+use boxlite::{BoxArchive, BoxliteError, ExportOptions, ImportOptions, PreparedImport};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
-use crate::event_queue::CCheckpointArchiveCb;
-use crate::event_queue::{CBoxExportCb, CRuntimeImportCb, OwnedFfiPtr, RuntimeEvent, push_event};
-use crate::runtime::RuntimeHandle;
+use crate::event_queue::{
+    CBoxExportCb, CPrepareImportCb, CRuntimeImportCb, OwnedFfiPtr, RuntimeEvent, push_event,
+};
+use crate::runtime::{RuntimeHandle, RuntimeLiveness};
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 
-pub struct PreparedCheckpointArchiveHandle {
-    archive: PreparedCheckpointArchive,
-    path: CString,
-    sha256: CString,
+pub struct PreparedImportHandle {
+    prepared: Mutex<Option<PreparedImport>>,
+    info: CString,
+    tokio_rt: TokioRuntimeDropGuard,
+    queue: Arc<crate::event_queue::EventQueue>,
+    liveness: Arc<RuntimeLiveness>,
 }
 
-/// Validate a checkpoint archive and pinned OCI startup configuration, returning
-/// a private archive for the existing import API. `platform_env_json_or_null`
-/// may contain only reserved target identity keys. Inputs are copied before
-/// returning. The callback owns its handle; keep it until import completes.
+/// Extract and validate an archive without creating a box. Optional JSON uses
+/// ImportOptions (image, env values or null to remove keys, preflight_startup).
+/// The callback owns its prepared handle. Keep the source until completion.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_runtime_prepare_checkpoint_archive(
+pub unsafe extern "C" fn boxlite_runtime_prepare_import(
     runtime: *mut CBoxliteRuntime,
     archive_path: *const c_char,
-    archive_sha256: *const c_char,
-    pinned_image: *const c_char,
-    platform_env_json_or_null: *const c_char,
-    cb: CCheckpointArchiveCb,
+    options_json_or_null: *const c_char,
+    cb: CPrepareImportCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
@@ -47,34 +45,18 @@ pub unsafe extern "C" fn boxlite_runtime_prepare_checkpoint_archive(
     let inputs = unsafe {
         (|| {
             let path = parse_required_path(archive_path, "archive_path")?;
-            let sha256 = parse_required_string(archive_sha256, "archive_sha256")?;
-            let pinned_image = parse_required_string(pinned_image, "pinned_image")?;
-            let env = if platform_env_json_or_null.is_null() {
-                None
+            let options = if options_json_or_null.is_null() {
+                ImportOptions::default()
             } else {
-                let json =
-                    parse_required_string(platform_env_json_or_null, "platform_env_json_or_null")?;
-                Some(
-                    serde_json::from_str::<std::collections::BTreeMap<String, String>>(&json)
-                        .map_err(|_| {
-                            BoxliteError::InvalidArgument(
-                                "platform environment must be a JSON object of string values"
-                                    .into(),
-                            )
-                        })?,
-                )
+                let json = parse_required_string(options_json_or_null, "options_json_or_null")?;
+                serde_json::from_str::<ImportOptions>(&json).map_err(|_| {
+                    BoxliteError::InvalidArgument("invalid import options JSON".into())
+                })?
             };
-            Ok::<_, BoxliteError>((
-                CheckpointArchiveSource {
-                    path,
-                    sha256,
-                    pinned_image,
-                },
-                env,
-            ))
+            Ok::<_, BoxliteError>((BoxArchive::new(path), options))
         })()
     };
-    let (source, env) = match inputs {
+    let (archive, options) = match inputs {
         Ok(inputs) => inputs,
         Err(error) => {
             let code = error_to_code(&error);
@@ -84,38 +66,41 @@ pub unsafe extern "C" fn boxlite_runtime_prepare_checkpoint_archive(
     };
     let cb = crate::unwrap_cb_or_return!(cb, out_error);
     let runtime = unsafe { &*runtime };
-    if let Err(error) =
-        crate::util::ensure_runtime_live(&runtime.liveness, "prepare checkpoint archive")
-    {
+    if let Err(error) = crate::util::ensure_runtime_live(&runtime.liveness, "prepare import") {
         let code = error_to_code(&error);
         unsafe { write_error(out_error, error) };
         return code;
     }
     let core = runtime.runtime.clone();
     let task_runtime = runtime.tokio_rt.clone();
+    let owner_runtime = runtime.tokio_rt.clone();
     let queue = runtime.queue.clone();
+    let owner_queue = queue.clone();
+    let liveness = runtime.liveness.clone();
     let user_data = user_data as usize;
     runtime.tokio_rt.spawn(async move {
         let _guard = TokioRuntimeDropGuard::new(task_runtime);
+        let owner_runtime = TokioRuntimeDropGuard::new(owner_runtime);
         let result = core
-            .prepare_checkpoint_archive(source, env)
+            .prepare_import(archive, options)
             .await
-            .and_then(|archive| {
-                let path = archive_path_to_c_string(archive.path())?;
-                let sha256 = CString::new(archive.sha256()).map_err(|_| {
-                    BoxliteError::Internal("invalid derived archive checksum".into())
-                })?;
-                Ok(OwnedFfiPtr::new(Box::new(
-                    PreparedCheckpointArchiveHandle {
-                        archive,
-                        path,
-                        sha256,
-                    },
-                )))
+            .and_then(|prepared| {
+                let info =
+                    CString::new(serde_json::to_string(prepared.info()).map_err(|error| {
+                        BoxliteError::Internal(format!("cannot serialize import metadata: {error}"))
+                    })?)
+                    .map_err(|_| BoxliteError::Internal("invalid import metadata".into()))?;
+                Ok(OwnedFfiPtr::new(Box::new(PreparedImportHandle {
+                    prepared: Mutex::new(Some(prepared)),
+                    info,
+                    tokio_rt: owner_runtime,
+                    queue: owner_queue,
+                    liveness,
+                })))
             });
         push_event(
             &queue,
-            RuntimeEvent::CheckpointArchive {
+            RuntimeEvent::PrepareImport {
                 cb,
                 user_data,
                 result,
@@ -126,36 +111,82 @@ pub unsafe extern "C" fn boxlite_runtime_prepare_checkpoint_archive(
     BoxliteErrorCode::Ok
 }
 
-/// Borrow the prepared path; it remains valid until the archive owner is freed.
+/// Borrow source metadata JSON until this owner is freed; null returns null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_prepared_checkpoint_archive_path(
-    handle: *const crate::CPreparedCheckpointArchive,
+pub unsafe extern "C" fn boxlite_prepared_import_info_json(
+    handle: *const crate::CPreparedImport,
 ) -> *const c_char {
-    unsafe { handle.as_ref() }.map_or(std::ptr::null(), |handle| handle.path.as_ptr())
+    unsafe { handle.as_ref() }.map_or(std::ptr::null(), |handle| handle.info.as_ptr())
 }
 
-/// Borrow the derived archive's lowercase SHA-256 hex until the owner is freed.
+/// Commit already validated staging without rereading the source. Synchronous
+/// rejection keeps staging available; accepted work consumes it exactly once.
+/// The owner may be freed after this function returns; the task owns the disks.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_prepared_checkpoint_archive_sha256(
-    handle: *const crate::CPreparedCheckpointArchive,
-) -> *const c_char {
-    unsafe { handle.as_ref() }.map_or(std::ptr::null(), |handle| handle.sha256.as_ptr())
+pub unsafe extern "C" fn boxlite_prepared_import_commit(
+    handle: *mut crate::CPreparedImport,
+    name_or_null: *const c_char,
+    cb: CRuntimeImportCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let submit = || -> Result<(), BoxliteError> {
+        let owner =
+            unsafe { handle.as_ref() }.ok_or_else(|| null_pointer_error("prepared_import"))?;
+        let name = unsafe { parse_optional_name(name_or_null) }?;
+        let cb = cb.ok_or_else(|| null_pointer_error("cb"))?;
+        crate::util::ensure_runtime_live(&owner.liveness, "commit import")?;
+        let prepared = owner
+            .prepared
+            .lock()
+            .map_err(|_| BoxliteError::Internal("prepared import lock poisoned".into()))?
+            .take()
+            .ok_or_else(|| {
+                BoxliteError::InvalidState("prepared import already committed".into())
+            })?;
+        let tokio_rt = owner.tokio_rt.0.as_ref().expect("prepared runtime").clone();
+        let task_runtime = tokio_rt.clone();
+        let box_runtime = tokio_rt.clone();
+        let queue = owner.queue.clone();
+        let box_queue = queue.clone();
+        let user_data = user_data as usize;
+        tokio_rt.spawn(async move {
+            let _guard = TokioRuntimeDropGuard::new(task_runtime);
+            let result = prepared.commit(name).await.map(|handle| {
+                let box_id = handle.id().clone();
+                OwnedFfiPtr::new(Box::new(BoxHandle {
+                    handle: Arc::new(handle),
+                    box_id,
+                    tokio_rt: box_runtime,
+                    queue: box_queue,
+                }))
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::RuntimeImport {
+                    cb,
+                    user_data,
+                    result,
+                },
+            )
+            .await;
+        });
+        Ok(())
+    };
+    match submit() {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
 }
 
-/// Return the derived archive length; a null owner returns zero.
+/// Release uncommitted staging or the consumed wrapper; never deletes a box.
+/// Null is accepted. Serialize freeing with calls that access the same pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_prepared_checkpoint_archive_size_bytes(
-    handle: *const crate::CPreparedCheckpointArchive,
-) -> u64 {
-    unsafe { handle.as_ref() }.map_or(0, |handle| handle.archive.size_bytes())
-}
-
-/// Delete the private derived archive without touching its source or any box.
-/// A null handle is accepted. Never free it while import is still using it.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_prepared_checkpoint_archive_free(
-    handle: *mut crate::CPreparedCheckpointArchive,
-) {
+pub unsafe extern "C" fn boxlite_prepared_import_free(handle: *mut crate::CPreparedImport) {
     if !handle.is_null() {
         unsafe { drop(Box::from_raw(handle)) };
     }
@@ -397,15 +428,15 @@ mod tests {
 
     use std::ptr;
 
-    extern "C" fn noop_checkpoint_archive_cb(
-        _archive: *mut crate::CPreparedCheckpointArchive,
+    extern "C" fn noop_prepare_import_cb(
+        _archive: *mut crate::CPreparedImport,
         _error: *mut CBoxliteError,
         _user_data: *mut c_void,
     ) {
     }
 
     #[test]
-    fn checkpoint_archive_preparation_refuses_a_closed_runtime_before_queueing() {
+    fn import_preparation_refuses_a_closed_runtime_before_queueing() {
         let core =
             boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://127.0.0.1:1"))
                 .unwrap();
@@ -417,17 +448,13 @@ mod tests {
         };
         runtime.liveness.mark_closed();
         let archive = CString::new("/tmp/checkpoint.boxlite").unwrap();
-        let digest = CString::new("a".repeat(64)).unwrap();
-        let image = CString::new(format!("example/app@sha256:{}", "a".repeat(64))).unwrap();
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_runtime_prepare_checkpoint_archive(
+            boxlite_runtime_prepare_import(
                 &mut runtime,
                 archive.as_ptr(),
-                digest.as_ptr(),
-                image.as_ptr(),
                 ptr::null(),
-                Some(noop_checkpoint_archive_cb),
+                Some(noop_prepare_import_cb),
                 ptr::null_mut(),
                 &mut error,
             )
@@ -437,33 +464,27 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_archive_preparation_rejects_invalid_inputs_before_dereferencing_the_runtime() {
+    fn import_preparation_rejects_invalid_inputs_before_dereferencing_the_runtime() {
         let dangling_runtime = ptr::NonNull::<RuntimeHandle>::dangling().as_ptr();
         let archive = CString::new("/tmp/checkpoint.boxlite").unwrap();
-        let digest = CString::new("a".repeat(64)).unwrap();
-        let image = CString::new(format!("example/app@sha256:{}", "a".repeat(64))).unwrap();
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_runtime_prepare_checkpoint_archive(
+            boxlite_runtime_prepare_import(
                 ptr::null_mut(),
                 archive.as_ptr(),
-                digest.as_ptr(),
-                image.as_ptr(),
                 ptr::null(),
-                Some(noop_checkpoint_archive_cb),
+                Some(noop_prepare_import_cb),
                 ptr::null_mut(),
                 &mut error,
             )
         };
         assert_invalid_argument(code, &mut error, "runtime");
         let code = unsafe {
-            boxlite_runtime_prepare_checkpoint_archive(
+            boxlite_runtime_prepare_import(
                 dangling_runtime,
                 ptr::null(),
-                digest.as_ptr(),
-                image.as_ptr(),
                 ptr::null(),
-                Some(noop_checkpoint_archive_cb),
+                Some(noop_prepare_import_cb),
                 ptr::null_mut(),
                 &mut error,
             )
@@ -471,24 +492,20 @@ mod tests {
         assert_invalid_argument(code, &mut error, "archive_path");
         let invalid_json = CString::new("{bad-private-input").unwrap();
         let code = unsafe {
-            boxlite_runtime_prepare_checkpoint_archive(
+            boxlite_runtime_prepare_import(
                 dangling_runtime,
                 archive.as_ptr(),
-                digest.as_ptr(),
-                image.as_ptr(),
                 invalid_json.as_ptr(),
-                Some(noop_checkpoint_archive_cb),
+                Some(noop_prepare_import_cb),
                 ptr::null_mut(),
                 &mut error,
             )
         };
-        assert_invalid_argument(code, &mut error, "platform environment");
+        assert_invalid_argument(code, &mut error, "import options");
         let code = unsafe {
-            boxlite_runtime_prepare_checkpoint_archive(
+            boxlite_runtime_prepare_import(
                 dangling_runtime,
                 archive.as_ptr(),
-                digest.as_ptr(),
-                image.as_ptr(),
                 ptr::null(),
                 None,
                 ptr::null_mut(),
@@ -496,13 +513,18 @@ mod tests {
             )
         };
         assert_invalid_argument(code, &mut error, "cb");
-        assert!(unsafe { boxlite_prepared_checkpoint_archive_path(ptr::null()) }.is_null());
-        assert!(unsafe { boxlite_prepared_checkpoint_archive_sha256(ptr::null()) }.is_null());
-        assert_eq!(
-            unsafe { boxlite_prepared_checkpoint_archive_size_bytes(ptr::null()) },
-            0
-        );
-        unsafe { boxlite_prepared_checkpoint_archive_free(ptr::null_mut()) };
+        assert!(unsafe { boxlite_prepared_import_info_json(ptr::null()) }.is_null());
+        let code = unsafe {
+            boxlite_prepared_import_commit(
+                ptr::null_mut(),
+                ptr::null(),
+                Some(noop_import_cb),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_invalid_argument(code, &mut error, "prepared_import");
+        unsafe { boxlite_prepared_import_free(ptr::null_mut()) };
     }
 
     extern "C" fn noop_export_cb(

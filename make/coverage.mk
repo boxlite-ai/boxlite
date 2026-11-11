@@ -112,7 +112,7 @@ coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
 		-o "$(PROJECT_ROOT)/target/coverage/checkpoint-native.test" \
 		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-checkpoint-native.out" \
-		-run '^TestCheckpointArchivePreparation' ./integration/archive
+		-run '^TestPreparedImport' ./integration/archive
 
 coverage\:python: _ensure-python-deps
 	@mkdir -p target/coverage/python
