@@ -443,26 +443,18 @@ jobs:
           # tee to persistent volume so logs survive runner Worker death.
           # The next run's Stage step rescues + uploads "$LOG_DIR".
           set -o pipefail
-          export PYTHONPATH="${PWD}/scripts/ci${PYTHONPATH:+:${PYTHONPATH}}"
-          export PYTEST_ADDOPTS="-p pr2524_network_probe"
-          export RUST_LOG=info
+          export RUST_LOG=warn
+          export NEXTEST_FILTER_EXPR='binary(recovery) | test(test_snapshot_data_isolation_across_versions) | test(pid_available_immediately_after_run) | test(a_main_command_missing_from_the_image_is_an_invalid_argument)'
           {
             make runtime:debug
             mkdir -p /tmp/pr2524-rpc-observed
             before=$(find /tmp/pr2524-rpc-observed -name rpc-error.txt | wc -l)
             result=0
-            for attempt in 1 2; do
-              echo "Rust diagnostic attempt ${attempt}"
+            for attempt in {1..10}; do
+              echo "Rust startup diagnostic attempt ${attempt}"
               make test:integration:rust SETUP_DONE=1 || result=1
               after=$(find /tmp/pr2524-rpc-observed -name rpc-error.txt | wc -l)
               if (( after > before )); then break; fi
-            done
-            for attempt in {1..10}; do
-              echo "Network diagnostic attempt ${attempt}"
-              if ! make test:integration:python SETUP_DONE=1 FILTER=test_network_policy_live_traffic_and_restart; then
-                result=1
-                break
-              fi
             done
             exit "$result"
           } 2>&1 | tee "${LOG_DIR}/integration.log"
