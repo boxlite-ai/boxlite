@@ -652,6 +652,19 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
+The page uses **All domains** and **Custom domains** tabs beneath one title.
+All domains retains every held hostname, including verified custom names; Custom domains
+shows setup progress and the one-domain allowance without another section heading.
+Changing tabs only changes the view and stops polling when the setup dialog unmounts.
+
+Custom-domain dialogs use the shared fixed header/footer and scrolling body.
+The current status, errors and next action stay prominent; all three DNS records
+appear together, with exact name/value copying and explicit clipboard feedback.
+DNS help and timing are expandable. Completed setups focus on Box/port binding,
+with DNS records retained in a collapsed disclosure for renewal and troubleshooting.
+Subscription restrictions still allow viewing, unbinding and confirmed deletion.
+Verification warns before transferring ownership away from an earlier application.
+
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
 

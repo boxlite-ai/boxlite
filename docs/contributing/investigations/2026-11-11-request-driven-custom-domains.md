@@ -99,6 +99,23 @@ Migration disables legacy due scans; normal deployment documentation must still 
 
 ## Validation
 
+### Dashboard presentation
+
+Use the current console's shared square buttons, neutral surfaces, segmented tabs and fixed-header/footer form dialog.
+The Domains page keeps one primary title and switches between All domains and Custom domains; the all-domain list still includes every held hostname.
+Custom setup shows a compact status row, the three DNS records together and one stage-appropriate primary action.
+Detailed DNS help, issuance timing and certificate observations remain available through disclosure controls rather than repeated section headings.
+Ready domains focus on Box binding; their retained DNS records remain accessible for renewal and troubleshooting.
+The single-domain limit, subscription restrictions, exact DNS copies, uncertain submission state and explicit delete confirmation remain visible or actionable at the relevant stage.
+
+`Domains → Custom domains → hostname + status → DNS records / current step → verify or bind`.
+
+Reuse `ResourceLayout`, `AsciiButton`, `Input`, `Tabs` and `FormDialog` from the current Dashboard; avoid a separate visual system or new dependencies.
+The reference implementations are `Domains.tsx`, `ImagesPage.tsx`, `Volumes.tsx` and the shared dialog primitives.
+Preserve existing mutations, confirmation and polling boundaries; tab selection and help expansion only navigate or disclose content.
+Validate navigation, exact copy feedback, verification/submission states, permission restrictions and binding/deletion with page tests, then inspect light/dark and narrow layouts locally.
+This is an intentional presentation contract change, not a claim of a newly reproduced backend defect.
+
 | Claim | Planned evidence |
 | --- | --- |
 | No cloud writes from reads; no DNS before confirmation | Controller/service and UI request traces |
@@ -127,3 +144,8 @@ The API production build and workspace lint pass; lint reports zero errors and 5
 Scheduling tests exercise real Nest bootstrap, minute callbacks, overlap suppression, failed-round recovery and shutdown while work is active.
 PostgreSQL tests verify confirmed-only due selection, three-item batches, restart recovery and shared leases between replicas and explicit requests.
 No cloud issuance, mapping propagation, natural renewal, deployed task execution or alert delivery has been validated in this change.
+
+After rebasing onto main `27f47f9f0`, Dashboard presentation checks pass with 114 files and 1,117 tests; API domain/preview/configuration checks pass with 16 suites and 299 tests.
+The deployment suite passes 523 tests, including CI capacity and the existing Cloud Run single-port object contract; API and Dashboard production builds pass.
+Local browser checks with synthetic domain responses cover light/dark themes, creation, DNS records and Ready binding, including a 390-pixel viewport without horizontal overflow.
+Full workspace lint still reports three module-boundary errors in the unchanged `apps/infra/deployment/release-audit-workflow.test.ts` imports on lines 10–12; this unrelated finding remains unresolved.

@@ -3,18 +3,16 @@ import React, { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { HeldDomain } from '@/api/domain-types'
+import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { FormDialogContent, FormDialogHeader, FormDialogBody, FormDialogFooter } from '@/components/ui/form-dialog'
+import { AsciiButton } from '@/components/ascii'
+import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { Copy, Globe, Plus, ArrowRightIcon } from '@/components/ui/icon'
+import { Input } from '@/components/ui/input'
+import { copyToClipboard } from '@/lib/copy-text'
+import { toast } from 'sonner'
+import type { CustomDomain, HeldDomain } from '@/api/domain-types'
 
-const BUTTON = 'rounded border border-border px-3 py-2 text-xs disabled:opacity-40 disabled:cursor-not-allowed'
-const INPUT = 'w-full rounded border border-border bg-background px-3 py-2 text-sm'
-const PHASES = {
-  pending_verification: 'Waiting for DNS verification',
-  pending_certificate_dns: 'Waiting for certificate DNS',
-  provisioning: 'Waiting for HTTPS',
-  ready: 'Ready',
-  superseded: 'Replaced by a newer verified application',
-}
 const ERRORS: Record<string, string> = {
   ownership_txt_mismatch: 'The TXT record does not match this configuration. Copy the current value below.',
   traffic_cname_mismatch: 'Point the traffic CNAME to the exact platform endpoint below.',
@@ -45,6 +43,29 @@ const ERRORS: Record<string, string> = {
   subscription_required: 'An active organization subscription is required. Your configuration is retained.',
   subscription_not_ready:
     'Subscription eligibility could not be confirmed. Access pauses when the current grant expires.',
+}
+
+function DomainStatus({ domain, active }: { domain: CustomDomain; active: boolean }) {
+  const label =
+    domain.phase === 'superseded'
+      ? 'Replaced'
+      : domain.errorCode
+        ? 'Needs attention'
+        : domain.ready
+          ? active
+            ? 'Ready'
+            : 'Setup completed'
+          : domain.confirmed
+            ? 'Waiting for HTTPS'
+            : domain.dnsRecords.length
+              ? 'Waiting for DNS verification'
+              : 'Getting DNS configuration'
+  return (
+    <StatusIndicator
+      label={label}
+      color={`hsl(var(--${domain.errorCode ? 'warning' : domain.ready && active ? 'brand' : 'muted-foreground'}))`}
+    />
+  )
 }
 
 export default function CustomDomains({
@@ -137,302 +158,415 @@ export default function CustomDomains({
     )
     return () => clearTimeout(timer)
   }, [visible, open, domain, canCreate, action.isPending, preparingFor])
+  const busy = create.isPending || action.isPending
+  const canBind =
+    canCreate &&
+    domain?.ready &&
+    !!box.trim() &&
+    Number.isInteger(Number(port)) &&
+    Number(port) >= 1 &&
+    Number(port) <= 65535 &&
+    !busy
+  const stepLabel = !domain?.dnsRecords.length
+    ? 'Continue getting DNS configuration'
+    : domain.confirmed
+      ? 'Continue HTTPS setup'
+      : 'Configured, verify'
+  const copyRecord = async (value: string, label: string) => {
+    if (await copyToClipboard(value)) toast.success(`${label} copied`)
+    else toast.error('Could not copy DNS record. Select the value and copy it manually.')
+  }
   if (!canManage) return null
   return (
-    <section className="mt-8 space-y-4 pb-8" aria-label="Custom domains">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold">Custom domains</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Use one custom domain per organization with an active subscription, including pending setups. Delete the
-            configuration before adding another hostname. Platform domain allowance is separate.
-          </p>
-        </div>
-        <button
-          className={BUTTON}
+    <section className="min-h-0 pb-6 text-body" aria-label="Custom domains">
+      <div className="resource-toolbar">
+        <p className="text-meta text-muted-foreground">
+          One custom domain per organization · Active subscription required
+        </p>
+        <div className="flex-1" />
+        <AsciiButton
+          variant="primary"
+          className="h-11 sm:h-9"
           onClick={() => {
             setSelected(null)
             setHostname('')
             create.reset()
             action.reset()
             setPreparingFor(null)
+            setDeleting(null)
             setOpen(true)
           }}
         >
-          Add custom domain
-        </button>
+          <Plus className="size-3.5" /> Add custom domain
+        </AsciiButton>
       </div>
-      {query.isPending && <p role="status">Loading custom domains…</p>}
-      {query.isError && (
-        <p role="alert">
-          Unable to load custom domains.{' '}
-          <button className={BUTTON} onClick={() => void query.refetch()}>
-            Retry
-          </button>
+      {query.isPending && (
+        <p role="status" className="py-10 text-muted-foreground">
+          Loading custom domains…
         </p>
       )}
-      {data && !data.enabled && <p>Custom domains are not enabled on this deployment.</p>}
+      {query.isError && (
+        <div role="alert" className="flex items-center gap-3 py-6 text-destructive">
+          Unable to load custom domains.
+          <AsciiButton onClick={() => void query.refetch()}>Retry</AsciiButton>
+        </div>
+      )}
+      {data && !data.enabled && (
+        <p className="mt-4 text-muted-foreground">Custom domains are not enabled on this deployment.</p>
+      )}
       {data && data.subscription !== 'active' && (
-        <p role="status">
+        <p role="status" className="mt-4 text-muted-foreground">
           {data.subscription === 'required'
             ? 'Subscribe to add, bind and access custom domains.'
             : 'Subscription eligibility is temporarily unavailable.'}{' '}
           Existing configurations can still be viewed, unbound or deleted.
         </p>
       )}
-      {data?.domains.map((item) => (
-        <button
-          key={item.id}
-          className="flex w-full justify-between gap-4 rounded border border-border p-4 text-left"
-          onClick={() => {
-            setSelected(item.id)
-            action.reset()
-            setPreparingFor(null)
-            setDeleting(null)
-            setBox('')
-            setOpen(true)
-          }}
-        >
-          <span className="break-all font-mono text-sm">{item.hostname}</span>
-          <span className="text-xs">
-            {item.ready && data.subscription === 'active'
-              ? 'Ready'
-              : item.errorCode
-                ? 'Needs attention'
-                : item.phase === 'ready'
-                  ? 'Setup completed'
-                  : PHASES[item.phase]}
-          </span>
-        </button>
-      ))}
+      {data && data.domains.length === 0 && (
+        <ResourceEmptyState
+          icon={<Globe className="size-6" />}
+          title="Bring your own domain"
+          description="Connect a subdomain you own. Get all three DNS records, configure them once, then verify to enable HTTPS."
+        />
+      )}
+      {data && data.domains.length > 0 && (
+        <div className="mt-[14px] border-t border-border">
+          {data.domains.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-label={`Manage ${item.hostname}`}
+              className="flex w-full flex-wrap items-center gap-4 border-b border-border/60 px-4 py-5 text-left transition-colors hover:bg-accent/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+              onClick={() => {
+                setSelected(item.id)
+                action.reset()
+                setPreparingFor(null)
+                setDeleting(null)
+                setBox('')
+                setOpen(true)
+              }}
+            >
+              <Globe className="size-6 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 break-all font-mono font-semibold">{item.hostname}</span>
+              <DomainStatus domain={item} active={data.subscription === 'active'} />
+              <ArrowRightIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+            </button>
+          ))}
+          <p className="mt-3 text-meta text-muted-foreground">
+            Pending setups count toward the limit. Delete a configuration before adding another hostname; platform
+            domain allowance is separate.
+          </p>
+        </div>
+      )}
       <Dialog
         open={open}
         onOpenChange={(next) => {
-          if (!create.isPending && !action.isPending) {
+          if (!busy) {
             setOpen(next)
             if (!next) setPreparingFor(null)
           }
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{domain?.hostname ?? 'Set up your own domain'}</DialogTitle>
-            <DialogDescription>
-              Add DNS records at your DNS provider. BoxLite manages HTTPS after verification.
+        <FormDialogContent className={domain ? 'sm:max-w-[680px]' : 'sm:max-w-[480px]'} showCloseButton={!busy}>
+          <FormDialogHeader>
+            <DialogTitle className="break-all">{domain?.hostname ?? 'Add custom domain'}</DialogTitle>
+            <DialogDescription className="mt-2 text-body leading-relaxed">
+              {domain
+                ? 'Manage DNS, HTTPS and the Box this domain points to.'
+                : 'Use a subdomain you own, such as app.example.com. BoxLite manages HTTPS.'}
             </DialogDescription>
-          </DialogHeader>
-          <ol className="list-decimal space-y-2 pl-5 text-sm">
-            <li>Use a public subdomain, such as app.example.com; apex domains and wildcards are not supported.</li>
-            <li>
-              Get all three DNS records, then add the traffic CNAME, ownership TXT and certificate CNAME exactly as
-              shown. Use DNS-only mode and remove conflicting records.
-            </li>
-            <li>
-              Click Configured, verify after adding all records. For certificate authorization, use its exact name,
-              including the _acme-challenge prefix; do not replace the traffic CNAME.
-            </li>
-            <li>
-              Wait for Ready in this dialog or the domain list, then bind a Box port. The port must also have a public
-              tunnel and inbound access enabled.
-            </li>
-          </ol>
-          {!domain ? (
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (canCreate && hostname.trim()) create.mutate()
-              }}
-            >
-              <label className="block text-sm">
-                Hostname
-                <input
+          </FormDialogHeader>
+          <FormDialogBody className="space-y-5">
+            {!domain ? (
+              <form
+                id="custom-domain-create"
+                className="space-y-4"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (canCreate && hostname.trim() && !busy) create.mutate()
+                }}
+              >
+                <label className="block text-meta font-medium" htmlFor="custom-hostname">
+                  Hostname
+                </label>
+                <Input
+                  id="custom-hostname"
                   aria-label="Custom hostname"
-                  className={`${INPUT} mt-2`}
+                  className="font-mono"
                   value={hostname}
                   maxLength={221}
                   placeholder="app.example.com"
                   onChange={(event) => setHostname(event.target.value)}
                 />
-              </label>
-              <button className={BUTTON} disabled={!canCreate || !hostname.trim() || create.isPending}>
-                Get DNS configuration
-              </button>
-              {!canCreate && (
-                <p className="text-sm">
-                  An active subscription and an enabled deployment are required to add a domain.
+                <p className="text-body leading-relaxed text-muted-foreground">
+                  Get all three DNS records, add them at your DNS provider, then return to verify. Apex domains and
+                  wildcards are not supported.
                 </p>
-              )}
-              {create.isError && <p role="alert">{create.error.message}</p>}
-            </form>
-          ) : (
-            <div className="space-y-4">
-              <p role="status">
-                {domain.ready && data?.subscription === 'active'
-                  ? 'Ready to bind'
-                  : domain.phase === 'ready'
-                    ? 'Setup completed'
-                    : PHASES[domain.phase]}
-              </p>
-              {!domain.ready && domain.phase !== 'superseded' && (
-                <div role="status" className="space-y-2 text-sm text-muted-foreground">
-                  <p>
-                    {!domain.dnsRecords.length
-                      ? 'Getting all three DNS records. You can continue preparation if it takes longer.'
-                      : !domain.confirmed
-                        ? 'Configure all three records, then click Configured, verify. DNS is not checked until you confirm.'
-                        : domain.submissionStatus === 'accepted'
-                          ? 'DNS verification passed. HTTPS is being enabled. You can leave this page and return later.'
-                          : domain.submissionStatus === 'unknown'
-                            ? 'Confirming whether the certificate request was accepted. Do not create another configuration.'
-                            : 'DNS verification passed, but the certificate request has not been submitted.'}
+                <p className="text-meta leading-relaxed text-muted-foreground">
+                  One domain per organization, including pending setups. Delete the existing configuration before adding
+                  another.
+                </p>
+                {!canCreate && (
+                  <p role="status" className="text-warning">
+                    An active subscription and an enabled deployment are required to add a domain.
                   </p>
-                  <p>
-                    DNS changes can take minutes to hours. After DNS and load-balancer changes propagate, Google
-                    issuance can take up to 60 minutes; mapping deployment can take additional time.
+                )}
+                {create.isError && (
+                  <p role="alert" className="text-destructive">
+                    {create.error.message}
                   </p>
-                  <p>
-                    While this dialog is visible, confirmed setup advances about every 10 seconds, subject to retry
-                    delays. After you leave, Google continues issuance; the API checks confirmed setup at startup and
-                    every minute while running. If the API is stopped or paused, checks resume when it runs again.
-                    Returning does not guarantee immediate readiness.
-                  </p>
-                  <p>Progress: {domain.progress?.replaceAll('_', ' ')}</p>
-                </div>
-              )}
-              {domain.errorCode && (
-                <p role="alert">
-                  {ERRORS[domain.errorCode] ?? `Setup needs attention: ${domain.errorCode}. Retry or contact support.`}
-                </p>
-              )}
-              {domain.dnsRecords.map((record) => (
-                <div key={record.name} className="space-y-1 rounded border border-border p-3 text-xs">
-                  <div className="font-semibold">
-                    {record.type === 'TXT'
-                      ? 'Domain ownership'
-                      : record.name === domain.hostname
-                        ? 'Traffic routing'
-                        : 'Certificate authorization'}{' '}
-                    · {record.type}
-                  </div>
-                  <div className="break-all font-mono">Name: {record.name}</div>
-                  <div className="break-all font-mono">Value: {record.value}</div>
-                  <div className="flex gap-2">
-                    <button className={BUTTON} onClick={() => void navigator.clipboard.writeText(record.name)}>
-                      Copy name
-                    </button>
-                    <button className={BUTTON} onClick={() => void navigator.clipboard.writeText(record.value)}>
-                      Copy value
-                    </button>
-                  </div>
-                </div>
-              ))}
-              <p className="text-xs text-muted-foreground">
-                Keep all records for verification and certificate renewal. In Cloudflare, use DNS only (gray cloud) for
-                both CNAME records. If your DNS provider adds the zone suffix automatically, enter only the relative
-                name and check that the full name matches the one shown above.
-              </p>
-              {domain.dnsChecks?.map((check) => (
-                <p key={check.record} role={check.status === 'passed' ? 'status' : 'alert'} className="text-sm">
-                  {check.record}:{' '}
-                  {check.status === 'passed'
-                    ? 'Verified'
-                    : (ERRORS[check.errorCode ?? ''] ?? 'Could not verify this record.')}
-                </p>
-              ))}
-              {!domain.confirmed && domain.phase !== 'superseded' && (
-                <p className="text-sm">
-                  Successful verification makes this the only valid application for the hostname and disconnects any
-                  previous organization’s target.
-                </p>
-              )}
-              <button
-                className={BUTTON}
-                disabled={!canCreate || action.isPending || domain.ready || domain.phase === 'superseded'}
-                onClick={() => run(!domain.dnsRecords.length ? 'prepare' : domain.confirmed ? 'advance' : 'verify')}
-              >
-                {action.isPending
-                  ? action.variables?.type === 'verify'
-                    ? 'Verifying DNS, please wait…'
-                    : 'Checking progress…'
-                  : !domain.dnsRecords.length
-                    ? 'Continue getting DNS configuration'
-                    : domain.confirmed
-                      ? 'Continue HTTPS setup'
-                      : 'Configured, verify'}
-              </button>
-              {domain.certificateObservedAt && (
-                <p className="text-xs text-muted-foreground">
-                  Certificate: {domain.certificateState ?? 'unknown'} · Observed: {domain.certificateObservedAt} ·
-                  Expires: {domain.certificateExpiresAt ?? 'unknown'}
-                </p>
-              )}
-              <p className="text-sm">
-                Saved target: {target?.type === 'box' ? `${target.box}:${target.port}` : 'Unbound'}
-              </p>
-              <form
-                className="flex flex-wrap gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  run('bind')
-                }}
-              >
-                <input
-                  className={`${INPUT} flex-1`}
-                  aria-label="Box ID or name"
-                  placeholder="Box ID or name"
-                  value={box}
-                  onChange={(event) => setBox(event.target.value)}
-                />
-                <input
-                  className={`${INPUT} max-w-28`}
-                  aria-label="Port"
-                  type="number"
-                  min="1"
-                  max="65535"
-                  value={port}
-                  onChange={(event) => setPort(event.target.value)}
-                />
-                <button
-                  className={BUTTON}
-                  disabled={
-                    !canCreate ||
-                    !domain.ready ||
-                    !box.trim() ||
-                    !Number.isInteger(Number(port)) ||
-                    Number(port) < 1 ||
-                    Number(port) > 65535 ||
-                    action.isPending
-                  }
-                >
-                  Bind
-                </button>
+                )}
               </form>
-              <div className="flex gap-2">
-                <button className={BUTTON} disabled={!target || action.isPending} onClick={() => run('unbind')}>
-                  Unbind
-                </button>
-                <button className={BUTTON} disabled={action.isPending} onClick={() => setDeleting(domain.id)}>
-                  Delete configuration
-                </button>
-              </div>
-              {deleting === domain.id && (
-                <div role="alert" className="space-y-2 rounded border border-destructive p-3 text-sm">
-                  <p>
+            ) : (
+              <>
+                <div className="space-y-2" role="status">
+                  <DomainStatus domain={domain} active={data?.subscription === 'active'} />
+                  <p className="leading-relaxed text-muted-foreground">
+                    {domain.phase === 'superseded'
+                      ? 'A newer verified application owns this hostname. This configuration is no longer valid.'
+                      : domain.ready
+                        ? 'HTTPS is ready. Bind a Box port with a public tunnel and inbound access enabled.'
+                        : !domain.dnsRecords.length
+                          ? 'Getting all three DNS records. You can continue preparation if it takes longer.'
+                          : !domain.confirmed
+                            ? 'Add all three records below, then click Configured, verify. DNS is not checked until you confirm.'
+                            : domain.submissionStatus === 'accepted'
+                              ? 'DNS verification passed. HTTPS is being enabled. You can leave this page and return later.'
+                              : domain.submissionStatus === 'unknown'
+                                ? 'Confirming whether the certificate request was accepted. Do not create another configuration.'
+                                : 'DNS verification passed, but the certificate request has not been submitted.'}
+                  </p>
+                  {!domain.ready && domain.phase !== 'superseded' && (
+                    <p className="text-meta text-muted-foreground">
+                      DNS propagation and HTTPS setup can take time; returning does not guarantee immediate readiness.
+                    </p>
+                  )}
+                </div>
+                {domain.errorCode && domain.phase !== 'superseded' && (
+                  <p role="alert" className="border-l-2 border-warning pl-3 leading-relaxed">
+                    {ERRORS[domain.errorCode] ??
+                      `Setup needs attention: ${domain.errorCode}. Retry or contact support.`}
+                  </p>
+                )}
+                {domain.ready && (
+                  <form
+                    id="custom-domain-bind"
+                    className="space-y-3"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      if (canBind) run('bind')
+                    }}
+                  >
+                    <p className="text-meta text-muted-foreground">
+                      Saved target:{' '}
+                      <span className="font-mono text-foreground">
+                        {target?.type === 'box' ? `${target.box}:${target.port}` : 'Unbound'}
+                      </span>
+                    </p>
+                    <div className="grid grid-cols-[minmax(0,1fr)_100px] gap-3">
+                      <label className="space-y-2 text-meta font-medium">
+                        Box ID or name
+                        <Input
+                          className="font-mono"
+                          aria-label="Box ID or name"
+                          placeholder="my-box"
+                          value={box}
+                          onChange={(event) => setBox(event.target.value)}
+                        />
+                      </label>
+                      <label className="space-y-2 text-meta font-medium">
+                        Port
+                        <Input
+                          className="font-mono"
+                          aria-label="Port"
+                          type="number"
+                          min="1"
+                          max="65535"
+                          value={port}
+                          onChange={(event) => setPort(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                  </form>
+                )}
+                {domain.dnsRecords.length > 0 && (
+                  <details key={domain.id} open={!domain.ready && domain.phase !== 'superseded'} className="group">
+                    <summary className="cursor-pointer text-meta font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand">
+                      DNS records{' '}
+                      <span className="font-normal text-muted-foreground">
+                        · Keep these for verification and renewal
+                      </span>
+                    </summary>
+                    <div className="mt-3 divide-y divide-border border border-border">
+                      {domain.dnsRecords.map((record) => {
+                        const kind =
+                          record.type === 'TXT'
+                            ? 'ownership'
+                            : record.name === domain.hostname
+                              ? 'traffic'
+                              : 'certificate'
+                        const label =
+                          kind === 'ownership'
+                            ? 'Domain ownership'
+                            : kind === 'traffic'
+                              ? 'Traffic routing'
+                              : 'Certificate authorization'
+                        const check = domain.dnsChecks?.find((value) => value.record === kind)
+                        return (
+                          <div key={record.name} className="space-y-2 px-4 py-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-meta">
+                              <span className="font-medium">{label}</span>
+                              <span className="font-mono text-muted-foreground">{record.type}</span>
+                            </div>
+                            {(['name', 'value'] as const).map((field) => (
+                              <div key={field} className="grid grid-cols-[40px_minmax(0,1fr)_28px] items-start gap-2">
+                                <span className="pt-1 text-meta text-muted-foreground">
+                                  {field === 'name' ? 'Name' : 'Value'}
+                                </span>
+                                <code className="break-all pt-1 font-mono text-meta leading-relaxed select-text">
+                                  {record[field]}
+                                </code>
+                                <AsciiButton
+                                  size="icon"
+                                  aria-label={`Copy ${field} for ${label}`}
+                                  title={`Copy ${field}`}
+                                  onClick={() => void copyRecord(record[field], `DNS ${field}`)}
+                                >
+                                  <Copy className="size-3.5" />
+                                </AsciiButton>
+                              </div>
+                            ))}
+                            {check && (
+                              <p
+                                role={check.status === 'passed' ? 'status' : 'alert'}
+                                className={`text-meta ${check.status === 'passed' ? 'text-muted-foreground' : 'text-warning'}`}
+                              >
+                                {check.status === 'passed'
+                                  ? 'Verified'
+                                  : (ERRORS[check.errorCode ?? ''] ?? 'Could not verify this record.')}
+                              </p>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </details>
+                )}
+                {!domain.confirmed && domain.phase !== 'superseded' && (
+                  <p className="text-meta leading-relaxed text-muted-foreground">
+                    Successful verification makes this the only valid application for the hostname and disconnects any
+                    previous organization’s target.
+                  </p>
+                )}
+                <details className="text-meta text-muted-foreground">
+                  <summary className="cursor-pointer text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand">
+                    DNS help and timing
+                  </summary>
+                  <div className="mt-3 space-y-3 leading-relaxed">
+                    <p>
+                      Use DNS-only mode for both CNAME records (gray cloud in Cloudflare) and remove conflicting
+                      records. For certificate authorization, copy its exact name, including the _acme-challenge prefix;
+                      do not replace the traffic CNAME.
+                    </p>
+                    <p>
+                      If your DNS provider adds the zone suffix automatically, enter only the relative name and check
+                      the resulting full name.
+                    </p>
+                    <p>
+                      DNS changes can take minutes to hours. After DNS and load-balancer changes propagate, Google
+                      issuance can take up to 60 minutes; mapping deployment can take additional time.
+                    </p>
+                    <p>
+                      While this dialog is visible, confirmed setup advances about every 10 seconds, subject to retry
+                      delays. After you leave, Google continues issuance; the API checks at startup and every minute
+                      while running. If the API is stopped or paused, checks resume when it runs again.
+                    </p>
+                    {domain.certificateObservedAt && (
+                      <p className="break-words">
+                        Certificate: {domain.certificateState ?? 'unknown'} · Observed: {domain.certificateObservedAt} ·
+                        Expires: {domain.certificateExpiresAt ?? 'unknown'}
+                      </p>
+                    )}
+                  </div>
+                </details>
+                {deleting === domain.id && (
+                  <p role="alert" className="border-l-2 border-destructive pl-3 leading-relaxed">
                     Delete {domain.hostname}? Access stops and ownership is released. Remove its DNS records afterward.
                   </p>
-                  <button className={BUTTON} disabled={action.isPending} onClick={() => run('delete')}>
-                    Confirm deletion
-                  </button>
-                  <button className={`${BUTTON} ml-2`} onClick={() => setDeleting(null)}>
-                    Keep domain
-                  </button>
-                </div>
-              )}
-              {action.isError && <p role="alert">{action.error.message}</p>}
-            </div>
-          )}
-        </DialogContent>
+                )}
+                {action.isError && (
+                  <p role="alert" className="text-destructive">
+                    {action.error.message}
+                  </p>
+                )}
+              </>
+            )}
+          </FormDialogBody>
+          <FormDialogFooter className="flex-wrap">
+            {!domain ? (
+              <>
+                <AsciiButton disabled={busy} onClick={() => setOpen(false)}>
+                  Cancel
+                </AsciiButton>
+                <AsciiButton
+                  variant="primary"
+                  type="submit"
+                  form="custom-domain-create"
+                  disabled={!canCreate || !hostname.trim() || busy}
+                >
+                  {create.isPending ? 'Getting DNS configuration…' : 'Get DNS configuration'}
+                </AsciiButton>
+              </>
+            ) : deleting === domain.id ? (
+              <>
+                <AsciiButton disabled={busy} onClick={() => setDeleting(null)}>
+                  Keep domain
+                </AsciiButton>
+                <AsciiButton variant="dangerSolid" disabled={busy} onClick={() => run('delete')}>
+                  Confirm deletion
+                </AsciiButton>
+              </>
+            ) : (
+              <>
+                <AsciiButton
+                  variant="danger"
+                  aria-label="Delete configuration"
+                  disabled={busy}
+                  onClick={() => setDeleting(domain.id)}
+                >
+                  Delete
+                </AsciiButton>
+                {target && (
+                  <AsciiButton disabled={busy} onClick={() => run('unbind')}>
+                    Unbind
+                  </AsciiButton>
+                )}
+                <div className="flex-1" />
+                {domain.ready ? (
+                  <AsciiButton variant="primary" type="submit" form="custom-domain-bind" disabled={!canBind}>
+                    Bind
+                  </AsciiButton>
+                ) : (
+                  domain.phase !== 'superseded' && (
+                    <AsciiButton
+                      variant="primary"
+                      disabled={!canCreate || busy}
+                      onClick={() =>
+                        run(!domain.dnsRecords.length ? 'prepare' : domain.confirmed ? 'advance' : 'verify')
+                      }
+                    >
+                      {action.isPending
+                        ? action.variables?.type === 'verify'
+                          ? 'Verifying DNS, please wait…'
+                          : 'Checking progress…'
+                        : stepLabel}
+                    </AsciiButton>
+                  )
+                )}
+              </>
+            )}
+          </FormDialogFooter>
+        </FormDialogContent>
       </Dialog>
     </section>
   )

@@ -117,6 +117,7 @@ function capture(configured: boolean) {
     zoneId: 'zone',
     network: value('network') as any,
     runnerAccount: value('runner@example.test') as any,
+    proxyAddress: value('192.0.2.1') as any,
   })({ ...channels, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
   const service = records.find((r) => r.type === 'gcp.cloudrunv2.Service' && r.name === 'Api')
   assert.ok(service)

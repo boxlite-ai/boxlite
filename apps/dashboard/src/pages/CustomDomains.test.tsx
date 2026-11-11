@@ -18,6 +18,9 @@ const api = vi.hoisted(() => ({
   unbindDomain: vi.fn(),
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => api }))
+const feedback = vi.hoisted(() => ({ copy: vi.fn(), success: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/copy-text', () => ({ copyToClipboard: feedback.copy }))
+vi.mock('sonner', () => ({ toast: { success: feedback.success, error: feedback.error } }))
 const domain: CustomDomain = {
   id: 'config-1',
   hostname: 'app.example.com',
@@ -75,7 +78,7 @@ describe('Custom domains setup', () => {
   }
   function button(label: string) {
     return [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (item) => item.textContent?.trim() === label,
+      (item) => item.textContent?.trim() === label || item.getAttribute('aria-label') === label,
     )!
   }
   async function click(label: string) {
@@ -125,13 +128,13 @@ describe('Custom domains setup', () => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('abc.authorize.certificatemanager.goog.')
     await click('Configured, verify')
     expect(api.verifyCustomDomain).toHaveBeenCalledWith('org-1', 'config-1')
-    input('Box ID or name', 'box-1')
-    expect(button('Bind').disabled).toBe(true)
+    expect(button('Bind')).toBeUndefined()
+    expect(api.bindDomain).not.toHaveBeenCalled()
   })
 
   it('binds a ready hostname using the existing Box target operation', async () => {
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     input('Box ID or name', 'my-box')
     input('Port', '8080')
     await click('Bind')
@@ -159,7 +162,7 @@ describe('Custom domains setup', () => {
         }),
     )
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     await act(async () => button('Configured, verify').click())
     await settle()
     try {
@@ -169,14 +172,14 @@ describe('Custom domains setup', () => {
       await settle()
     }
     expect(document.body.textContent).toContain('DNS verification passed. HTTPS is being enabled.')
-    input('Box ID or name', 'box-1')
-    expect(button('Bind').disabled).toBe(true)
+    expect(button('Bind')).toBeUndefined()
+    expect(api.bindDomain).not.toHaveBeenCalled()
   })
 
   it('distinguishes an unknown submission from an accepted certificate request', async () => {
     response.domains = [{ ...domain, phase: 'provisioning', ready: false, submissionStatus: 'unknown' }]
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     expect(document.body.textContent).toContain('Confirming whether the certificate request was accepted')
     expect(document.body.textContent).not.toContain('HTTPS is being enabled')
   })
@@ -186,7 +189,7 @@ describe('Custom domains setup', () => {
       { ...domain, ready: false, confirmed: false, submissionStatus: 'not_submitted', dnsRecords: [] },
     ]
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     expect(button('Continue getting DNS configuration')).toBeDefined()
     expect(api.prepareCustomDomain).not.toHaveBeenCalled()
     expect(api.advanceCustomDomain).not.toHaveBeenCalled()
@@ -197,10 +200,10 @@ describe('Custom domains setup', () => {
   it('does not allow a superseded application to verify or bind again', async () => {
     response.domains = [{ ...domain, ready: false, phase: 'superseded', errorCode: 'domain_superseded' }]
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
-    expect(button('Continue HTTPS setup').disabled).toBe(true)
-    input('Box ID or name', 'box-1')
-    expect(button('Bind').disabled).toBe(true)
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
+    expect(button('Continue HTTPS setup')).toBeUndefined()
+    expect(button('Bind')).toBeUndefined()
+    expect(api.bindDomain).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('no longer valid')
   })
 
@@ -210,7 +213,7 @@ describe('Custom domains setup', () => {
     await render()
     vi.useFakeTimers()
     try {
-      await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+      await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_050)
       })
@@ -231,7 +234,7 @@ describe('Custom domains setup', () => {
   it('explains where to wait and distinguishes the certificate CNAME from traffic DNS', async () => {
     response.domains = [{ ...domain, phase: 'provisioning', ready: false }]
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     const text = document.querySelector('[role="dialog"]')!.textContent
     expect(text).toContain('60 minutes')
     expect(text).toContain('10 seconds')
@@ -240,7 +243,7 @@ describe('Custom domains setup', () => {
     expect(text).toContain('If the API is stopped or paused')
     expect(text).toContain('Certificate authorization')
     expect(text).toContain('Traffic routing')
-    expect(text).toContain('Copy name')
+    expect(document.querySelector('[aria-label="Copy name for Certificate authorization"]')).not.toBeNull()
     expect(text).toContain('do not replace the traffic CNAME')
   })
 
@@ -249,7 +252,7 @@ describe('Custom domains setup', () => {
       { ...domain, phase: 'provisioning', ready: false, errorCode: 'certificate_provisioning_failed' },
     ]
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
     expect(document.body.textContent).toContain('one hour')
     expect(document.body.textContent).toContain('pki.goog')
   })
@@ -260,8 +263,8 @@ describe('Custom domains setup', () => {
       { hostname: domain.hostname, url: `https://${domain.hostname}`, target: { type: 'box', box: 'box-1', port: 80 } },
     ]
     await render()
-    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
-    expect(button('Continue HTTPS setup').disabled).toBe(true)
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
+    expect(button('Continue HTTPS setup')).toBeUndefined()
     expect(button('Bind').disabled).toBe(true)
     await click('Unbind')
     expect(api.unbindDomain).toHaveBeenCalledWith('org-1', domain.hostname)
@@ -269,6 +272,37 @@ describe('Custom domains setup', () => {
     expect(api.deleteCustomDomain).not.toHaveBeenCalled()
     await click('Confirm deletion')
     expect(api.deleteCustomDomain).toHaveBeenCalledWith('org-1', domain.id)
+  })
+
+  it.each([true, false])('copies the exact authorization record with success=%s feedback', async (success) => {
+    feedback.copy.mockResolvedValue(success)
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Copy name for Certificate authorization"]')!.click(),
+    )
+    expect(feedback.copy).toHaveBeenCalledWith(domain.dnsRecords[2].name)
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="Copy value for Certificate authorization"]')!.click(),
+    )
+    expect(feedback.copy).toHaveBeenLastCalledWith(domain.dnsRecords[2].value)
+    if (success) expect(feedback.success).toHaveBeenCalledWith('DNS value copied')
+    else
+      expect(feedback.error).toHaveBeenCalledWith('Could not copy DNS record. Select the value and copy it manually.')
+  })
+
+  it('keeps current actions in the shared footer and collapses secondary help', async () => {
+    response.domains = [{ ...domain, phase: 'pending_certificate_dns', ready: false, confirmed: false }]
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
+    expect(document.querySelectorAll('[role="dialog"] h2')).toHaveLength(1)
+    const disclosures = [...document.querySelectorAll<HTMLDetailsElement>('[role="dialog"] details')]
+    expect(disclosures[0].open).toBe(true)
+    expect(disclosures[1].open).toBe(false)
+    expect(button('Configured, verify').closest('.form-dialog-footer')).not.toBeNull()
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('disconnects any previous organization')
+    expect(document.querySelectorAll('[aria-label^="Copy name for"]')).toHaveLength(3)
+    expect(api.verifyCustomDomain).not.toHaveBeenCalled()
   })
 
   it('drops an old organization dialog on switch and does not fetch without management permission', async () => {
