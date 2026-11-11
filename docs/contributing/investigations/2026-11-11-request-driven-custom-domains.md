@@ -14,7 +14,8 @@ Resource IDs, generations, ownership labels and execution leases already provide
 
 Explicit prepare and verify operations control admission; advance requests and an API startup/minute task resume confirmed setup; list/detail remain read-only.
 Existing permission, subscription, namespace and organization quota controls remain mandatory.
-No publication or cloud deployment is part of this change; other API timers and Cloud Run CPU/minimum-instance settings remain unchanged.
+No publication or cloud deployment is part of this change; other API timers remain unchanged.
+The capacity and toolbar amendment below removes the custom-domain minimum instance requirement while retaining its continuous CPU allocation.
 
 ## Related work and lessons
 
@@ -29,6 +30,31 @@ No publication or cloud deployment is part of this change; other API timers and 
 
 ## How it works
 
+### Capacity and toolbar amendment
+
+Custom-domain configuration no longer sets a revision minimum of one; retain `cpuIdle: false` for existing instances.
+The separate CI service-level minimum remains conditional on CI configuration.
+This follows the independent [minimum-instance](https://docs.cloud.google.com/run/docs/configuring/min-instances) and
+[CPU allocation](https://docs.cloud.google.com/run/docs/configuring/billing-settings) controls; it does not guarantee API timers run with zero instances.
+Removing the domain-specific minimum is preferred over forcing all services to zero because CI retains its own capacity contract.
+
+Reuse the All domains toolbar's muted monospace allowance display: `0 / 1 custom domains` or `1 / 1 custom domains`.
+Count live configurations, including drafts; exclude `superseded` records, which the API retains for inspection after releasing their quota slot.
+Do not show a fabricated zero while the list is loading or unavailable.
+Remove the unavailable-subscription banner, quota explanation footer and empty-state description; retain the concise subscription-required notice and existing action authorization.
+The add dialog also omits DNS instructions, apex/wildcard prose and repeated quota guidance; hostname validation and action errors are unchanged.
+Setup dialogs omit the ownership-transfer explanation, provider issuance estimate and polling schedule explanation; the underlying ownership and advancement rules remain unchanged.
+The counter replaces the existing toolbar explanation without adding a heading, component, dependency, or API field.
+
+Validate resource arguments with domains enabled/disabled and CI enabled; CPU remains allocated while the domain-specific minimum disappears.
+Validate empty, draft, ready and superseded allowance counts, absent removed copy, and unchanged subscription action restrictions.
+Observe the assertions fail against the unchanged production code before implementing the amendment.
+
+The baseline failed six Dashboard assertions and four deployment assertions with only test files changed.
+After implementation, all 1,125 Dashboard tests and 525 deployment tests pass through the repository make targets.
+Desktop empty/occupied states and a 390px-wide preview confirm the concise counter and removed copy without horizontal overflow.
+Cloud configuration removal remains unverified until a subsequent deployment; this amendment makes no cloud changes.
+
 `Get DNS configuration → prepare authorization → show three records → Confirm DNS → verify → claim → submit → advance certificate/map/TLS → ready`.
 
 Preparation reserves one organization slot and stable challenge/IDs, but performs no DNS query or certificate creation.
@@ -41,8 +67,85 @@ Only an accepted operation or verified existing certificate, followed by a succe
 Unknown submission outcomes remain distinguishable and are recovered by reading deterministic resources before retrying.
 
 Each invocation has a 25-second external-work budget, two-second workflow SQL statement limits, and cancellation propagated to DNS/TLS/cloud calls; it does not wait for issuance or continue after returning.
-The page polls explicit advance operations only for confirmed work, respects server backoff, and stops when hidden, closed or ready.
+The page performs setup operations only on explicit clicks; list-only status reads follow the minute refresh amendment below.
 Google issuance continues without API CPU; map creation and TLS readiness resume on an advance request or the next eligible API task round.
+
+### Manual verification result amendment
+
+The current dialog discards the verify response and starts timed advancement after confirmation, leaving the user without a final verification outcome.
+Reuse the existing typed response and notification system; HTTP 202 alone cannot establish DNS success because workflow failures also return a configuration.
+Cache the returned configuration directly, avoiding a list refresh overwriting the result with stale data.
+While verifying, disable overlapping actions and dismissal; after persisted confirmation, notify the user and close the dialog.
+Accepted certificate requests, unknown submission outcomes and requests not submitted receive different notifications; none implies HTTPS readiness.
+Unconfirmed responses retain the three records and record errors for a manual retry; lease/backoff responses without an error remain explicitly pending.
+Transport failures retain the dialog and show the request error without retrying automatically.
+Remove the dialog timer, visibility tracking and preparation polling state; keep explicit preparation and DNS verification buttons.
+Server startup/minute advancement, ownership checks, subscription controls and binding readiness remain unchanged.
+
+Example: a missing authorization CNAME keeps the records open; correcting it and clicking verify again closes the dialog only after confirmation.
+Tests cover delayed responses, DNS rejection followed by manual retry, unknown/unsubmitted certificates, transport errors and absence of timed requests.
+The existing polling test is replaced because removing automatic advancement is an intentional contract change; result handling receives pre-fix failing coverage.
+Observed baseline failures cover result dismissal, returned DNS errors, uncertain submission feedback and timed advancement/preparation.
+A separate regression reproduces a completed verification waiting on an unrelated held-domain refresh; that refresh no longer blocks feedback.
+After implementation, all 1,132 Dashboard tests pass and the production build succeeds through the repository make targets.
+A browser run with mocked API responses confirms failure retains the records and a second explicit verification closes the dialog with a success notification.
+These checks do not exercise live DNS or GCP issuance.
+
+### Quiet minute status refresh amendment
+
+The Custom domains list now needs current status while server-side setup proceeds after the dialog closes.
+Reuse React Query's conditional 60-second refetch interval for the existing read-only list endpoint; do not call prepare, verify or advance automatically.
+Enable the interval while the list has an incomplete, non-superseded configuration; an open dialog permits reads after DNS confirmation.
+Stop when every configuration is ready or superseded, the list is empty, or custom domains are disabled; leaving the tab unmounts the list.
+Pause new interval reads in hidden browser tabs, unconfirmed setup dialogs and pending mutations; explicit mutations cancel list reads before writing.
+On returning to a visible tab or reconnecting, immediately read eligible incomplete setup even if its cached data is considered fresh.
+Keep cached rows during a refresh or refresh failure, without a spinner, toast or refresh-error banner; initial-load failures retain Retry. Disable automatic request retries so a failed status read waits for the next minute tick.
+React Query structural sharing and stable row keys retain the page and update changed status text without a reload.
+The completion boundary is `ready`, independent of Box binding or subscription-dependent display labels (`Ready` versus `Setup completed`).
+Tests will check the minute boundary, status-only DOM updates, failed reads retaining rows, terminal-state stopping, dialog pause and absence of automatic setup writes.
+This intentionally replaces the previous no-list-polling contract; server work and explicit verification behavior are unchanged.
+The unchanged implementation failed four minute-read assertions before the interval was added.
+After implementation, all 1,139 Dashboard tests and the production build pass; tests retain the same row and toolbar DOM nodes while status changes.
+
+### HTTPS detail refresh recovery
+
+Opening a confirmed domain previously disabled its interval, so clicking Continue HTTPS setup once and remaining in the dialog left its status stale indefinitely.
+Hidden-tab reads also paused without a catch-up read on return, leaving another minute of stale status possible.
+Reuse the same eligibility predicate for the minute interval and focus/reconnect reads; only read state, never automatically invoke advance.
+Track organization-scoped pending mutations with the existing React Query mutation cache so reads cannot restart during verification or other writes.
+The server advance operation retains bounded, leased semantics; the Dashboard exposes it only for explicit failure retry after the amendments below.
+Regression coverage must show an open confirmed dialog reaching success or failure, a fresh cached pending result updating on focus, and no interval reads during an outstanding mutation.
+Browser validation repeats both complete mock flows, clicks Continue HTTPS setup before completion and leaves the details open through the two-minute outcome.
+Five regression assertions fail against the prior implementation because expected status reads never occur.
+The updated implementation passes all 1,143 Dashboard tests and the production build through make targets.
+Browser tests run through a standalone make target: list outcomes appear after 120 seconds and open-detail outcomes after 121 seconds for both success and failure.
+These local simulations verify UI updates, not live cloud issuance; the separately reported indefinitely stale visible list was not reproduced.
+
+### Read-only HTTPS progress
+
+After DNS confirmation, reopening a domain should show progress without asking the user to continue HTTPS setup again.
+Remove the normal HTTPS continuation button; the API startup/minute task owns continued certificate and mapping work, with explicit retry after errors as described below.
+Opening a confirmed, incomplete configuration performs one read-only list refresh, then retains the existing quiet interval and focus recovery.
+Unconfirmed drafts still allow preparation and explicit DNS verification, including retries after a failed check.
+Ready domains still allow Box binding; delete and unbind remain independent management operations.
+Remove wording that instructs users to press a continuation action; failed HTTPS setup uses provider-neutral recovery guidance.
+Tests cover accepted, unknown and unsubmitted healthy states without continuation controls, explicit failure retry, fresh state on reopen, and unchanged DNS retry and Ready binding.
+This intentionally changes the UI contract; the server advance endpoint and SDK compatibility remain unchanged.
+The prior implementation failed nine assertions covering continuation controls, fresh reads on reopening and removed-action wording.
+After implementation, all 1,148 Dashboard tests and the production build pass through make targets.
+The local browser preview test also runs through make and confirms both successful verification and failure-then-retry reopen with progress but no HTTPS continuation button.
+
+### HTTPS failure retry
+
+After DNS confirmation, an incomplete configuration with an error offers Retry and a support@boxlite.ai contact link beneath its error message.
+Healthy pending setup stays read-only; Ready, superseded and unconfirmed configurations retain their existing actions.
+Replace provider-specific certificate failure and renewal messages with HTTPS terminology; retain exact provider-issued DNS record values because users must configure them.
+Retry calls the existing advance endpoint once and reuses the saved configuration; subscription permissions, leases, backoff and certificate replacement limits remain enforced by the API.
+Disable the action while pending and retain the dialog; show returned progress without claiming HTTPS is ready unless the response says ready.
+An error still present after a request may reflect a retry delay, so describe it as still needing attention, not proof that a new certificate attempt occurred.
+If an error remains or the request itself fails, keep Retry and the support contact available; a healthy pending result removes Retry.
+The primary status paragraph must not say HTTPS is proceeding normally when a confirmed setup error is present.
+Tests cover absent vendor names, support contact, pending/failed/ready retry results, transport failure, duplicate-click prevention and subscription restrictions.
 
 ### Startup and minute task amendment
 
@@ -112,7 +215,7 @@ The single-domain limit, subscription restrictions, exact DNS copies, uncertain 
 
 Reuse `ResourceLayout`, `AsciiButton`, `Input`, `Tabs` and `FormDialog` from the current Dashboard; avoid a separate visual system or new dependencies.
 The reference implementations are `Domains.tsx`, `ImagesPage.tsx`, `Volumes.tsx` and the shared dialog primitives.
-Preserve existing mutations, confirmation and polling boundaries; tab selection and help expansion only navigate or disclose content.
+Preserve explicit mutations and confirmation boundaries; tab selection and help expansion only navigate or disclose content.
 Validate navigation, exact copy feedback, verification/submission states, permission restrictions and binding/deletion with page tests, then inspect light/dark and narrow layouts locally.
 This is an intentional presentation contract change, not a claim of a newly reproduced backend defect.
 

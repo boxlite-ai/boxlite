@@ -134,7 +134,8 @@ for (const reserved of [undefined, 'retired.example.test']) {
       String(envs.find((entry: { name: string }) => entry.name === 'CUSTOM_DOMAIN_EDGE_IPS')?.value),
       'ProxyAddress:address',
     )
-    assert.equal(service.args.template.scaling.minInstanceCount, 1)
+    assert.equal(service.args.scaling, undefined)
+    assert.equal(service.args.template.scaling, undefined)
     assert.equal(container.resources.cpuIdle, false)
     assert.deepEqual(container.ports, { name: 'http1', containerPort: 3000 })
     const role = resources.find((resource) => resource.logical === 'CustomDomainRuntimeRole')!

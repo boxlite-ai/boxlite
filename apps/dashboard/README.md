@@ -655,15 +655,46 @@ without showing a success notification in the current organization.
 The page uses **All domains** and **Custom domains** tabs beneath one title.
 All domains retains every held hostname, including verified custom names; Custom domains
 shows setup progress and the one-domain allowance without another section heading.
-Changing tabs only changes the view and stops polling when the setup dialog unmounts.
+Its toolbar shows `0 / 1 custom domains` or `1 / 1 custom domains`, including drafts
+but excluding replaced configurations. Initial loading and initial-load errors show no allowance.
+The list omits the unavailable-subscription banner and quota footer; the empty state
+keeps its title without explanatory copy. Subscription checks and management actions remain unchanged.
+The add dialog presents the hostname field without DNS instructions or repeated quota guidance; validation and action errors remain visible.
+The Custom domains list quietly reads status every minute while any setup is incomplete.
+It stops when every setup is ready or replaced, when empty or disabled, or when leaving the tab.
+Hidden browser tabs, unconfirmed DNS dialogs and pending actions pause interval reads.
+After DNS confirmation, HTTPS details continue the same quiet minute reads while open.
+Returning to the tab or reconnecting immediately reads eligible incomplete setup, even if cached data is still fresh.
+Healthy pending HTTPS setup is read-only: there is no continuation button. Reopening an incomplete confirmed domain reads its latest status without advancing setup.
+Existing rows remain visible during reads or read failures, without a refresh spinner or notification.
+Successful reads update changed status text in place; initial-load failures still offer Retry.
+`Ready` and `Setup completed` both mean HTTPS setup is complete, independently of Box binding.
+`Ready` requires an active subscription; `Setup completed` appears when subscription status is required or unavailable.
+The dialog's Saved target shows whether a Box port is bound.
 
 Custom-domain dialogs use the shared fixed header/footer and scrolling body.
 The current status, errors and next action stay prominent; all three DNS records
 appear together, with exact name/value copying and explicit clipboard feedback.
 DNS help and timing are expandable. Completed setups focus on Box/port binding,
 with DNS records retained in a collapsed disclosure for renewal and troubleshooting.
+Setup dialogs omit ownership-transfer prose, provider issuance estimates and internal polling schedules; record guidance and current progress remain visible.
 Subscription restrictions still allow viewing, unbinding and confirmed deletion.
-Verification warns before transferring ownership away from an earlier application.
+Clicking **Configured, verify** waits for the server result with actions disabled.
+Confirmed DNS shows a notification and closes the dialog; certificate acceptance,
+unknown submission and submission failure remain distinct from HTTPS readiness.
+A failed DNS check keeps all three records and record errors visible for the next
+manual verification attempt. A response without confirmation or an error remains
+pending; transport errors also leave the dialog open. HTTP success alone does not
+count as verified DNS. Responses update the cached configuration directly.
+Preparation and DNS verification require explicit clicks; the API's startup
+and minute task continues confirmed HTTPS setup while the API runs.
+An incomplete, confirmed setup with an error offers **Retry** and a `support@boxlite.ai` contact link.
+Certificate failures use provider-neutral HTTPS wording; exact DNS record values remain unchanged.
+Retry makes one advance request with duplicate clicks disabled and keeps the dialog open.
+The returned state determines the message: healthy pending setup becomes read-only again,
+an error retains Retry and support guidance, and Ready allows binding.
+Transport failures retain Retry as well. Server leases and retry delays still apply;
+an unchanged error does not establish that a new certificate request was submitted.
 
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.

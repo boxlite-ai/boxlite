@@ -448,8 +448,6 @@ export const gcpApiProvider =
         ...(continuousCi ? { scaling: { minInstanceCount: 1 } } : {}),
         template: {
           serviceAccount: placement.serviceAccount,
-          // Preserve existing capacity settings for API periodic work; the domain task adds no capacity changes.
-          ...(customDomains ? { scaling: { minInstanceCount: 1 } } : {}),
           /*
            * The Cloud SQL proxy the platform builds in, as a volume.
            *

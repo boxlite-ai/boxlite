@@ -120,10 +120,13 @@ or deletion. Deploy the role update before the API, and enable the Resource Mana
 API in that project; the GCP bootstrap already enables it. Failed lookups are retried,
 including during IAM propagation, rather than cached as a permanent failure.
 
-With the feature enabled, Cloud Run keeps at least one instance
-and allocates CPU outside requests. Request-driven domain setup no longer requires this,
-but other API periodic work (including Box autostop and usage handling) still needs assessment before reducing these settings.
-This change preserves them and does not establish that the whole API can safely scale to zero. Every proxy receives the required `PROXY_DOMAIN` namespace;
+With the feature enabled, Cloud Run allocates CPU outside requests without imposing
+a minimum instance count for custom domains. Hosted CI independently requires a
+service-level minimum of one when configured. Background domain checks run while
+an instance exists and resume at startup after scale-to-zero; continuous CPU does
+not keep an instance alive. Other API periodic work, including Box autostop and
+usage handling, is unchanged; this does not establish that every API task can safely pause.
+Every proxy receives the required `PROXY_DOMAIN` namespace;
 other valid customer hosts always use exact domain lookup.
 API onboarding still requires all three operator-supplied GCP settings above.
 IP-host `GET /health` remains available to GKE and load-balancer probes, while
@@ -160,7 +163,7 @@ Legacy unconfirmed setups preserve their records and resources but require confi
 The API task starts once during application bootstrap, then checks every 60 seconds while the process receives CPU.
 Each round advances at most three due confirmed setups and performs one maintenance round; existing leases prevent conflicting hostname work.
 Startup awaits that round, and shutdown stops new rounds and awaits active work; cold starts can therefore include setup-check latency.
-No Cloud Scheduler, new minimum instances or continuous CPU settings are added; existing capacity settings are retained.
+No Cloud Scheduler is added; custom domains retain continuous CPU but do not require a minimum instance count.
 A stopped or CPU-throttled API cannot guarantee minute-by-minute execution; restart or resumed execution continues from saved progress.
 
 Maintenance observes ready certificate/TLS state without revoking setup on a single timeout, expires unconfirmed/unclaimed drafts after thirty days,

@@ -19,7 +19,7 @@ const unwrap = (input: any): any =>
         ? Object.fromEntries(Object.entries(input).map(([key, item]) => [key, unwrap(item)]))
         : input
 
-function capture(configured: boolean) {
+function capture(configured: boolean, customDomains = false) {
   const records: { type: string; name: string; args: any }[] = []
   const namespace = (path: string): any =>
     new Proxy(function () {}, {
@@ -63,10 +63,16 @@ function capture(configured: boolean) {
         ),
       }
     : {}
+  const domainSettings = customDomains ? { CUSTOM_DOMAIN_GCP_PROJECT: 'test-project' } : {}
   const channels = apiEnvironmentFrom({
-    environment: { STACK_DOMAIN: 'example.test', OIDC_ISSUER_BASE_URL: 'https://auth.example.test', ...ci },
+    environment: {
+      STACK_DOMAIN: 'example.test',
+      OIDC_ISSUER_BASE_URL: 'https://auth.example.test',
+      ...ci,
+      ...domainSettings,
+    },
     declaration: {
-      groups: { deploy: [], api: Object.keys(ci), secret: configured ? secrets : [] },
+      groups: { deploy: [], api: Object.keys({ ...ci, ...domainSettings }), secret: configured ? secrets : [] },
       where: '/test/mstage.config.json',
     },
     region: 'us-east5',
@@ -149,3 +155,12 @@ test('CI refs reach actual Cloud Run envs and per-secret grants, without plainte
     assert.equal(grant.args.role, 'roles/secretmanager.secretAccessor')
   }
 })
+
+for (const ci of [false, true]) {
+  test(`custom domains keep background CPU without adding a minimum when CI is ${ci}`, () => {
+    const { service } = capture(ci, true)
+    assert.deepEqual(service.scaling, ci ? { minInstanceCount: 1 } : undefined)
+    assert.equal(service.template.scaling, undefined)
+    assert.equal(service.template.containers[0].resources.cpuIdle, false)
+  })
+}
