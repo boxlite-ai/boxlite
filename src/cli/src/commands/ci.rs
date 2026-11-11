@@ -244,9 +244,13 @@ async fn request(
         .get_token()
         .await
         .context("Loading context credential")?;
+    let bodiless_post = body.is_none() && method == Method::POST;
     let mut request = http.request(method, url).bearer_auth(&token.token);
     if let Some(body) = body {
         request = request.json(&body);
+    } else if bodiless_post {
+        // Gateways may answer 411 to a POST without a length, and the HTTP client omits it for an empty body.
+        request = request.header(reqwest::header::CONTENT_LENGTH, 0);
     }
     let mut response = request
         .send()
