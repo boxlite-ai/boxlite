@@ -134,7 +134,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Logs(args) => commands::logs::execute(args, &global).await.map(|_| 0),
         cli::Commands::Stats(args) => commands::stats::execute(args, &global).await.map(|_| 0),
         cli::Commands::Network(args) => commands::network::execute(args, &global).await.map(|_| 0),
-        cli::Commands::Ssh(args) => commands::ssh::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Ssh(args) => commands::ssh::execute(args, &global).await,
         cli::Commands::Agent(args) => commands::agent::execute(args, &global).await.map(|_| 0),
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),

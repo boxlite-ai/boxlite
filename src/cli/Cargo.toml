@@ -18,7 +18,7 @@ path = "src/main.rs"
 boxlite = { workspace = true, features = ["rest"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
-tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "signal", "process"] }
 notify = "6.1"
 futures = "0.3"
 term_size = "0.3"

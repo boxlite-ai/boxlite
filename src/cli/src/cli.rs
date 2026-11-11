@@ -827,11 +827,10 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
-    /// Set up guest SSH and print a connection command
+    /// Connect to guest SSH using system OpenSSH
     ///
-    /// With no operation option, generate or reuse client and host keys,
-    /// enable box on guest port 22, and print the server fingerprint and SSH command.
-    /// Setup replaces the complete configuration and disconnects existing clients.
+    /// With no operation option, generate or reuse CLI-managed client and host keys,
+    /// prepare guest SSH, and log in as box. Healthy managed services are not reconfigured.
     /// Use --configure, --status, --enable, --disable, --tunnel, or --proxy
     /// for another operation. All operations support local and cloud contexts.
     Ssh(crate::commands::ssh::SshArgs),

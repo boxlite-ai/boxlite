@@ -14,6 +14,7 @@ use crate::cli::GlobalFlags;
 use crate::commands::network::tunnel::{forward_until_interrupted, parse_socket_address};
 use crate::formatter;
 
+mod connect;
 mod proxy;
 mod setup;
 
@@ -146,14 +147,14 @@ fn read_public_key(path: &Path) -> Result<String> {
     }
 }
 
-pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
+pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
     if args.configure {
         let config = args.source.load()?;
         let (_runtime, sandbox) = find_box(global, &args.target).await?;
-        return print_status(&sandbox.ssh().configure(config).await?);
+        return print_status(&sandbox.ssh().configure(config).await?).map(|_| 0);
     }
     if args.proxy {
-        return proxy::execute(&args.target, global).await;
+        return proxy::execute(&args.target, global).await.map(|_| 0);
     }
     if !(args.status || args.enable || args.disable || args.tunnel) {
         return setup::execute(&args.target, global).await;
@@ -167,10 +168,11 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
         sandbox.ssh().status().await?
     };
     if args.tunnel {
-        forward(&sandbox, &status, args.listen).await
+        forward(&sandbox, &status, args.listen).await?;
     } else {
-        print_status(&status)
+        print_status(&status)?;
     }
+    Ok(0)
 }
 
 /// The runtime is returned so it outlives the box handle for the whole command.

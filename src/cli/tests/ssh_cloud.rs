@@ -1,5 +1,7 @@
 //! Real CLI selection and stdio over loopback REST/CONNECT; no VM or cloud account.
 
+use std::collections::BTreeSet;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,6 +11,7 @@ use axum::body::Bytes;
 use axum::extract::{OriginalUri, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use russh::keys::HashAlg;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -16,12 +19,54 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 struct Recording {
     requests: Vec<(Method, String, String)>,
     configs: Vec<Value>,
-    connect: String,
+    attempted_configs: Vec<Value>,
+    connects: Vec<String>,
+    enabled: bool,
+    generation: u64,
+    host_public_key: String,
+    host_key_fingerprint: String,
     configure_error: bool,
-    disabled: bool,
     missing: bool,
     tunnel_error: bool,
     lifecycle_error: bool,
+    blocked_tunnel: Option<Arc<tokio::sync::Notify>>,
+}
+
+impl Recording {
+    fn configure(&mut self, config: Value) {
+        let key = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(key.path(), config["host_private_key"].as_str().unwrap()).unwrap();
+        let private = russh::keys::load_secret_key(key.path(), None).unwrap();
+        let public = private.public_key();
+        self.host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
+            .to_openssh()
+            .unwrap();
+        self.host_key_fingerprint = public.fingerprint(HashAlg::Sha256).to_string();
+        self.configs.push(config);
+        self.enabled = true;
+        self.generation += 1;
+    }
+
+    fn status(&self) -> Value {
+        let (listen_address, public_key, fingerprint) = if self.enabled {
+            (
+                self.configs.last().unwrap()["listen_address"]
+                    .as_str()
+                    .unwrap(),
+                self.host_public_key.as_str(),
+                self.host_key_fingerprint.as_str(),
+            )
+        } else {
+            ("", "", "")
+        };
+        json!({
+            "enabled": self.enabled,
+            "generation": self.generation,
+            "listen_address": listen_address,
+            "host_public_key": public_key,
+            "host_key_fingerprint": fingerprint,
+        })
+    }
 }
 
 struct Cloud {
@@ -45,17 +90,29 @@ async fn route(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let blocked_tunnel = {
+        let mut state = state.lock().unwrap();
+        state.requests.push((
+            method.clone(),
+            uri.to_string(),
+            headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .into(),
+        ));
+        if uri.path().ends_with("/network/tunnel") {
+            state.blocked_tunnel.clone()
+        } else {
+            None
+        }
+    };
+    if let Some(entered) = blocked_tunnel {
+        entered.notify_one();
+        return std::future::pending().await;
+    }
     let mut state = state.lock().unwrap();
-    state.requests.push((
-        method.clone(),
-        uri.to_string(),
-        headers
-            .get("authorization")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .into(),
-    ));
     if state.missing || (uri.path().ends_with("/network/tunnel") && state.tunnel_error) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -64,20 +121,25 @@ async fn route(
             return (StatusCode::CONFLICT, "box must be running").into_response();
         }
         if uri.path().ends_with("/enable") {
-            state.disabled = false;
+            if state.configs.is_empty() {
+                return (StatusCode::CONFLICT, "SSH configuration is required").into_response();
+            }
+            if !state.enabled {
+                state.generation += 1;
+            }
+            state.enabled = true;
         } else if method == Method::DELETE {
-            state.disabled = true;
+            state.enabled = false;
         }
         if method == Method::POST && uri.path().ends_with("/ssh") {
-            state.configs.push(serde_json::from_slice(&body).unwrap());
+            let config: Value = serde_json::from_slice(&body).unwrap();
+            state.attempted_configs.push(config.clone());
             if state.configure_error {
                 return (StatusCode::CONFLICT, "configuration refused").into_response();
             }
-            state.disabled = false;
+            state.configure(config);
         }
-        json!({"enabled": !state.disabled, "listen_address": "0.0.0.0:2222",
-            "host_public_key": "ssh-ed25519 HOST", "host_key_fingerprint": "SHA256:host",
-            "generation": 1})
+        state.status()
     } else if uri.path().ends_with("/network/tunnel") {
         json!({"uri": tunnel})
     } else {
@@ -95,26 +157,32 @@ impl Cloud {
         let tunnel = format!("http://{}", listener.local_addr().unwrap());
         let captured = state.clone();
         let transport = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut head = Vec::new();
-            while !head.ends_with(b"\r\n\r\n") {
-                head.push(socket.read_u8().await.unwrap());
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut head = Vec::new();
+                while !head.ends_with(b"\r\n\r\n") {
+                    head.push(socket.read_u8().await.unwrap());
+                }
+                captured
+                    .lock()
+                    .unwrap()
+                    .connects
+                    .push(String::from_utf8(head).unwrap());
+                socket
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
+                    .unwrap();
+                if echo {
+                    let mut bytes = Vec::new();
+                    socket.read_to_end(&mut bytes).await.unwrap();
+                    bytes.reverse();
+                    socket.write_all(&bytes).await.unwrap();
+                } else {
+                    // Real OpenSSH reaches CONNECT, then fails its SSH handshake.
+                    socket.write_all(b"not an SSH server\r\n").await.unwrap();
+                }
+                socket.shutdown().await.unwrap();
             }
-            captured.lock().unwrap().connect = String::from_utf8(head).unwrap();
-            socket
-                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                .await
-                .unwrap();
-            if echo {
-                let mut bytes = Vec::new();
-                socket.read_to_end(&mut bytes).await.unwrap();
-                bytes.reverse();
-                socket.write_all(&bytes).await.unwrap();
-            } else {
-                // Real OpenSSH reaches the proxy, then fails its SSH handshake.
-                socket.write_all(b"not an SSH server\r\n").await.unwrap();
-            }
-            socket.shutdown().await.unwrap();
         });
         let app = axum::Router::new()
             .fallback(route)
@@ -151,6 +219,19 @@ impl Cloud {
         )
         .unwrap();
     }
+
+    fn save_oidc_context(&self, home: &Path) {
+        std::fs::write(
+            home.join("credentials.toml"),
+            toml::to_string(&json!({
+                "profiles": {"cloud": {"url": self.url, "auth_method": "oidc",
+                    "access_token": "oidc-token", "path_prefix": "team"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(home.join("cli.toml"), "current_context = 'cloud'\n").unwrap();
+    }
 }
 
 fn isolated(command: &mut Command, home: &Path) {
@@ -175,24 +256,67 @@ fn cli(home: &Path) -> Command {
     command
 }
 
-fn setup(home: &Path, flags: &[&str]) -> String {
-    let output = cli(home)
+fn connect(home: &Path, flags: &[&str]) {
+    cli(home)
         .args(flags)
         .args(["ssh", "dev"])
+        .assert()
+        .code(255)
+        .stdout(predicates::str::is_empty());
+}
+
+fn credential_directories(home: &Path) -> BTreeSet<PathBuf> {
+    let root = home.join("ssh/remote");
+    if !root.exists() {
+        return BTreeSet::new();
+    }
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("-remote"))
+        .filter(|directory| directory.join("client_key").exists())
+        .collect()
+}
+
+fn only_credential_directory(home: &Path) -> PathBuf {
+    let directories = credential_directories(home);
+    assert_eq!(directories.len(), 1, "expected one managed SSH identity");
+    directories.into_iter().next().unwrap()
+}
+
+fn generate_key(path: &Path) {
+    let result = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(path)
+        .status()
+        .expect("run ssh-keygen");
+    assert!(result.success(), "ssh-keygen failed for {}", path.display());
+}
+
+fn configure_fixture(home: &Path) -> Value {
+    let keys = tempfile::tempdir().unwrap();
+    let host = keys.path().join("host");
+    let client = keys.path().join("client");
+    generate_key(&host);
+    generate_key(&client);
+    let output = cli(home)
+        .args([
+            "--context",
+            "cloud",
+            "ssh",
+            "--configure",
+            "dev",
+            "--host-key",
+        ])
+        .arg(&host)
+        .args(["--login", "box", "--authorized-key"])
+        .arg(client.with_extension("pub"))
+        .args(["--guest-listen", "0.0.0.0:2222"])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    String::from_utf8(output).unwrap()
-}
-
-fn key_path(summary: &str) -> PathBuf {
-    summary
-        .lines()
-        .find_map(|line| line.strip_prefix("Private key: "))
-        .unwrap()
-        .into()
+    serde_json::from_slice(&output).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -200,7 +324,7 @@ async fn cloud_control_options_preserve_context_authentication_and_saved_configu
     let cloud = Cloud::start(false).await;
     let home = tempfile::tempdir().unwrap();
     cloud.save_context(home.path(), "cloud", "team");
-    setup(home.path(), &[]);
+    let initial = configure_fixture(home.path());
     let config = cloud.state.lock().unwrap().configs[0].clone();
     let path = home.path().join("ssh.json");
     std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
@@ -217,16 +341,17 @@ async fn cloud_control_options_preserve_context_authentication_and_saved_configu
         .get_output()
         .stdout
         .clone();
+    let configured: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(
-        serde_json::from_slice::<Value>(&output).unwrap()["host_key_fingerprint"],
-        "SHA256:host"
+        configured["host_key_fingerprint"],
+        initial["host_key_fingerprint"]
     );
     cloud.state.lock().unwrap().requests.clear();
-    for (operation, enabled) in [
-        ("--disable", false),
-        ("--status", false),
-        ("--enable", true),
-        ("--status", true),
+    for (operation, enabled, generation) in [
+        ("--disable", false, 2),
+        ("--status", false, 2),
+        ("--enable", true, 3),
+        ("--status", true, 3),
     ] {
         let output = cli(home.path())
             .args(["ssh", "dev", operation])
@@ -237,7 +362,15 @@ async fn cloud_control_options_preserve_context_authentication_and_saved_configu
             .clone();
         let status: Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(status["enabled"], enabled);
-        assert_eq!(status["host_key_fingerprint"], "SHA256:host");
+        assert_eq!(status["generation"], generation);
+        assert_eq!(
+            status["host_key_fingerprint"],
+            if enabled {
+                initial["host_key_fingerprint"].clone()
+            } else {
+                json!("")
+            }
+        );
     }
     {
         let mut state = cloud.state.lock().unwrap();
@@ -280,109 +413,138 @@ async fn cloud_control_options_preserve_context_authentication_and_saved_configu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cloud_setup_reuses_keys_and_generated_command_preserves_routing() {
+async fn cloud_connect_reuses_keys_and_routes_authenticated_connect() {
     let cloud = Cloud::start(false).await;
     let home = tempfile::tempdir().unwrap();
-    let context = "-cloud ' % $()";
-    cloud.save_context(home.path(), context, "stored");
-    // Named context and an explicit prefix must survive without their environment.
-    let first = setup(home.path(), &["--path-prefix=-team/override"]);
-    let second = setup(home.path(), &["--path-prefix=-team/override"]);
-    let key = key_path(&first);
-    assert_eq!(key, key_path(&second));
-    assert!(key.starts_with(home.path().canonicalize().unwrap().join("ssh/remote")));
-    assert!(!home.path().join("boxes").exists());
-    assert!(!first.contains("CLI exit stops"));
-    assert!(!first.contains("stored-key"));
-    assert!(first.contains("SSH host key fingerprint: SHA256:host"));
-    let configs = cloud.state.lock().unwrap().configs.clone();
-    assert_eq!(configs.len(), 2);
-    assert_eq!(configs[0], configs[1]);
-    assert_eq!(configs[0]["listen_address"], "0.0.0.0:22");
-    assert_eq!(configs[0]["accounts"][0]["login"], "box");
+    cloud.save_context(home.path(), "-cloud ' % $()", "stored");
+    connect(home.path(), &["--path-prefix=-team/override"]);
+    let key = only_credential_directory(home.path()).join("client_key");
+    let initial_key = std::fs::read(&key).unwrap();
+    connect(home.path(), &["--path-prefix=-team/override"]);
     assert_eq!(
-        configs[0]["host_private_key"],
+        only_credential_directory(home.path()).join("client_key"),
+        key
+    );
+    assert_eq!(std::fs::read(&key).unwrap(), initial_key);
+    assert!(!home.path().join("boxes").exists());
+
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(
+        state.configs.len(),
+        1,
+        "healthy service is not reconfigured"
+    );
+    assert_eq!(state.generation, 1);
+    assert_eq!(state.configs[0]["listen_address"], "0.0.0.0:22");
+    assert_eq!(state.configs[0]["accounts"][0]["login"], "box");
+    assert_eq!(
+        state.configs[0]["host_private_key"],
         std::fs::read_to_string(key.with_file_name("host_key")).unwrap()
     );
-
-    let command = first
-        .lines()
-        .find_map(|line| line.strip_prefix("  ssh "))
-        .unwrap();
-    let mut ssh = Command::new("/bin/sh");
-    isolated(&mut ssh, home.path());
-    // Different saved context and environment cannot redirect the printed command.
-    ssh.env("BOXLITE_CONTEXT", "other")
-        .env("BOXLITE_REST_URL", "http://127.0.0.1:1")
-        .env("BOXLITE_REST_PATH_PREFIX", "wrong")
-        .args([
-            "-c",
-            &format!("ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=2 {command}"),
-        ])
-        .assert()
-        .failure();
-    let state = cloud.state.lock().unwrap();
     assert!(
-        state.requests.iter().all(
-            |(_, path, auth)| path.starts_with("/v1/-team/override/boxes/")
-                && auth == "Bearer stored-key"
-        ),
+        state.requests.iter().all(|(_, path, auth)| {
+            path.starts_with("/v1/-team/override/boxes/") && auth == "Bearer stored-key"
+        }),
         "{:?}",
         state.requests
     );
-    assert!(
+    assert_eq!(
         state
             .requests
             .iter()
-            .any(|(method, path, _)| method == Method::POST
-                && path == "/v1/-team/override/boxes/-remote/network/tunnel?port=2222")
+            .filter(|(method, path, _)| { method == Method::POST && path.ends_with("/ssh") })
+            .count(),
+        1
     );
-    assert!(state.connect.starts_with("CONNECT "), "{}", state.connect);
-    assert!(
+    assert_eq!(
         state
-            .connect
-            .to_ascii_lowercase()
-            .contains("x-boxlite-authorization: bearer stored-key")
+            .requests
+            .iter()
+            .filter(|(method, path, _)| { method == Method::GET && path.ends_with("/ssh") })
+            .count(),
+        1,
+        "the second connection reads a healthy status"
     );
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|(method, path, _)| {
+                method == Method::POST
+                    && path == "/v1/-team/override/boxes/-remote/network/tunnel?port=22"
+            })
+            .count(),
+        2
+    );
+    assert_eq!(state.connects.len(), 2);
+    assert!(state.connects.iter().all(|connect| {
+        connect.starts_with("CONNECT ")
+            && connect
+                .to_ascii_lowercase()
+                .contains("x-boxlite-authorization: bearer stored-key")
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_connect_enables_saved_configuration_without_reconfiguring() {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    connect(home.path(), &[]);
+    let key = only_credential_directory(home.path()).join("client_key");
+    let original = std::fs::read(&key).unwrap();
+    cli(home.path())
+        .args(["ssh", "--disable", "dev"])
+        .assert()
+        .success();
+    cloud.state.lock().unwrap().requests.clear();
+    connect(home.path(), &[]);
+
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(state.generation, 2);
+    assert_eq!(state.configs.len(), 1);
+    assert_eq!(std::fs::read(key).unwrap(), original);
+    assert_eq!(state.connects.len(), 2);
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|(method, path, _)| { method == Method::POST && path.ends_with("/ssh/enable") })
+            .count(),
+        1
+    );
+    assert!(state.requests.iter().all(|(method, path, auth)| {
+        path.starts_with("/v1/team/boxes/")
+            && auth == "Bearer stored-key"
+            && !(method == Method::POST && path.ends_with("/ssh"))
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[rstest::rstest]
 #[case("default")]
 #[case("cloud")]
-async fn cloud_setup_pins_empty_prefix_after_saved_context_changes(#[case] context: &str) {
+async fn cloud_connect_explicit_empty_prefix_survives_saved_context_changes(#[case] context: &str) {
     let cloud = Cloud::start(false).await;
     let home = tempfile::tempdir().unwrap();
     cloud.save_context(home.path(), context, "");
-    let summary = setup(home.path(), &[]);
-    let command = summary
-        .lines()
-        .find_map(|line| line.strip_prefix("  ssh "))
-        .unwrap();
+    connect(home.path(), &["--path-prefix="]);
     cloud.save_context(home.path(), context, "changed");
     cloud.state.lock().unwrap().requests.clear();
-
-    let mut ssh = Command::new("/bin/sh");
-    isolated(&mut ssh, home.path());
-    ssh.env("BOXLITE_REST_PATH_PREFIX", "ambient")
-        .args([
-            "-c",
-            &format!("ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=2 {command}"),
-        ])
-        .assert()
-        .failure();
+    connect(home.path(), &["--path-prefix="]);
 
     let state = cloud.state.lock().unwrap();
+    assert_eq!(state.configs.len(), 1);
     assert_eq!(state.requests.len(), 3, "lookup, SSH status, tunnel");
     assert!(
         state
             .requests
             .iter()
             .all(|(_, path, auth)| path.starts_with("/v1/boxes/") && auth == "Bearer stored-key"),
-        "printed SSH command changed routes: {:?}",
+        "explicit empty prefix changed routes: {:?}",
         state.requests
     );
-    assert!(state.connect.starts_with("CONNECT "), "{}", state.connect);
+    assert_eq!(state.connects.len(), 2);
 }
 
 #[rstest::rstest]
@@ -407,21 +569,31 @@ async fn cloud_path_prefix_precedence(
     if let Some(prefix) = environment {
         command.env("BOXLITE_REST_PATH_PREFIX", prefix);
     }
-    command.args(["ssh", "--status", "dev"]).assert().success();
+    command
+        .args(["ssh", "dev"])
+        .assert()
+        .code(255)
+        .stdout(predicates::str::is_empty());
     let root = if expected.is_empty() {
         "/v1/boxes/".to_string()
     } else {
         format!("/v1/{expected}/boxes/")
     };
     let state = cloud.state.lock().unwrap();
-    assert_eq!(state.requests.len(), 2);
+    assert_eq!(state.configs.len(), 1);
+    assert_eq!(state.connects.len(), 1);
     assert!(
         state
             .requests
             .iter()
-            .all(|(_, path, _)| path.starts_with(&root)),
+            .all(|(_, path, auth)| path.starts_with(&root) && auth == "Bearer stored-key"),
         "unexpected routing: {:?}",
         state.requests
+    );
+    assert!(
+        state.connects[0]
+            .to_ascii_lowercase()
+            .contains("x-boxlite-authorization: bearer stored-key")
     );
 }
 
@@ -430,6 +602,8 @@ async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key(
     let cloud = Cloud::start(true).await;
     let home = tempfile::tempdir().unwrap();
     cloud.save_context(home.path(), "cloud", "team");
+    configure_fixture(home.path());
+    cloud.state.lock().unwrap().requests.clear();
     let bytes: Vec<u8> = (0..131_072).map(|n| n as u8).collect();
     let output = cli(home.path())
         .env("BOXLITE_API_KEY", "environment-key")
@@ -450,10 +624,9 @@ async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key(
             .all(|(_, path, auth)| path.starts_with("/v1/team/boxes/")
                 && auth == "Bearer environment-key")
     );
-    assert!(state.configs.is_empty(), "proxy must not configure SSH");
+    assert_eq!(state.configs.len(), 1, "proxy must not reconfigure SSH");
     assert!(
-        state
-            .connect
+        state.connects[0]
             .to_ascii_lowercase()
             .contains("x-boxlite-authorization: bearer environment-key")
     );
@@ -467,6 +640,8 @@ async fn cloud_tunnel_option_forwards_bytes_and_reports_server_fingerprint() {
     let cloud = Cloud::start(true).await;
     let home = tempfile::tempdir().unwrap();
     cloud.save_context(home.path(), "cloud", "team");
+    let fixture = configure_fixture(home.path());
+    cloud.state.lock().unwrap().requests.clear();
     let mut command = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
     command.env("BOXLITE_HOME", home.path());
     for name in [
@@ -514,14 +689,14 @@ async fn cloud_tunnel_option_forwards_bytes_and_reports_server_fingerprint() {
             .await
             .unwrap();
         assert!(
-            diagnostics.contains("SSH host key fingerprint: SHA256:host"),
+            diagnostics.contains(fixture["host_key_fingerprint"].as_str().unwrap()),
             "{diagnostics}"
         );
     })
     .await
     .expect("cloud tunnel exchange and shutdown must complete");
     let state = cloud.state.lock().unwrap();
-    assert!(state.configs.is_empty(), "tunneling must not configure SSH");
+    assert_eq!(state.configs.len(), 1, "tunneling must not reconfigure SSH");
     assert!(
         state
             .requests
@@ -531,15 +706,14 @@ async fn cloud_tunnel_option_forwards_bytes_and_reports_server_fingerprint() {
                 && auth == "Bearer stored-key")
     );
     assert!(
-        state
-            .connect
+        state.connects[0]
             .to_ascii_lowercase()
             .contains("x-boxlite-authorization: bearer stored-key")
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cloud_setup_isolates_context_endpoint_and_prefix_and_retains_failed_keys() {
+async fn cloud_connect_isolates_context_endpoint_and_prefix_and_retains_failed_keys() {
     let cloud = Cloud::start(false).await;
     let other = Cloud::start(false).await;
     let home = tempfile::tempdir().unwrap();
@@ -551,22 +725,38 @@ async fn cloud_setup_isolates_context_endpoint_and_prefix_and_retains_failed_key
         .failure()
         .stdout(predicates::str::is_empty())
         .stderr(predicates::str::contains("configuration refused"));
+    let failed_directory = only_credential_directory(home.path());
+    assert!(cloud.state.lock().unwrap().connects.is_empty());
+    assert_eq!(cloud.state.lock().unwrap().configs.len(), 0);
     cloud.state.lock().unwrap().configure_error = false;
-    let first = setup(home.path(), &[]);
+    connect(home.path(), &[]);
     {
         let state = cloud.state.lock().unwrap();
         assert_eq!(
-            state.configs.len(),
+            state.attempted_configs.len(),
             2,
-            "failed configuration is not retried"
+            "failed configure is not retried"
         );
-        assert_eq!(state.configs[0], state.configs[1]);
+        assert_eq!(state.attempted_configs[0], state.attempted_configs[1]);
+        assert_eq!(state.configs, [state.attempted_configs[1].clone()]);
+        assert_eq!(state.connects.len(), 1);
     }
-    let context = setup(home.path(), &["--context", "other"]);
-    let prefix = setup(home.path(), &["--path-prefix", "another"]);
-    let default = setup(home.path(), &["--url", &cloud.url]);
-    let endpoint = setup(home.path(), &["--url", &other.url]);
-    let paths = [first, context, prefix, default, endpoint].map(|summary| key_path(&summary));
+    assert_eq!(only_credential_directory(home.path()), failed_directory);
+
+    let mut paths = vec![failed_directory.join("client_key")];
+    for flags in [
+        vec!["--context", "other"],
+        vec!["--path-prefix", "another"],
+        vec!["--url", cloud.url.as_str()],
+        vec!["--url", other.url.as_str()],
+    ] {
+        let before = credential_directories(home.path());
+        connect(home.path(), &flags);
+        let after = credential_directories(home.path());
+        let added: Vec<_> = after.difference(&before).collect();
+        assert_eq!(added.len(), 1, "each routing scope gets an identity");
+        paths.push(added[0].join("client_key"));
+    }
     for (i, path) in paths.iter().enumerate() {
         for previous in &paths[..i] {
             assert_ne!(path, previous);
@@ -576,77 +766,93 @@ async fn cloud_setup_isolates_context_endpoint_and_prefix_and_retains_failed_key
             );
         }
     }
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(state.configs.len(), 4);
+    assert_eq!(state.connects.len(), 4);
+    assert!(
+        state
+            .requests
+            .iter()
+            .any(|(_, path, _)| path.starts_with("/v1/another/boxes/"))
+    );
+    assert!(
+        state
+            .requests
+            .iter()
+            .any(|(_, path, _)| path.starts_with("/v1/team/boxes/"))
+    );
+    assert_eq!(other.state.lock().unwrap().configs.len(), 1);
+    assert_eq!(other.state.lock().unwrap().connects.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cloud_setup_uses_new_credential_home_and_ignores_local_config() {
+async fn cloud_connect_uses_new_credential_home_and_ignores_local_config() {
     for prefix in ["env-team", ""] {
         let cloud = Cloud::start(false).await;
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("new-home");
-        let output = cli(&home)
+        cli(&home)
             .env("BOXLITE_REST_URL", &cloud.url)
             .env("BOXLITE_REST_PATH_PREFIX", prefix)
             .env("BOXLITE_API_KEY", "environment-key")
             .args(["--config", "/missing/local-config.json", "ssh", "dev"])
             .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        let summary = String::from_utf8(output).unwrap();
-        assert!(key_path(&summary).exists());
+            .code(255)
+            .stdout(predicates::str::is_empty());
+        assert!(only_credential_directory(&home).join("client_key").exists());
         assert!(!home.join("boxes").exists());
-        let command = summary
-            .lines()
-            .find_map(|line| line.strip_prefix("  ssh "))
-            .unwrap();
-        let mut ssh = Command::new("/bin/sh");
-        isolated(&mut ssh, &home);
-        ssh.env("BOXLITE_API_KEY", "environment-key")
-            .env("BOXLITE_REST_URL", "http://127.0.0.1:1")
-            .env("BOXLITE_CONTEXT", "missing")
-            .env("BOXLITE_REST_PATH_PREFIX", "wrong")
-            .args([
-                "-c",
-                &format!("ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=2 {command}"),
-            ])
-            .assert()
-            .failure();
         let expected_path = if prefix.is_empty() {
             "/v1/boxes/"
         } else {
             "/v1/env-team/boxes/"
         };
+        let state = cloud.state.lock().unwrap();
         assert!(
-            cloud
-                .state
-                .lock()
-                .unwrap()
-                .requests
-                .iter()
-                .all(|(_, path, auth)| path.starts_with(expected_path)
-                    && auth == "Bearer environment-key")
+            state.requests.iter().all(|(_, path, auth)| {
+                path.starts_with(expected_path) && auth == "Bearer environment-key"
+            }),
+            "{:?}",
+            state.requests
         );
-        assert!(cloud.state.lock().unwrap().connect.starts_with("CONNECT "));
+        assert_eq!(state.configs.len(), 1);
+        assert_eq!(state.connects.len(), 1);
+        assert!(state.connects[0].starts_with("CONNECT "));
+        assert!(
+            state.connects[0]
+                .to_ascii_lowercase()
+                .contains("x-boxlite-authorization: bearer environment-key")
+        );
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cloud_setup_and_proxy_use_stored_oidc_bearer() {
+async fn cloud_connect_uses_stored_oidc_bearer() {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_oidc_context(home.path());
+    connect(home.path(), &["--context", "cloud"]);
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(state.configs.len(), 1);
+    assert!(
+        state.requests.iter().all(|(_, path, auth)| {
+            path.starts_with("/v1/team/") && auth == "Bearer oidc-token"
+        })
+    );
+    assert_eq!(state.connects.len(), 1);
+    assert!(
+        state.connects[0]
+            .to_ascii_lowercase()
+            .contains("x-boxlite-authorization: bearer oidc-token")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_proxy_uses_stored_oidc_bearer() {
     let cloud = Cloud::start(true).await;
     let home = tempfile::tempdir().unwrap();
-    std::fs::write(
-        home.path().join("credentials.toml"),
-        toml::to_string(&json!({
-            "profiles": {"cloud": {"url": cloud.url, "auth_method": "oidc",
-                "access_token": "oidc-token", "path_prefix": "team"}}
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let summary = setup(home.path(), &["--context", "cloud"]);
-    assert!(!summary.contains("oidc-token"));
+    cloud.save_oidc_context(home.path());
+    configure_fixture(home.path());
+    cloud.state.lock().unwrap().requests.clear();
     cli(home.path())
         .args(["--context", "cloud", "ssh", "--proxy", "dev"])
         .write_stdin("hello")
@@ -654,26 +860,55 @@ async fn cloud_setup_and_proxy_use_stored_oidc_bearer() {
         .success()
         .stdout("olleh");
     let state = cloud.state.lock().unwrap();
+    assert_eq!(state.configs.len(), 1);
     assert!(
-        state
-            .requests
-            .iter()
-            .all(|(_, path, auth)| path.starts_with("/v1/team/") && auth == "Bearer oidc-token")
+        state.requests.iter().all(|(_, path, auth)| {
+            path.starts_with("/v1/team/") && auth == "Bearer oidc-token"
+        })
     );
+    assert_eq!(state.connects.len(), 1);
     assert!(
-        state
-            .connect
+        state.connects[0]
             .to_ascii_lowercase()
             .contains("x-boxlite-authorization: bearer oidc-token")
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cloud_proxy_reports_disabled_missing_and_unsupported_without_configuring() {
+async fn cloud_proxy_reports_disabled_missing_and_unsupported_with_saved_configuration() {
     let cloud = Cloud::start(false).await;
     let home = tempfile::tempdir().unwrap();
     cloud.save_context(home.path(), "cloud", "team");
-    cloud.state.lock().unwrap().disabled = true;
+    let status = cli(home.path())
+        .args(["ssh", "--status", "dev"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let initial: Value = serde_json::from_slice(&status).unwrap();
+    assert_eq!(initial["enabled"], false);
+    assert_eq!(initial["generation"], 0);
+    assert_eq!(initial["host_public_key"], "");
+    cli(home.path())
+        .args(["ssh", "--enable", "dev"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("SSH configuration is required"));
+    cli(home.path())
+        .args(["ssh", "--proxy", "dev"])
+        .assert()
+        .failure()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::contains("guest SSH is disabled"));
+    assert_eq!(cloud.state.lock().unwrap().configs.len(), 0);
+    let fixture = configure_fixture(home.path());
+    assert_eq!(fixture["generation"], 1);
+    cli(home.path())
+        .args(["ssh", "--disable", "dev"])
+        .assert()
+        .success();
+    cloud.state.lock().unwrap().requests.clear();
     cli(home.path())
         .args(["ssh", "--proxy", "dev"])
         .assert()
@@ -681,11 +916,11 @@ async fn cloud_proxy_reports_disabled_missing_and_unsupported_without_configurin
         .stdout(predicates::str::is_empty())
         .stderr(predicates::str::contains("guest SSH is disabled"));
     assert_eq!(cloud.state.lock().unwrap().requests.len(), 2);
-    {
-        let mut state = cloud.state.lock().unwrap();
-        state.disabled = false;
-        state.tunnel_error = true;
-    }
+    cli(home.path())
+        .args(["ssh", "--enable", "dev"])
+        .assert()
+        .success();
+    cloud.state.lock().unwrap().tunnel_error = true;
     cli(home.path())
         .args(["ssh", "--proxy", "dev"])
         .assert()
@@ -702,6 +937,258 @@ async fn cloud_proxy_reports_disabled_missing_and_unsupported_without_configurin
             .stderr(predicates::str::contains("No such box"));
     }
     let state = cloud.state.lock().unwrap();
-    assert!(state.configs.is_empty());
-    assert!(state.connect.is_empty());
+    assert_eq!(state.configs.len(), 1, "proxy does not configure SSH");
+    assert!(state.connects.is_empty());
+}
+
+#[rstest::rstest]
+#[case::file_prefix(false, true)]
+#[case::inaccessible_prefix(true, true)]
+#[case::inaccessible_only(true, false)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_connect_searches_past_invalid_path_entries(
+    #[case] inaccessible: bool,
+    #[case] include_valid_tools: bool,
+) {
+    // SAFETY: geteuid has no arguments or memory-safety preconditions.
+    if inaccessible && unsafe { nix::libc::geteuid() } == 0 {
+        eprintln!("root bypasses directory permissions; skipping inaccessible PATH case");
+        return;
+    }
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    let entries = tempfile::tempdir().unwrap();
+    let invalid = entries.path().join("invalid");
+    if inaccessible {
+        std::fs::create_dir(&invalid).unwrap();
+        std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o000)).unwrap();
+    } else {
+        std::fs::write(&invalid, "not a directory").unwrap();
+    }
+    let mut path = vec![invalid.clone()];
+    if include_valid_tools {
+        path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    }
+    let result = cli(home.path())
+        .env("PATH", std::env::join_paths(path).unwrap())
+        .args(["ssh", "dev"])
+        .assert();
+    if inaccessible {
+        std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let state = cloud.state.lock().unwrap();
+    if include_valid_tools {
+        result.code(255).stdout(predicates::str::is_empty());
+        assert_eq!(state.configs.len(), 1);
+        assert_eq!(state.connects.len(), 1);
+        assert!(
+            state.connects[0]
+                .to_ascii_lowercase()
+                .contains("x-boxlite-authorization: bearer stored-key")
+        );
+    } else {
+        result
+            .failure()
+            .stderr(predicates::str::contains("Permission denied"));
+        assert!(state.requests.is_empty());
+        assert!(credential_directories(home.path()).is_empty());
+    }
+}
+
+#[rstest::rstest]
+#[case::empty_path(false, false, "ssh")]
+#[case::ssh_only(true, false, "ssh-keygen")]
+#[case::directory_ssh(false, true, "ssh")]
+#[case::nonexecutable_keygen(true, true, "ssh-keygen")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_connect_requires_openssh_before_runtime_or_credentials(
+    #[case] include_ssh: bool,
+    #[case] rejected_entry: bool,
+    #[case] missing_tool: &str,
+) {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    let initial_home_entries: BTreeSet<_> = std::fs::read_dir(home.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    let tools = tempfile::tempdir().unwrap();
+    if include_ssh {
+        let ssh = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("ssh"))
+            .find(|path| {
+                std::fs::metadata(path).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            })
+            .expect("the test runner needs system ssh");
+        symlink(
+            std::fs::canonicalize(ssh).unwrap(),
+            tools.path().join("ssh"),
+        )
+        .unwrap();
+        if rejected_entry {
+            std::fs::write(tools.path().join("ssh-keygen"), "not executable").unwrap();
+        }
+    } else if rejected_entry {
+        std::fs::create_dir(tools.path().join("ssh")).unwrap();
+    }
+    cli(home.path())
+        .env("PATH", tools.path())
+        .args(["ssh", "dev"])
+        .assert()
+        .failure()
+        .stdout(predicates::str::is_empty())
+        .stderr(predicates::str::contains(format!(
+            "OpenSSH client tool '{missing_tool}' was not found in PATH; install the OpenSSH client package."
+        )));
+    let local_home = home.path().join("local");
+    cli(&local_home)
+        .env("PATH", tools.path())
+        .args(["--config", "/missing/runtime-config.json", "ssh", "unresolved"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(format!(
+            "OpenSSH client tool '{missing_tool}' was not found in PATH; install the OpenSSH client package."
+        )));
+    assert!(
+        !local_home.exists(),
+        "preflight precedes local runtime creation"
+    );
+    let current_home_entries: BTreeSet<_> = std::fs::read_dir(home.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(current_home_entries, initial_home_entries);
+    assert!(!home.path().join("boxes").exists());
+    assert!(credential_directories(home.path()).is_empty());
+    let state = cloud.state.lock().unwrap();
+    assert!(
+        state.requests.is_empty(),
+        "no REST reads or writes before preflight"
+    );
+    assert!(state.attempted_configs.is_empty());
+    assert!(state.connects.is_empty());
+}
+
+#[rstest::rstest]
+#[case::environment_expansion("home-${HOME}")]
+#[case::control_character("home-\n")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_connect_rejects_unusable_paths_before_side_effects(#[case] name: &str) {
+    let cloud = Cloud::start(false).await;
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join(name);
+    std::fs::create_dir(&home).unwrap();
+    cloud.save_context(&home, "cloud", "team");
+    let original = configure_fixture(&home);
+    cloud.state.lock().unwrap().requests.clear();
+
+    let output = cli(&home).args(["ssh", "dev"]).output().unwrap();
+    assert!(
+        !output.status.success(),
+        "unsupported paths must be rejected"
+    );
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(
+        state.configs.len(),
+        1,
+        "unusable paths must be rejected before replacing guest SSH configuration"
+    );
+    assert_eq!(state.status(), original);
+    assert!(
+        state
+            .requests
+            .iter()
+            .all(|(method, _, _)| *method == Method::GET),
+        "unusable paths must not mutate guest services: {:?}",
+        state.requests
+    );
+    assert!(state.connects.is_empty());
+    assert!(
+        !home.join("ssh").exists(),
+        "unusable paths must not create managed credentials"
+    );
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("SSH command paths"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[rstest::rstest]
+#[case::interrupt(nix::sys::signal::Signal::SIGINT)]
+#[case::terminate(nix::sys::signal::Signal::SIGTERM)]
+#[case::hangup(nix::sys::signal::Signal::SIGHUP)]
+#[case::quit(nix::sys::signal::Signal::SIGQUIT)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_connect_cancels_pending_tunnel_preparation(
+    #[case] signal: nix::sys::signal::Signal,
+) {
+    use std::process::Stdio;
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    let entered = Arc::new(tokio::sync::Notify::new());
+    cloud.state.lock().unwrap().blocked_tunnel = Some(entered.clone());
+    let mut command = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
+    command.env("BOXLITE_HOME", home.path());
+    for name in [
+        "BOXLITE_CONTEXT",
+        "BOXLITE_PROFILE",
+        "BOXLITE_REST_URL",
+        "BOXLITE_REST_PATH_PREFIX",
+        "BOXLITE_API_KEY",
+        "BOXLITE_LOG_FILE",
+    ] {
+        command.env_remove(name);
+    }
+    let mut child = command
+        .args(["ssh", "dev"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    if tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .is_err()
+    {
+        child.kill().await.unwrap();
+        panic!("fixture did not observe the tunnel preparation request");
+    }
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+        signal,
+    )
+    .unwrap();
+    let exited = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+    let status = match exited {
+        Ok(result) => result.unwrap(),
+        Err(_) => {
+            child.kill().await.unwrap();
+            panic!("SSH CLI ignored {signal} while tunnel preparation was pending");
+        }
+    };
+    assert_eq!(status.code(), Some(128 + signal as i32));
+    let mut stdout = Vec::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut stdout)
+        .await
+        .unwrap();
+    assert!(stdout.is_empty());
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(state.configs.len(), 1);
+    assert!(state.enabled);
+    assert!(
+        state.connects.is_empty(),
+        "cancellation must not launch an SSH connection"
+    );
 }

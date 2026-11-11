@@ -7,12 +7,13 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
-use boxlite::{BoxliteRestOptions, BoxliteRuntime, LiteBox, SshAccount, SshConfig};
+use boxlite::{BoxliteRestOptions, BoxliteRuntime, LiteBox, SshAccount, SshConfig, SshStatus};
 use sha2::{Digest, Sha256};
 
 use crate::cli::GlobalFlags;
 
-pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
+pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<i32> {
+    require_openssh()?;
     let connection = ConnectionTarget {
         context: global.resolved_context(),
         rest: global.rest_options()?,
@@ -37,8 +38,41 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
     if connection.rest.is_some() {
         crate::credentials::create_secure_dir(&home)?;
     }
-    println!("{}", configure(&sandbox, &home, &connection).await?);
-    Ok(())
+    let home = fs::canonicalize(home).context("resolve runtime home")?;
+    let scope = connection.remote_scope()?;
+    let directory = match &scope {
+        Some(scope) => home
+            .join("ssh/remote")
+            .join(scope)
+            .join(sandbox.id().as_str()),
+        None => {
+            let layout = FilesystemLayout::new(home, FsLayoutConfig::without_bind_mount());
+            layout
+                .box_layout(sandbox.id().as_str(), false)?
+                .root()
+                .join("ssh")
+        }
+    };
+    let host_alias = match scope {
+        Some(scope) => format!("boxlite-{scope}-{}", sandbox.id()),
+        None => sandbox.id().to_string(),
+    }
+    .to_ascii_lowercase();
+    let paths = super::connect::ConnectionPaths::new(&directory)?;
+    let credentials = directory.clone();
+    let (config, credentials_existed, expected_host_key) = tokio::task::spawn_blocking(move || {
+        let credentials_existed = match fs::symlink_metadata(&credentials) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error).context("inspect SSH key directory"),
+        };
+        let config = managed_config(&credentials)?;
+        let expected_host_key = public_key(&credentials.join("host_key"))?;
+        Ok::<_, anyhow::Error>((config, credentials_existed, expected_host_key))
+    })
+    .await??;
+    let status = prepare_ssh(&sandbox, config, credentials_existed, &expected_host_key).await?;
+    super::connect::execute(&sandbox, &status, paths, &host_alias, &expected_host_key).await
 }
 
 struct ConnectionTarget {
@@ -63,48 +97,77 @@ impl ConnectionTarget {
     }
 }
 
-/// Apply managed credentials and describe how to connect after CLI exit.
-async fn configure(
+fn require_openssh() -> Result<()> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for name in ["ssh", "ssh-keygen"] {
+        let mut found = false;
+        let mut permission_error = None;
+        for directory in std::env::split_paths(&path) {
+            match fs::metadata(directory.join(name)) {
+                Ok(metadata) if metadata.is_file() && metadata.mode() & 0o111 != 0 => {
+                    found = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(nix::libc::ENOTDIR) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    permission_error.get_or_insert(error);
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("inspect OpenSSH client tool '{name}'"));
+                }
+            }
+        }
+        if !found {
+            if let Some(error) = permission_error {
+                return Err(error).with_context(|| format!("inspect OpenSSH client tool '{name}'"));
+            }
+            bail!(
+                "OpenSSH client tool '{name}' was not found in PATH; install the OpenSSH client package."
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn prepare_ssh(
     sandbox: &LiteBox,
-    home: &Path,
-    connection: &ConnectionTarget,
-) -> Result<String> {
-    let home = fs::canonicalize(home).context("resolve runtime home")?;
-    let directory = match connection.remote_scope()? {
-        Some(scope) => home
-            .join("ssh/remote")
-            .join(scope)
-            .join(sandbox.id().as_str()),
-        None => {
-            let layout = FilesystemLayout::new(home.clone(), FsLayoutConfig::without_bind_mount());
-            layout
-                .box_layout(sandbox.id().as_str(), false)?
-                .root()
-                .join("ssh")
+    config: SshConfig,
+    credentials_existed: bool,
+    expected_host_key: &str,
+) -> Result<SshStatus> {
+    let ssh = sandbox.ssh();
+    let status = if !credentials_existed {
+        ssh.configure(config).await?
+    } else {
+        let status = ssh.status().await?;
+        if status.enabled {
+            status
+        } else if status.generation > 0 {
+            ssh.enable().await?
+        } else {
+            // Generation zero also describes idle boxes with saved configuration.
+            // Preserve configure's startup policy; never explicitly start the box.
+            ssh.configure(config).await?
         }
     };
-    let private_key = directory.join("client_key");
-    let command = connection_command(
-        &std::env::current_exe()?,
-        &home,
-        sandbox.id().as_str(),
-        &private_key,
-        connection,
-    )?;
-    let config = tokio::task::spawn_blocking(move || managed_config(&directory)).await??;
-    let status = sandbox.ssh().configure(config).await?;
-    let guidance = if connection.rest.is_some() {
-        "The connection requires enabled guest SSH and server tunnel support with inbound access. Proxy opens a public tunnel that remains open after exit.\n\nCopy and run the following command to enter the box:"
-    } else {
-        "Warning: CLI exit stops non-detached boxes. The connection command requires a running detached box (created with `boxlite create` or `boxlite run -d`).\n\nCopy and run the following command to enter a running detached box:"
-    };
-    Ok(format!(
-        "SSH configured for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: {}\nSSH host key fingerprint: {}\n\n{guidance}\n\n  {command}\n",
-        sandbox.name().unwrap_or(sandbox.id().as_str()),
-        private_key.display(),
-        status.listen_address,
-        status.host_key_fingerprint,
-    ))
+    fn identity(key: &str) -> (Option<&str>, Option<&str>) {
+        let mut fields = key.split_whitespace();
+        (fields.next(), fields.next())
+    }
+    if identity(&status.host_public_key) != identity(expected_host_key) {
+        bail!(
+            "SSH host key does not match the CLI-managed identity for box {}; refusing to reconfigure or connect",
+            sandbox.id()
+        );
+    }
+    if !status.enabled {
+        bail!("guest SSH is disabled after preparing box {}", sandbox.id());
+    }
+    Ok(status)
 }
 
 fn managed_config(directory: &Path) -> Result<SshConfig> {
@@ -122,7 +185,7 @@ fn managed_config(directory: &Path) -> Result<SshConfig> {
                     .arg(staging.path().join(name))
                     .stdin(Stdio::null())
                     .output()
-                    .context("run ssh-keygen; install the OpenSSH client tools")?;
+                    .context("run ssh-keygen")?;
                 if !output.status.success() {
                     bail!("ssh-keygen failed to generate {name}");
                 }
@@ -145,7 +208,7 @@ fn managed_config(directory: &Path) -> Result<SshConfig> {
     })
 }
 
-fn check_private(path: &Path, directory: bool) -> Result<()> {
+pub(super) fn check_private(path: &Path, directory: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path).context("inspect SSH credentials")?;
     // SAFETY: geteuid has no arguments or memory-safety preconditions.
     let uid = unsafe { nix::libc::geteuid() };
@@ -182,75 +245,6 @@ fn public_key(path: &Path) -> Result<String> {
         .context("invalid SSH public key encoding")?
         .trim()
         .into())
-}
-
-fn quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn connection_command(
-    executable: &Path,
-    home: &Path,
-    id: &str,
-    key: &Path,
-    connection: &ConnectionTarget,
-) -> Result<String> {
-    let text = |path: &Path| -> Result<String> {
-        let value = path.to_str().context("SSH command paths must be UTF-8")?;
-        if value.chars().any(char::is_control) || value.contains("${") {
-            bail!(
-                "SSH command paths cannot contain control characters or ${{: {}",
-                path.display()
-            );
-        }
-        Ok(value.into())
-    };
-    let mut proxy = format!(
-        "{} --home {}",
-        quote(&text(executable)?),
-        quote(&text(home)?),
-    );
-    if connection.context.chars().any(char::is_control) {
-        bail!("SSH command context cannot contain control characters");
-    }
-    let hostname = if let Some(rest) = &connection.rest {
-        let prefix = rest.path_prefix.as_deref().unwrap_or("");
-        if rest.url.chars().chain(prefix.chars()).any(char::is_control) {
-            bail!("SSH command routing cannot contain control characters");
-        }
-        // URL selection uses default credentials; the parser rejects combining it
-        // with --context. Named contexts resolve their endpoint when proxy runs.
-        if connection.context == crate::credentials::DEFAULT_PROFILE {
-            proxy.push_str(&format!(" --url={}", quote(&rest.url)));
-        } else {
-            proxy.push_str(&format!(" --context={}", quote(&connection.context)));
-        }
-        proxy.push_str(&format!(" --path-prefix={}", quote(prefix)));
-        proxy.push_str(&format!(" ssh --proxy -- {}", quote(id)));
-        format!(
-            "boxlite-{}-{id}",
-            connection.remote_scope()?.context("missing remote scope")?
-        )
-    } else {
-        proxy.push_str(&format!(
-            " --context {} ssh --proxy -- {}",
-            quote(&connection.context),
-            quote(id)
-        ));
-        id.to_string()
-    };
-    // Unlike -i's early filesystem check, IdentityFile expands SSH tokens
-    // before loading the key. Quote for ssh_config first, then for the shell.
-    let identity = text(key)?
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('%', "%%");
-    Ok(format!(
-        "ssh -o {} -o IdentitiesOnly=yes -o {} {}",
-        quote(&format!("IdentityFile=\"{identity}\"")),
-        quote(&format!("ProxyCommand={}", proxy.replace('%', "%%"))),
-        quote(&format!("box@{hostname}"))
-    ))
 }
 
 #[cfg(test)]

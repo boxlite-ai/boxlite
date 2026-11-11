@@ -114,7 +114,7 @@ fn configuration_sources_are_required_and_exclusive() {
 }
 
 #[test]
-fn operations_are_options_and_setup_is_the_default() {
+fn operations_are_options_and_connect_is_the_default() {
     let names: Vec<String> = crate::cli::command()
         .find_subcommand("ssh")
         .expect("ssh command")
@@ -447,10 +447,10 @@ impl Server {
         let Commands::Ssh(ssh) = cli.command else {
             panic!("expected the ssh command");
         };
-        super::execute(ssh, &cli.global).await
+        super::execute(ssh, &cli.global).await.map(|_| ())
     }
 
-    fn requests(&self) -> Vec<(String, String)> {
+    pub(super) fn requests(&self) -> Vec<(String, String)> {
         self.state
             .lock()
             .unwrap()
@@ -532,7 +532,7 @@ async fn configure_posts_the_complete_file_configuration_once() {
 }
 
 #[tokio::test]
-async fn setup_and_proxy_report_missing_runtime_configuration() {
+async fn connect_and_proxy_report_missing_runtime_configuration() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("missing.json");
     let home = temp.path().join("home");
