@@ -40,7 +40,9 @@ Image Layers          Rootfs Builder              Box Rootfs
 
 Protected host copy-out resolves trusted host parents through filesystem path
 resolution, retaining `..` and symlink semantics. A trailing `/` requests a
-destination directory independently of the resolved path. This preparation does
+destination directory independently of the resolved path. Resolution runs on a
+blocking worker so filesystem operations do not occupy an async executor thread.
+This preparation does
 not enable merging protected copies into existing directories: the existing
 extraction policy still rejects that operation.
 
