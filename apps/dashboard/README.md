@@ -623,6 +623,13 @@ Boxes; billing records have no creation CTA. Search misses, loading and errors
 remain separate states. Quotas and other task-specific content above the list can
 change its absolute vertical position without changing the empty-state anatomy.
 
+For the compact fleet overview, open `/dashboard/boxes?preview=fleet` in mock mode.
+This loads 14 Boxes (6 running, 5 stopped, and 3 in other states), including after
+refresh. The parameter is read when mock fixtures initialize; reload if changing
+the URL through client-side navigation. Opening `/dashboard/boxes` without the
+parameter and reloading restores the default 7-Box fixture. Empty-account overrides
+below take precedence.
+
 For local mock review, `localStorage['desktop-review-empty'] = '1'` empties Boxes,
 Images, Registries, Volumes, Domains, billing documents, credit activity and cost
 series. API Keys are already empty by default. Set `SkipOnboarding_mock-user-00000000`
