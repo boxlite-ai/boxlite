@@ -404,6 +404,49 @@ describe('RunnerDiskExpansionService round', () => {
       )
     })
 
+    it('marks exhausted when the filesystem sits within the ext4-overhead zone of the cap', async () => {
+      // Device 200 parked on cap 200 reports ~195.8 (0.979): a raw
+      // comparison would leave the gate open and re-request the device's
+      // current size — a GCP 400 — every round instead of marking exhausted.
+      const runner = gcpRunner({ diskGiB: 200 * 0.979 })
+      const { service, runnerRepository, gcpDiskClient } = makeService({
+        readyRunners: [runner],
+        expansion: { capGiB: 200 },
+      })
+
+      await service.evaluateAndConfirm()
+
+      expect(runnerRepository.update).toHaveBeenCalledWith(
+        { id: runner.id, unschedulable: false, state: expect.anything() },
+        { unschedulable: true, unschedulableReason: RunnerUnschedulableReason.DISK_EXPAND_EXHAUSTED },
+      )
+      expect(gcpDiskClient.resizeDisk).not.toHaveBeenCalled()
+    })
+
+    it('holds the exhausted mark while the filesystem sits within the overhead zone of the cap', async () => {
+      // The lift gate shares the tolerance: a device parked on the cap must
+      // not be lifted back into the pool just because its filesystem reads
+      // ~2% low, only for the next round to re-mark it.
+      const runner = gcpRunner({
+        unschedulable: true,
+        unschedulableReason: RunnerUnschedulableReason.DISK_EXPAND_EXHAUSTED,
+        diskGiB: 200 * 0.979,
+        currentDiskUsagePercentage: 50,
+        currentAllocatedDiskGiB: 100,
+      })
+      const { service, runnerRepository } = makeService({
+        readyRunners: [runner],
+        expansion: { capGiB: 200 },
+      })
+
+      await service.evaluateAndConfirm()
+
+      expect(runnerRepository.update).not.toHaveBeenCalledWith(
+        { id: runner.id, unschedulableReason: RunnerUnschedulableReason.DISK_EXPAND_EXHAUSTED },
+        { unschedulable: false, unschedulableReason: null },
+      )
+    })
+
     it('falls back to the admission expandLimit as the cap', async () => {
       const runner = gcpRunner()
       // resolveCapGiB(undefined, 240) = 240: capacity 200 under it, so the

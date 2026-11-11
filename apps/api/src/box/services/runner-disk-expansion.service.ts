@@ -37,11 +37,31 @@ export const MAX_PATCHES_PER_ROUND = 20
 /**
  * ext4 metadata keeps the filesystem ~2.1% below the block device (measured:
  * 4.18 GiB on a 200 GiB disk), so the runner's reported diskGiB (a filesystem
- * total) needs this slack before it can count as "reached the new size". The
- * remaining margin is deliberate: if real overhead ever exceeds it,
+ * total) never matches a device size exactly. Every comparison of a reported
+ * filesystem figure against a device size goes through deviceReachedGiB:
+ * resize confirmation, the exhaustion cap gate, and the exhaustion-lift gate.
+ * The remaining margin is deliberate: if real overhead ever exceeds it,
  * confirmation times out loudly instead of passing silently.
  */
 export const CONFIRM_TOLERANCE_RATIO = 0.975
+
+/**
+ * Whether a reported filesystem size counts as a device having reached
+ * `targetDeviceGiB`.
+ *
+ * Decision history: the cap is a device size while the report is the
+ * filesystem total, so comparing the two raw left the cap gates open forever
+ * at a device parked on the cap — every round re-requested the device's
+ * current size, drawing a GCP 400 ("new size must be larger") with an ERROR
+ * log each minute, and the runner never became exhausted. Having the runner
+ * report the device size was rejected as the heavy fix: it changes the
+ * runner reporting contract, and this tolerance already exists for exactly
+ * this gap. Accepted cost: a device within ~0.4% below the cap reads as
+ * at-cap — ceiling semantics, not a boundary.
+ */
+export function deviceReachedGiB(reportedFsGiB: number, targetDeviceGiB: number): boolean {
+  return reportedFsGiB >= targetDeviceGiB * CONFIRM_TOLERANCE_RATIO
+}
 
 /** Relative cap default multiplier: one default-ceiling generation per 100% growth. */
 export const CAP_DEFAULT_MULTIPLIER = 2
@@ -283,7 +303,7 @@ export class RunnerDiskExpansionService {
           await this.closePending(row, RunnerDiskExpansionStatus.FAILED, op.error, now)
           resultCounter().add(1, { result: 'op_failed' })
         } else if (op.status === 'DONE') {
-          if (runner.diskGiB >= row.toGiB * CONFIRM_TOLERANCE_RATIO) {
+          if (deviceReachedGiB(runner.diskGiB, row.toGiB)) {
             await this.closePending(row, RunnerDiskExpansionStatus.CONFIRMED, null, now)
             resultCounter().add(1, { result: 'confirmed' })
           } else if (now.getTime() - row.requestedAt.getTime() > confirmTimeoutMs) {
@@ -404,7 +424,7 @@ export class RunnerDiskExpansionService {
         (await this.expansions.count({
           where: { runnerId: runner.id, accepted: true, requestedAt: MoreThan(budgetWindowStart) },
         })) < expansion.maxExpansionsPerWindow
-      const capHasRoom = cap !== undefined && runner.diskGiB < cap
+      const capHasRoom = cap !== undefined && !deviceReachedGiB(runner.diskGiB, cap)
       if (runner.currentDiskUsagePercentage < expansion.liftPercentage && budgetFree && capHasRoom) {
         await this.liftExhaustedMark(runner)
       }
@@ -443,7 +463,7 @@ export class RunnerDiskExpansionService {
       this.gaugeValues.uncapped += 1
       return false
     }
-    if (runner.diskGiB >= cap) {
+    if (deviceReachedGiB(runner.diskGiB, cap)) {
       await this.markExhausted(runner, `cap ${cap}GiB reached`)
       return false
     }
