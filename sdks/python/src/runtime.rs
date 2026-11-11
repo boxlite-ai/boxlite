@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxImportSource, BoxOptions, BoxliteOptions, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
@@ -242,33 +242,22 @@ impl PyBoxlite {
     /// Server implementations must pass `untrusted=True` for uploaded bytes so
     /// host-only features and filesystem paths are rejected and server-owned
     /// security is enforced.
-    #[pyo3(signature = (archive_path=None, name=None, *, untrusted=false, checkpoint_id=None, box_id=None))]
+    #[pyo3(signature = (archive_path, name=None, *, untrusted=false))]
     fn import_box<'py>(
         &self,
         py: Python<'py>,
-        archive_path: Option<String>,
+        archive_path: String,
         name: Option<String>,
         untrusted: bool,
-        checkpoint_id: Option<String>,
-        box_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
-        if untrusted && checkpoint_id.is_some() {
-            return Err(map_err(boxlite::BoxliteError::InvalidArgument(
-                "untrusted requires an archive source".into(),
-            )));
-        }
-        let archive = archive_path.map(|path| {
-            if untrusted {
-                BoxArchive::from_untrusted_upload(path)
-            } else {
-                BoxArchive::new(path)
-            }
-        });
-        let source =
-            BoxImportSource::from_options(archive, checkpoint_id, box_id).map_err(map_err)?;
+        let archive = if untrusted {
+            BoxArchive::from_untrusted_upload(archive_path)
+        } else {
+            BoxArchive::new(archive_path)
+        };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let handle = source.import_box(&runtime, name).await.map_err(map_err)?;
+            let handle = runtime.import_box(archive, name).await.map_err(map_err)?;
             Ok(PyBox {
                 handle: Arc::new(handle),
             })

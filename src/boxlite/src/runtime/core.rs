@@ -632,21 +632,20 @@ mod tests {
             checkpoints.get("base").await.unwrap_err(),
             checkpoints.remove("base", false).await.unwrap_err(),
             checkpoints.remove("base", true).await.unwrap_err(),
+            checkpoints
+                .import_box("base", Some("worker".into()), None)
+                .await
+                .err()
+                .expect("local checkpoint import must fail"),
+            checkpoints
+                .import_box("base", None, Some("target"))
+                .await
+                .err()
+                .expect("local checkpoint import must fail"),
         ];
         for error in errors {
             assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
             assert!(error.to_string().contains("REST runtimes"), "{error}");
-        }
-        #[cfg(feature = "rest")]
-        for box_id in [None, Some("target".to_string())] {
-            let source = crate::BoxImportSource::Checkpoint {
-                checkpoint_id: "base".into(),
-                box_id,
-            };
-            assert!(matches!(
-                source.import_box(&runtime, None).await,
-                Err(BoxliteError::Unsupported(_))
-            ));
         }
         assert!(!home.path().join("checkpoints").exists());
         assert!(runtime.list_info().await.unwrap().is_empty());

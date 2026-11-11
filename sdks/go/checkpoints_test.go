@@ -78,7 +78,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	if err != nil || detail.ID != captured.ID || detail.State != "failed" || detail.ErrorReason != "archive upload failed" {
 		t.Fatalf("get: %+v %v", detail, err)
 	}
-	created, err := runtime.ImportWithOptions(ctx, "", "worker", ImportOptions{CheckpointID: "checkpoint-1"})
+	created, err := checkpoints.ImportBox(ctx, "checkpoint-1", "worker", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	if created.ID() != "target-1" || created.Name() != "worker" {
 		t.Fatalf("created: %s %q", created.ID(), created.Name())
 	}
-	recovered, err := runtime.ImportWithOptions(ctx, "", "", ImportOptions{CheckpointID: "checkpoint-1", BoxID: created.ID()})
+	recovered, err := checkpoints.ImportBox(ctx, "checkpoint-1", "", created.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	unnamed, err := runtime.ImportWithOptions(ctx, "", "", ImportOptions{CheckpointID: "checkpoint-1"})
+	unnamed, err := checkpoints.ImportBox(ctx, "checkpoint-1", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 		if _, err := checkpoints.Create(ctx, key, ""); !IsInvalidArgument(err) {
 			t.Fatalf("create %q: %v", key, err)
 		}
-		if _, err := checkpoints.runtime.ImportWithOptions(ctx, "", "", ImportOptions{CheckpointID: key}); !IsInvalidArgument(err) {
+		if _, err := checkpoints.ImportBox(ctx, key, "", ""); !IsInvalidArgument(err) {
 			t.Fatalf("create box %q: %v", key, err)
 		}
 		if err := checkpoints.Remove(ctx, key, true); !IsInvalidArgument(err) {
@@ -151,7 +151,7 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 		}
 	}
 	for _, target := range []string{"target", "bad\x00suffix"} {
-		if _, err := checkpoints.runtime.ImportWithOptions(ctx, "", "conflicting-name", ImportOptions{CheckpointID: "base", BoxID: target}); !IsInvalidArgument(err) {
+		if _, err := checkpoints.ImportBox(ctx, "base", "conflicting-name", target); !IsInvalidArgument(err) {
 			t.Fatalf("conflicting import target %q: %v", target, err)
 		}
 	}
@@ -160,7 +160,7 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := checkpoints.runtime.ImportWithOptions(cancelled, "", "worker", ImportOptions{CheckpointID: "base"}); !errors.Is(err, context.Canceled) {
+	if _, err := checkpoints.ImportBox(cancelled, "base", "worker", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled: %v", err)
 	}
 }
@@ -168,25 +168,17 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
 	operations := []struct {
 		name string
-		call func(context.Context, *Runtime, string) error
+		call func(context.Context, *Checkpoints, string) error
 	}{
-		{"create", func(ctx context.Context, runtime *Runtime, key string) error {
-			_, err := runtime.Checkpoints().Create(ctx, key, "")
+		{"create", func(ctx context.Context, c *Checkpoints, key string) error {
+			_, err := c.Create(ctx, key, "")
 			return err
 		}},
-		{"get", func(ctx context.Context, runtime *Runtime, key string) error {
-			_, err := runtime.Checkpoints().Get(ctx, key)
-			return err
-		}},
-		{"list", func(ctx context.Context, runtime *Runtime, _ string) error {
-			_, err := runtime.Checkpoints().List(ctx)
-			return err
-		}},
-		{"remove", func(ctx context.Context, runtime *Runtime, key string) error {
-			return runtime.Checkpoints().Remove(ctx, key, false)
-		}},
-		{"import", func(ctx context.Context, runtime *Runtime, key string) error {
-			_, err := runtime.ImportWithOptions(ctx, "", "", ImportOptions{CheckpointID: key})
+		{"get", func(ctx context.Context, c *Checkpoints, key string) error { _, err := c.Get(ctx, key); return err }},
+		{"list", func(ctx context.Context, c *Checkpoints, _ string) error { _, err := c.List(ctx); return err }},
+		{"remove", func(ctx context.Context, c *Checkpoints, key string) error { return c.Remove(ctx, key, false) }},
+		{"import", func(ctx context.Context, c *Checkpoints, key string) error {
+			_, err := c.ImportBox(ctx, key, "", "")
 			return err
 		}},
 	}
@@ -205,24 +197,24 @@ func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
 			defer runtime.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := operation.call(ctx, runtime, "base"); err == nil || !strings.Contains(err.Error(), "checkpoint unavailable") {
+			if err := operation.call(ctx, runtime.Checkpoints(), "base"); err == nil || !strings.Contains(err.Error(), "checkpoint unavailable") {
 				t.Fatalf("backend failure was lost: %v", err)
 			}
 			if operation.name != "list" {
-				if err := operation.call(ctx, runtime, "\xff"); !IsInvalidArgument(err) {
+				if err := operation.call(ctx, runtime.Checkpoints(), "\xff"); !IsInvalidArgument(err) {
 					t.Fatalf("native UTF-8 rejection was lost: %v", err)
 				}
 			}
 			cancelled, stop := context.WithCancel(context.Background())
 			stop()
-			if err := operation.call(cancelled, runtime, "base"); !errors.Is(err, context.Canceled) {
+			if err := operation.call(cancelled, runtime.Checkpoints(), "base"); !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancelled admission: %v", err)
 			}
 			if err := operation.call(context.Background(), nil, "base"); !errors.Is(err, ErrRuntimeClosed) {
 				t.Fatalf("nil manager: %v", err)
 			}
 			runtime.closingOnce.Do(func() { close(runtime.closing) })
-			if err := operation.call(context.Background(), runtime, "base"); !errors.Is(err, ErrRuntimeClosed) {
+			if err := operation.call(context.Background(), runtime.Checkpoints(), "base"); !errors.Is(err, ErrRuntimeClosed) {
 				t.Fatalf("closing runtime: %v", err)
 			}
 		})
@@ -287,26 +279,5 @@ func TestCheckpointManagementCancellationAfterNativeAdmission(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestCheckpointImportSourceSelectionRejectsConflicts(t *testing.T) {
-	runtime := &Runtime{}
-	for _, input := range []struct {
-		path, name string
-		options    ImportOptions
-	}{
-		{"", "", ImportOptions{}},
-		{"file.boxlite", "", ImportOptions{CheckpointID: "base"}},
-		{"file.boxlite", "", ImportOptions{BoxID: "target"}},
-		{"", "worker", ImportOptions{CheckpointID: "base", BoxID: "target"}},
-		{"", "", ImportOptions{CheckpointID: "base", BoxID: "bad\x00target"}},
-	} {
-		if _, err := runtime.ImportWithOptions(t.Context(), input.path, input.name, input.options); !IsInvalidArgument(err) {
-			t.Fatalf("invalid source %#v: %v", input, err)
-		}
-	}
-	if _, err := runtime.ImportWithOptions(t.Context(), "", "", ImportOptions{CheckpointID: "base"}); !errors.Is(err, ErrRuntimeClosed) {
-		t.Fatalf("closed import: %v", err)
 	}
 }

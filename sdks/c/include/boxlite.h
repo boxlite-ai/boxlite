@@ -258,22 +258,13 @@ typedef struct CAgentEventsOptions {
   const char *after;
 } CAgentEventsOptions;
 
-typedef struct RuntimeHandle CBoxliteRuntime;
+// Box export completion.
+typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
-// Import source selection. Specify archive_path or checkpoint_id, not both.
-// box_id is only valid for a checkpoint and is mutually exclusive with name.
-typedef struct CBoxImportOptions {
-  const char *archive_path;
-  const char *name;
-  const char *checkpoint_id;
-  const char *box_id;
-} CBoxImportOptions;
+typedef struct RuntimeHandle CBoxliteRuntime;
 
 // Runtime import completion.
 typedef void (*CRuntimeImportCb)(CBoxHandle*, CBoxliteError*, void*);
-
-// Box export completion.
-typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
 typedef struct OptionsHandle CBoxliteOptions;
 
@@ -1086,14 +1077,6 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
 
-// Queue an archive or checkpoint import; inputs are copied before returning.
-// The callback owns the returned Box handle, released with boxlite_box_free.
-enum BoxliteErrorCode boxlite_runtime_import_with_options(CBoxliteRuntime *runtime,
-                                                          const struct CBoxImportOptions *options,
-                                                          CRuntimeImportCb cb,
-                                                          void *user_data,
-                                                          CBoxliteError *out_error);
-
 // Submit a box export.
 //
 // On success, the callback owns the returned path and must release it with
@@ -1198,6 +1181,16 @@ enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteRuntime *runtime,
                                                 CBoxRemoveBoxCb cb,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
+
+// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
+// A non-null box_id replaces an idle target; the callback owns the Box handle.
+enum BoxliteErrorCode boxlite_checkpoint_import_box(CBoxliteRuntime *runtime,
+                                                    const char *key,
+                                                    const char *name,
+                                                    const char *box_id,
+                                                    CRuntimeImportCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,

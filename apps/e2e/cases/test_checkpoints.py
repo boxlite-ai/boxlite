@@ -102,7 +102,7 @@ async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_i
     await rt.remove(source.id, force=True)
     assert (await rt.checkpoints.get(checkpoint.id)).state == "ready"
 
-    copy = await rt.import_box(checkpoint_id=checkpoint.id, name=names["copy"])
+    copy = await rt.checkpoints.import_box(checkpoint.id, names["copy"])
     assert copy.id != source.id
     read_captured = (
         "printf '%s\n%s\n' \"$CHECKPOINT_E2E\" \"$BOXLITE_BOX_ID\"; "
@@ -120,7 +120,7 @@ async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_i
     await shell(target, "mkdir -p /workspace; printf old-target > /workspace/checkpoint-e2e.txt")
     await target.stop()
     public_id = target.id
-    recovered = await rt.import_box(checkpoint_id=checkpoint.id, box_id=public_id)
+    recovered = await rt.checkpoints.import_box(checkpoint.id, box_id=public_id)
     assert recovered.id == public_id
     assert recovered.name == names["target"]
     info = await recovered.info()

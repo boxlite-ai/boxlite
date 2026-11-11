@@ -169,10 +169,10 @@ boxlite --url https://api.example.com checkpoint list
 boxlite --url https://api.example.com checkpoint get dev-base
 
 # Saved execution settings are inherited; configuration overrides are refused.
-boxlite --url https://api.example.com import --checkpoint dev-base --name worker
+boxlite --url https://api.example.com checkpoint import dev-base --name worker
 
 # Replace an idle stopped or failed box, preserving its public Box ID.
-boxlite --url https://api.example.com import --checkpoint dev-base --box worker
+boxlite --url https://api.example.com checkpoint import dev-base --box worker
 boxlite --url https://api.example.com checkpoint delete dev-base
 ```
 
@@ -183,8 +183,8 @@ intact; `--force` tolerates absence and never bypasses active use.
 
 Storage, capture coordination, and replacement retries belong to the server.
 The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
-The CLI uses the runtime facade shared with SDKs for checkpoint management and
-import selection; native archive import and provision remain unchanged.
+The CLI uses the runtime checkpoint handle for management and REST imports.
+The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
 Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
 management routes. Existing binary archive export/import remains available.
 The cloud runner validates downloaded archives through its separate native

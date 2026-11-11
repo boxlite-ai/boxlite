@@ -18,33 +18,27 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ### Managed checkpoints
 
-The runtime facade owns `checkpoint_backend`, shared by SDK bindings and the CLI.
-The shared REST import adapter obtains that capability from the runtime and sends
-JSON to the existing `POST /boxes/import` endpoint.
-Native disk import and provision retain their archive-only implementation; existing
-archive calls remain compatible. Local checkpoint requests return `Unsupported`.
-Runner stages downloads under its checkpoint work root and removes staging only
-after native import finishes.
-
-`Runtime.Import(ctx, archivePath, name)` retains its original signature.
-Use `Runtime.ImportWithOptions` with `ImportOptions{CheckpointID: key, BoxID: target}` for checkpoint creation or replacement.
-Archive paths and checkpoint IDs are mutually exclusive.
+Checkpoint import belongs to the checkpoint handle, separate from archive import.
+The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
+checkpoint import requests through REST. The runtime facade owns the shared
+checkpoint backend; native archive import and provision remain unchanged.
 
 The source must be stopped before `Create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get` and `Remove`, each taking a context. The handle follows its runtime's
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`
+and `ImportBox(ctx, key, name, boxID)`, each taking a context. The handle follows its runtime's
 lifetime and needs no separate close. Captured archives survive source deletion.
 
 ```go
 checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
 if err != nil { return err }
-worker, err := runtime.ImportWithOptions(ctx, "", "worker", boxlite.ImportOptions{CheckpointID: checkpoint.ID})
+worker, err := runtime.Checkpoints().ImportBox(ctx, checkpoint.ID, "worker", "")
 if err != nil { return err }
 defer worker.Close()
 ```
 
-Leave `ImportOptions.BoxID` empty for a new Box; a nonempty value replaces that target.
+Pass an empty `boxID` for a new Box; a nonempty `boxID` replaces that target.
 Name and target are mutually exclusive.
 
 Cloud capture may report `creating`; query until `ready` before use. New imports

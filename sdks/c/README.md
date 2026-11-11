@@ -9,18 +9,15 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 ## Managed checkpoints
 
-The runtime facade owns `checkpoint_backend`, shared by SDK bindings and the CLI.
-The shared REST import adapter obtains that capability from the runtime and sends
-JSON to the existing `POST /boxes/import` endpoint.
-Native disk import and provision retain their archive-only implementation; existing
-archive calls remain compatible. Local checkpoint requests return `Unsupported`.
-Runner stages downloads under its checkpoint work root and removes staging only
-after native import finishes.
+Checkpoint import belongs to the checkpoint handle, separate from archive import.
+The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
+checkpoint import requests through REST. The runtime facade owns the shared
+checkpoint backend; native archive import and provision remain unchanged.
 
 The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-`boxlite_checkpoint_create`, `list`, `get` and `remove` require a
+`boxlite_checkpoint_create`, `list`, `get`, `remove` and `import_box` require a
 REST runtime and use its existing post-and-drain event queue. Local runtimes
 deliver an unsupported-operation error through the same callback queue.
 Import accepts optional name and box_id; they are mutually exclusive. A non-null
@@ -38,11 +35,6 @@ Storage and replacement coordination belong to the server. Existing native archi
 export/import remains available.
 `boxlite_box_name` returns an owned name string, released with
 `boxlite_free_string`, or null for an unnamed Box.
-
-Checkpoint imports use `boxlite_runtime_import_with_options` with `CBoxImportOptions`:
-set `checkpoint_id` and optional `box_id` or `name`, leaving `archive_path` null.
-The original `boxlite_runtime_import` archive signature and ABI remain unchanged.
-Exactly one source is required; `box_id` requires a checkpoint and excludes `name`.
 
 ## Table of Contents
 

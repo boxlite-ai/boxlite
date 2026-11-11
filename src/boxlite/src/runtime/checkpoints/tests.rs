@@ -25,6 +25,25 @@ async fn invalid_checkpoint_arguments_are_rejected_before_backend_dispatch() {
             Err(BoxliteError::InvalidArgument(_))
         ));
     }
+    let error = checkpoints
+        .import_box("base", Some("worker".into()), Some("target"))
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+    assert!(error.to_string().contains("mutually exclusive"));
+    for target in ["", "target\0suffix"] {
+        assert!(matches!(
+            checkpoints.import_box("base", None, Some(target)).await,
+            Err(BoxliteError::InvalidArgument(_))
+        ));
+    }
+    assert!(matches!(
+        checkpoints
+            .import_box("base", Some("bad/name".into()), None)
+            .await,
+        Err(BoxliteError::InvalidArgument(_))
+    ));
     // Boundary names pass validation and reach the backend capability check.
     for name in ["a".to_owned(), "a".repeat(128), "A0._-".to_owned()] {
         assert!(matches!(

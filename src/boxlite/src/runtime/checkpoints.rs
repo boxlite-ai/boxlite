@@ -99,7 +99,37 @@ impl CheckpointHandle {
         self.backend()?.remove(key, force).await
     }
 
-    pub(crate) fn backend(&self) -> BoxliteResult<&dyn CheckpointBackend> {
+    /// Import into a new box, or replace an idle target selected by `box_id`.
+    /// Name and target are mutually exclusive. Replacement preserves the public identity.
+    /// Import retains the checkpoint archive for subsequent uses.
+    pub async fn import_box(
+        &self,
+        key: &str,
+        name: Option<String>,
+        box_id: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
+        checked_name(key)?;
+        if name.is_some() && box_id.is_some() {
+            return Err(BoxliteError::InvalidArgument(
+                "name and box_id are mutually exclusive".into(),
+            ));
+        }
+        if let Some(target) = box_id {
+            if target.is_empty() || target.contains('\0') {
+                return Err(BoxliteError::InvalidArgument(
+                    "import target must be a box ID or name".into(),
+                ));
+            }
+            self.backend()?.import_box(key, None, Some(target)).await
+        } else {
+            if let Some(name) = &name {
+                checked_name(name)?;
+            }
+            self.backend()?.import_box(key, name, None).await
+        }
+    }
+
+    fn backend(&self) -> BoxliteResult<&dyn CheckpointBackend> {
         self.backend.as_deref().ok_or_else(|| {
             BoxliteError::Unsupported("checkpoints are only implemented for REST runtimes".into())
         })

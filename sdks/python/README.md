@@ -7,31 +7,26 @@ and `SimpleBox.agents`, including synchronous wrappers, grouped options and erro
 
 ## Managed checkpoints
 
-The runtime facade owns `checkpoint_backend`, shared by SDK bindings and the CLI.
-The shared REST import adapter obtains that capability from the runtime and sends
-JSON to the existing `POST /boxes/import` endpoint.
-Native disk import and provision retain their archive-only implementation; existing
-archive calls remain compatible. Local checkpoint requests return `Unsupported`.
-Runner stages downloads under its checkpoint work root and removes staging only
-after native import finishes.
+Checkpoint import belongs to the checkpoint handle, separate from archive import.
+The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
+checkpoint import requests through REST. The runtime facade owns the shared
+checkpoint backend; native archive import and provision remain unchanged.
 
 The source must be stopped before `create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
 On REST runtimes, `runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
-`get(key)` and `remove(key, force=False)`. `SyncBoxlite.checkpoints` exposes the same operations
+`get(key)`, `remove(key, force=False)` and
+`import_box(key, name=None, *, box_id=None)`. `SyncBoxlite.checkpoints` exposes the same operations
 synchronously. These independent archives survive source deletion.
 
 ```python
 checkpoint = await runtime.checkpoints.create("source", "dev-base")
-worker = await runtime.import_box(checkpoint_id=checkpoint.id, name="worker")
+worker = await runtime.checkpoints.import_box(checkpoint.id, "worker")
 ```
 
-The existing `runtime.import_box(archive_path, name)` archive call stays compatible.
-Checkpoint imports use `checkpoint_id` instead of `archive_path`; the two sources are mutually exclusive.
-
 New imports and replacements inherit all saved execution settings; they accept no
-configuration overrides. `runtime.import_box(checkpoint_id=key, box_id=target)` requires an idle stopped or failed
+configuration overrides. `import_box(key, box_id=target)` requires an idle stopped or failed
 target and preserves the public Box ID. A cloud capture can initially report
 `creating`; query it until `ready` before use. Force removal only ignores absence.
 Storage and replacement coordination belong to the server. Local runtime checkpoint

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use boxlite::{CheckpointHandle, CheckpointInfo};
 use pyo3::prelude::*;
 
+use crate::box_handle::PyBox;
 use crate::util::map_err;
 
 #[pyclass(name = "CheckpointInfo")]
@@ -96,6 +97,28 @@ impl PyCheckpointHandle {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             handle.remove(&key, force).await.map_err(map_err)
+        })
+    }
+
+    /// Import a new box or replace box_id; name and box_id are exclusive.
+    #[pyo3(signature = (key, name=None, *, box_id=None))]
+    fn import_box<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        name: Option<String>,
+        box_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(PyBox {
+                handle: Arc::new(
+                    handle
+                        .import_box(&key, name, box_id.as_deref())
+                        .await
+                        .map_err(map_err)?,
+                ),
+            })
         })
     }
 }

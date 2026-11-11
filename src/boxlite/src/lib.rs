@@ -81,8 +81,6 @@ pub use runtime::types::{
 };
 
 #[cfg(feature = "rest")]
-pub use rest::checkpoints::BoxImportSource;
-#[cfg(feature = "rest")]
 pub use rest::credential::{AccessToken, ApiKeyCredential, Credential};
 #[cfg(feature = "rest")]
 pub use rest::options::BoxliteRestOptions;

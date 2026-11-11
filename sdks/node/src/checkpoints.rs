@@ -6,6 +6,7 @@ use boxlite::{CheckpointHandle, CheckpointInfo};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+use crate::box_handle::JsBox;
 use crate::util::map_err;
 
 #[napi(object)]
@@ -78,5 +79,23 @@ impl JsCheckpointHandle {
             .remove(&key, force.unwrap_or(false))
             .await
             .map_err(map_err)
+    }
+
+    /// Import a new box, or replace boxId while preserving its name.
+    #[napi]
+    pub async fn import_box(
+        &self,
+        key: String,
+        name: Option<String>,
+        box_id: Option<String>,
+    ) -> Result<JsBox> {
+        Ok(JsBox {
+            handle: Arc::new(
+                self.handle
+                    .import_box(&key, name, box_id.as_deref())
+                    .await
+                    .map_err(map_err)?,
+            ),
+        })
     }
 }

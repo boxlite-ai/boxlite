@@ -82,25 +82,25 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       state: "failed",
       errorReason: "archive upload failed",
     });
-    const target = await runtime.importBox(undefined, "worker", {
-      checkpointId: "checkpoint-1",
-    });
+    const target = await runtime.checkpoints.importBox(
+      "checkpoint-1",
+      "worker",
+    );
     expect(target.id).toBe("target-1");
     expect(
       (
-        await runtime.importBox(undefined, undefined, {
-          checkpointId: "checkpoint-1",
-          boxId: target.id,
-        })
+        await runtime.checkpoints.importBox(
+          "checkpoint-1",
+          undefined,
+          target.id,
+        )
       ).id,
     ).toBe(target.id);
     await runtime.checkpoints.remove("checkpoint-1", true);
     await runtime.checkpoints.remove("checkpoint-1");
     await runtime.checkpoints.remove("checkpoint-1", false);
     await runtime.checkpoints.create("source-1");
-    await runtime.importBox(undefined, undefined, {
-      checkpointId: "checkpoint-1",
-    });
+    await runtime.checkpoints.importBox("checkpoint-1");
     expect(requests).toEqual([
       {
         method: "POST",
@@ -149,26 +149,6 @@ test("checkpoint native REST calls preserve configuration inheritance and result
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
-    );
-  }
-});
-
-test("checkpoint native runtime import validates source options before HTTP", async () => {
-  const runtime = JsBoxlite.rest(
-    new BoxliteRestOptions({ url: "http://127.0.0.1:1" }),
-  );
-  expect(runtime.checkpoints).not.toHaveProperty("importBox");
-  const inputs = [
-    [undefined, undefined, undefined],
-    ["archive.boxlite", undefined, { checkpointId: "base" }],
-    ["archive.boxlite", undefined, { boxId: "target" }],
-    [undefined, "worker", { checkpointId: "base", boxId: "target" }],
-    [undefined, undefined, { checkpointId: "bad/key" }],
-    [undefined, undefined, { checkpointId: "base", boxId: "" }],
-  ] as const;
-  for (const [archive, name, options] of inputs) {
-    await expect(runtime.importBox(archive, name, options)).rejects.toThrow(
-      /specify|mutually exclusive|must/i,
     );
   }
 });

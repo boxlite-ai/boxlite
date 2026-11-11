@@ -100,17 +100,15 @@ async def test_checkpoint_native_rest_management_and_box_creation(checkpoint_ser
         "failed",
         "archive upload failed",
     )
-    created = await runtime.import_box(checkpoint_id="checkpoint-1", name="worker")
+    created = await checkpoints.import_box("checkpoint-1", "worker")
     assert (created.id, created.name) == ("target-1", "worker")
-    recovered = await runtime.import_box(
-        checkpoint_id="checkpoint-1", box_id="target-1"
-    )
+    recovered = await checkpoints.import_box("checkpoint-1", box_id="target-1")
     assert recovered.id == "target-1"
     await checkpoints.remove("checkpoint-1", True)
     await checkpoints.remove("checkpoint-1")
     await checkpoints.remove("checkpoint-1", False)
     await checkpoints.create("source-1")
-    await runtime.import_box(checkpoint_id="checkpoint-1")
+    await checkpoints.import_box("checkpoint-1")
     assert requests == [
         ("POST", "/v1/checkpoints", {"source_box_id": "source-1", "name": "base"}),
         ("GET", "/v1/checkpoints", None),
@@ -137,37 +135,11 @@ def test_checkpoint_sync_bridge_returns_managed_box_handles(checkpoint_server):
     url, requests = checkpoint_server
     with boxlite.SyncBoxlite.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
         assert runtime.checkpoints.list()[0].id == "checkpoint-1"
-        target = runtime.import_box(checkpoint_id="checkpoint-1", name="worker")
+        target = runtime.checkpoints.import_box("checkpoint-1", "worker")
         assert isinstance(target, boxlite.SyncBox)
         assert target.id == "target-1"
         assert (
-            runtime.import_box(checkpoint_id="checkpoint-1", box_id=target.id).id
+            runtime.checkpoints.import_box("checkpoint-1", box_id=target.id).id
             == target.id
         )
     assert requests[1][2] == {"checkpoint_id": "checkpoint-1", "name": "worker"}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "options",
-    [
-        {},
-        {"archive_path": "file.boxlite", "checkpoint_id": "base"},
-        {"archive_path": "file.boxlite", "box_id": "target"},
-        {"checkpoint_id": "base", "name": "worker", "box_id": "target"},
-        {"checkpoint_id": "bad/key"},
-        {"checkpoint_id": "base", "box_id": ""},
-        {"checkpoint_id": "base", "untrusted": True},
-    ],
-)
-async def test_checkpoint_import_source_options_fail_before_http(
-    checkpoint_server, options
-):
-    url, requests = checkpoint_server
-    runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
-    assert not hasattr(runtime.checkpoints, "import_box")
-    with pytest.raises(
-        (ValueError, RuntimeError), match="specify|mutually exclusive|must|requires"
-    ):
-        await runtime.import_box(**options)
-    assert requests == []
