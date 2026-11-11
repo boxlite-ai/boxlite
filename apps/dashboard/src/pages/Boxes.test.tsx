@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   placeholder: false,
   socketEnabled: false,
   filteredTotal: undefined as number | undefined,
+  fleetTotal: 0,
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -122,7 +123,7 @@ vi.mock('@/hooks/queries/useApiKeysQuery', () => ({
 }))
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({
-    data: state.pending || state.boxCountPending ? undefined : 0,
+    data: state.pending || state.boxCountPending ? undefined : state.fleetTotal,
     isSuccess: !state.pending && !state.boxCountPending,
   }),
   useQueryClient: () => ({
@@ -184,6 +185,7 @@ describe('Boxes page, empty account', () => {
     state.placeholder = false
     state.socketEnabled = false
     state.filteredTotal = undefined
+    state.fleetTotal = 0
     mocks.handlers.clear()
     mocks.setQueryData.mockReset()
     // Most cases are about the empty state itself, so start from a browser that
@@ -207,6 +209,14 @@ describe('Boxes page, empty account', () => {
       root.render(<Boxes />)
     })
   }
+
+  it.each([9, 10])('shows the overview only at ten organization Boxes (count=%i)', (count) => {
+    state.fleetTotal = count
+    // A filtered or empty page does not determine whether the overview is shown.
+    state.total = 0
+    render()
+    expect(document.querySelector('[aria-label="Boxes overview"]') !== null).toBe(count >= 10)
+  })
 
   it('shows the filtered total rather than the current page size', () => {
     state.items = [{ id: 'box-1', name: 'web-api', state: 'started', createdAt: '2026-06-01T00:00:00.000Z' }]

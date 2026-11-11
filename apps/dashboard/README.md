@@ -557,6 +557,14 @@ no toast or loading lock. The API's 30-second grant cache still applies, followe
 by up to one polling interval and request latency before an open dialog updates.
 See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-sizes).
 
+## API Keys
+
+The list uses the shared resource filter beside **Create Key**. Search matches
+key names locally, ignoring case and surrounding whitespace; the filter count
+and table footer show the matching keys. Masked key values are not searchable.
+No matches shows **Clear filter**, while an organization with no keys retains
+the setup guidance. Creation permissions and revoke confirmation remain unchanged.
+
 ## Domains
 
 **Domains** is a primary navigation page alongside Images and Volumes. It lists
@@ -631,7 +639,7 @@ Box inbound state means the proxy tunnel gate, not organization scope: disabled 
 
 Desktop visual comparisons and reproduction steps: [screenshot gallery](../../docs/contributing/investigations/assets/desktop-dashboard-review/README.md).
 
-Resource headers leave 24px before the next section. Desktop filters share a 380×36px field, 13px input text, solid border and explicit accessible name. Toolbars precede list headers by 14px; Images and Domains usage wraps only when needed. Private registries supports local host, prefix and username filtering with clear-filter recovery. Boxes shows total, running and stopped counts for fleets of at least ten Boxes, independently of list filters or pagination. Its overview has 24px gaps above and below.
+Resource headers leave 24px before the next section. Desktop filters share a 380×36px field, 13px input text, solid border and explicit accessible name. Toolbars precede list headers by 14px; Images and Domains usage wraps only when needed. Private registries supports local host, prefix and username filtering with clear-filter recovery. Boxes shows total, running and stopped counts for fleets of at least ten Boxes, independently of list filters or pagination. Its compact overview places labels and tabular counts inline in a 50px desktop strip, with 16px before the filter toolbar; loading counts remain unknown rather than zero.
 
 Billing pagers retain Previous on a failed later page with unknown totals. Cached Images refresh failures identify the retained rows as previously loaded data. Unknown invoice statuses preserve the upstream text. Create Box pricing and validation scroll inside the body while header and action footer remain visible.
 

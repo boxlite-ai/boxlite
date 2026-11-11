@@ -6,7 +6,7 @@ import { ResourceFilter } from '@/components/ResourceLayout'
  */
 
 import { OrganizationSuspendedError } from '@/api/errors'
-import { AsciiButton, StatCard } from '@/components/ascii'
+import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
 import { Plus } from '@/components/ui/icon'
@@ -632,7 +632,7 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  // Fleet stat cards — real data, independent of the table's current filter/page.
+  // Fleet overview — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
 
   // Counts come straight from the paginated endpoint's `total` (limit=1, no full fetch).
@@ -726,11 +726,21 @@ const Boxes: React.FC = () => {
       </div>
 
       {(totalBoxesQuery.data ?? 0) >= FLEET_THRESHOLD && (
-        <div className="mb-6 grid shrink-0 grid-cols-3 gap-3" aria-label="Boxes overview">
-          <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
-          <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
-          <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
-        </div>
+        <dl
+          className="mb-4 flex shrink-0 flex-wrap items-center gap-x-8 gap-y-2 border-y border-border py-3"
+          aria-label="Boxes overview"
+        >
+          {[
+            ['Total', totalBoxesDisplay],
+            ['Running', runningBoxesDisplay],
+            ['Stopped', stoppedBoxesDisplay],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-baseline gap-2">
+              <dt className="text-meta text-muted-foreground">{label}</dt>
+              <dd className="font-mono text-lg font-medium leading-6 tabular-nums">{value}</dd>
+            </div>
+          ))}
+        </dl>
       )}
 
       {/* toolbar */}
