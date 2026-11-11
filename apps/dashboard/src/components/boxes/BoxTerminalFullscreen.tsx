@@ -12,17 +12,18 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { getBoxDisplayName, getBoxPublicId } from '@/lib/box-identity'
-import { isStoppable } from '@/lib/utils/box'
-import { Container, TerminalSquare } from '@/components/ui/icon'
+import { Container } from '@/components/ui/icon'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { BoxFullscreenShell } from './BoxFullscreenShell'
-import { BoxTerminal } from './BoxTerminal'
+import { BoxTerminalSession } from './BoxTerminalSession'
+import { BoxPageNavigation } from './BoxPageNavigation'
 
 export default function BoxTerminalFullscreen() {
   const { boxId } = useParams<{ boxId: string }>()
   const { data: box, isLoading: boxLoading, isError: boxIsError } = useBoxQuery(boxId ?? '')
   useBoxWsSync({ boxId })
 
-  const running = box ? isStoppable(box) : false
+  usePageTitle(box ? `${getBoxDisplayName(box)} · Terminal` : 'Box terminal')
   const backPath = boxId ? RoutePath.BOX_DETAILS.replace(':boxId', boxId) : RoutePath.BOXES
 
   let body: ReactNode
@@ -48,23 +49,8 @@ export default function BoxTerminalFullscreen() {
         </Button>
       </Empty>
     )
-  } else if (!running) {
-    body = (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia>
-            <TerminalSquare className="size-12 text-muted-foreground" />
-          </EmptyMedia>
-          <EmptyTitle>Box is not running</EmptyTitle>
-          <EmptyDescription>Start the box to access the terminal.</EmptyDescription>
-        </EmptyHeader>
-        <Button variant="outline" size="sm" asChild>
-          <Link to={backPath}>Back</Link>
-        </Button>
-      </Empty>
-    )
   } else {
-    body = <BoxTerminal boxId={box.id} className="flex-1" />
+    body = <BoxTerminalSession box={box} />
   }
 
   const label = box ? getBoxDisplayName(box) : boxId
@@ -72,6 +58,7 @@ export default function BoxTerminalFullscreen() {
 
   return (
     <BoxFullscreenShell boxId={boxId} title={label} copyValue={publicBoxId || undefined}>
+      {boxId && <BoxPageNavigation boxId={boxId} current="terminal" className="px-3" />}
       {body}
     </BoxFullscreenShell>
   )

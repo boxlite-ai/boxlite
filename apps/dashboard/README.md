@@ -84,11 +84,11 @@ name-confirmed deletion without a VM or archive storage. Run
 
 ## SSH access
 
-The left **Network** section shows SSH state and its switch. The switch only
+The **Network** section shows SSH state and its switch. The switch only
 enables or disables saved configuration; it does not generate keys or change
 inbound. Status refreshes on click, window focus, and every 30 seconds while
 visible and idle. Reads skip pending operations and preserve mutation errors.
-Unknown/loading states cannot be toggled. The header and sidebar share one
+Unknown/loading states cannot be toggled. The header and Network section share one
 controller and component-scoped private keys.
 
 **Connect via SSH**, beside start/stop, first opens an access confirmation.
@@ -204,7 +204,7 @@ not automatically retried. Pending operations block overlapping actions and clos
 detail refreshes during mutations wait for the mutation to finish. Stale reads and
 responses after stop, permission, account, endpoint or scope changes are ignored.
 The title/close control stays fixed while the dialog body scrolls. Command lines
-wrap without changing copied content. The terminal remains mounted throughout.
+wrap without changing copied content. The overview remains mounted throughout.
 
 Tests cover consent, conditional creation, request ordering, permissions, partial
 success, same-key retry, stale responses, storage isolation and reset cancellation.
@@ -212,6 +212,49 @@ The local MSW preview echoes the generated host public key and fingerprint, reta
 saved configuration across Disable/Enable, and hides disabled listener identity like
 the real service. It exercises the real Dashboard but does not start an SSH server
 or prove a live cloud SSH handshake.
+
+## Box overview and terminal
+
+Each Box has two pages, linked by **Overview** and **Terminal**. The existing
+`/dashboard/boxes/:boxId` URL opens Overview; `/terminal` opens the dedicated
+shell page. The current destination is marked for assistive technology.
+
+Overview contains lifecycle and SSH actions, followed by a compact CPU, memory,
+and disk summary with explicit units. Configuration/Volumes and Network/Activity
+panels stack on narrow screens. Configuration uses aligned description-list
+fields; full image references wrap, and volumes use a table with Volume and
+Mount path headers. Section headings share the same sentence-case typography.
+Overview scrolls with the document so short viewports can still reach every
+section. At narrow widths, terminal status and recovery controls wrap into
+separate rows. The application header uses compact mobile spacing; profile
+and navigation menus stay within the available viewport and scroll when needed.
+Opening or refreshing Overview does not start a shell; refresh reloads box and
+SSH status. Terminal uses the available content height. A stopped Box offers
+**Start box** only to members with Box-write permission; pending starts disable
+the action, and transitional Boxes do not offer another start.
+
+The terminal header shows connection state, a text-size selector, **Clear
+terminal**, and **Scroll to bottom**. These controls preserve the current shell.
+Clear removes the displayed history and scrollback except the current line.
+Text-size choices are 12, 13, 14, and 16px; the choice survives reconnects within
+the mounted Terminal page. Header controls follow the dashboard theme; the
+terminal surface stays black in both themes.
+
+Only an explicit execution-exit frame reports **Session ended**. A dropped
+socket reports **Connection lost**, and connection establishment times out after
+30 seconds. Failed attempts request shell deletion, including shells whose start
+finishes after timeout or unmount. Cleanup is best-effort if the API refuses it.
+**Reconnect** starts a fresh shell. Leaving Terminal for Overview ends its shell;
+returning starts another one.
+
+Container resize notifications coalesce into one animation-frame measurement,
+skip hidden containers, and send only changed character dimensions. Font readiness
+also schedules a fit. These checks bound layout work; they do not establish
+producer backpressure or a throughput benchmark.
+
+Run `make test:apps:dashboard FILTER=Box` for box page, session,
+and lifecycle checks. The local UI preview may use a simulated transport and
+does not prove live guest-shell connectivity.
 
 ## ASCII action buttons
 
@@ -809,7 +852,7 @@ below it.
 | `--brand-foreground` | Dark text. White on the brand cyan is 2.5:1; the dark value is 7.3:1 |
 | `--destructive-solid` | Fill for buttons with white text, 4.67:1 in both themes. `--destructive` stays for text and tints |
 | Code blocks | `readableCodeTheme` in `src/lib/readable-code-theme.ts` moves each Prism token colour to the closest value that passes |
-| Terminal | Its surface is black in both themes, so status text and the Reconnect button use fixed light colours, never theme tokens |
+| Terminal | Its surface stays black in both themes; the separate header uses dashboard theme tokens for status and controls |
 
 A row that is busy is not dimmed: opacity pulled its text under 4.5:1. The status cell shows the
 spinner.

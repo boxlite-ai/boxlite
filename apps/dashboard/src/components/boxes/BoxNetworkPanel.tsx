@@ -13,73 +13,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
+import { BoxSectionHeader } from './BoxSectionHeader'
 
 /**
  * Mirrors the palette in BoxDetails so the network section reads as part of the
  * same spec sheet rather than a widget bolted onto it.
  */
 const STATUS = { idle: '#e0b341' } as const
-
-/**
- * Local copy of the section header from BoxDetails. It is module private there,
- * so duplicating this one small helper is cheaper than reaching into it. Worth
- * extracting to a shared module the next time either file is touched.
- */
-function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
-  return (
-    <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
-      <span className="text-label leading-none text-brand">▸</span>
-      <span className="text-meta uppercase tracking-[2px]">{title}</span>
-      <span className="flex-1" />
-      {right}
-    </div>
-  )
-}
-
-/**
- * A secondary text action. Underlined because bare muted text read as a static
- * annotation rather than a control. Stays muted on purpose: exposing a box to
- * the internet should not be the brightest thing on the sheet.
- *
- * Labels here stay short. This column is ~40px wide after the value takes its
- * share of 340px, so a label that spelled out the consequence
- * (`open to anyone`) wrapped onto a second line and squeezed the leader dots
- * to nothing. The consequence belongs in the confirmation dialog, which has
- * room for a paragraph.
- */
-function InlineAction({
-  children,
-  onClick,
-  disabled,
-  title,
-}: {
-  children: ReactNode
-  onClick: () => void
-  disabled?: boolean
-  title?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      // The two actions on this sheet are the ones that make a box reachable
-      // from outside; they get a button's weight, not a footnote's.
-      className={cn(
-        'border border-border px-[9px] py-[3px] font-mono text-label uppercase tracking-[1px] text-foreground',
-        'transition-colors hover:border-brand',
-        'disabled:pointer-events-none disabled:opacity-40',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
 
 export type BoxNetworkPanelProps = {
   /** The box's policy in both directions; absent when the API did not report it. */
@@ -129,48 +73,48 @@ export function BoxNetworkPanel({
   return (
     <>
       {/* A URL is a tunnel: the API grants it only with inbound access, to members who can manage the box. */}
-      <SectionHeader
-        title="network"
+      <BoxSectionHeader
+        title="Network"
         right={
-          <InlineAction
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onGetUrl}
             disabled={!inboundEnabled || !canManage}
             title={getUrlHint(inboundEnabled, canManage)}
           >
-            get url
-          </InlineAction>
+            Get URL
+          </Button>
         }
       />
 
       {/* Sheet convention: grey key, foreground value; hue carries the risk
           signal (amber when inbound is enabled). Outbound is read-only: no
           route changes it after create. */}
-      <div className="mb-[6px] flex items-baseline gap-2">
-        <span className="whitespace-nowrap text-muted-foreground">outbound</span>
-        <span className="min-w-[8px] flex-1" />
-        <span className="min-w-0 max-w-[66%] break-words text-right">
+      <div className="mb-4 grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
+        <span className="text-meta text-muted-foreground">Outbound</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">
           {network ? outboundLabel(network.outbound) : 'unknown'}
         </span>
       </div>
 
       {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}
-      <div className="mb-[6px] flex items-baseline gap-2">
-        <span className="whitespace-nowrap text-muted-foreground">inbound</span>
-        <span className="min-w-[8px] flex-1" />
-        <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
-          {network ? (inboundEnabled ? 'enabled' : 'disabled') : 'unknown'}
-        </span>
-        {canManage && network ? (
-          <Switch
-            aria-label="Inbound access"
-            checked={inboundEnabled}
-            disabled={inboundPending}
-            onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
-            // A text-less button's baseline is its bottom edge, so the row's
-            // baseline alignment would lift it above the text; center it.
-            className="ml-1 mr-3 shrink-0 scale-90 self-center"
-          />
-        ) : null}
+      <div className="mb-4 grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
+        <span className="text-meta text-muted-foreground">Inbound</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
+            {network ? (inboundEnabled ? 'enabled' : 'disabled') : 'unknown'}
+          </span>
+          {canManage && network ? (
+            <Switch
+              aria-label="Inbound access"
+              checked={inboundEnabled}
+              disabled={inboundPending}
+              onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
+              className="shrink-0"
+            />
+          ) : null}
+        </div>
       </div>
 
       <AlertDialog open={confirmingInbound} onOpenChange={setConfirmingInbound}>
