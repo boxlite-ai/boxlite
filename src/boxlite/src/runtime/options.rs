@@ -651,15 +651,12 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
-    /// Validate options for a new box: [`Self::sanitize_common`] plus the
-    /// outbound rules `update_outbound` accepts, so every saved allowlist can be
-    /// re-sent or rolled back to. Start and import skip the rule check, keeping
-    /// boxes and archives saved by older releases usable.
     /// The checkpoint this box is created from, if that is its rootfs source.
     ///
     /// A checkpoint box inherits the saved execution settings, and the server
     /// accepts no overrides. Any other option that differs from its default is
     /// therefore rejected here instead of being dropped on the wire.
+    #[cfg(feature = "rest")]
     pub(crate) fn checkpoint_source(&self) -> BoxliteResult<Option<&str>> {
         let RootfsSpec::Checkpoint(checkpoint) = &self.rootfs else {
             return Ok(None);
@@ -683,6 +680,10 @@ impl BoxOptions {
         Ok(Some(checkpoint))
     }
 
+    /// Validate options for a new box: [`Self::sanitize_common`] plus the
+    /// outbound rules `update_outbound` accepts, so every saved allowlist can be
+    /// re-sent or rolled back to. Start and import skip the rule check, keeping
+    /// boxes and archives saved by older releases usable.
     pub(crate) fn sanitize_create(&self) -> BoxliteResult<()> {
         self.sanitize_common()?;
         OutboundNetworkConfig::from(&self.network).validate()
