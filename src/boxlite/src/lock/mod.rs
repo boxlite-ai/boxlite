@@ -11,6 +11,10 @@
 mod file;
 mod memory;
 
+#[cfg(test)]
+#[path = "tests/process.rs"]
+mod process_tests;
+
 pub use file::FileLockManager;
 pub use memory::InMemoryLockManager;
 
@@ -342,12 +346,20 @@ mod tests {
 
         // Blocking acquisitions must hold the requested mode until their guard drops.
         for waiting_reader in [false, true] {
+            let (contended_tx, contended_rx) = mpsc::channel();
             let (acquired_tx, acquired_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let held_read = (!waiting_reader).then(|| ReadLockGuard::new(reader1.as_ref()));
             let held_write = waiting_reader.then(|| LockGuard::new(writer.as_ref()));
             let waiter = manager.retrieve(id).unwrap();
             let worker = thread::spawn(move || {
+                let acquired = if waiting_reader {
+                    waiter.try_read_lock()
+                } else {
+                    waiter.try_lock()
+                };
+                assert!(!acquired, "waiter must encounter the held lock");
+                contended_tx.send(()).unwrap();
                 let hold_guard = || {
                     acquired_tx.send(()).unwrap();
                     release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -360,6 +372,12 @@ mod tests {
                     hold_guard();
                 }
             });
+            contended_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                acquired_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout),
+                "waiter must not acquire before the owner releases"
+            );
             drop(held_read);
             drop(held_write);
             acquired_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -385,6 +403,7 @@ mod tests {
         let reader = manager.retrieve(id).unwrap();
         let peer = manager.retrieve(id).unwrap();
         let writer = manager.retrieve(id).unwrap();
+        let probe = manager.retrieve(id).unwrap();
 
         let exclusive = LockGuard::new_async(owner.as_ref()).await;
         let mut waiting_reader = Box::pin(ReadLockGuard::new_async(reader.as_ref()));
@@ -392,6 +411,8 @@ mod tests {
         let mut cancelled_writer = Box::pin(LockGuard::new_async(writer.as_ref()));
         assert!(futures::poll!(&mut cancelled_writer).is_pending());
         drop(cancelled_writer);
+        assert!(LockGuard::try_new(probe.as_ref()).is_none());
+        assert!(ReadLockGuard::try_new(probe.as_ref()).is_none());
         drop(exclusive);
 
         let shared = tokio::time::timeout(Duration::from_secs(1), waiting_reader)
@@ -411,6 +432,8 @@ mod tests {
         let mut cancelled_reader = Box::pin(ReadLockGuard::new_async(reader.as_ref()));
         assert!(futures::poll!(&mut cancelled_reader).is_pending());
         drop(cancelled_reader);
+        assert!(LockGuard::try_new(probe.as_ref()).is_none());
+        assert!(ReadLockGuard::try_new(probe.as_ref()).is_none());
         drop(exclusive);
         assert!(LockGuard::try_new(owner.as_ref()).is_some());
     }

@@ -1,3 +1,7 @@
+// These fixtures cover real fatal kernel errors, not EINTR retries. The retry
+// branch uses LOCK_NB; signalling a blocked flock exercises a different path,
+// and signal timing cannot deterministically interrupt a nonblocking attempt.
+
 use super::*;
 use crate::lock::{LockGuard, ReadLockGuard};
 use futures::FutureExt;

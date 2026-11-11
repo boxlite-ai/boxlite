@@ -93,11 +93,34 @@ with the box and rechecked on every local start. The VMM exposes virtualization
 extensions to the guest, then the guest agent grants only its `/dev/kvm` device
 to the OCI workload.
 
-The lock module also provides `LockGuard::new_async` and
-`ReadLockGuard::new_async`. They retry nonblocking acquisition every 10ms
-with Tokio sleep, leaving the executor thread available while waiting.
-Cancelling a waiter acquires nothing; dropping an acquired guard releases
-the lock. Blocking and try-lock interfaces remain available.
+### Reader/writer locks
+
+`Locker` provides shared reads and exclusive writes. `InMemoryLockManager` is
+single-process; `FileLockManager` uses `flock` across processes. Retrieve a separate
+handle for every concurrent acquisition: cloning an `Arc` shares ownership, not
+an independent lock. Nested acquisition and read-to-write upgrades are unsupported.
+
+`LockGuard::new_async` and `ReadLockGuard::new_async` retry nonblocking acquisition
+every 10ms with Tokio sleep. Cancelling a pending waiter must not release the
+current owner's lock. Dropping an acquired guard releases its lock; process exit
+also releases file locks when the last owning descriptor closes. Neither blocking
+nor asynchronous acquisition promises fairness.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=lock::` for the lock contract
+checks. Blocking tests acknowledge a failed acquisition before checking that the
+waiter cannot acquire until release. Cancellation checks probe read and write
+exclusion before releasing the owner. Reexecuted child processes independently
+open the manager and verify shared readers, writer exclusion, and exit release;
+control messages and deadlines bound the scenario, and cleanup kills/reaps children.
+
+Try-acquisition treats `WouldBlock` as contention, retries `Interrupted`, and
+panics on other OS errors rather than hiding them as contention. The errno tests
+exercise real fatal kernel errors, **not EINTR retry coverage**. The retry path
+uses `LOCK_NB`; interrupting a blocking `flock` exercises a different path.
+No deterministic local-filesystem trigger for nonblocking EINTR is established on
+macOS or Linux; signal timing alone is not evidence of reaching that branch.
+See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)
+and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/flock.2).
 
 ### ShimController
 
