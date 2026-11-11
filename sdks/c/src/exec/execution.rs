@@ -281,7 +281,27 @@ pub unsafe extern "C" fn boxlite_box_exec(
     out_execution: *mut *mut CExecutionHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    box_exec(handle, cmd, out_execution, out_error)
+    box_exec(handle, cmd, ptr::null(), 0, out_execution, out_error)
+}
+
+/// Additive ABI entry point: the original BoxliteCommand layout stays stable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_exec_keyed(
+    handle: *mut CBoxHandle,
+    cmd: *const BoxliteCommand,
+    key: *const c_char,
+    expected_started_at: i64,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_exec(
+        handle,
+        cmd,
+        key,
+        expected_started_at,
+        out_execution,
+        out_error,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -394,6 +414,8 @@ pub unsafe extern "C" fn boxlite_execution_free(execution: *mut CExecutionHandle
 unsafe fn box_exec(
     handle: *mut BoxHandle,
     cmd: *const BoxliteCommand,
+    key: *const c_char,
+    expected_started_at: i64,
     out_execution: *mut *mut ExecutionHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -413,7 +435,7 @@ unsafe fn box_exec(
         *out_execution = ptr::null_mut();
 
         let handle_ref = &*handle;
-        let command = match parse_boxlite_command(&*cmd) {
+        let mut command = match parse_boxlite_command(&*cmd) {
             Ok(command) => command,
             Err(e) => {
                 let code = error_to_code(&e);
@@ -422,6 +444,20 @@ unsafe fn box_exec(
             }
         };
 
+        if !key.is_null() {
+            let Some(key) = crate::util::parse_c_str(key) else {
+                write_error(
+                    out_error,
+                    BoxliteError::InvalidArgument("key must be UTF-8".into()),
+                );
+                return BoxliteErrorCode::InvalidArgument;
+            };
+            command = command.idempotency_key(key);
+            if expected_started_at != 0 {
+                command = command.expected_started_at(expected_started_at);
+            }
+        }
+
         // Synchronous handle creation: block on the underlying exec call,
         // which only sets up channels; it does not spawn the process loop.
         let lite = handle_ref.handle.clone();
@@ -429,8 +465,11 @@ unsafe fn box_exec(
 
         match result {
             Ok(execution) => {
-                *out_execution =
-                    Box::into_raw(Box::new(ExecutionHandle::new(execution, handle_ref, true)));
+                *out_execution = Box::into_raw(Box::new(ExecutionHandle::new(
+                    execution,
+                    handle_ref,
+                    key.is_null(),
+                )));
                 BoxliteErrorCode::Ok
             }
             Err(e) => {

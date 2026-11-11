@@ -7,6 +7,8 @@
 
 #include "boxlite.h"
 
+extern BoxliteErrorCode boxlite_box_exec_keyed(CBoxHandle *, const BoxliteCommand *, const char *, int64_t, CExecutionHandle **, CBoxliteError *);
+
 extern CBoxStdoutCb cbStdout(void);
 extern CBoxStderrCb cbStderr(void);
 extern CBoxExitCb cbExit(void);
