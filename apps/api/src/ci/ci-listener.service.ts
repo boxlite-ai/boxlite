@@ -34,7 +34,7 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
         image: this.config.get('ci.workerImage'),
         cpus: this.config.get('ci.workerCPUs'),
         memoryMiB: this.config.get('ci.workerMemoryGB') * 1024,
-        labels: ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
+        labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
       },
       capacity: this.settings,
     })

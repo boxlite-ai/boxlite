@@ -743,6 +743,7 @@ Primary navigation places **CI** in **Applications**, after Infrastructure, in b
 the sidebar and mobile menu. CI uses rail destinations on desktop and tabs on mobile.
 **Runners** (`/dashboard/ci`)
 lists actual JIT Boxes, with state, image, resources and links to Box details.
+Resources shows vCPU, RAM in GiB and configured disk capacity in GiB.
 It uses Box socket events and three-second polling during transitions, with a
 five-second fallback during socket loss or errors and ten-second refresh for
 journal-only capacity changes. It uses the same organization
@@ -750,14 +751,15 @@ access as Box reads. Each JIT Box row has a 28px isometric BoxCube beside its na
 matching the Boxes table. Running workers have a brand-colored play symbol;
 transitions, stopped workers and errors use the corresponding cube treatment.
 The CI cube is also used in the empty runner view; the page title has no icon.
-Name filtering sits immediately below the capacity strip in the same dashed
-search field as Images. It searches case-insensitive literal substrings across
+Name filtering shares a toolbar with the compact capacity summary, using the same
+380×36px shared ResourceFilter as Boxes and Images, with a solid border, muted icon
+and 13px monospace input. The 128-character limit and existing pagination remain. It searches case-insensitive literal substrings across
 all pages, resets pagination on edits and preserves organization-wide capacity.
 Clearing the input restores the inventory; matching count is independent of page size.
 **Connects** (`/dashboard/ci/connects`) uses a registry-style table for GitHub accounts;
-owners can connect a personal account or organization. Capacity is shown above the
-Runners table using Images' panel spacing and segmented meter, with a plain **Edit**
-text action beside the count for owners; the strip has no visible title or explanatory footer.
+owners can connect a personal account or organization. Capacity appears beside the Runners filter as `CI slots used / limit`, using Images'
+compact monospace usage-summary styling without a progress bar or surrounding panel.
+A plain **Edit** text action beside the count remains available to owners.
 It shows occupied scheduler slots against the effective shared limit; reservations
 and workers awaiting Box cleanup count, even before a Box row exists. Confirmed
 Box absence releases a slot even if GitHub runner cleanup remains pending.

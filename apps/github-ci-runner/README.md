@@ -24,7 +24,7 @@ flag to exclude private repositories. Complete GitHub's device authorization as
 that personal account owner or an organization owner.
 Connect also checks your current BoxLite organization owner/admin authority and
 prevents another platform tenant from claiming the same installation. Configure
-eligible workflow jobs with `runs-on: boxlite-ci-runner`.
+eligible workflow jobs with `runs-on: boxlite`.
 
 The API imports the shared controller, stores its state in PostgreSQL, and creates
 worker Boxes through internal BoxService capabilities under the stored binding's
@@ -223,16 +223,34 @@ catalog work has not completed. See the shared library's
 `GET /healthz` reports process liveness and whether installation discovery has
 completed. It is not a CI success or deployment acceptance result.
 
-Configure workflows with the fixed label:
+Configure workflows with the default label:
 
 ```yaml
 jobs:
   build:
-    runs-on: boxlite-ci-runner
+    runs-on: boxlite
     steps:
       - uses: actions/checkout@v4
       - run: echo 'Running in a BoxLite CI Box'
 ```
+
+Request a specific Box size by replacing `runs-on` with a resource label:
+
+```yaml
+jobs:
+  build:
+    runs-on: boxlite-2vcpu-4gbmem-10gbdisk
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo '2 vCPU, 4 GiB RAM, 10 GiB disk'
+```
+
+The label changes the actual Box resources in both hosted and standalone modes.
+Use exactly one default or custom resource label. Organization limits and Commerce
+quota still apply; invalid or conflicting requests cannot create workers.
+See the shared [resource-label contract](../libs/ci-listener/README.md#resource-labels)
+for quantities, bounds and restart behavior. `CI_WORKER_GROUP_NAME` selects a
+GitHub runner group independently of the workflow label.
 
 ## Dispatch and recovery
 

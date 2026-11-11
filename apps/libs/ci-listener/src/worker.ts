@@ -1,11 +1,31 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
 /** Runtime configuration only. GitHub JIT credentials are delivered after boot. */
-export interface WorkerLaunch {
-  name: string
-  image: string
+export interface WorkerResources {
   cpus: number
   memoryMiB: number
+  diskGiB?: number
+}
+
+export function validateWorkerResources(resources: WorkerResources): void {
+  const disk = resources.diskGiB ?? 10
+  if (
+    !Number.isSafeInteger(resources.cpus) ||
+    resources.cpus < 1 ||
+    resources.cpus > 16 ||
+    !Number.isSafeInteger(resources.memoryMiB) ||
+    resources.memoryMiB < 128 ||
+    resources.memoryMiB > 131072 ||
+    !Number.isSafeInteger(disk) ||
+    disk < 1 ||
+    !Number.isSafeInteger(disk * 1024 ** 3)
+  )
+    throw new Error('Invalid CI worker resources')
+}
+
+export interface WorkerLaunch extends WorkerResources {
+  name: string
+  image: string
   entrypoint: string[]
 }
 

@@ -16,6 +16,7 @@ import {
   ExecutionJournal,
   ExecutionLease,
   scopeKey,
+  parseResourceLabels,
 } from '@boxlite-ai/ci-listener'
 import { BoxDto } from '../box/dto/box.dto'
 import { CiNativeState } from './ci-native-state'
@@ -31,8 +32,7 @@ import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
 
-const database = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = database ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () => {
   const schema = 'ci_native_' + randomUUID().replaceAll('-', ''),
     org = randomUUID(),
@@ -70,11 +70,15 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     limits = { resolveMaxCreatedBoxes: jest.fn() },
     runners = { findOneUncachedOrFail: jest.fn() }
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(database!).hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw Error('Disposable local PostgreSQL required')
     db = await new DataSource({
       type: 'postgres',
-      url: database,
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       schema,
       entities: [Box, BoxLastActivity],
       namingStrategy: new CustomNamingStrategy(),
@@ -112,6 +116,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       const box = new Box('test-region', dto.name)
       Object.assign(box, {
         organizationId: organization.id,
+        cpu: dto.cpu,
+        mem: dto.memory,
+        disk: dto.disk,
         runnerId,
         osUser: 'runner',
         labels: {},
@@ -254,7 +261,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
           throw Error('Running workers need no registration mutation')
         },
       }),
-      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] },
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
     await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
     expect(admit).not.toHaveBeenCalled()
@@ -307,6 +314,82 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(limits.resolveMaxCreatedBoxes).toHaveBeenCalledWith(org)
     await expect(host.create(config)).rejects.toThrow('already attempted')
   })
+  it('passes parsed resources to BoxService and persists the requested native Box quantities', async () => {
+    const { host, config } = await prepared()
+    const resources = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!.resources
+    const created = await host.create({ ...config, ...resources })
+    expect(await db.getRepository(Box).findOneByOrFail({ id: created.box_id })).toMatchObject({
+      cpu: 2,
+      mem: 4,
+      disk: 10,
+    })
+    expect(platform.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cpu: 2, memory: 4, disk: 10 }),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ maxCreatedBoxes: 4, onPersist: expect.any(Function) }),
+    )
+  })
+  it.each([
+    { maxCpuPerBox: 1, maxMemoryPerBox: 128, maxDiskPerBox: 100 },
+    { maxCpuPerBox: 16, maxMemoryPerBox: 3, maxDiskPerBox: 100 },
+    { maxCpuPerBox: 16, maxMemoryPerBox: 128, maxDiskPerBox: 9 },
+  ])('rejects custom resources at the real BoxService organization boundary: %j', async (resourceLimits) => {
+    const { host, config, row } = await prepared()
+    organizations.findOne.mockResolvedValueOnce({ id: org, ...resourceLimits })
+    const region = jest.spyOn(platform as any, 'getValidatedOrDefaultRegion').mockResolvedValue({ id: 'test-region' })
+    const boxClass = jest.spyOn(platform as any, 'getValidatedOrDefaultClass').mockReturnValue('small')
+    const originalLimits = (platform as any).organizationBoxLimits
+    ;(platform as any).organizationBoxLimits = { resolve: async (organization) => organization }
+    jest.mocked(platform.create).mockImplementationOnce(BoxService.prototype.create.bind(platform))
+    try {
+      const resources = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!.resources
+      await expect(host.create({ ...config, ...resources })).rejects.toMatchObject({
+        rejectedCreationEffect: row.value.effect!.id,
+      })
+      expect(await db.getRepository(Box).count()).toBe(0)
+      await expect(host.get(config.name)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    } finally {
+      region.mockRestore()
+      boxClass.mockRestore()
+      ;(platform as any).organizationBoxLimits = originalLimits
+    }
+  })
+  it('enforces Commerce creation quota for a custom resource request', async () => {
+    const { host, config } = await prepared()
+    limits.resolveMaxCreatedBoxes.mockResolvedValueOnce(0)
+    const resources = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!.resources
+    await expect(host.create({ ...config, ...resources })).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+  })
+  it('resource refusal regression: native organization denial records a definitive rejection', async () => {
+    const { host, config, row } = await prepared()
+    organizations.findOne.mockResolvedValueOnce({ id: org, maxCpuPerBox: 1, maxMemoryPerBox: 128, maxDiskPerBox: 100 })
+    const region = jest.spyOn(platform as any, 'getValidatedOrDefaultRegion').mockResolvedValue({ id: 'test-region' })
+    const boxClass = jest.spyOn(platform as any, 'getValidatedOrDefaultClass').mockReturnValue('small')
+    const originalLimits = (platform as any).organizationBoxLimits
+    ;(platform as any).organizationBoxLimits = { resolve: async (organization) => organization }
+    jest.mocked(platform.create).mockImplementationOnce(BoxService.prototype.create.bind(platform))
+    try {
+      await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+      expect(await db.getRepository(Box).count()).toBe(0)
+      await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
+    } finally {
+      region.mockRestore()
+      boxClass.mockRestore()
+      ;(platform as any).organizationBoxLimits = originalLimits
+    }
+  })
+  it.each([{ cpus: 17 }, { memoryMiB: NaN }, { memoryMiB: 131073 }, { diskGiB: 0 }, { diskGiB: 8388608 }])(
+    'rejects invalid native launch quantities before creation: %j',
+    async (resources) => {
+      const { host, config } = await prepared()
+      const before = jest.mocked(platform.create).mock.calls.length
+      await expect(host.create({ ...config, ...resources })).rejects.toThrow('Invalid CI worker launch')
+      expect(platform.create).toHaveBeenCalledTimes(before)
+      expect(await db.getRepository(Box).count()).toBe(0)
+    },
+  )
   it('creation refusal regression: a real quota race persists a recoverable no-creation fact', async () => {
     limits.resolveMaxCreatedBoxes.mockResolvedValue(1)
     const { host, config, row } = await prepared()
@@ -402,7 +485,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
           throw Error('No runner was created')
         },
       }),
-      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] },
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
     await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
     await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
@@ -428,7 +511,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
           if (operation === 'admission') await store.transaction((tx) => store.admit(tx, current, app))
         },
       },
-      ['boxlite-ci-runner'],
+      ['boxlite'],
     )
     const before = jest.mocked(platform.create).mock.calls.length
     await expect(backend.workers.create(config)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
@@ -654,7 +737,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       journal,
       scopeKey(scope()),
       async () => ({ workers: host, admit: jest.fn(), job: jest.fn(), runners: jest.fn() }),
-      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] },
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
     try {
       await pool.tick(lease, capacity)

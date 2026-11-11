@@ -137,7 +137,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
       image: env.CI_WORKER_IMAGE ?? 'ghcr.io/actions/actions-runner:latest',
       cpus: integer('CI_WORKER_CPUS', 2, 16),
       memoryMiB: memory,
-      labels: ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
+      labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
     },
     max: integer('CI_WORKER_MAX', 1, 16),
   }

@@ -61,7 +61,7 @@ describe('CI shared GitHub JIT runners', () => {
     new GitHubRunners(
       GitHubCredential.personal('test-only-token'),
       scope,
-      ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
+      ['self-hosted', 'linux', 'x64', 'boxlite'],
       journal,
     )
   it('registers in the original repository only after durable intent admission', async () => {
@@ -74,7 +74,7 @@ describe('CI shared GitHub JIT runners', () => {
       json: {
         name,
         runner_group_id: 1,
-        labels: ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
+        labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
         work_folder: '_work',
       },
     })

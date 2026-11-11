@@ -45,6 +45,12 @@ The command requires BoxLite organization ownership and GitHub installation owne
 An API key needs `write:boxes` and `delete:boxes`. Current and future App-selected
 repositories follow the binding. A conflicting binding is rejected rather than replaced.
 
+After connecting, use `runs-on: boxlite` for the configured worker defaults or
+`runs-on: boxlite-2vcpu-4gbmem-10gbdisk` for 2 vCPU, 4 GiB RAM and 10 GiB disk.
+Both hosted and standalone execution enforce the backend's resource and quota
+checks. See [resource labels](../../apps/libs/ci-listener/README.md#resource-labels)
+for accepted quantities and conflicting-label rules.
+
 The current API reports `provisioning` after binding; runner capacity is not ready yet.
 The API deployment also needs the CI Login OAuth App credentials for authenticated GitHub account-type lookup; user authorization still uses the matching Personal or Organization CI App.
 

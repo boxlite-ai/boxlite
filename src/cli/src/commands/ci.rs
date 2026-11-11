@@ -99,7 +99,7 @@ pub async fn execute(args: CiArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     .await?;
     let listener = field(&response, "listener_status")?;
     println!("Connected {}. Listener: {listener}.", args.github_account);
-    println!("runs-on: boxlite-ci-runner");
+    println!("runs-on: boxlite");
     if listener != "ready" {
         println!("Binding saved; CI capacity is not ready yet.");
     }

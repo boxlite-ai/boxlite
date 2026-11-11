@@ -2,6 +2,7 @@
 import { GitHubCredential } from './github-app'
 import { decodeRepository, GitHubRepository } from './jobs'
 import { WorkerExecutor } from './worker'
+import { parseResourceLabels } from './resource-labels'
 
 export type RunnerScope =
   | { kind: 'repository'; repository: GitHubRepository; allowPublic: boolean; allowPrivate: boolean }
@@ -71,7 +72,7 @@ export class GitHubRunners {
         (label) => !label || label.length > 128 || Array.from(label).some((char) => char.charCodeAt(0) < 32),
       ) ||
       new Set(labels.map((label) => label.toLowerCase())).size !== labels.length ||
-      !labels.some((label) => label.toLowerCase() === 'boxlite-ci-runner')
+      !parseResourceLabels(labels)
     )
       throw new Error('Invalid GitHub runner labels')
     this.labels = [...labels]

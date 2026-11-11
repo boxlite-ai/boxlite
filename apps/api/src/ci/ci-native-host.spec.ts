@@ -17,8 +17,7 @@ import { CiNativeHost } from './ci-native-host'
 import { CiListenerService } from './ci-listener.service'
 import { CiSettingsService } from './ci-settings.service'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
-const database = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = database ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI native host (Postgres binding and shared inbox)', () => {
   const schema = 'ci_native_host_' + randomUUID().replaceAll('-', ''),
     org = randomUUID(),
@@ -38,11 +37,15 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     hint: { installationId: 10, accountId: 20, repositoryId: 30, job: { id: 50, runId: 40 } },
   })
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(database!).hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw Error('Disposable local PostgreSQL required')
     db = await new DataSource({
       type: 'postgres',
-      url: database,
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       extra: { options: `-c search_path=${schema},public` },
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}";
@@ -218,7 +221,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
               id: 77,
               run_id: 99,
               status: 'queued',
-              labels: ['boxlite-ci-runner'],
+              labels: ['boxlite'],
               runner_id: null,
               conclusion: null,
               completed_at: null,
@@ -643,7 +646,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
         journal,
         key,
         async () => backend,
-        { image: 'runner', cpus: 1, memoryMiB: 512, labels: ['boxlite-ci-runner'] },
+        { image: 'runner', cpus: 1, memoryMiB: 512, labels: ['boxlite'] },
         (event) => (host as any).observe(event),
       )
       await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))

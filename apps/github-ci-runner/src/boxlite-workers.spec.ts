@@ -13,6 +13,7 @@ import {
   ExecutionScope,
   ListenerState,
   WorkerExecutor,
+  parseResourceLabels,
 } from '@boxlite-ai/ci-listener'
 import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import { BoxLiteWorkers } from './boxlite-workers'
@@ -158,6 +159,24 @@ describe('Standalone BoxLite execution boundary', () => {
     await advance({ delivery: 'requested', effect: { id: randomUUID(), kind: 'jit-deliver' } })
   }
   const posts = () => calls.filter((call) => call.path === '/v1/tenant-a/boxes' && call.method === 'POST')
+  it('translates parsed resource quantities into the real REST create request', async () => {
+    const selected = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!
+    await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
+    await worker.create({ ...launch(), ...selected.resources })
+    expect(posts()[0].body).toMatchObject({ cpus: 2, memory_mib: 4096, disk_size_gb: 10 })
+  })
+  it.each([
+    { cpus: 0 },
+    { cpus: 17 },
+    { memoryMiB: Infinity },
+    { memoryMiB: 131073 },
+    { diskGiB: 0 },
+    { diskGiB: 8388608 },
+    { diskGiB: NaN },
+  ])('rejects invalid launch resources before HTTP: %j', async (resources) => {
+    await expect(worker.create({ ...launch(), ...resources })).rejects.toThrow('Invalid CI worker resources')
+    expect(posts()).toHaveLength(0)
+  })
   it('requires the durable intent and records a positive original ID before boot', async () => {
     await expect(worker.create(launch())).rejects.toThrow('intent missing')
     expect(posts()).toHaveLength(0)

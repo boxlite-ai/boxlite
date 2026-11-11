@@ -29,9 +29,8 @@ const definition: ExecutionScope = {
 }
 const demand = { repository: 21, run: 33, job: 55 },
   limits = testCapacity({ account: 1, tenant: 1 })
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
 for (const backend of ['sqlite', 'postgres'] as const) {
-  const suite = backend === 'postgres' && !url ? describe.skip : describe
+  const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
   suite(`CI shared execution journal ${backend}`, () => {
     let db: StateDatabase,
       sqlite: SqliteStateDatabase | undefined,
@@ -49,12 +48,16 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         sqlite = new SqliteStateDatabase(directory)
         db = sqlite
       } else {
-        if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+        if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
           throw new Error('Disposable local PostgreSQL required')
         schema = 'ci_journal_' + randomUUID().replaceAll('-', '')
         pg = await new DataSource({
           type: 'postgres',
-          url,
+          host: process.env.DB_HOST,
+          port: Number(process.env.DB_PORT || 5432),
+          username: process.env.DB_USERNAME,
+          password: process.env.DB_PASSWORD,
+          database: process.env.DB_DATABASE,
           extra: { options: `-c search_path=${schema},public` },
         }).initialize()
         await pg.query(`CREATE SCHEMA "${schema}"`)

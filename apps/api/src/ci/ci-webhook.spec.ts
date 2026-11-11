@@ -15,8 +15,7 @@ import { CiWebhookController } from './ci-webhook.controller'
 import { CI_WEBHOOK_PATH, installCiWebhookBodyParser } from './ci-webhook-body'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
 
-const database = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = database ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI webhook native HTTP and PostgreSQL', () => {
   const schema = 'ci_native_hook_' + randomUUID().replaceAll('-', ''),
     org = randomUUID(),
@@ -29,7 +28,7 @@ integration('CI webhook native HTTP and PostgreSQL', () => {
     action: 'queued',
     installation: { id: 10 },
     repository: { id: 30, owner: { id: 20 } },
-    workflow_job: { id: 50, run_id: 40, status: 'queued', labels: ['boxlite-ci-runner'], name: '验证 Unicode' },
+    workflow_job: { id: 50, run_id: 40, status: 'queued', labels: ['boxlite'], name: '验证 Unicode' },
   })
   const sign = (body: Buffer) => 'sha256=' + createHmac('sha256', secret).update(body).digest('hex')
   const makeService = (state: CiNativeState) => {
@@ -37,7 +36,7 @@ integration('CI webhook native HTTP and PostgreSQL', () => {
     const listener = new Listener({
       state: state.state,
       host,
-      worker: { image: 'runner:test', cpus: 1, memoryMiB: 512, labels: ['boxlite-ci-runner'] },
+      worker: { image: 'runner:test', cpus: 1, memoryMiB: 512, labels: ['boxlite'] },
       capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
     })
     return new CiWebhookService(
@@ -66,11 +65,15 @@ integration('CI webhook native HTTP and PostgreSQL', () => {
     )
   }
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(database!).hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw Error('Disposable local PostgreSQL required')
     db = await new DataSource({
       type: 'postgres',
-      url: database,
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       extra: { options: `-c search_path=${schema},public` },
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}";

@@ -6,8 +6,7 @@ import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/179370
 import { CiNativeHost } from './ci-native-host'
 import { CiNativeState } from './ci-native-state'
 
-const database = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = database ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI managed organization group (real Postgres)', () => {
   const schema = 'ci_group_' + randomUUID().replaceAll('-', ''),
     organization = randomUUID(),
@@ -32,11 +31,14 @@ integration('CI managed organization group (real Postgres)', () => {
     beforeGroupRead: (() => Promise<void>) | undefined,
     reports: jest.SpyInstance
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(database!).hostname))
-      throw Error('Disposable database required')
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!)) throw Error('Disposable database required')
     db = await new DataSource({
       type: 'postgres',
-      url: database,
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       extra: { options: `-c search_path=${schema},public` },
     }).initialize()
     await db.query(`CREATE SCHEMA "${schema}";

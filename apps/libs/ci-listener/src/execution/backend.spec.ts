@@ -12,6 +12,7 @@ import { GitHubExecutionBackend, ExecutionHost } from './backend'
 import { ExecutionJournal } from './journal'
 import { testCapacity } from '../../tests/capacity'
 import { ExecutionScope } from './model'
+import { WorkerPool } from './pool'
 
 describe('CI shared execution authority', () => {
   const originalFetch = global.fetch,
@@ -96,7 +97,7 @@ describe('CI shared execution authority', () => {
           id: 56,
           run_id: 34,
           status: 'queued',
-          labels: ['boxlite-ci-runner'],
+          labels: ['boxlite'],
           runner_id: null,
           conclusion: null,
           completed_at: null,
@@ -106,7 +107,7 @@ describe('CI shared execution authority', () => {
           id: 55,
           run_id: 33,
           status: 'queued',
-          labels: ['boxlite-ci-runner'],
+          labels: ['boxlite'],
           runner_id: null,
           conclusion: null,
           completed_at: null,
@@ -121,7 +122,7 @@ describe('CI shared execution authority', () => {
               id: 55,
               run_id: 33,
               status: 'queued',
-              labels: ['boxlite-ci-runner'],
+              labels: ['boxlite'],
               runner_id: null,
               conclusion: null,
               completed_at: null,
@@ -170,7 +171,7 @@ describe('CI shared execution authority', () => {
     }
     backend = makeBackend()
   })
-  const makeBackend = () => new GitHubExecutionBackend(state, lease, scope, source, host, ['boxlite-ci-runner'])
+  const makeBackend = () => new GitHubExecutionBackend(state, lease, scope, source, host, ['boxlite'])
   afterEach(async () => {
     await backend.close().catch(() => {})
     global.fetch = originalFetch
@@ -178,6 +179,39 @@ describe('CI shared execution authority', () => {
     rmSync(directory, { recursive: true, force: true })
   })
   const launch = () => ({ name, image: 'runner', cpus: 2, memoryMiB: 2048, entrypoint: ['bash', '-c', 'run'] })
+  it('sends the same resource selection to the host and the actual GitHub JIT request', async () => {
+    const label = 'boxlite-2vcpu-4gbmem-10gbdisk'
+    const fetcher = global.fetch
+    global.fetch = jest.fn(async (input, options) => {
+      const response = await fetcher(input, options)
+      if (new URL(String(input)).pathname === '/repos/owner/repo/actions/jobs/55')
+        return new Response(JSON.stringify({ ...(await response.json()), labels: [label] }))
+      return response
+    }) as typeof fetch
+    const journal = new ExecutionJournal(state)
+    const key = await journal.define(lease, scope)
+    const pool = new WorkerPool(journal, key, async () => backend, {
+      image: 'runner',
+      cpus: 1,
+      memoryMiB: 512,
+      labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
+    })
+    try {
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }), notice)
+      expect(host.workers.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cpus: 2, memoryMiB: 4096, diskGiB: 10 }),
+      )
+      expect(calls.find((call) => call.path.endsWith('/generate-jitconfig'))?.body?.labels).toEqual([
+        'self-hosted',
+        'linux',
+        'x64',
+        label,
+      ])
+      expect(host.workers.deliverJit).toHaveBeenCalledTimes(1)
+    } finally {
+      await pool.close()
+    }
+  })
   it('denies Private repository work before Box creation and JIT delivery when Private is disabled', async () => {
     await backend.close()
     scope.runners.allowPrivate = false
@@ -306,9 +340,7 @@ describe('CI shared execution authority', () => {
     expect(calls).toEqual([])
   })
   it('bounds compensation to one authorized repository using an Actions-only token', async () => {
-    expect(await backend.queued(21)).toEqual([
-      { ...notice, status: 'queued', labels: ['boxlite-ci-runner'], runner: null },
-    ])
+    expect(await backend.queued(21)).toEqual([{ ...notice, status: 'queued', labels: ['boxlite'], runner: null }])
     expect(calls.filter((call) => call.path === '/repos/owner/repo/actions/runs')).toHaveLength(5)
     expect(calls.find((call) => call.path.endsWith('/access_tokens'))?.body).toEqual({
       permissions: { actions: 'read' },

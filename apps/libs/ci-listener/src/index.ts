@@ -1,5 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 export type { WorkerExecutor, WorkerLaunch, WorkerState } from './worker'
+export { validateWorkerResources } from './worker'
+export { parseResourceLabels, selectRunnerLabels } from './resource-labels'
 export { ListenerState } from './state/store'
 export type { ExecutionLease, StateChange, StateCheck } from './state/store'
 export { PostgresStateDatabase, postgresStateTable } from './state/postgres'

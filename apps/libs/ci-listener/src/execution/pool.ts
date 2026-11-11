@@ -4,7 +4,8 @@ import { JobNotice, jobMatches, WorkflowJob } from '../jobs'
 import { GitHubRunners, JitRegistration, RunnerEffect } from '../runners'
 import { ExecutionLease } from '../state/store'
 import { LeaseLost, StateConflict, StateCorrupt } from '../state/database'
-import { ConfirmedWorkerCreationRejected, WorkerExecutor, WorkerLaunch } from '../worker'
+import { ConfirmedWorkerCreationRejected, validateWorkerResources, WorkerExecutor, WorkerLaunch } from '../worker'
+import { parseResourceLabels, selectRunnerLabels } from '../resource-labels'
 import { AllocationChange, AllocationRow, ExecutionJournal } from './journal'
 import { EffectKind, ExecutionScope } from './model'
 import { CapacityPolicy, captureCapacity } from '../capacity'
@@ -18,7 +19,11 @@ export interface PoolBackend {
   workers: WorkerExecutor
   admit(signal?: AbortSignal): Promise<void>
   job(notice: JobNotice, signal?: AbortSignal): Promise<WorkflowJob>
-  runners(beforeMutation: (effect: RunnerEffect) => Promise<void>, signal?: AbortSignal): Promise<RunnerSession>
+  runners(
+    beforeMutation: (effect: RunnerEffect) => Promise<void>,
+    signal?: AbortSignal,
+    labels?: readonly string[],
+  ): Promise<RunnerSession>
 }
 export interface PoolSettings {
   image: string
@@ -79,17 +84,13 @@ export class WorkerPool {
     settings: PoolSettings,
     private readonly observe: (event: WorkerEvent) => void = () => {},
   ) {
+    validateWorkerResources(settings)
     if (
       !settings.image ||
-      !Number.isInteger(settings.cpus) ||
-      settings.cpus < 1 ||
-      settings.cpus > 16 ||
-      !Number.isInteger(settings.memoryMiB) ||
-      settings.memoryMiB < 128 ||
       !settings.labels.length ||
       settings.labels.length > 100 ||
       settings.labels.some((label) => !label || label.length > 128) ||
-      !settings.labels.some((label) => label.toLowerCase() === 'boxlite-ci-runner')
+      parseResourceLabels(settings.labels)?.label !== 'boxlite'
     )
       throw new Error('Invalid CI worker settings')
     this.settings = { ...settings, labels: [...settings.labels] }
@@ -201,6 +202,18 @@ export class WorkerPool {
     signal?: AbortSignal,
   ): Promise<void> {
     let row = initial
+    let selection: ReturnType<typeof selectRunnerLabels> | undefined
+    const select = async () => {
+      const original = row.value.job
+      const current = await backend.job(original, signal)
+      if (current.repository !== original.repository || current.run !== original.run || current.job !== original.job)
+        throw new Error('Original job identity changed at creation')
+      selection = jobMatches(current, this.settings.labels)
+        ? selectRunnerLabels(current.labels, this.settings.labels)
+        : null
+      if (!selection) await update({ closing: true })
+      return selection
+    }
     const update = async (change: AllocationChange) => {
       row = await this.journal.advance(lease, row.record.key, row.record.version, change)
     }
@@ -215,19 +228,23 @@ export class WorkerPool {
       }
     }
     const registry = async <T>(work: (registry: RunnerSession['registry']) => Promise<T>): Promise<T> => {
-      const session = await backend.runners(async (effect) => {
-        if (effect.name !== row.value.name) throw new Error('Original CI runner name changed')
-        if (effect.kind === 'register') {
-          if (row.value.runner.phase !== 'none' || row.value.closing)
-            throw new Error('CI runner registration was already attempted')
-          await admit()
-          await intent('runner-register', { runner: { phase: 'requested', id: null } })
-        } else {
-          if (row.value.runner.phase !== 'known' || row.value.runner.id !== effect.id)
-            throw new Error('Known original CI runner required for removal')
-          await intent('runner-remove')
-        }
-      }, signal)
+      const session = await backend.runners(
+        async (effect) => {
+          if (effect.name !== row.value.name) throw new Error('Original CI runner name changed')
+          if (effect.kind === 'register') {
+            if (row.value.runner.phase !== 'none' || row.value.closing)
+              throw new Error('CI runner registration was already attempted')
+            await admit()
+            await intent('runner-register', { runner: { phase: 'requested', id: null } })
+          } else {
+            if (row.value.runner.phase !== 'known' || row.value.runner.id !== effect.id)
+              throw new Error('Known original CI runner required for removal')
+            await intent('runner-remove')
+          }
+        },
+        signal,
+        selection?.labels,
+      )
       this.sessions.add(session)
       try {
         return await work(session.registry)
@@ -240,16 +257,21 @@ export class WorkerPool {
     try {
       if (row.value.box.phase === 'none' && !row.value.closing) {
         await admit()
-        await intent('box-create', { box: { phase: 'requested', id: null } })
-        const launch: WorkerLaunch = {
-          name: row.value.name,
-          image: this.settings.image,
-          cpus: this.settings.cpus,
-          memoryMiB: this.settings.memoryMiB,
-          entrypoint: ['/bin/bash', '-c', bootstrap],
+        const selected = await select()
+        if (selected) {
+          await intent('box-create', { box: { phase: 'requested', id: null } })
+          const launch: WorkerLaunch = {
+            name: row.value.name,
+            image: this.settings.image,
+            cpus: this.settings.cpus,
+            memoryMiB: this.settings.memoryMiB,
+            diskGiB: 10,
+            ...selected.resources,
+            entrypoint: ['/bin/bash', '-c', bootstrap],
+          }
+          const created = await backend.workers.create(launch)
+          await update({ box: { phase: 'known', id: created.box_id } })
         }
-        const created = await backend.workers.create(launch)
-        await update({ box: { phase: 'known', id: created.box_id } })
       }
       if (row.value.box.phase === 'requested') {
         // A positive host ledger lookup may recover an original ID. No absence
@@ -294,9 +316,12 @@ export class WorkerPool {
       })
     }
     if (!row.value.closing && status === 'running' && row.value.runner.phase === 'none') {
-      const registration = await registry((client) => client.create(row.value.name, signal))
-      this.jit.set(row.record.key, registration)
-      await update({ runner: { phase: 'known', id: registration.id } })
+      if (selection === undefined) await select()
+      if (selection) {
+        const registration = await registry((client) => client.create(row.value.name, signal))
+        this.jit.set(row.record.key, registration)
+        await update({ runner: { phase: 'known', id: registration.id } })
+      }
     }
     if (!row.value.closing && row.value.runner.phase === 'known' && row.value.delivery === 'none') {
       const registration = this.jit.get(row.record.key)

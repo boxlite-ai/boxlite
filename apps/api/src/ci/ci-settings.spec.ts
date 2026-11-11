@@ -13,8 +13,7 @@ import { AddCiWebConnect1793786400000 } from '../migrations/pre-deploy/179378640
 import { AddCiWebTarget1794000000000 } from '../migrations/pre-deploy/1794000000000-add-ci-web-target-migration'
 import { AddCiAccountSelection1793894400000 } from '../migrations/pre-deploy/1793894400000-add-ci-account-selection-migration'
 
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
-const integration = url ? describe : describe.skip
+const integration = process.env.DB_HOST ? describe : describe.skip
 integration('CI account settings (real Postgres)', () => {
   const schema = 'ci_settings_' + randomUUID().replaceAll('-', '')
   const org = randomUUID(),
@@ -38,11 +37,15 @@ integration('CI account settings (real Postgres)', () => {
     },
   })
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
       throw Error('Disposable local database required')
     db = await new DataSource({
       type: 'postgres',
-      url,
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT || 5432),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_DATABASE,
       entities: [],
       extra: { options: `-c search_path=${schema},public` },
     }).initialize()

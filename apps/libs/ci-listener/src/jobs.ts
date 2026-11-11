@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { GitHubCredential } from './github-app'
+import { selectRunnerLabels } from './resource-labels'
 
 export interface GitHubRepository {
   id: number
@@ -183,12 +184,5 @@ export class GitHubJobs {
 
 /** JIT registration must supply every requested label; a custom runner name alone is insufficient. */
 export function jobMatches(job: WorkflowJob, labels: readonly string[]): boolean {
-  const available = new Set(labels.map((label) => label.toLowerCase()))
-  return (
-    job.status === 'queued' &&
-    job.runner === null &&
-    job.labels.length > 0 &&
-    job.labels.some((label) => label.toLowerCase() === 'boxlite-ci-runner') &&
-    job.labels.every((label) => available.has(label.toLowerCase()))
-  )
+  return job.status === 'queued' && job.runner === null && selectRunnerLabels(job.labels, labels) !== null
 }

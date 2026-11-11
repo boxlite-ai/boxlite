@@ -101,7 +101,7 @@ describe('CI webhook resource bounds', () => {
         action: 'queued',
         installation: { id: 1 },
         repository: { id: 2, owner: { id: 3 } },
-        workflow_job: { id: 4, run_id: 5, status: 'queued', labels: ['boxlite-ci-runner'] },
+        workflow_job: { id: 4, run_id: 5, status: 'queued', labels: ['boxlite'] },
       }),
     )
     const post = () =>
@@ -149,7 +149,7 @@ describe('CI webhook resource bounds', () => {
         action: 'queued',
         installation: { id: 1 },
         repository: { id: 2, owner: { id: 3 } },
-        workflow_job: { id: 4, run_id: 5, status: 'queued', labels: ['boxlite-ci-runner'] },
+        workflow_job: { id: 4, run_id: 5, status: 'queued', labels: ['boxlite'] },
       }),
     )
     const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`

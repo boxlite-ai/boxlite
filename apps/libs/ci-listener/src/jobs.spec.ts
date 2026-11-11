@@ -11,7 +11,7 @@ describe('CI shared GitHub jobs', () => {
     status: 'queued',
     conclusion: null,
     completed_at: null,
-    labels: ['boxlite-ci-runner'],
+    labels: ['boxlite'],
     runner_id: null,
     ...extra,
   })
@@ -52,7 +52,7 @@ describe('CI shared GitHub jobs', () => {
   it.each([0, null])('accepts an unassigned GitHub runner_id of %s', async (runner_id) => {
     reply = (url) => (url.pathname === '/repositories/21' ? repository : queued({ runner_id }))
     const job = await reader.job(notice)
-    expect(jobMatches(job, ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'])).toBe(true)
+    expect(jobMatches(job, ['self-hosted', 'linux', 'x64', 'boxlite'])).toBe(true)
     expect(job.runner).toBeNull()
   })
   it('rejects a notice from another repository before sending HTTP', async () => {
@@ -63,7 +63,7 @@ describe('CI shared GitHub jobs', () => {
     reply = (url) => (url.pathname === '/repositories/21' ? repository : queued({ status }))
     const job = await reader.job(notice)
     expect(job.status).toBe(status)
-    expect(jobMatches(job, ['boxlite-ci-runner'])).toBe(false)
+    expect(jobMatches(job, ['boxlite'])).toBe(false)
   })
   it.each([{ id: 56 }, { run_id: 34 }, { labels: null }, { runner_id: -1 }, { status: 'unknown' }])(
     'rejects changed or malformed job identity %j',
@@ -93,19 +93,15 @@ describe('CI shared GitHub jobs', () => {
   it('admits only a queued, unassigned job whose complete label set is supported', async () => {
     const job = await reader.job(notice)
     expect(
-      jobMatches({ ...job, labels: ['self-hosted', 'Linux', 'boxlite-ci-runner'] }, [
-        'self-hosted',
-        'linux',
-        'boxlite-ci-runner',
-      ]),
+      jobMatches({ ...job, labels: ['self-hosted', 'Linux', 'boxlite'] }, ['self-hosted', 'linux', 'boxlite']),
     ).toBe(true)
     for (const changed of [
       { ...job, labels: ['self-hosted'] },
-      { ...job, labels: ['boxlite-ci-runner', 'macOS'] },
+      { ...job, labels: ['boxlite', 'macOS'] },
       { ...job, runner: 42 },
       { ...job, status: 'in_progress' as const },
     ])
-      expect(jobMatches(changed, ['self-hosted', 'linux', 'boxlite-ci-runner'])).toBe(false)
+      expect(jobMatches(changed, ['self-hosted', 'linux', 'boxlite'])).toBe(false)
   })
   it('scans all active run states once and reads queued jobs in a running workflow', async () => {
     reply = (url) => {

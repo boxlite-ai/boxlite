@@ -17,12 +17,11 @@ import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ListenerInbox, verifyWebhook } from '../webhook'
 import { AppDeliveryRecovery } from './recovery'
 import { interval, item, itemPrefix, minute, progress, progressKey, retention } from './model'
-const url = process.env.CI_CONNECT_TEST_DATABASE_URL
 const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const guid1 = '00000000-0000-4000-8000-000000000001'
 const guid2 = '00000000-0000-4000-8000-000000000002'
 for (const backend of ['sqlite', 'postgres'] as const) {
-  const suite = backend === 'postgres' && !url ? describe.skip : describe
+  const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
   suite('CI App delivery replay ' + backend, () => {
     let database: StateDatabase,
       state: ListenerState,
@@ -62,7 +61,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           action: 'queued',
           installation: { id: installation },
           repository: { id: installation + 20, owner: { id: installation + 6 } },
-          workflow_job: { id: installation * 100 + 55, run_id: 33, status: 'queued', labels: ['boxlite-ci-runner'] },
+          workflow_job: { id: installation * 100 + 55, run_id: 33, status: 'queued', labels: ['boxlite'] },
         }),
       )
       const secret = Buffer.alloc(32, 5)
@@ -106,12 +105,16 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         local = new SqliteStateDatabase(directory)
         database = local
       } else {
-        if (!['localhost', '127.0.0.1', '[::1]'].includes(new URL(url!).hostname))
+        if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
           throw Error('Disposable local PostgreSQL required')
         schema = 'ci_replay_' + randomUUID().replaceAll('-', '')
         pg = await new DataSource({
           type: 'postgres',
-          url,
+          host: process.env.DB_HOST,
+          port: Number(process.env.DB_PORT || 5432),
+          username: process.env.DB_USERNAME,
+          password: process.env.DB_PASSWORD,
+          database: process.env.DB_DATABASE,
           extra: { options: `-c search_path=${schema},public` },
         }).initialize()
         await pg.query(`CREATE SCHEMA "${schema}"`)

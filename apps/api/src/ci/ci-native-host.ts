@@ -270,7 +270,7 @@ export class CiNativeHost implements ListenerHost {
           })
         },
       },
-      ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'],
+      ['self-hosted', 'linux', 'x64', 'boxlite'],
     )
   }
   async scan(original: ScanClaim, signal: AbortSignal): Promise<RepositoryScanSession> {
@@ -319,7 +319,7 @@ export class CiNativeHost implements ListenerHost {
         this.store.transaction(async (tx, state) => {
           signal.throwIfAborted()
           await authorize(state, tx)
-          await state.scans().publish(claim, jobs, ['self-hosted', 'linux', 'x64', 'boxlite-ci-runner'])
+          await state.scans().publish(claim, jobs, ['self-hosted', 'linux', 'x64', 'boxlite'])
         }),
     })
   }
