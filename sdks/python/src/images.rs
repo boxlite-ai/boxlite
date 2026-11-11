@@ -7,6 +7,27 @@ use pyo3::prelude::*;
 
 use crate::util::map_err;
 
+#[pyclass(name = "ImageRemovalResult")]
+#[derive(Clone)]
+pub(crate) struct PyImageRemovalResult {
+    #[pyo3(get)]
+    pub(crate) image_id: String,
+    #[pyo3(get)]
+    pub(crate) removed_references: Vec<String>,
+    #[pyo3(get)]
+    pub(crate) reclaimed_bytes: u64,
+}
+
+impl From<boxlite::ImageRemovalResult> for PyImageRemovalResult {
+    fn from(result: boxlite::ImageRemovalResult) -> Self {
+        Self {
+            image_id: result.image_id,
+            removed_references: result.removed_references,
+            reclaimed_bytes: result.reclaimed_bytes,
+        }
+    }
+}
+
 #[pyclass(name = "ImageInfo")]
 #[derive(Clone)]
 pub(crate) struct PyImageInfo {
@@ -287,6 +308,16 @@ impl PyImageHandle {
         })
     }
 
+    /// Remove one untagged local image by manifest ID or unique hex prefix.
+    fn remove_by_id<'py>(&self, py: Python<'py>, image_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(PyImageRemovalResult::from(
+                handle.remove_by_id(&image_id).await.map_err(map_err)?,
+            ))
+        })
+    }
+
     /// Images held against the allowance; REST runtimes only.
     fn usage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
@@ -345,6 +376,106 @@ mod tests {
     use pyo3::types::PyDict;
 
     use super::*;
+
+    #[test]
+    fn removal_by_id_returns_core_results_through_the_python_async_api() {
+        let fixture = boxlite::LocalImageFixture::new();
+        Python::attach(|py| {
+            let images = Bound::new(
+                py,
+                PyImageHandle {
+                    handle: Arc::new(fixture.runtime().images().unwrap()),
+                },
+            )
+            .unwrap();
+            let listed = awaited(&images, "list()");
+            let id: String = listed
+                .get_item(0)
+                .unwrap()
+                .getattr("id")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let removed = awaited(&images, &format!("remove_by_id({:?})", &id[7..19]));
+            assert_eq!(
+                removed
+                    .getattr("image_id")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                id
+            );
+            assert_eq!(
+                removed
+                    .getattr("removed_references")
+                    .unwrap()
+                    .len()
+                    .unwrap(),
+                2
+            );
+            assert!(
+                removed
+                    .getattr("reclaimed_bytes")
+                    .unwrap()
+                    .extract::<u64>()
+                    .unwrap()
+                    > 0
+            );
+            assert!(awaited(&images, "list()").is_empty().unwrap());
+        });
+        assert!(!fixture.manifest_path.exists());
+    }
+
+    #[test]
+    fn removal_by_id_on_rest_is_unsupported_without_network_io() {
+        Python::attach(|py| {
+            let images = images_at(py, "http://127.0.0.1:1".into());
+            let error = awaited_error(&images, "remove_by_id('123')");
+            assert_eq!(
+                error.getattr("code").unwrap().extract::<String>().unwrap(),
+                "unsupported"
+            );
+        });
+    }
+
+    #[test]
+    fn removal_by_id_preserves_typed_tag_and_missing_errors() {
+        let fixture = boxlite::LocalImageFixture::new();
+        fixture.add_tag();
+        Python::attach(|py| {
+            let images = Bound::new(
+                py,
+                PyImageHandle {
+                    handle: Arc::new(fixture.runtime().images().unwrap()),
+                },
+            )
+            .unwrap();
+            let error = awaited_error(&images, &format!("remove_by_id({:?})", fixture.image_id));
+            assert_eq!(
+                error.getattr("code").unwrap().extract::<String>().unwrap(),
+                "image_has_tags"
+            );
+            assert!(error.to_string().contains("one.example/app:latest"));
+            let error = awaited_error(&images, "remove_by_id('000000000000')");
+            assert_eq!(
+                error.getattr("code").unwrap().extract::<String>().unwrap(),
+                "not_found"
+            );
+        });
+        assert!(fixture.manifest_path.exists());
+    }
+
+    fn awaited_error<'py>(images: &Bound<'py, PyImageHandle>, call: &str) -> Bound<'py, PyAny> {
+        let py = images.py();
+        let globals = PyDict::new(py);
+        globals.set_item("images", images).unwrap();
+        globals
+            .set_item("package_root", env!("CARGO_MANIFEST_DIR"))
+            .unwrap();
+        let script = CString::new(format!("import sys, asyncio\nsys.path.insert(0, package_root)\nasync def main():\n    try:\n        await images.{call}\n    except Exception as error:\n        return error\n    raise AssertionError('expected failure')\nresult = asyncio.run(main())\n")).unwrap();
+        py.run(&script, Some(&globals), None).unwrap();
+        globals.get_item("result").unwrap().unwrap()
+    }
 
     fn version(digest: &str, size_bytes: Option<u64>, recorded_secs: u64) -> ImageVersion {
         ImageVersion {
