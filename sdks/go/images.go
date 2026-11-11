@@ -9,6 +9,7 @@ import "C"
 import (
 	"context"
 	"runtime/cgo"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -28,6 +29,15 @@ type ImagePullResult struct {
 	Reference    string
 	ConfigDigest string
 	LayerCount   int
+}
+
+// ImageRemovalResult describes completed local cache removal by manifest ID.
+type ImageRemovalResult struct {
+	ImageID           string
+	RemovedReferences []string
+	// ReclaimedBytes counts allocated bytes, excluding external hardlinks.
+	// Snapshots and reflinks may defer physical free-space changes.
+	ReclaimedBytes uint64
 }
 
 // ImageDetail is an image name and every build of it the runtime holds.
@@ -252,6 +262,38 @@ func (i *Images) Remove(ctx context.Context, name string) error {
 	case <-i.runtime.closing:
 		abandonAsyncErr(ch, h, i.runtime.closing)
 		return ErrRuntimeClosed
+	}
+}
+
+// RemoveByID removes one untagged local image by manifest ID or unique hex
+// prefix. Tagged and box-dependent images are refused. REST is unsupported.
+func (i *Images) RemoveByID(ctx context.Context, imageID string) (*ImageRemovalResult, error) {
+	if i == nil || i.handle == nil {
+		return nil, closedImagesError()
+	}
+	if strings.IndexByte(imageID, 0) >= 0 {
+		return nil, &Error{Code: ErrInvalidArgument, Message: "image ID must not contain NUL bytes"}
+	}
+	i.runtime.ensureDrainRunning()
+	cID := toCString(imageID)
+	defer C.free(unsafe.Pointer(cID))
+	ch := make(chan imageRemovalResult, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+	var cerr C.CBoxliteError
+	code := C.boxlite_image_remove_by_id(i.handle, cID, C.cbImageRemoveByID(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return nil, freeError(&cerr)
+	}
+	select {
+	case result := <-ch:
+		return result.value, result.err
+	case <-ctx.Done():
+		drainAndDelete(ch, h, i.runtime.closing)
+		return nil, ctx.Err()
+	case <-i.runtime.closing:
+		drainAndDelete(ch, h, i.runtime.closing)
+		return nil, ErrRuntimeClosed
 	}
 }
 

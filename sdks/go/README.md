@@ -183,6 +183,22 @@ must explicitly remove it when it is no longer needed.
 
 ### Runtime Image Management
 
+To reclaim an untagged local image, call `images.RemoveByID(ctx, "1f8c03c8f5e5")`.
+The returned `*ImageRemovalResult` contains `ImageID string`, `RemovedReferences []string`, and `ReclaimedBytes uint64`.
+The existing name-based `Remove` keeps its behavior.
+
+```go
+removed, err := images.RemoveByID(ctx, "1f8c03c8f5e5")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(removed.ImageID, removed.RemovedReferences, removed.ReclaimedBytes)
+```
+
+Inspect `*boxlite.Error.Code` for `ErrAmbiguousImageID`, `ErrImageHasTags`,
+`ErrImageUsedByBoxes`, `ErrNotFound`, `ErrInvalidState` (busy), or `ErrUnsupported` (REST).
+See [local removal semantics and limits](../../docs/concepts/images.md#removing-local-images).
+
 `rt.Images()` holds the images a runtime can boot from: the local cache on a
 runtime from `NewRuntime`, the server's catalog on one from `NewRest`. `List`,
 `Get` and `Remove` run unchanged against either.
@@ -232,6 +248,7 @@ fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 | `List` | One row per cached reference | Catalog alias and digest references |
 | `Get` | The cache entries under the name | The catalog entry with its versions |
 | `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
+| `RemoveByID` | Reclaims eligible local cache data | `ErrUnsupported` |
 | `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
 | `CreateAlias` | `ErrUnsupported` | Creates a new alias; existing names conflict |
 | `DeleteAlias` | `ErrUnsupported` | Removes only the named alias |

@@ -111,6 +111,10 @@ Eligibility errors leave the target intact.
 Filesystem and SQLite updates are not one atomic transaction: an I/O failure can leave the target cache incomplete.
 Retry removal, or pull the image again to restore missing data; retained images and protected boxes keep their data.
 
+SDKs expose the same operation as `images.remove_by_id()` in Rust and Python,
+`images.removeById()` in Node.js, `images.RemoveByID()` in Go, and
+`boxlite_image_remove_by_id()` in C.
+Python's synchronous handle also provides `remove_by_id()`.
 Results contain the resolved full image ID, removed references and reclaimed bytes.
 
 The existing name-based `remove` operation still forgets references and retains cache bytes.
