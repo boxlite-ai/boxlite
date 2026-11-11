@@ -78,52 +78,6 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
   })
 
-  // The two volume forms map to distinct internal shapes: a managed selector
-  // becomes volumeId, a filestore reference becomes {instance} with no
-  // volumeId. VolumeService.validateVolumes only ever sees managed selectors,
-  // and the runner mounts by one field or the other — conflating them would
-  // send the volume service an undefined lookup or the runner a volume with
-  // no backend.
-  it('maps a filestore volume to an instance reference with no volumeId', () => {
-    const mapped = createBoxToCreateBox({
-      volumes: [{ guest_path: '/scratch', filestore: { instance: 'ml-scratch' }, read_only: false }],
-    })
-
-    expect(mapped.volumes).toEqual([
-      { volumeId: undefined, mountPath: '/scratch', filestore: { instance: 'ml-scratch' } },
-    ])
-    expect('filestore' in mapped.volumes![0]).toBe(true)
-  })
-
-  it('keeps a managed volume mapping free of any filestore key', () => {
-    const mapped = createBoxToCreateBox({
-      volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: false }],
-    })
-
-    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data' }])
-    // toEqual alone would accept a stray `filestore: undefined`; the spread
-    // must genuinely omit the key so downstream `in` checks see one form.
-    expect('filestore' in mapped.volumes![0]).toBe(false)
-  })
-
-  // The REST box response never carried volumes, and a box row bearing
-  // filestore entries must not change that or break the mapping on the way
-  // out.
-  it('maps a box with filestore volumes to a response without crashing', () => {
-    const response = boxToBoxResponse({
-      id: 'box-1',
-      name: 'demo',
-      state: BoxState.STARTED,
-      labels: {},
-      volumes: [
-        { volumeId: undefined, mountPath: '/scratch', filestore: { instance: 'ml-scratch' } },
-      ],
-    } as any)
-
-    expect(response.box_id).toBe('box-1')
-    expect(response).not.toHaveProperty('volumes')
-  })
-
   it('maps REST secret specs to secret placeholder rules', () => {
     const mapped = createBoxToCreateBox({
       secrets: [

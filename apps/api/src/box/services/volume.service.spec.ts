@@ -90,7 +90,7 @@ describe('VolumeService validateVolumes canonicalization', () => {
 
     const canonical = await service.validateVolumes('org-1', ['my-data'])
 
-    expect(canonical.get('my-data')).toBe('uuid-mine')
+    expect(canonical.get('my-data')?.id).toBe('uuid-mine')
   })
 
   // The tenant-boundary case: a caller may name their own volume after another
@@ -103,8 +103,8 @@ describe('VolumeService validateVolumes canonicalization', () => {
 
     const canonical = await service.validateVolumes('org-1', [otherTenantId])
 
-    expect(canonical.get(otherTenantId)).toBe('uuid-mine')
-    expect(canonical.get(otherTenantId)).not.toBe(otherTenantId)
+    expect(canonical.get(otherTenantId)?.id).toBe('uuid-mine')
+    expect(canonical.get(otherTenantId)?.id).not.toBe(otherTenantId)
   })
 
   // When one volume's id equals another's name, the id must win: an id is
@@ -117,7 +117,7 @@ describe('VolumeService validateVolumes canonicalization', () => {
 
     const canonical = await service.validateVolumes('org-1', ['collide'])
 
-    expect(canonical.get('collide')).toBe('collide')
+    expect(canonical.get('collide')?.id).toBe('collide')
   })
 
   it('returns an empty map for no selectors', async () => {
@@ -171,7 +171,7 @@ describe('VolumeService validateVolumes query safety', () => {
       { id: 'uuid-other', name: 'wanted', state: VolumeState.PENDING_CREATE },
     ])
 
-    await expect(service.validateVolumes('org-1', ['wanted'])).resolves.toEqual(new Map([['wanted', 'wanted']]))
+    await expect(service.validateVolumes('org-1', ['wanted'])).resolves.toEqual(new Map([['wanted', { id: 'wanted', name: 'by-id', state: VolumeState.READY }]]))
   })
 
   it('still rejects a selected volume that is not ready', async () => {
@@ -184,5 +184,79 @@ describe('VolumeService validateVolumes query safety', () => {
     const { service } = createService([])
 
     await expect(service.validateVolumes('org-1', ['missing'])).rejects.toThrow("Volume 'missing' not found")
+  })
+})
+
+// Filestore volumes are Volume rows with an `instance`; their lifecycle
+// differs from the bucket kind in exactly two places: nothing to provision
+// API-side (the runner creates the data directory lazily at first mount, so
+// the volume is READY at once) and nothing to tear down (the NFS directory is
+// left in place for ops cleanup, so delete tombstones the row directly — the
+// volume manager is dormant on APIs without object storage, which is where
+// filestore-only orgs live).
+describe('VolumeService filestore volumes', () => {
+  function createService(volume: Record<string, unknown> | null, boxes: Array<Record<string, unknown>> = []) {
+    const volumeRepository = {
+      findOne: jest.fn().mockResolvedValue(volume),
+      save: jest.fn().mockImplementation(async (v) => v),
+    }
+    const boxRepository = {
+      createQueryBuilder: jest.fn(() => {
+        const builder = {
+          where: () => builder,
+          andWhere: () => builder,
+          select: () => builder,
+          getOne: jest.fn().mockResolvedValue(boxes[0] ?? null),
+        }
+        return builder
+      }),
+    }
+    const organizationService = { assertOrganizationIsNotSuspended: jest.fn() }
+    const service = new VolumeService(
+      volumeRepository as never,
+      boxRepository as never,
+      organizationService as never,
+      {} as never,
+      {} as never,
+    )
+    return { service, volumeRepository }
+  }
+
+  const organization = { id: 'org-1' } as never
+
+  it('creates a filestore volume READY, without consulting object storage', async () => {
+    const { service } = createService(null)
+
+    const volume = await service.create(organization, { name: 'nfs-data', instance: 'ml-scratch' })
+
+    expect(volume.state).toBe(VolumeState.READY)
+    expect(volume.instance).toBe('ml-scratch')
+  })
+
+  it('still rejects a duplicate name among filestore volumes', async () => {
+    const { service } = createService({ id: 'existing', name: 'nfs-data', state: VolumeState.READY, instance: 'ml-scratch' })
+
+    await expect(service.create(organization, { name: 'nfs-data', instance: 'ml-scratch' })).rejects.toThrow(
+      'already exists',
+    )
+  })
+
+  it('tombstones a filestore volume directly instead of entering the async delete path', async () => {
+    const { service, volumeRepository } = createService({ id: 'volume-1', name: 'nfs-data', state: VolumeState.READY, instance: 'ml-scratch' })
+
+    await service.delete('volume-1')
+
+    expect(volumeRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'volume-1', state: VolumeState.DELETED }),
+    )
+  })
+
+  it('still refuses to delete a filestore volume a live box references', async () => {
+    const { service } = createService(
+      { id: 'volume-1', name: 'nfs-data', state: VolumeState.READY, instance: 'ml-scratch' },
+      [{ id: 'box-1', name: 'my-box' }],
+    )
+
+    await expect(service.delete('volume-1')).rejects.toThrow('in use by one or more boxes')
   })
 })

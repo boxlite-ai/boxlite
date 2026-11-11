@@ -189,68 +189,24 @@ class IsNotHostPathConstraint implements ValidatorConstraintInterface {
   }
 }
 
-export class FilestoreRefDto {
-  /**
-   * The Filestore instance's logical name in the runner's FILESTORE_INSTANCES
-   * registry. The pattern matches what the runner registry accepts, so a
-   * name that validates here can never carry a path separator or relative
-   * component into the host mount path the runner derives from it.
-   */
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[a-z0-9][a-z0-9-]{0,62}$/)
-  instance: string
-}
-
-// Exactly one volume source per volume spec. Both references at once is
-// ambiguous; neither is a volume with no backend.
-@ValidatorConstraint({ name: 'isExactlyOneVolumeSource', async: false })
-class IsExactlyOneVolumeSourceConstraint implements ValidatorConstraintInterface {
-  validate(_value: unknown, args: ValidationArguments): boolean {
-    const volume = args.object as VolumeSpecDto
-    return Boolean(volume.managed_volume) !== Boolean(volume.filestore)
-  }
-
-  defaultMessage(): string {
-    return 'exactly one of managed_volume or filestore must be provided per volume'
-  }
-}
-
 export class VolumeSpecDto {
   /**
-   * The managed volume's server-assigned id or its name - the server resolves
-   * either. Absent when the volume references a filestore instance instead.
+   * The volume's server-assigned id or its name - the server resolves either.
+   * This includes Filestore volumes: they are Volume rows like any other
+   * (their `instance` column names the NFS instance holding the data
+   * directory), and they are referenced exactly like bucket-backed ones.
    *
    * IsNotEmpty (not just IsString) so an explicit `managed_volume: ''` is a
    * validation error on its own rather than reaching the mapper as a lookup
    * that can never match.
    */
-  // ValidateIf instead of IsOptional: IsOptional skips null too, which would
-  // let `managed_volume: null` pass with a filestore reference (or alone) —
-  // the spec types managed_volume as a string and null is not one. Only
-  // undefined means "absent".
-  @ValidateIf((_, value) => value !== undefined)
   @IsString()
   @IsNotEmpty()
   @Validate(IsNotHostPathConstraint)
-  managed_volume?: string
+  managed_volume: string
 
-  // The exactly-one-source constraint lives on guest_path — the one always
-  // present, ungated property — because class-validator's ValidateIf skips
-  // the entire property it decorates, custom constraints included: parked on
-  // read_only (ValidateIf-gated), the XOR would never run for the normal
-  // payload that omits read_only.
   @IsString()
-  @Validate(IsExactlyOneVolumeSourceConstraint)
   guest_path: string
-
-  // Same null strictness as managed_volume: null is not a valid reference,
-  // only undefined means absent.
-  @ValidateIf((_, value) => value !== undefined)
-  @IsObject()
-  @ValidateNested()
-  @Type(() => FilestoreRefDto)
-  filestore?: FilestoreRefDto
 
   /**
    * Read-only mounts are not implemented yet. Rejected rather than silently

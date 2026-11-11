@@ -13,6 +13,7 @@ Name | Type | Description | Notes
 **updatedAt** | **string** | Last update timestamp | [default to undefined]
 **lastUsedAt** | **string** | Last used timestamp | [optional] [default to undefined]
 **errorReason** | **string** | The error reason of the volume | [default to undefined]
+**instance** | **string** | Filestore-only: the NFS instance holding the volume's data directory. Absent for object-storage volumes | [optional] [default to undefined]
 
 ## Example
 

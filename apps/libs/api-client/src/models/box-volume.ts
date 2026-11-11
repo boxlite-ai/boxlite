@@ -12,23 +12,21 @@
  * Do not edit the class manually.
  */
 
-
-
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolumeFilestoreRef } from './box-volume-filestore-ref';
 
 export interface BoxVolume {
     /**
-     * The ID of the managed volume; absent for filestore volumes
+     * The ID of the volume (bucket-backed or Filestore-backed)
      */
-    'volumeId'?: string;
+    'volumeId': string;
     /**
      * The mount path for the volume
      */
     'mountPath': string;
     /**
-     * The Filestore instance reference; absent for managed volumes
+     * The Filestore instance reference; absent for bucket-backed volumes
      */
     'filestore'?: BoxVolumeFilestoreRef;
     /**

@@ -522,10 +522,13 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ## GCP Filestore volumes
 
-A box can mount a GCP Filestore NFS instance by reference. The reference
-carries the instance's **logical name**; the address is resolved from the
-runner's registry at mount time, so recreating an instance under the same
-name requires no change to historical boxes.
+A box mounts a **Filestore volume** — a Volume row whose data directory lives
+on a Filestore NFS instance, created through the volume API with an
+`instance` field and mounted by the same `managed_volume` selector as
+bucket-backed volumes. The reference carries the instance's **logical name**;
+the address is resolved from the runner's registry at mount time, so
+recreating an instance under the same name requires no change to historical
+boxes.
 
 ### Registry
 
@@ -547,11 +550,15 @@ refuses to start the runner.
   demand (`mount -t nfs -o vers=4.1,hard ...`), and reclaimed when no box
   record references it anymore. `mountOptions` entries are appended to the
   same `-o` list.
-- The box binds to its own data directory inside the export
-  (`/mnt/boxlite-filestore-<instance>/<box_id>-<n>`), `chmod 0777` — NFS
-  permissions are real, unlike the FUSE backends' faked ones.
-- Destroy unbinds only: the data directory and its data survive, same as a
-  bucket survives a destroy.
+- The box binds to the volume's data directory inside the export
+  (`/mnt/boxlite-filestore-<instance>/<volume_id>`), `chmod 0777` — NFS
+  permissions are real, unlike the FUSE backends' faked ones. The directory
+  is named by the volume id, so boxes sharing a volume share data, and a
+  destroyed box's data stays reachable by mounting the volume into a new box.
+- Destroy unbinds only: the data directory and its data survive, exactly as a
+  bucket survives a destroy — reachable again through the volume id.
+- Volume removal tombstones the Volume row once no live box mounts it; the
+  NFS data directory itself is left in place for ops cleanup.
 
 ### Troubleshooting: box started but its filestore mountpoint is empty
 
@@ -574,7 +581,11 @@ the registry.
 - Filestore instance: zonal, NFSv4.1, 1 TiB minimum, same VPC as the runner,
   port 2049 open. Capacity exhaustion shows up in the box as ENOSPC.
 - Host: NFS client package (`nfs-utils` on RHEL-family, `nfs-common` on
-  Debian-family). No autofs; the runner mounts explicitly.
+  Debian-family). No autofs; the runner mounts explicitly. The cloud boot
+  script ([`runner-boot.ts`](../infra/mdeploy/stack/runner-boot.ts)) installs
+  `nfs-common` on fresh hosts automatically; hosts provisioned before the
+  feature landed, or deployments that bypass the boot scripts, still need it
+  by hand.
 - **Deploy order: runners before the API.** An API upgraded ahead of its
   runners can dispatch filestore volumes to a runner that predates the
   feature; the old binary treats the reference as a bucket id and fails the

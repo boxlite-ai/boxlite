@@ -150,17 +150,17 @@ func TestLookupFilestoreInstance(t *testing.T) {
 	}
 }
 
-// The data directory suffix ({box_id}-{n}) is what makes stop/start keep the
-// data: the declaration index is fixed at create time and the same declaration
-// must always derive the same directory.
+// The volume id is what makes stop/start keep the data — and what makes
+// sharing possible: the same volume derives the same directory whatever box
+// mounts it, and a destroyed box's data stays reachable under the volume id.
 func TestFilestoreDataDirDerivation(t *testing.T) {
 	root := "/mnt/boxlite-filestore-ml"
 
-	if got, want := filestoreDataDir(root, "box1", 0), filepath.Join(root, "box1-0"); got != want {
-		t.Errorf("filestoreDataDir(root, box1, 0) = %q, want %q", got, want)
+	if got, want := filestoreDataDir(root, "vol1"), filepath.Join(root, "vol1"); got != want {
+		t.Errorf("filestoreDataDir(root, vol1) = %q, want %q", got, want)
 	}
-	if got, want := filestoreDataDir(root, "box1", 1), filepath.Join(root, "box1-1"); got != want {
-		t.Errorf("filestoreDataDir(root, box1, 1) = %q, want %q", got, want)
+	if got, want := filestoreDataDir(root, "vol2"), filepath.Join(root, "vol2"); got != want {
+		t.Errorf("filestoreDataDir(root, vol2) = %q, want %q", got, want)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestRecordBoxVolumeMountsWritesEntries(t *testing.T) {
 
 	s3Root := filepath.Join(base, "boxlite-volume-abc")
 	fsRoot := filepath.Join(base, "boxlite-filestore-ml")
-	dataDir := filestoreDataDir(fsRoot, "box1", 0)
+	dataDir := filestoreDataDir(fsRoot, "vol1")
 
 	c := filestoreTestClient(t)
 	err := c.recordBoxVolumeMounts(ctx, "box1", []volumeMount{
@@ -388,31 +388,31 @@ func TestGetVolumeMountsPreparesFilestoreVolumes(t *testing.T) {
 	fake := installFakeFilestoreMounts(c)
 
 	mounts, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
-		{MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-b", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
 	})
 	if err != nil {
 		t.Fatalf("getVolumeMounts failed: %v", err)
 	}
 
-	// Two declared volumes on one instance: two distinct data directories
-	// (declaration index fixes the {box_id}-{n} suffix) behind one shared
-	// mount root, both labeled filestore with the instance that backs them.
+	// Two declared volumes on one instance: two distinct data directories,
+	// each named by its volume id, behind one shared mount root, both labeled
+	// filestore with the instance that backs them.
 	want := []volumeMount{
 		{
-			hostPath:          filestoreDataDir(root, "box1", 0),
+			hostPath:          filestoreDataDir(root, "vol-a"),
 			mountPath:         "/a",
 			rootPath:          root,
 			backend:           volumeBackendFilestore,
-			dataDir:           filestoreDataDir(root, "box1", 0),
+			dataDir:           filestoreDataDir(root, "vol-a"),
 			filestoreInstance: "ml-scratch",
 		},
 		{
-			hostPath:          filestoreDataDir(root, "box1", 1),
+			hostPath:          filestoreDataDir(root, "vol-b"),
 			mountPath:         "/b",
 			rootPath:          root,
 			backend:           volumeBackendFilestore,
-			dataDir:           filestoreDataDir(root, "box1", 1),
+			dataDir:           filestoreDataDir(root, "vol-b"),
 			filestoreInstance: "ml-scratch",
 		},
 	}
@@ -477,6 +477,55 @@ func TestGetVolumeMountsPreparesFilestoreVolumes(t *testing.T) {
 	}
 }
 
+// The volume id names the data directory — the bucket-alignment contract:
+// two boxes mounting the same volume land in the same directory and share
+// data, a destroyed box's directory stays reachable by mounting the volume
+// into a new box, and one box declaring the same volume at two guest paths
+// binds the same directory twice.
+func TestFilestoreVolumesShareTheDirectoryByVolumeId(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
+
+	c := filestoreTestClient(t)
+	c.filestoreInstances = []config.FilestoreInstance{inst}
+	installFakeFilestoreMounts(c)
+
+	box1, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
+		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+	})
+	if err != nil {
+		t.Fatalf("box1 getVolumeMounts failed: %v", err)
+	}
+
+	// A second box mounting the same volume derives the same data directory:
+	// what makes cross-box sharing (and post-destroy remount) real.
+	box2, err := c.getVolumeMounts(ctx, "box2", []dto.VolumeDTO{
+		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+	})
+	if err != nil {
+		t.Fatalf("box2 getVolumeMounts failed: %v", err)
+	}
+	if box1[0].hostPath != box2[0].hostPath {
+		t.Fatalf("boxes sharing a volume derived different data directories: %q vs %q", box1[0].hostPath, box2[0].hostPath)
+	}
+
+	// One box declaring the same volume twice binds the same directory at
+	// both guest paths.
+	oneBox, err := c.getVolumeMounts(ctx, "box3", []dto.VolumeDTO{
+		{VolumeId: "vol-shared", MountPath: "/x", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-shared", MountPath: "/y", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+	})
+	if err != nil {
+		t.Fatalf("box3 getVolumeMounts failed: %v", err)
+	}
+	if oneBox[0].hostPath != oneBox[1].hostPath {
+		t.Fatalf("one box declaring a volume twice derived different data directories: %q vs %q", oneBox[0].hostPath, oneBox[1].hostPath)
+	}
+}
+
 // Design §4.5.2 ordering, pinned end to end: the referencing record is written
 // inside filestoreVolumeMount's critical section, so the moment getVolumeMounts
 // returns the reference is already visible — there is no window in which a
@@ -537,7 +586,7 @@ func TestReclaimRescansRecordsUnderTheInstanceLock(t *testing.T) {
 	// time the reclaim takes the lock, the record exists.
 	c := filestoreTestClient(t)
 	if err := c.recordBoxVolumeMounts(ctx, "box-late", []volumeMount{
-		{hostPath: filestoreDataDir(root, "box-late", 0), mountPath: "/nfs", rootPath: root, backend: volumeBackendFilestore, filestoreInstance: "ml"},
+		{hostPath: filestoreDataDir(root, "vol-late"), mountPath: "/nfs", rootPath: root, backend: volumeBackendFilestore, filestoreInstance: "ml"},
 	}); err != nil {
 		t.Fatalf("recordBoxVolumeMounts failed: %v", err)
 	}
@@ -580,7 +629,7 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 
 		c := filestoreTestClient(t)
 		if err := c.recordBoxVolumeMounts(ctx, "box-a", []volumeMount{
-			{hostPath: filestoreDataDir(root, "box-a", 0), mountPath: "/nfs", rootPath: root, backend: volumeBackendFilestore, filestoreInstance: "ml"},
+			{hostPath: filestoreDataDir(root, "vol-a"), mountPath: "/nfs", rootPath: root, backend: volumeBackendFilestore, filestoreInstance: "ml"},
 		}); err != nil {
 			t.Fatalf("recordBoxVolumeMounts failed: %v", err)
 		}
@@ -633,3 +682,4 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 		}
 	})
 }
+

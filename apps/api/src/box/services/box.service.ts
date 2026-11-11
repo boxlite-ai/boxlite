@@ -285,31 +285,30 @@ export class BoxService {
       const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
-        // Filestore volumes reference a runner-side instance by name and have
-        // no volume entity here, so only managed-volume selectors go through
-        // entity validation and resolution.
-        const managedSelectors = createBoxDto.volumes.filter((v) => !v.filestore).map((v) => v.volumeId)
-        const canonical = await this.volumeService.validateVolumes(organization.id, managedSelectors)
-        // Replace the caller's selector with the id it resolved to inside this
-        // organization. A name is only unique per organization, but everything
-        // downstream (the runner, the `boxlite-volume-<id>` bucket) reads this
-        // field as a global id - see VolumeService.validateVolumes.
+        const volumes = await this.volumeService.validateVolumes(organization.id, createBoxDto.volumes.map((v) => v.volumeId))
+        // Replace the caller's selector with the volume it resolved to inside
+        // this organization. A name is only unique per organization, but
+        // everything downstream (the runner, the `boxlite-volume-<id>` bucket,
+        // a filestore data directory `boxlite-filestore-<instance>/<id>`) reads
+        // the stored value as a globally canonical id - see
+        // VolumeService.validateVolumes. The filestore reference rides along
+        // for the runner's mount dispatch; the instance is deliberately not
+        // checked here — the runner's registry is the source of truth, and the
+        // mount fails loudly there on an unknown name.
         createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
-          if (volume.filestore) {
-            // Instance existence is deliberately not checked here: the
-            // runner's registry is the source of truth, and the mount fails
-            // loudly there on an unknown name.
-            return volume
-          }
-          const canonicalId = canonical.get(volume.volumeId)
-          if (!canonicalId) {
+          const resolved = volumes.get(volume.volumeId)
+          if (!resolved) {
             // validateVolumes keys every selector or throws, so this is
             // unreachable today. Fail closed anyway: the alternative fallback
             // is silently persisting the caller's own string, which is exactly
             // the tenant-controlled passthrough the resolution exists to stop.
             throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
           }
-          return { ...volume, volumeId: canonicalId }
+          return {
+            ...volume,
+            volumeId: resolved.id,
+            ...(resolved.instance ? { filestore: { instance: resolved.instance } } : {}),
+          }
         })
       } else if (image && !needsFreshBox) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec

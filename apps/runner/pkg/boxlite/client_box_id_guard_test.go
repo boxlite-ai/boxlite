@@ -12,8 +12,8 @@ import (
 )
 
 // The box id becomes part of filesystem paths: volume mount records
-// ({id}.json), filestore data directories ({id}-{n}) and the runtime's own
-// box name. These tests pin the boundary guards on Create/Start/Destroy —
+// ({id}.json) and the runtime's own box name. These tests pin the boundary
+// guards on Create/Start/Destroy —
 // a traversal-shaped id is rejected before any mount or record work runs.
 //
 // createDtoWithUnknownFilestore carries a filestore volume naming an

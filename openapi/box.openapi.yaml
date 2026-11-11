@@ -2865,52 +2865,33 @@ components:
     VolumeSpec:
       type: object
       description: |
-        A volume mounted into a box, backed by a managed volume (an S3/GCS
-        bucket) or by a GCP Filestore NFS instance. Host bind mounts have no
+        Managed volume mounted into a box. Host bind mounts have no
         representation here: the path would name the server's filesystem, not
-        the caller's. The two backends are mutually exclusive references —
-        each volume names exactly one of `managed_volume` or `filestore`.
+        the caller's, so the only mount source this API accepts is a managed
+        volume. This includes Filestore volumes — a volume whose data
+        directory lives on a Filestore NFS instance — which are created
+        through the volume endpoints and referenced identically by id or
+        name.
       additionalProperties: false
-      required: [guest_path]
+      required: [managed_volume, guest_path]
       properties:
         managed_volume:
           type: string
           minLength: 1
           description: |
-            The managed volume's server-assigned `id` or its `name` — both
-            resolve to the same volume, and a name is unique within the
-            owning scope. Mutually exclusive with `filestore`: exactly one
-            of the two must be present.
+            The volume's server-assigned `id` or its `name` — both resolve to
+            the same volume, and a name is unique within the owning scope.
           example: vol_01K2EXAMPLE
         guest_path:
           type: string
           description: Mount point inside the container
-        filestore:
-          type: object
-          description: |
-            A GCP Filestore NFS instance to mount (NFSv4.1, Zonal/Regional
-            tiers). The instance must appear in the target runner's
-            FILESTORE_INSTANCES registry; a box create referencing an
-            unregistered instance fails. Mutually exclusive with
-            `managed_volume`: exactly one of the two must be present.
-          required: [instance]
-          additionalProperties: false
-          properties:
-            instance:
-              type: string
-              pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
-              description: |
-                The instance's logical name in the runner's
-                FILESTORE_INSTANCES registry — never an address. The
-                address is resolved at mount time from the registry.
-              example: ml-scratch
         read_only:
           type: boolean
           default: false
           enum: [false]
           description: |
-            Read-only mounts are not implemented yet; `true` is rejected
-            rather than silently downgraded to read-write.
+            Read-only managed mounts are not implemented yet; `true` is
+            rejected rather than silently downgraded to read-write.
 
     VolumeState:
       type: string
@@ -2935,6 +2916,12 @@ components:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+        instance:
+          type: string
+          description: |
+            Filestore-only: the NFS instance holding the volume's data
+            directory. Absent for object-storage volumes, whose data lives in
+            boxlite-volume-<id>.
 
     CreateVolumeRequest:
       type: object
@@ -2949,6 +2936,17 @@ components:
           pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$"
           minLength: 2
           example: my-data
+        instance:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+          description: |
+            The Filestore instance the volume's data directory lives on.
+            Presence makes the volume a filestore volume; absence keeps it an
+            object-storage volume (data in boxlite-volume-<id>). The instance
+            must appear in the target runner's FILESTORE_INSTANCES registry —
+            a box referencing an unregistered instance fails loudly at mount
+            time.
+          example: ml-scratch
 
     Volume:
       type: object
@@ -2979,6 +2977,12 @@ components:
         error_reason:
           type: string
           description: Failure detail when state is "error"
+        instance:
+          type: string
+          description: |
+            Filestore-only: the NFS instance holding the volume's data
+            directory. Absent for object-storage volumes, whose data lives in
+            boxlite-volume-<id>.
 
     ListVolumesResponse:
       type: object

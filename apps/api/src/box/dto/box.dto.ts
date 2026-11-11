@@ -52,15 +52,14 @@ export class BoxVolumeFilestoreRef {
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
   /**
-   * The managed volume's server-assigned id. Absent for filestore volumes,
-   * which reference an instance by name instead — exactly one of the two
-   * reference forms is present on any persisted volume.
+   * The volume's server-assigned id. Filestore volumes are Volume rows like
+   * any other and carry an id the same way.
    */
-  @ApiPropertyOptional({
-    description: 'The ID of the managed volume; absent for filestore volumes',
+  @ApiProperty({
+    description: 'The ID of the volume (bucket-backed or Filestore-backed)',
     example: 'volume123',
   })
-  volumeId?: string
+  volumeId: string
 
   @ApiProperty({
     description: 'The mount path for the volume',
@@ -68,8 +67,12 @@ export class BoxVolume {
   })
   mountPath: string
 
+  /**
+   * Filestore-only. Present on a box volume whose Volume row carries an
+   * `instance`; absent for bucket-backed volumes.
+   */
   @ApiPropertyOptional({
-    description: 'The Filestore instance reference; absent for managed volumes',
+    description: 'The Filestore instance reference; absent for bucket-backed volumes',
     type: BoxVolumeFilestoreRef,
   })
   filestore?: BoxVolumeFilestoreRef
