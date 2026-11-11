@@ -115,7 +115,7 @@ async def test_checkpoint_native_rest_management_and_box_creation(checkpoint_ser
         boxlite.BoxOptions(checkpoint="checkpoint-1", image="alpine:latest"),
         boxlite.BoxOptions(checkpoint="checkpoint-1", rootfs_path="/tmp/rootfs"),
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(boxlite.InvalidArgumentError):
             await runtime.create(overridden)
     assert requests == [
         ("POST", "/v1/checkpoints", {"source_box_id": "source-1", "name": "base"}),

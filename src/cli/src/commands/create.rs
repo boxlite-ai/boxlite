@@ -126,7 +126,8 @@ impl CreateArgs {
         global: &GlobalFlags,
     ) -> anyhow::Result<BoxOptions> {
         use clap::Parser;
-        let bare = crate::cli::Cli::try_parse_from(["boxlite", "create", "--checkpoint", checkpoint])?;
+        let bare =
+            crate::cli::Cli::try_parse_from(["boxlite", "create", "--checkpoint", checkpoint])?;
         let crate::cli::Commands::Create(bare) = bare.command else {
             unreachable!("`create` parses to the create command");
         };
@@ -155,9 +156,9 @@ impl CreateArgs {
             (None, None, None) => {
                 anyhow::bail!("provide IMAGE, --rootfs PATH or --checkpoint CHECKPOINT")
             }
-            _ => anyhow::bail!(
-                "provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT"
-            ),
+            _ => {
+                anyhow::bail!("provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT")
+            }
         }
     }
 }

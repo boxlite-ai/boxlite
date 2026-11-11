@@ -297,7 +297,13 @@ async fn checkpoint_creation_refuses_execution_overrides_before_sending_requests
     }
     for sources in [
         vec!["create", "--checkpoint", "checkpoint-1", "alpine"],
-        vec!["create", "--checkpoint", "checkpoint-1", "--rootfs", "/tmp/rootfs"],
+        vec![
+            "create",
+            "--checkpoint",
+            "checkpoint-1",
+            "--rootfs",
+            "/tmp/rootfs",
+        ],
     ] {
         cli(&home, &server)
             .args(sources)
@@ -308,7 +314,13 @@ async fn checkpoint_creation_refuses_execution_overrides_before_sending_requests
     // The checkpoint import entry point is gone, as is in-place replacement.
     for removed in [
         vec!["checkpoint", "import", "checkpoint-1", "--name", "worker"],
-        vec!["create", "--checkpoint", "checkpoint-1", "--box", "cloudBox1234"],
+        vec![
+            "create",
+            "--checkpoint",
+            "checkpoint-1",
+            "--box",
+            "cloudBox1234",
+        ],
     ] {
         cli(&home, &server).args(removed).assert().failure();
     }

@@ -13,8 +13,8 @@ use tokio::runtime::Runtime as TokioRuntime;
 use crate::archive::TokioRuntimeDropGuard;
 use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxRemoveBoxCb, CCheckpointInfoCb, CCheckpointListCb, EventQueue, OwnedFfiPtr,
-    RuntimeEvent, push_event,
+    CBoxRemoveBoxCb, CCheckpointInfoCb, CCheckpointListCb, EventQueue, OwnedFfiPtr, RuntimeEvent,
+    push_event,
 };
 use crate::info::{free_raw_slice, into_raw_slice};
 use crate::{CBoxliteError, CBoxliteRuntime};
