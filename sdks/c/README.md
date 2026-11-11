@@ -9,6 +9,14 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 ## Managed checkpoints
 
+Checkpoint operations use a separate REST backend in the SDK adapter. The Rust
+runtime keeps `import_box(BoxArchive, name)` for archive files; it has no checkpoint
+selector or checkpoint management entry point. Local SDK checkpoint requests return
+`Unsupported`. Remote import uses the existing JSON `POST /boxes/import` endpoint;
+runner downloads the archive under its checkpoint work directory, imports the local
+file, and removes staging only after native import finishes.
+
+
 The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 

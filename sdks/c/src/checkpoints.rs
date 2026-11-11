@@ -7,7 +7,7 @@ use std::future::Future;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 
-use boxlite::{BoxliteError, BoxliteResult, BoxliteRuntime, CheckpointInfo};
+use boxlite::{BoxliteError, BoxliteResult, CheckpointHandle, CheckpointInfo};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::archive::TokioRuntimeDropGuard;
@@ -171,7 +171,6 @@ pub unsafe extern "C" fn boxlite_checkpoint_create(
     unsafe {
         submit(runtime, out_error, move |runtime, _, _| async move {
             let result = runtime
-                .checkpoints()
                 .create(&source, name)
                 .await
                 .and_then(CCheckpointInfo::new)
@@ -200,7 +199,6 @@ pub unsafe extern "C" fn boxlite_checkpoint_get(
     unsafe {
         submit(runtime, out_error, move |runtime, _, _| async move {
             let result = runtime
-                .checkpoints()
                 .get(&key)
                 .await
                 .and_then(CCheckpointInfo::new)
@@ -226,7 +224,7 @@ pub unsafe extern "C" fn boxlite_checkpoint_list(
     let user_data = user_data as usize;
     unsafe {
         submit(runtime, out_error, move |runtime, _, _| async move {
-            let result = runtime.checkpoints().list().await.and_then(|infos| {
+            let result = runtime.list().await.and_then(|infos| {
                 let items = infos
                     .into_iter()
                     .map(CCheckpointInfo::new)
@@ -258,7 +256,7 @@ pub unsafe extern "C" fn boxlite_checkpoint_remove(
     let user_data = user_data as usize;
     unsafe {
         submit(runtime, out_error, move |runtime, _, _| async move {
-            let result = runtime.checkpoints().remove(&key, force != 0).await;
+            let result = runtime.remove(&key, force != 0).await;
             RuntimeEvent::RemoveBox {
                 cb,
                 user_data,
@@ -271,7 +269,7 @@ pub unsafe extern "C" fn boxlite_checkpoint_remove(
 unsafe fn submit<F>(
     runtime: *mut CBoxliteRuntime,
     out_error: *mut CBoxliteError,
-    build: impl FnOnce(BoxliteRuntime, Arc<TokioRuntime>, Arc<EventQueue>) -> F + Send + 'static,
+    build: impl FnOnce(CheckpointHandle, Arc<TokioRuntime>, Arc<EventQueue>) -> F + Send + 'static,
 ) -> BoxliteErrorCode
 where
     F: Future<Output = RuntimeEvent> + Send + 'static,
@@ -290,7 +288,7 @@ where
         }
         return code;
     }
-    let core = runtime.runtime.clone();
+    let core = CheckpointHandle::new(runtime.checkpoint_backend.clone());
     let task_runtime = runtime.tokio_rt.clone();
     let queue = runtime.queue.clone();
     runtime.tokio_rt.spawn(async move {
@@ -305,6 +303,7 @@ where
 mod tests {
     use super::*;
     use crate::runtime::{RuntimeHandle, RuntimeLiveness, create_tokio_runtime};
+    use boxlite::BoxliteRuntime;
     use std::ptr;
     use std::sync::mpsc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -348,6 +347,7 @@ mod tests {
         })
         .unwrap();
         let mut runtime = RuntimeHandle {
+            checkpoint_backend: None,
             runtime: core,
             tokio_rt: create_tokio_runtime().unwrap(),
             liveness: Arc::new(RuntimeLiveness::new()),
@@ -417,6 +417,7 @@ mod tests {
                 .as_nanos()
         ));
         let mut runtime = RuntimeHandle {
+            checkpoint_backend: None,
             runtime: BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
                 home_dir: home.clone(),
                 ..Default::default()
@@ -619,6 +620,12 @@ mod tests {
                 requests
             });
             let mut runtime = RuntimeHandle {
+                checkpoint_backend: Some(
+                    boxlite::rest::checkpoints::checkpoint_backend(
+                        &boxlite::BoxliteRestOptions::new(format!("http://{address}")),
+                    )
+                    .unwrap(),
+                ),
                 runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(format!(
                     "http://{address}"
                 )))

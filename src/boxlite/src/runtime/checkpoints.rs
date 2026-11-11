@@ -37,7 +37,8 @@ pub enum CheckpointState {
     reason = "async_trait generates a must-use boxed future"
 )]
 #[async_trait]
-pub(crate) trait CheckpointBackend: Send + Sync {
+/// REST capability used by SDK adapters, separate from the native runtime.
+pub trait CheckpointBackend: Send + Sync {
     async fn create(&self, source: &str, name: Option<String>) -> BoxliteResult<CheckpointInfo>;
     async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>>;
     async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo>;
@@ -63,7 +64,8 @@ impl std::fmt::Debug for CheckpointHandle {
 }
 
 impl CheckpointHandle {
-    pub(crate) fn new(backend: Option<Arc<dyn CheckpointBackend>>) -> Self {
+    /// Build the SDK management handle; local adapters pass no backend.
+    pub fn new(backend: Option<Arc<dyn CheckpointBackend>>) -> Self {
         Self { backend }
     }
 

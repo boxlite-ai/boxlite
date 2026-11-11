@@ -183,6 +183,8 @@ intact; `--force` tolerates absence and never bypasses active use.
 
 Storage, capture coordination, and replacement retries belong to the server.
 The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
+The CLI resolves a separate REST checkpoint backend from the selected context;
+checkpoint requests do not pass through Rust runtime archive import.
 Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
 management routes. Existing binary archive export/import remains available.
 The cloud runner validates downloaded archives through its separate native

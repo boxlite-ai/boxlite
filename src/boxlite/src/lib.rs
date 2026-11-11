@@ -67,10 +67,9 @@ pub use runtime::advanced_options::{
     ResourceLimits, SecurityOptions,
 };
 pub use runtime::options::{
-    BoxArchive, BoxImportSource, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions,
-    ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode,
-    NetworkSpec, OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret,
-    SnapshotOptions,
+    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
+    ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode, NetworkSpec,
+    OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

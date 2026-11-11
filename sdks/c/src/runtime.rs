@@ -30,6 +30,7 @@ use crate::{CBoxliteError, CBoxliteImageHandle, CBoxliteRuntime, CBoxliteVolumeH
 /// per-runtime event queue used by the post-and-drain callback API.
 pub struct RuntimeHandle {
     pub runtime: BoxliteRuntime,
+    pub checkpoint_backend: Option<Arc<dyn boxlite::runtime::checkpoints::CheckpointBackend>>,
     pub tokio_rt: Arc<TokioRuntime>,
     pub liveness: Arc<RuntimeLiveness>,
     pub queue: Arc<EventQueue>,
@@ -289,6 +290,7 @@ unsafe fn runtime_new(
         };
 
         *out_runtime = Box::into_raw(Box::new(RuntimeHandle {
+            checkpoint_backend: None,
             runtime,
             tokio_rt,
             liveness: Arc::new(RuntimeLiveness::new()),

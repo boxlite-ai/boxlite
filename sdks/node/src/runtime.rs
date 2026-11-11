@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxImportSource, BoxOptions, BoxliteOptions, BoxliteRuntime};
+use boxlite::rest::checkpoints::{BoxImportSource, checkpoint_backend};
+use boxlite::runtime::checkpoints::CheckpointBackend;
+use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -29,6 +31,7 @@ pub struct JsImportOptions {
 #[napi]
 pub struct JsBoxlite {
     runtime: Arc<BoxliteRuntime>,
+    checkpoint_backend: Option<Arc<dyn CheckpointBackend>>,
 }
 
 #[napi]
@@ -51,6 +54,7 @@ impl JsBoxlite {
 
         Ok(Self {
             runtime: Arc::new(runtime),
+            checkpoint_backend: None,
         })
     }
 
@@ -72,6 +76,7 @@ impl JsBoxlite {
         let runtime = BoxliteRuntime::default_runtime();
         Ok(Self {
             runtime: Arc::new(runtime.clone()),
+            checkpoint_backend: None,
         })
     }
 
@@ -101,9 +106,12 @@ impl JsBoxlite {
     /// adaptation lives in the binding (`JsBoxliteRestOptions::into_core`).
     #[napi(factory)]
     pub fn rest(options: &JsBoxliteRestOptions) -> Result<Self> {
-        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
+        let options = options.into();
+        let checkpoint_backend = checkpoint_backend(&options).map_err(map_err)?;
+        let runtime = BoxliteRuntime::rest(options).map_err(map_err)?;
         Ok(Self {
             runtime: Arc::new(runtime),
+            checkpoint_backend: Some(checkpoint_backend),
         })
     }
 
@@ -116,6 +124,7 @@ impl JsBoxlite {
         options: Option<JsImportOptions>,
     ) -> Result<JsBox> {
         let runtime = Arc::clone(&self.runtime);
+        let checkpoint_backend = self.checkpoint_backend.clone();
         let options = options.unwrap_or(JsImportOptions {
             checkpoint_id: None,
             box_id: None,
@@ -126,7 +135,10 @@ impl JsBoxlite {
             options.box_id,
         )
         .map_err(map_err)?;
-        let handle = runtime.import_box(source, name).await.map_err(map_err)?;
+        let handle = source
+            .import_box(&runtime, checkpoint_backend.as_deref(), name)
+            .await
+            .map_err(map_err)?;
         Ok(JsBox {
             handle: Arc::new(handle),
         })
@@ -318,7 +330,9 @@ impl JsBoxlite {
     #[napi(getter)]
     pub fn checkpoints(&self) -> crate::checkpoints::JsCheckpointHandle {
         crate::checkpoints::JsCheckpointHandle {
-            handle: Arc::new(self.runtime.checkpoints()),
+            handle: Arc::new(boxlite::CheckpointHandle::new(
+                self.checkpoint_backend.clone(),
+            )),
         }
     }
 

@@ -7,9 +7,8 @@ use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::checkpoints::{CheckpointBackend, CheckpointHandle};
 use crate::runtime::images::ImageBackend;
-use crate::runtime::options::{BoxImportSource, BoxOptions, BoxliteOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::registries::RegistryBackend;
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
@@ -60,7 +59,6 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
-    checkpoint_backend: Option<Arc<dyn CheckpointBackend>>,
     /// Image capability — an `Arc` view of the same backend, local or REST.
     image_backend: Arc<dyn ImageBackend>,
     /// Named-volume capability — an `Arc` view of the same backend (local or
@@ -136,7 +134,6 @@ impl BoxliteRuntime {
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Self {
             backend: backend_arc,
-            checkpoint_backend: None,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
@@ -171,10 +168,8 @@ impl BoxliteRuntime {
         let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
         let domain_backend =
             Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::domains::DomainBackend>;
-        let checkpoint_backend = Arc::clone(&rest_runtime) as Arc<dyn CheckpointBackend>;
         Ok(Self {
             backend: rest_runtime,
-            checkpoint_backend: Some(checkpoint_backend),
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
@@ -388,54 +383,17 @@ impl BoxliteRuntime {
         self.backend.remove(id_or_name, force).await
     }
 
-    /// Import a box from a `.boxlite` archive or a REST-managed checkpoint.
+    /// Import a box from a `.boxlite` archive.
     ///
     /// Creates a new box with a new ID from archived disk images and configuration.
     /// Pass `name=None` to keep the imported box unnamed.
     /// Support depends on backend capabilities (local backends implement import).
     pub async fn import_box(
         &self,
-        source: impl Into<BoxImportSource>,
+        archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        match source.into() {
-            BoxImportSource::Archive(archive) => self.backend.import_box(archive, name).await,
-            BoxImportSource::Checkpoint {
-                checkpoint_id,
-                box_id,
-            } => {
-                crate::runtime::checkpoints::checked_name(&checkpoint_id)?;
-                if name.is_some() && box_id.is_some() {
-                    return Err(BoxliteError::InvalidArgument(
-                        "name and box_id are mutually exclusive".into(),
-                    ));
-                }
-                if let Some(name) = &name {
-                    crate::runtime::checkpoints::checked_name(name)?;
-                }
-                if let Some(target) = &box_id
-                    && (target.is_empty() || target.contains('\0'))
-                {
-                    return Err(BoxliteError::InvalidArgument(
-                        "import target must be a box ID or name".into(),
-                    ));
-                }
-                self.checkpoint_backend
-                    .as_deref()
-                    .ok_or_else(|| {
-                        BoxliteError::Unsupported(
-                            "checkpoints are only implemented for REST runtimes".into(),
-                        )
-                    })?
-                    .import_box(&checkpoint_id, name, box_id.as_deref())
-                    .await
-            }
-        }
-    }
-
-    /// REST-managed disk checkpoints. Operations return Unsupported on local runtimes.
-    pub fn checkpoints(&self) -> CheckpointHandle {
-        CheckpointHandle::new(self.checkpoint_backend.as_ref().map(Arc::clone))
+        self.backend.import_box(archive, name).await
     }
 
     // ========================================================================
@@ -649,50 +607,6 @@ mod tests {
         })
         .expect("local runtime");
         (runtime, temp_dir)
-    }
-
-    #[tokio::test]
-    async fn local_checkpoint_operations_are_unsupported_without_creating_storage() {
-        let (runtime, home) = local_runtime();
-        let checkpoints = runtime.checkpoints();
-        let errors = [
-            checkpoints
-                .create("source", Some("base".into()))
-                .await
-                .expect_err("local checkpoint creation must fail"),
-            checkpoints.list().await.unwrap_err(),
-            checkpoints.get("base").await.unwrap_err(),
-            checkpoints.remove("base", false).await.unwrap_err(),
-            checkpoints.remove("base", true).await.unwrap_err(),
-            runtime
-                .import_box(
-                    BoxImportSource::Checkpoint {
-                        checkpoint_id: "base".into(),
-                        box_id: None,
-                    },
-                    Some("worker".into()),
-                )
-                .await
-                .err()
-                .expect("local checkpoint import must fail"),
-            runtime
-                .import_box(
-                    BoxImportSource::Checkpoint {
-                        checkpoint_id: "base".into(),
-                        box_id: Some("target".into()),
-                    },
-                    None,
-                )
-                .await
-                .err()
-                .expect("local checkpoint import must fail"),
-        ];
-        for error in errors {
-            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
-            assert!(error.to_string().contains("REST runtimes"), "{error}");
-        }
-        assert!(!home.path().join("checkpoints").exists());
-        assert!(runtime.list_info().await.unwrap().is_empty());
     }
 
     #[tokio::test]

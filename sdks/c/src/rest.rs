@@ -250,6 +250,14 @@ pub unsafe extern "C" fn boxlite_rest_runtime_new_with_options(
             }
         };
 
+        let checkpoint_backend = match boxlite::rest::checkpoints::checkpoint_backend(&opts) {
+            Ok(backend) => backend,
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                return code;
+            }
+        };
         let runtime = match BoxliteRuntime::rest(opts) {
             Ok(rt) => rt,
             Err(e) => {
@@ -260,6 +268,7 @@ pub unsafe extern "C" fn boxlite_rest_runtime_new_with_options(
         };
 
         *out_runtime = Box::into_raw(Box::new(RuntimeHandle {
+            checkpoint_backend: Some(checkpoint_backend),
             runtime,
             tokio_rt,
             liveness: Arc::new(RuntimeLiveness::new()),

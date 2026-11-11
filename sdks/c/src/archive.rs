@@ -8,7 +8,8 @@ use std::os::raw::{c_char, c_void};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxImportSource, BoxliteError, ExportOptions};
+use boxlite::rest::checkpoints::BoxImportSource;
+use boxlite::{BoxArchive, BoxliteError, ExportOptions};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::box_handle::BoxHandle;
@@ -235,6 +236,7 @@ unsafe fn import_box(
             return code;
         }
         let runtime = runtime_ref.runtime.clone();
+        let checkpoint_backend = runtime_ref.checkpoint_backend.clone();
         let tokio_rt = runtime_ref.tokio_rt.clone();
         let queue = runtime_ref.queue.clone();
         let box_tokio_rt = tokio_rt.clone();
@@ -247,15 +249,18 @@ unsafe fn import_box(
             let _runtime_drop_guard = TokioRuntimeDropGuard::new(task_tokio_rt);
             // Local runtimes intentionally trust caller-managed archives. A
             // REST server applies its own untrusted-upload policy server-side.
-            let result = runtime.import_box(source, name).await.map(|handle| {
-                let box_id = handle.id().clone();
-                OwnedFfiPtr::new(Box::new(BoxHandle {
-                    handle: Arc::new(handle),
-                    box_id,
-                    tokio_rt: box_tokio_rt,
-                    queue: box_queue,
-                }))
-            });
+            let result = source
+                .import_box(&runtime, checkpoint_backend.as_deref(), name)
+                .await
+                .map(|handle| {
+                    let box_id = handle.id().clone();
+                    OwnedFfiPtr::new(Box::new(BoxHandle {
+                        handle: Arc::new(handle),
+                        box_id,
+                        tokio_rt: box_tokio_rt,
+                        queue: box_queue,
+                    }))
+                });
             push_event(
                 &queue,
                 RuntimeEvent::RuntimeImport {

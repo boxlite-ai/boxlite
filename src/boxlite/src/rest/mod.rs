@@ -5,6 +5,7 @@
 //!
 //! Enabled with the `rest` feature flag.
 
+pub mod checkpoints;
 pub(crate) mod client;
 pub mod credential;
 pub(crate) mod error;
