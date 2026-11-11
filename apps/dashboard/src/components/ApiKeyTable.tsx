@@ -30,6 +30,7 @@ interface DataTableProps {
   loading: boolean
   isLoadingKey: (key: ApiKeyList) => boolean
   onRevoke: (key: ApiKeyList) => void
+  onClearFilter?: () => void
 }
 
 // Mirrors the Boxes (BoxTable) layout: borderless full-height column, header with a
@@ -40,7 +41,7 @@ const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
  * Lists API keys with a confirmation step before calling the owner's revoke handler.
  * Per-key loading state disables revocation while its request is in flight.
  */
-export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
+export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilter }: DataTableProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
@@ -62,6 +63,13 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
               <div className="h-4 w-3/4 animate-pulse bg-card" />
             </div>
           ))
+        ) : data.length === 0 && onClearFilter ? (
+          <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-[12px] text-muted-foreground">
+            <span>No API keys match your search</span>
+            <AsciiButton size="sm" type="button" onClick={onClearFilter}>
+              Clear filter
+            </AsciiButton>
+          </div>
         ) : data.length === 0 ? (
           <ResourceEmptyState
             title="No API Keys yet."

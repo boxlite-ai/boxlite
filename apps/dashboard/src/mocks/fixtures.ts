@@ -207,6 +207,21 @@ export const MOCK_BOXES: Box[] = [
   }),
 ]
 
+// Opt-in fleet fixtures survive reloads without changing the default small account.
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'fleet') {
+  for (let index = 0; index < 7; index++) {
+    const running = index < 4
+    MOCK_BOXES.push(
+      buildBox({
+        id: `mock-fleet-${index + 1}`,
+        name: `${running ? 'worker' : 'batch'}-${index + 1}`,
+        state: running ? BoxState.STARTED : BoxState.STOPPED,
+        desiredState: running ? BoxDesiredState.STARTED : BoxDesiredState.STOPPED,
+      }),
+    )
+  }
+}
+
 export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
   items: MOCK_BOXES,
   total: MOCK_BOXES.length,
