@@ -100,7 +100,8 @@ integers from 1 through 1000. Follow `next_page_token` as `pageToken` until the
 response omits it; repeat the same `status` selection. Page size may change.
 MCP `listBoxes` delegates to this REST operation and uses the same continuation.
 A resolved organization is required, including for system administrators; requests
-without one return 400 before querying inventory.
+without one return 400 before querying inventory. A non-`default` path prefix must
+match the resolved organization; unresolved or mismatched prefixes return 400.
 
 Deployment must coordinate client upgrades with the bounded server response.
 Previously released native clients that issue only one list request return at most

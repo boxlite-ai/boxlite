@@ -3,7 +3,7 @@
  */
 import { Test } from '@nestjs/testing'
 import { INestApplication } from '@nestjs/common'
-import { HttpAdapterHost } from '@nestjs/core'
+import { HttpAdapterHost, Reflector } from '@nestjs/core'
 import { DataSource, Repository } from 'typeorm'
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -88,13 +88,26 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
           request.user = request.headers['x-test-unscoped-admin']
             ? { role: 'admin' }
             : request.headers['x-test-other-org']
-              ? { organizationId: otherOrg }
+              ? { organizationId: otherOrg, organization: { id: otherOrg } }
               : caller
           return true
         },
       })
       .overrideGuard(OrganizationResourceActionGuard)
-      .useValue({ canActivate: () => true })
+      .useValue({
+        async canActivate(context: any) {
+          const request = context.switchToHttp().getRequest()
+          if (!request.headers['x-test-real-admin-guard']) return true
+          request.user = { ...caller, role: 'admin' }
+          const guard = new OrganizationResourceActionGuard(
+            { findOne: async () => null } as any,
+            {} as any,
+            new Reflector(),
+          )
+          Object.assign(guard, { redis: { get: async () => null } })
+          return guard.canActivate(context)
+        },
+      })
       .compile()
     app = module.createNestApplication()
     app.setGlobalPrefix('api')
@@ -141,12 +154,17 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
     expect(first.body.boxes.every((b: any) => b.status === 'stopped')).toBe(true)
     expect(first.body.next_page_token).toEqual(expect.any(String))
     await rows.delete('000000000004')
-    const next = await get(`status=stopped&pageSize=1&pageToken=${first.body.next_page_token}`, 'tenant/')
+    const next = await get(`status=stopped&pageSize=1&pageToken=${first.body.next_page_token}`, `${org}/`)
     expect(next.body.boxes.map((b: any) => b.box_id)).toEqual(['000000000006'])
     expect(next.body).not.toHaveProperty('next_page_token')
   })
   it('requires a resolved organization even for an admin admitted by the resource guard', async () => {
     const result = await get('pageSize=2', '', { 'x-test-unscoped-admin': 'true' })
+    expect(result.status).toBe(400)
+    expect(result.body).not.toHaveProperty('boxes')
+  })
+  it('rejects an unresolved prefix even when real guards retain an admin organization', async () => {
+    const result = await get('pageSize=2', 'missing/', { 'x-test-real-admin-guard': 'true' })
     expect(result.status).toBe(400)
     expect(result.body).not.toHaveProperty('boxes')
   })
