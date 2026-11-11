@@ -139,29 +139,32 @@ The local browser preview test also runs through make and confirms both successf
 
 The create response may contain a saved draft without DNS records; selecting it currently opens an empty management screen with a second continuation action.
 Keep the hostname form until all three records are available, then display the existing DNS configuration directly.
-For example, a successful Get DNS configuration request opens the three records; an incomplete response leaves the hostname form with a retry message.
+For example, Get DNS configuration keeps loading through incomplete responses and opens the three records once preparation finishes.
 
-Reuse the existing create/prepare endpoints and React Query mutation state; no new server workflow, background polling or dependency is needed.
+Reuse the existing create/prepare endpoints and React Query mutation state; no new server workflow or dependency is needed.
 The installed mutation implementation awaits its callbacks, so avoid awaiting an unrelated list refresh before displaying the operation result.
 Cache the returned draft directly, appending new IDs and replacing existing IDs; cancel outstanding list reads before either preparation operation.
-Create is explicit; subsequent attempts on a saved draft use prepare with the same ID and locked hostname.
+Create is explicit; incomplete responses schedule serial prepare requests with the same ID and locked hostname, respecting retryAfter with a three-second minimum.
+The loading state covers both requests and their intervening delays. Leaving the page or changing organization cancels scheduled requests.
 Opening an incomplete draft only displays this form and never creates resources or starts preparation automatically.
 
 | Option | Outcome | Decision |
 | --- | --- | --- |
 | Keep the management screen | Requires the redundant continuation step | Reject |
-| Poll prepare until records arrive | Adds timers, cancellation and retry policy | Reject for this presentation change |
-| Reuse the hostname form and explicit preparation | Preserves bounded requests and draft identity | Pick |
+| Require explicit retry for incomplete responses | Interrupts the requested continuous loading flow | Reject |
+| Continue preparation after an explicit click | Keeps loading until records arrive, preserving bounded requests and draft identity | Pick |
 
 While requesting, disable submission, hostname editing and dismissal.
-An incomplete response keeps Get DNS configuration available with inline status; provider or transport failure keeps the error and permits retry.
+An incomplete response keeps Get DNS configuration loading without a retry message; provider or transport failure stops loading and permits retry.
+An incomplete response with dns_configuration_pending remains a waiting state, not a preparation failure.
 Saved incomplete drafts retain deletion, including the existing confirmation, so they cannot strand the organization quota.
 Deletion confirmation also blocks form submission by Enter.
 If the first create response is lost before its ID arrives, retrying the same hostname uses the existing server-side create deduplication.
 Confirmed, Ready and superseded domains retain their existing management behavior.
 Remove the sentence “DNS is not checked until you confirm.” without changing when DNS verification runs.
 
-Regression checks cover complete responses with stale list data, pending requests, incomplete/failed drafts, retry without duplicate creation, deletion, subscription restrictions and ordinary browsing without writes.
+Earlier regression checks cover complete responses with stale list data, pending requests, incomplete/failed drafts, retry without duplicate creation, deletion, subscription restrictions and ordinary browsing without writes.
+Continuous preparation changes the earlier explicit-retry contract; its tests are not updated or run for this change at the user's request.
 The existing tests that require Continue getting DNS configuration are superseded by the hostname-form contract.
 Preparation does not promise immediate DNS records after a timeout and never treats an incomplete response as ready for verification.
 

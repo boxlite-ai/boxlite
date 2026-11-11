@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -23,7 +23,6 @@ const ERRORS: Record<string, string> = {
   certificate_dns_mismatch:
     'The certificate authorization CNAME is missing or does not match. Copy its exact name and value below; do not replace the traffic CNAME.',
   confirmation_required: 'Configure all three records, then confirm to verify DNS.',
-  dns_configuration_pending: 'DNS configuration is not ready yet. Please try again.',
   domain_superseded: 'A newer verified application owns this hostname. This configuration is no longer valid.',
   domain_creation_limited: 'Wait for pending resource cleanup before creating another configuration.',
   domain_already_owned: 'This hostname is already held by another organization. Release it there before retrying.',
@@ -43,6 +42,16 @@ const ERRORS: Record<string, string> = {
   subscription_required: 'An active organization subscription is required. Your configuration is retained.',
   subscription_not_ready:
     'Subscription eligibility could not be confirmed. Access pauses when the current grant expires.',
+}
+
+function needsDnsPreparation(domain: CustomDomain) {
+  return (
+    !domain.confirmed &&
+    !domain.ready &&
+    domain.phase !== 'superseded' &&
+    domain.dnsRecords.length < 3 &&
+    (!domain.errorCode || domain.errorCode === 'dns_configuration_pending')
+  )
 }
 
 function DomainStatus({ domain, active }: { domain: CustomDomain; active: boolean }) {
@@ -87,6 +96,7 @@ export default function CustomDomains({
   const [box, setBox] = useState('')
   const [port, setPort] = useState('3000')
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [preparing, setPreparing] = useState<{ id: string; organizationId: string } | null>(null)
   const pendingMutations = useIsMutating({ mutationKey: key })
   const canRefreshStatus = (data: CustomDomainList | undefined) =>
     pendingMutations === 0 &&
@@ -122,14 +132,16 @@ export default function CustomDomains({
       }
     })
   }
+  const receivePreparation = (result: CustomDomain) => {
+    saveDomain(result)
+    setSelected(result.id)
+    setPreparing(needsDnsPreparation(result) ? { id: result.id, organizationId } : null)
+  }
   const create = useMutation({
     mutationKey: key,
     onMutate: () => client.cancelQueries({ queryKey: key }),
     mutationFn: () => api.createCustomDomain(organizationId, hostname),
-    onSuccess: (domain) => {
-      saveDomain(domain)
-      setSelected(domain.id)
-    },
+    onSuccess: receivePreparation,
   })
   const action = useMutation({
     mutationKey: key,
@@ -148,7 +160,8 @@ export default function CustomDomains({
     },
     onSuccess: async (result, operation) => {
       if (result) {
-        saveDomain(result)
+        if (operation.type === 'prepare') receivePreparation(result)
+        else saveDomain(result)
         // A slow held-domain refresh must not delay the verification result.
         void client.invalidateQueries({ queryKey: queryKeys.domains.list(organizationId) })
         return
@@ -159,10 +172,24 @@ export default function CustomDomains({
       }
       await refresh()
     },
+    onError: () => setPreparing(null),
   })
   const data = query.data
   const canCreate = canManage && data?.enabled && data.subscription !== 'required'
   const domain = data?.domains.find((value) => value.id === selected)
+  const waitingForRecords =
+    !!domain &&
+    preparing?.organizationId === organizationId &&
+    preparing.id === domain.id &&
+    needsDnsPreparation(domain)
+  useEffect(() => {
+    if (!waitingForRecords || !open || !canCreate || !domain || action.isPending || create.isPending) return
+    const timer = window.setTimeout(
+      () => action.mutate({ type: 'prepare', id: domain.id, hostname: domain.hostname }),
+      Math.max(3, domain.retryAfter || 3) * 1000,
+    )
+    return () => window.clearTimeout(timer)
+  }, [waitingForRecords, open, canCreate, domain, action.isPending, create.isPending, action.mutate])
   const showHostnameForm =
     !domain || (!domain.confirmed && !domain.ready && domain.phase !== 'superseded' && domain.dnsRecords.length < 3)
   const formHostname = domain?.hostname ?? hostname
@@ -204,7 +231,7 @@ export default function CustomDomains({
       },
     )
   }
-  const busy = create.isPending || action.isPending
+  const busy = create.isPending || action.isPending || (waitingForRecords && canCreate)
   const canBind =
     canCreate &&
     domain?.ready &&
@@ -345,11 +372,9 @@ export default function CustomDomains({
                     {create.error.message}
                   </p>
                 )}
-                {domain && !busy && (
-                  <p role={domain.errorCode ? 'alert' : 'status'} className="text-muted-foreground">
-                    {domain.errorCode
-                      ? (ERRORS[domain.errorCode] ?? 'Could not get DNS configuration. Please try again.')
-                      : ERRORS.dns_configuration_pending}
+                {domain?.errorCode && domain.errorCode !== 'dns_configuration_pending' && !busy && (
+                  <p role="alert" className="text-muted-foreground">
+                    {ERRORS[domain.errorCode] ?? 'Could not get DNS configuration. Please try again.'}
                   </p>
                 )}
               </form>

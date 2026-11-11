@@ -662,7 +662,9 @@ keeps its title without explanatory copy. Subscription checks and management act
 The add dialog presents the hostname field without DNS instructions or repeated quota guidance; validation and action errors remain visible.
 Get DNS configuration stays on the hostname form while requesting records, with editing and duplicate submissions disabled.
 A complete response opens all three records directly, without an intermediate management screen or continuation button.
-Incomplete responses and preparation errors remain on the form for explicit retry; a saved draft locks the hostname and retries prepare with the same ID.
+Incomplete responses keep the form loading and automatically continue prepare with the same draft ID, respecting the server's retry delay with a three-second minimum.
+No retry message is shown while records are being prepared; all three records open automatically when available.
+Preparation errors stop loading and allow explicit retry. Leaving the page or changing organization cancels scheduled preparation requests.
 Reopening an incomplete draft does not start preparation automatically. Drafts can still be deleted after confirmation, including when the subscription is inactive.
 Create and prepare responses update the list cache directly, so a delayed list response does not hide newly prepared records.
 The Custom domains list quietly reads status every minute while any setup is incomplete.
