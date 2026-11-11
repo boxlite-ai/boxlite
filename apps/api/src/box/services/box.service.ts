@@ -7,13 +7,9 @@
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-<<<<<<< HEAD
-import { Not, Repository, LessThan, MoreThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
+import { Not, Repository, LessThan, MoreThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager } from 'typeorm'
 import { BoxPublicStatus, publicBoxStatus } from '../utils/box-public-status'
 import { reportedBoxState } from '../utils/box-state.util'
-=======
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager } from 'typeorm'
->>>>>>> origin/main
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
