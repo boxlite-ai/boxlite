@@ -643,8 +643,7 @@ mod tests {
             checkpoints
                 .create("source", Some("base".into()))
                 .await
-                .err()
-                .expect("local checkpoint creation must fail"),
+                .expect_err("local checkpoint creation must fail"),
             checkpoints.list().await.unwrap_err(),
             checkpoints.get("base").await.unwrap_err(),
             checkpoints.remove("base", false).await.unwrap_err(),

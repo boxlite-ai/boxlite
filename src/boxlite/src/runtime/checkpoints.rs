@@ -146,3 +146,6 @@ pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
     }
     Ok(name)
 }
+
+#[cfg(test)]
+mod tests;
