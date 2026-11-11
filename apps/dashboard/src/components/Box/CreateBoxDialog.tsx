@@ -537,6 +537,8 @@ function SelectField({
 // rejects anything else ("not in a ready state"), and a volume is briefly
 // `creating` after it is made, so an unfiltered picker would offer a choice
 // that fails on submit.
+// TODO(boxlite-ai/boxlite#2541): this picker only offers managed volumes;
+// filestore volumes (attach by instance name) are API-only for now.
 function MountRow({
   mount,
   volumes,

@@ -114,6 +114,26 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
   const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
   usePageTitle(box ? `${getBoxDisplayName(box)}${page === 'terminal' ? ' · Terminal' : ''}` : 'Box')
 
+  // Volumes this box mounts, with the stored handle resolved back to a name.
+  const { data: allVolumes = [] } = useVolumesQuery()
+  // The image the box names is linked once it is in the catalog, which a
+  // first start puts it in; a built-in one is matched on its full reference.
+  const { data: images = [] } = useImagesQuery()
+  const catalogImage = box?.image
+    ? images.find((image) =>
+        image.curated ? image.curatedRef === box.image : image.name === catalogNameOf(box.image ?? ''),
+      )
+    : undefined
+  const mountedVolumes = useMemo(() => {
+    // TODO(boxlite-ai/boxlite#2541): filestore mounts carry `filestore.instance`
+    // instead of `volumeId` and render blank here.
+    const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
+    return mounts.map((mount) => {
+      const match = allVolumes.find((v) => v.id === mount.volumeId || v.name === mount.volumeId)
+      return { ...mount, displayName: match?.name ?? mount.volumeId }
+    })
+  }, [box?.volumes, allVolumes])
+
   const isNotFound = isError && isAxiosError(error?.cause) && error.cause?.status === 404
   useBoxWsSync({ boxId })
 
