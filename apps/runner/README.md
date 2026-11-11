@@ -835,3 +835,11 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
 
 - **Spec**:
   - [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) — formal API schema
+
+## Fractional CPU allocations
+
+Create and recovery requests accept `cpuQuota` as a number of cores from `0.125` to `16`, in increments of `0.001`.
+Omission retains the one-core default; explicit zero, non-finite values, and excess precision are rejected.
+The HTTP and v2 job paths preserve the number through the Go SDK; recovery validates it before destroying the old Box.
+Fractional Linux allocations use the Runtime's cgroup quota and rounded-up guest topology, with its existing best-effort membership behavior.
+Upgrade all Runners and matching native libraries before enabling fractional creation in the API, including migration destinations.

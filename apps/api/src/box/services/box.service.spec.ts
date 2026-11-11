@@ -505,7 +505,7 @@ describe('BoxService inbound defaults', () => {
     const { service, boxRepository } = makeCreateService()
 
     await expect(
-      service.createForWarmPool({ id: 'pool-7', image: 'quay.io/acme/app:v1', target: 'region-1' } as any),
+      service.createForWarmPool({ id: 'pool-7', image: 'quay.io/acme/app:v1', target: 'region-1', cpu: 1 } as any),
     ).rejects.toThrow(/pool-7/)
     expect(boxRepository.insert).not.toHaveBeenCalled()
   })

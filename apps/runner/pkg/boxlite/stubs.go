@@ -20,6 +20,9 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	// Check before Destroy: a request that cannot be recreated must not cost
 	// the box it was meant to recover.
 	createDto := recoverCreateDto(boxId, recoverDto)
+	if _, err := dto.CPUAllocation(createDto.CpuQuota); err != nil {
+		return errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
 	if _, err := networkSpec(createDto); err != nil {
 		return err
 	}

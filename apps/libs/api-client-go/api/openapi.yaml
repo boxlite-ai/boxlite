@@ -1900,7 +1900,7 @@ paths:
         name: minCpu
         required: false
         schema:
-          minimum: 1
+          minimum: 0.01
           type: number
         style: form
       - description: Maximum CPU
@@ -1909,7 +1909,7 @@ paths:
         name: maxCpu
         required: false
         schema:
-          minimum: 1
+          minimum: 0.01
           type: number
         style: form
       - description: Minimum memory in GiB

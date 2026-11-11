@@ -227,7 +227,7 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 
 ### `cpus: float`
 
-CPU allocation, default `1`, from `0.01` to `16` with the bundled kernel, in increments of `0.001`.
+CPU allocation, default `1`, from `0.125` to `16` with the bundled kernel, in increments of `0.001`.
 Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
 Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 

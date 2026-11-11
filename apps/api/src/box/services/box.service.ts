@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
@@ -195,6 +196,7 @@ export class BoxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
+    assertCpuAllocation(warmPoolItem.cpu)
     // The far side of `requiresFreshBox`'s image rule. A warm box is created
     // with no organization and handed to whichever one claims it, so a pool row
     // naming a tenant's image would put that image's contents in front of

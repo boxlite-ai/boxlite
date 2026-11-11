@@ -650,8 +650,10 @@ const docTemplate = `{
                     }
                 },
                 "cpuQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "description": "CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.",
+                    "type": "number",
+                    "maximum": 16,
+                    "minimum": 0.125
                 },
                 "entrypoint": {
                     "type": "array",
@@ -808,8 +810,10 @@ const docTemplate = `{
             ],
             "properties": {
                 "cpuQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "description": "CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.",
+                    "type": "number",
+                    "maximum": 16,
+                    "minimum": 0.125
                 },
                 "env": {
                     "type": "object",
