@@ -117,9 +117,11 @@ reconfiguration. Failed configuration retains generated keys for the next invoca
 service operations are not retried within one command.
 
 OpenSSH logs in directly as `box`, which still executes as the container's
-configured user. The CLI pins the host public key derived from its local host
-private key in `<credential-directory>/known_hosts`, not the user's known-hosts
-file. Local aliases use the canonical box ID; remote aliases include the credential
+configured user. During login or alias installation, credential preparation
+validates the local host private key and derives its public key once. The CLI
+reuses that public key for status identity verification and
+`<credential-directory>/known_hosts`, not the user's known-hosts file.
+Local aliases use the canonical box ID; remote aliases include the credential
 scope. Status identity must match this local key before connection.
 
 The parent CLI retains its runtime and an ephemeral loopback forwarder until

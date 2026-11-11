@@ -17,8 +17,7 @@ async fn prepare_selects_one_service_operation_and_preserves_healthy_configurati
     use super::super::tests::Server;
     let home = tempfile::tempdir().unwrap();
     let directory = home.path().join("ssh");
-    let config = managed_config(&directory).unwrap();
-    let host = public_key(&directory.join("host_key")).unwrap();
+    let (config, host) = managed_config(&directory).unwrap();
     for (existed, enabled, generation, operations) in [
         (false, false, 0, vec!["POST"]),
         (true, true, 4, vec!["GET"]),
@@ -73,8 +72,7 @@ async fn prepare_selects_one_service_operation_and_preserves_healthy_configurati
 async fn changed_host_identity_is_rejected_without_mutation() {
     use super::super::tests::Server;
     let home = tempfile::tempdir().unwrap();
-    let config = managed_config(&home.path().join("ssh")).unwrap();
-    let host = public_key(&home.path().join("ssh/host_key")).unwrap();
+    let (config, host) = managed_config(&home.path().join("ssh")).unwrap();
     let server = Server::start(vec![(200, managed_status(true, 4, "ssh-ed25519 changed"))]).await;
     let runtime = BoxliteRuntime::rest(BoxliteRestOptions::new(&server.url)).unwrap();
     let sandbox = runtime.get("box-1").await.unwrap().unwrap();
@@ -96,8 +94,7 @@ async fn failed_configure_retains_keys_for_the_next_invocation() {
     use super::super::tests::Server;
     let home = tempfile::tempdir().unwrap();
     let directory = home.path().join("ssh");
-    let config = managed_config(&directory).unwrap();
-    let host = public_key(&directory.join("host_key")).unwrap();
+    let (config, host) = managed_config(&directory).unwrap();
     let server = Server::start(vec![
         (
             500,
@@ -113,7 +110,7 @@ async fn failed_configure_retains_keys_for_the_next_invocation() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("configure failed"), "{error:#}");
-    let config = managed_config(&directory).unwrap();
+    let (config, host) = managed_config(&directory).unwrap();
     prepare_ssh(&sandbox, config, true, &host).await.unwrap();
     let bodies = server.bodies();
     assert_eq!(
@@ -135,8 +132,7 @@ async fn failed_enable_is_not_retried_or_reconfigured() {
     use super::super::tests::Server;
     let home = tempfile::tempdir().unwrap();
     let directory = home.path().join("ssh");
-    let config = managed_config(&directory).unwrap();
-    let host = public_key(&directory.join("host_key")).unwrap();
+    let (config, host) = managed_config(&directory).unwrap();
     let server = Server::start(vec![
         (200, managed_status(false, 3, &host)),
         (
@@ -165,8 +161,8 @@ async fn failed_enable_is_not_retried_or_reconfigured() {
 fn keys_are_private_reused_and_invalid_state_is_not_replaced() {
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().join("ssh");
-    let first = managed_config(&directory).unwrap();
-    let second = managed_config(&directory).unwrap();
+    let (first, _) = managed_config(&directory).unwrap();
+    let (second, _) = managed_config(&directory).unwrap();
     assert_eq!(first.host_private_key, second.host_private_key);
     assert_eq!(
         first.accounts[0].authorized_keys,

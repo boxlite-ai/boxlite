@@ -110,8 +110,7 @@ pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Resu
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => return Err(error).context("inspect SSH key directory"),
         };
-        let config = managed_config(&credentials)?;
-        let expected_host_key = public_key(&credentials.join("host_key"))?;
+        let (config, expected_host_key) = managed_config(&credentials)?;
         Ok::<_, anyhow::Error>((config, credentials_existed, expected_host_key))
     })
     .await??;
@@ -278,7 +277,7 @@ async fn prepare_ssh(
     Ok(status)
 }
 
-fn managed_config(directory: &Path) -> Result<SshConfig> {
+fn managed_config(directory: &Path) -> Result<(SshConfig, String)> {
     match fs::symlink_metadata(directory) {
         Ok(_) => check_private(directory, true)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -304,16 +303,19 @@ fn managed_config(directory: &Path) -> Result<SshConfig> {
     }
     let client_public_key = public_key(&directory.join("client_key"))?;
     let host = directory.join("host_key");
-    public_key(&host)?;
-    Ok(SshConfig {
-        listen_address: "0.0.0.0:22".into(),
-        host_private_key: fs::read_to_string(host).context("read SSH host key")?,
-        accounts: vec![SshAccount {
-            login: "box".into(),
-            authorized_keys: vec![client_public_key],
-            ca: None,
-        }],
-    })
+    let host_public_key = public_key(&host)?;
+    Ok((
+        SshConfig {
+            listen_address: "0.0.0.0:22".into(),
+            host_private_key: fs::read_to_string(host).context("read SSH host key")?,
+            accounts: vec![SshAccount {
+                login: "box".into(),
+                authorized_keys: vec![client_public_key],
+                ca: None,
+            }],
+        },
+        host_public_key,
+    ))
 }
 
 pub(super) fn check_private(path: &Path, directory: bool) -> Result<()> {
