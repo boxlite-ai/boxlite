@@ -226,26 +226,12 @@ func normalizeCopySourceKind(kind CopySourceKind) CopySourceKind {
 	}
 }
 
-// CopyInOption configures streaming uploads.
-type CopyInOption func(*bool)
-
-// WithCopyOverwrite controls replacement of existing entries. False permits new
-// files in existing directories and fails on conflicts; earlier writes may remain.
-func WithCopyOverwrite(overwrite bool) CopyInOption {
-	return func(value *bool) { *value = overwrite }
-}
-
 // CopyInStream streams r (raw tar) into guestDst without staging to disk.
-// Existing callers default to overwrite=true.
 //
 // sourceKind is the archive shape (directory tree vs single file); use
 // CopySourceUnknown when the caller cannot tell — the guest then peeks the
 // tar to decide.
-func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind CopySourceKind, r io.Reader, options ...CopyInOption) error {
-	overwrite := true
-	for _, option := range options {
-		option(&overwrite)
-	}
+func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind CopySourceKind, r io.Reader) error {
 	if r == nil {
 		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}
 	}
@@ -263,14 +249,13 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	// C caller might pass must map to Unknown, not an invalid Rust enum);
 	// cgo needs the explicit conversion.
 	kind := C.int32_t(normalizeCopySourceKind(sourceKind))
-	stream := C.boxlite_copy_in_start_with_overwrite(b.handle, cDst, kind, C.bool(overwrite), C.cbCopy(), handleToPtr(h), &cerr)
+	stream := C.boxlite_copy_in_start(b.handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
 	if stream == nil {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 
 	var writeErr error
-	consumerClosed := false
 	noProgress := 0
 	buf := make([]byte, copyStreamBufferSize)
 	for {
@@ -280,11 +265,6 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 			var werr C.CBoxliteError
 			if code := C.boxlite_copy_in_write(stream, (*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(n), &werr); code != C.Ok {
 				writeErr = freeError(&werr)
-				consumerClosed = true
-				if readErr != nil && readErr != io.EOF {
-					writeErr = readErr
-					consumerClosed = false
-				}
 				break
 			}
 		}
@@ -320,19 +300,14 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	}
 	C.boxlite_copy_in_free(stream)
 
-	if writeErr != nil && !consumerClosed {
+	if writeErr != nil {
 		deleteHandleForDispatch(h)
 		return writeErr
 	}
 
-	// A closed consumer can mean the guest already rejected an entry. Its
-	// completion carries the typed conflict; the channel write only says closed.
 	select {
 	case err := <-ch:
-		if err != nil {
-			return err
-		}
-		return writeErr
+		return err
 	case <-ctx.Done():
 		abandonAsyncErr(ch, h, b.runtime.closing)
 		return ctx.Err()

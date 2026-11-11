@@ -423,32 +423,6 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
     out_error: *mut CBoxliteError,
 ) -> *mut CBoxCopyInStream {
     unsafe {
-        boxlite_copy_in_start_with_overwrite(
-            handle,
-            guest_dst,
-            source_kind,
-            true,
-            copy_cb,
-            user_data,
-            out_error,
-        )
-    }
-}
-
-/// Begin streaming copy-in with explicit overwrite policy. False rejects
-/// conflicting entries; earlier new entries can remain after a conflict.
-/// The original start function retains overwrite=true for ABI compatibility.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_copy_in_start_with_overwrite(
-    handle: *mut CBoxHandle,
-    guest_dst: *const c_char,
-    source_kind: i32,
-    overwrite: bool,
-    copy_cb: CBoxCopyCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> *mut CBoxCopyInStream {
-    unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
             return std::ptr::null_mut();
@@ -479,15 +453,7 @@ pub unsafe extern "C" fn boxlite_copy_in_start_with_overwrite(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .copy_in_stream(
-                    bytes,
-                    dst.as_str(),
-                    source,
-                    CopyOptions {
-                        overwrite,
-                        ..CopyOptions::default()
-                    },
-                )
+                .copy_in_stream(bytes, dst.as_str(), source, CopyOptions::default())
                 .await;
             push_event(
                 &queue,
@@ -650,68 +616,6 @@ mod tests {
             message.contains(expected_message),
             "expected {message:?} to contain {expected_message:?}"
         );
-    }
-
-    #[test]
-    fn copy_in_start_validates_arguments_before_dereferencing_handle() {
-        let dangling = std::ptr::NonNull::<CBoxHandle>::dangling().as_ptr();
-        let invalid_utf8 = [0xffu8, 0];
-        for (handle, path, code, message) in [
-            (
-                std::ptr::null_mut(),
-                c"/app".as_ptr(),
-                BoxliteErrorCode::InvalidArgument,
-                "handle is null",
-            ),
-            (
-                dangling,
-                std::ptr::null(),
-                BoxliteErrorCode::Internal,
-                "null",
-            ),
-            (
-                dangling,
-                invalid_utf8.as_ptr().cast(),
-                BoxliteErrorCode::Internal,
-                "UTF-8",
-            ),
-            (
-                dangling,
-                c"/app".as_ptr(),
-                BoxliteErrorCode::InvalidArgument,
-                "copy_cb is null",
-            ),
-        ] {
-            let mut error = CBoxliteError::default();
-            let stream = unsafe {
-                boxlite_copy_in_start_with_overwrite(
-                    handle,
-                    path,
-                    0,
-                    false,
-                    None,
-                    std::ptr::null_mut(),
-                    &mut error,
-                )
-            };
-            assert!(stream.is_null());
-            assert_error_contains(&error, code, message);
-            unsafe { crate::error::boxlite_error_free(&mut error) };
-        }
-        let mut error = CBoxliteError::default();
-        let stream = unsafe {
-            boxlite_copy_in_start(
-                std::ptr::null_mut(),
-                c"/app".as_ptr(),
-                0,
-                None,
-                std::ptr::null_mut(),
-                &mut error,
-            )
-        };
-        assert!(stream.is_null());
-        assert_error_contains(&error, BoxliteErrorCode::InvalidArgument, "handle is null");
-        unsafe { crate::error::boxlite_error_free(&mut error) };
     }
 
     struct DropProbe(Arc<AtomicBool>);
