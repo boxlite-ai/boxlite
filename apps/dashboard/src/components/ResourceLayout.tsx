@@ -56,12 +56,14 @@ export function ResourceFilter({
   onChange,
   count,
   disabled,
+  maxLength,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   count: ReactNode
   disabled?: boolean
+  maxLength?: number
 }) {
   return (
     <div className="resource-filter">
@@ -72,6 +74,7 @@ export function ResourceFilter({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
+        maxLength={maxLength}
         className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
       />
       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{count}</span>

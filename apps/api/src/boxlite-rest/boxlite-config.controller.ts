@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Get } from '@nestjs/common'
+import { Controller, Get, Optional } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
 import { IDEMPOTENCY_KEY_LIFETIME } from './box-request.service'
 
@@ -13,11 +14,15 @@ import { IDEMPOTENCY_KEY_LIFETIME } from './box-request.service'
 @ApiTags('BoxLite REST')
 @Controller('v1')
 export class BoxliteConfigController {
+  constructor(@Optional() private readonly config?: ConfigService) {}
+
   @Get('config')
   getConfig() {
     return {
       capabilities: {
         idempotency_key_lifetime: IDEMPOTENCY_KEY_LIFETIME,
+        checkpoints_enabled:
+          this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
         privileged_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,

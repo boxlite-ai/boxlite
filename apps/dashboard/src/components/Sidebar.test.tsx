@@ -317,9 +317,18 @@ describe('Sidebar primary navigation', () => {
       '/dashboard/boxes',
       '/dashboard/images',
       '/dashboard/volumes',
+      '/dashboard/checkpoints',
       '/dashboard/domains',
     ])
     expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()
+  })
+  it('shows Applications CI navigation with Runners and Connects for a direct route', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/ci/connects')
+    const applications = document.querySelector('[role="group"][aria-label="Applications"]')
+    expect(applications).not.toBeNull()
+    expect(applications?.querySelector('a[href="/dashboard/ci/connects"]')?.getAttribute('aria-current')).toBe('page')
+    expect(applications?.textContent).toContain('Runners')
   })
 
   it('keeps Volumes in primary navigation', () => {
@@ -344,6 +353,7 @@ describe('Sidebar primary navigation', () => {
     const domainLinks = [...document.querySelectorAll<HTMLAnchorElement>('a[href="/dashboard/domains"]')]
     expect(domainLinks.length).toBeGreaterThan(0)
     expect(domainLinks.every((link) => link.textContent === 'Domains')).toBe(true)
+    expect(document.querySelector('a[href="/dashboard/ci"]')?.textContent).toBe('CI')
   })
 
   it('opens Management children in primary navigation from the compact rail', () => {

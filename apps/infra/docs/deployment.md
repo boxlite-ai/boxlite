@@ -86,6 +86,16 @@ Substitute real values and inspect the preview before the last command. Add `--c
 protected stage. For a commit runner build, use the selectors in the [runner runbook](runners.md).
 `mdeploy --local-env` bypasses store loading and is an explicit diagnostic option, not the default.
 
+## Fractional CPU upgrade
+
+Apply the CPU-column migration first.
+Upgrade every Runner, including migration destinations, with its matching Runtime/C ABI before deploying the API that accepts fractions, then deploy the dashboard.
+See the [fractional CPU data contract](../../../docs/contributing/architecture/platform/schema.md#fractional-cpu-allocations) for storage and metering behavior.
+
+Migration lock acquisition times out after five seconds; retry in a maintenance window if needed.
+Rollback to integer columns refuses fractional or out-of-range rows rather than rounding allocations.
+After fractional Boxes exist, retain compatible API and Runner versions; disabling new fractional creation alone does not make older binaries safe.
+
 ## Secrets & credentials
 
 [Configuration](configuration.md) owns the file/store/CI boundaries, and

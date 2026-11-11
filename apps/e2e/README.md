@@ -25,6 +25,29 @@ CLI matrix and both authentication modes, is in
 
 ## What the suite verifies
 
+### Managed checkpoints
+
+`cases/test_checkpoints.py` exercises hot export and upload, source deletion,
+new-Box import and stopped-target recovery through the SDK and actual guests.
+Guest reads verify immutable disk contents and inherited environment values;
+recovery verifies the public Box ID and captured CPU/memory settings. Deleting
+the checkpoint must leave the created and recovered Boxes usable.
+
+Run against an API/runner built from this branch with checkpoint storage enabled:
+
+```bash
+make test:e2e E2E_ARGS=cases/test_checkpoints.py
+```
+
+Use the existing environment/profile authentication described below. The case
+requires `capabilities.checkpoints_enabled=true`; absence fails before creating
+a Box. It uses unique `e2e-` resource names, retains the suite's bounded Box
+lifetimes, and reports cleanup failures. It is outside the production smoke
+selection because it uses two concurrent Boxes. Loopback, mock-storage and
+native stub checks do not satisfy this real VM/storage acceptance case.
+
+### Existing coverage
+
 Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
 creating a box; those checks are not counted as product E2E evidence.
@@ -540,3 +563,13 @@ apps/e2e/
 2. Take fixtures from `conftest.py` — at minimum `rt` (already REST-bound)
 3. Reference the issue / PR in the docstring so it survives the regression
 4. Run `pytest cases/test_yours.py -v` locally first
+
+## Fractional CPU acceptance
+
+`make test:e2e E2E_ARGS=cases/fractional_cpus_acceptance.py` exercises SDK → Cloud API → Runner → VM creation and restart with `0.125`, `0.5`, and `1.5` CPUs.
+It reads the managed local Runner's SQLite metadata and the running process's cgroup to verify the actual `cpu.max`, as well as guest CPU topology and API query values.
+The suite also calls the Runner v0 create/recover endpoints and verifies that rejected CPU values leave the running VM intact.
+Run this file explicitly against the managed local stack; remote-stage suites do not collect it by default.
+These tests require `BOXLITE_HOME_DIR` and the managed Runner URL/token; a missing or unreadable cgroup fails acceptance rather than silently skipping enforcement.
+Use `make test:fractional-cpus:acceptance` for local Runtime quota/lifecycle tests and `BOXLITE_REST_PATH_PREFIX= make test:integration:cli FILTER=fractional_cpus` for the real serve HTTP path and server restart.
+The membership policy remains best-effort in the product; the acceptance environment must successfully join the Box cgroup.

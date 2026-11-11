@@ -42,6 +42,8 @@ describe('subscription Box resource limits', () => {
     createBoxToCreateBox({ image: 'example/app:latest', cpus, memory_mib, disk_size_gb })
 
   it.each([
+    [0.125, 4096, 20],
+    [1.001, 4096, 20],
     [2, 4096, 20],
     [4, 8192, 50],
     [16, 32768, 100],

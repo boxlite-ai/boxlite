@@ -1456,13 +1456,13 @@ mod tests {
     }
     #[test]
     fn fractional_cpus_python_conversion() {
-        for cores in [0.01, 0.125, 1.5, 2.0] {
+        for cores in [0.125, 0.126, 1.5, 2.0] {
             let mut options = py_box_options_with_tty(None);
             options.cpus = Some(cores);
             let core = BoxOptions::try_from(options).unwrap();
             assert_eq!(core.cpus, Some(cores));
         }
-        for cores in [0.0, -0.5, 0.009, 0.1255, f64::NAN, f64::INFINITY] {
+        for cores in [0.0, -0.5, 0.124, 0.1255, f64::NAN, f64::INFINITY] {
             let mut options = py_box_options_with_tty(None);
             options.cpus = Some(cores);
             assert!(BoxOptions::try_from(options).is_err(), "{cores}");

@@ -113,6 +113,7 @@ test('a service reads its optional keys when present and boots without them when
     PROXY_API_KEY: 'f',
   }
   const bare = serviceSecretsFrom({ group: 'api', declaration, environment: withoutOptional })
+  assert.deepEqual(narrow('secret', withoutOptional), {})
   assert.deepEqual(Object.keys(bare).sort(), [
     'ADMIN_API_KEY',
     'ENCRYPTION_KEY',

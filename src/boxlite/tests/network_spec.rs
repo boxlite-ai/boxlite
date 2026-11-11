@@ -181,6 +181,12 @@ async fn disabled_network_runs_without_eth0() {
         "disabled network should remove eth0 entirely, got exit code {status}"
     );
 
+    let status = run_exit_code(&litebox, "ping", &["-c", "1", "-W", "1", "127.0.0.1"]).await;
+    assert_eq!(
+        status, 0,
+        "localhost must work with external networking disabled"
+    );
+
     litebox.stop().await.unwrap();
 }
 

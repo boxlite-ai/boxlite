@@ -26,7 +26,10 @@ function makeService() {
   const service = Object.create(BoxService.prototype) as BoxService
   Object.assign(service as any, {
     findOneByIdOrName: jest.fn().mockResolvedValue(startedBox),
-    boxRepository: { updateWhere: jest.fn().mockResolvedValue(startedBox) },
+    boxRepository: {
+      findWithCheckpointState: jest.fn().mockResolvedValue({ box: startedBox, checkpointState: null }),
+      updateWhere: jest.fn().mockResolvedValue(startedBox),
+    },
     eventEmitter: { emit: jest.fn() },
     logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
   })

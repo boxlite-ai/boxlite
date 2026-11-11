@@ -660,6 +660,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CVolumeInfo>(result, user_data, cb),
+            RuntimeEvent::CheckpointInfo {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CCheckpointInfo>(result, user_data, cb),
+            RuntimeEvent::CheckpointList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CCheckpointList>(result, user_data, cb),
             RuntimeEvent::VolumeGet {
                 cb,
                 user_data,

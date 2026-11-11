@@ -10,6 +10,33 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::stream::TryStreamExt;
 use std::net::Ipv4Addr;
 
+/// Localhost is required even when Guest.Init has no external network config.
+pub(crate) async fn configure_loopback() -> BoxliteResult<()> {
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| BoxliteError::Internal(format!("create loopback netlink connection: {e}")))?;
+    tokio::spawn(connection);
+    bring_up_loopback(&handle).await
+}
+
+async fn bring_up_loopback(handle: &rtnetlink::Handle) -> BoxliteResult<()> {
+    let link = handle
+        .link()
+        .get()
+        .match_name("lo".to_string())
+        .execute()
+        .try_next()
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("get lo interface: {e}")))?
+        .ok_or_else(|| BoxliteError::Internal("lo interface not found".to_string()))?;
+    handle
+        .link()
+        .set(link.header.index)
+        .up()
+        .execute()
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("bring up lo: {e}")))
+}
+
 /// Configure guest network interface
 ///
 /// Sets up eth0 with static IP 192.168.127.2/24 to match the network backend's DHCP configuration.
@@ -40,22 +67,7 @@ pub async fn configure_network() -> BoxliteResult<()> {
     // Spawn the netlink connection in the background
     tokio::spawn(connection);
 
-    // 1. Find the loopback interface (lo) and bring it up
-    tracing::debug!("  ↑ Bringing up loopback interface");
-    let mut links = handle.link().get().match_name("lo".to_string()).execute();
-    if let Some(link) = links
-        .try_next()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Failed to get lo interface: {}", e)))?
-    {
-        handle
-            .link()
-            .set(link.header.index)
-            .up()
-            .execute()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Failed to bring up lo: {}", e)))?;
-    }
+    bring_up_loopback(&handle).await?;
 
     // 2. Find eth0 interface
     tracing::info!("  🔍 Finding eth0 interface");
@@ -175,22 +187,7 @@ pub async fn configure_network_from_config(
     // Spawn the netlink connection in the background
     tokio::spawn(connection);
 
-    // 1. Find the loopback interface (lo) and bring it up
-    tracing::debug!("  ↑ Bringing up loopback interface");
-    let mut links = handle.link().get().match_name("lo".to_string()).execute();
-    if let Some(link) = links
-        .try_next()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Failed to get lo interface: {}", e)))?
-    {
-        handle
-            .link()
-            .set(link.header.index)
-            .up()
-            .execute()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Failed to bring up lo: {}", e)))?;
-    }
+    bring_up_loopback(&handle).await?;
 
     // 2. Find interface
     tracing::info!("  🔍 Finding {} interface", interface);

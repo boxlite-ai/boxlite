@@ -86,7 +86,7 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
         if (path === 'warm') {
           await repository.update(value.id, { updateData: { organizationId }, maxCreatedBoxes: 1, bindRequest: bind })
         } else {
-          await repository.insert(value, 1, bind)
+          await repository.insert(value, 1, undefined, undefined, undefined, bind)
         }
         throw new Error('simulated API crash')
       }),
@@ -109,7 +109,7 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
     const key = randomUUID()
     const requested = box()
     const create = jest.fn(async (bind) => {
-      await repository.insert(requested, 1, bind)
+      await repository.insert(requested, 1, undefined, undefined, undefined, bind)
       return { box_id: requested.id }
     })
     await expect(requests.run(scope, key, { image: 'alpine' }, create)).rejects.toThrow()
@@ -126,7 +126,7 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
     const value = box()
     await expect(
       requests.run(scope, key, {}, async (bind) => {
-        await repository.insert(value, 1, async (manager, id) => {
+        await repository.insert(value, 1, undefined, undefined, undefined, async (manager, id) => {
           await bind(manager, id)
           throw new Error('abort transaction')
         })
@@ -135,7 +135,7 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
     expect(await database.getRepository(Box).count()).toBe(0)
     await requests.run(scope, key, {}, async (bind, id) => {
       expect(id).toBeUndefined()
-      await repository.insert(value, 1, bind)
+      await repository.insert(value, 1, undefined, undefined, undefined, bind)
       return { box_id: value.id }
     })
   })

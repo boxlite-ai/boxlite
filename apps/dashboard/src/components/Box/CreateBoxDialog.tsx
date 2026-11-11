@@ -74,17 +74,24 @@ function Stepper({
   min = 1,
   max,
   onExceed,
+  fractional = false,
+  onValidityChange,
 }: {
   value: number
   onChange: (v: number) => void
   min?: number
   max?: number
   onExceed?: () => void
+  fractional?: boolean
+  onValidityChange?: (valid: boolean) => void
 }) {
+  const [invalid, setInvalid] = useState(false)
   const [text, setText] = useState(String(value))
   useEffect(() => {
     setText(String(value))
-  }, [value])
+    setInvalid(false)
+    onValidityChange?.(true)
+  }, [value, onValidityChange])
   const clamp = (n: number) => {
     const v = Math.max(min, n)
     return max != null ? Math.min(max, v) : v
@@ -94,6 +101,21 @@ function Stepper({
   // wouldn't re-sync `text` when the clamped result equalled the previous
   // parent value, leaving a stale typed number in the box).
   const handleTyped = (raw: string) => {
+    if (fractional) {
+      const n = Number(raw)
+      const valid = /^\d+(?:\.\d{0,3})?$/.test(raw) && Number.isFinite(n) && n >= min
+      setInvalid(!valid)
+      onValidityChange?.(valid)
+      if (!valid) {
+        setText(raw)
+        return
+      }
+      if (max != null && n > max) onExceed?.()
+      const next = clamp(n)
+      setText(next === n ? raw : String(next))
+      onChange(next)
+      return
+    }
     const digits = raw.replace(/[^0-9]/g, '')
     if (digits === '') {
       setText('')
@@ -111,6 +133,10 @@ function Stepper({
   // Text sync is unconditional so `text` stays consistent even when the parent
   // value doesn't change (e.g., already at max).
   const commit = (raw: string) => {
+    if (fractional) {
+      handleTyped(raw)
+      return
+    }
     const n = parseInt(raw, 10)
     const next = Number.isFinite(n) ? clamp(n) : min
     onChange(next)
@@ -123,7 +149,7 @@ function Stepper({
       <button
         type="button"
         aria-label="decrease"
-        onClick={() => onChange(clamp(value - 1))}
+        onClick={() => onChange(clamp(fractional ? (Math.round(value * 1000) - 100) / 1000 : value - 1))}
         disabled={value <= min}
         className={cn(btn, 'border-r border-border')}
       >
@@ -131,7 +157,9 @@ function Stepper({
       </button>
       <input
         value={text}
-        inputMode="numeric"
+        inputMode={fractional ? 'decimal' : 'numeric'}
+        aria-invalid={invalid}
+        title={invalid ? 'Enter at least 0.125 CPU with up to three decimal places' : undefined}
         aria-label="value"
         onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
@@ -143,7 +171,7 @@ function Stepper({
       <button
         type="button"
         aria-label="increase"
-        onClick={() => onChange(clamp(value + 1))}
+        onClick={() => onChange(clamp(fractional ? (Math.round(value * 1000) + 100) / 1000 : value + 1))}
         disabled={max != null && value >= max}
         className={cn(btn, 'border-l border-border')}
       >
@@ -163,6 +191,8 @@ function ResourceField({
   onChange,
   max,
   onExceed,
+  fractional,
+  onValidityChange,
 }: {
   label: string
   unit: string
@@ -170,13 +200,23 @@ function ResourceField({
   onChange: (v: number) => void
   max?: number
   onExceed?: () => void
+  fractional?: boolean
+  onValidityChange?: (valid: boolean) => void
 }) {
   return (
     <div className="flex flex-col gap-[9px]">
       <div className="font-mono text-[10px] uppercase tracking-[1px]">
         {label} <span className="text-muted-foreground">({unit})</span>
       </div>
-      <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
+      <Stepper
+        value={value}
+        onChange={onChange}
+        min={fractional ? 0.125 : 1}
+        max={max}
+        onExceed={onExceed}
+        fractional={fractional}
+        onValidityChange={onValidityChange}
+      />
       {max != null && (
         <span className="font-mono text-meta text-muted-foreground">
           Max {max} {unit}
@@ -627,6 +667,7 @@ export const CreateBoxDialog = ({
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState('')
   const [cpu, setCpu] = useState(initialCpu)
+  const [cpuValid, setCpuValid] = useState(true)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
   // 0 means "never" for both — a legitimate value, not the accidental-empty-input
@@ -666,6 +707,7 @@ export const CreateBoxDialog = ({
     // "+ Box" row action lands on a form that is holding it.
     setMounts(prefillVolume ? [{ volumeId: prefillVolume, mountPath: '/data' }] : [])
     setSizePreset('small')
+    setCpuValid(true)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
@@ -726,6 +768,7 @@ export const CreateBoxDialog = ({
   // why the number on screen doesn't match the tier they clicked.
   const applySizePreset = (id: SizePresetId) => {
     setSizePreset(id)
+    setCpuValid(true)
     const spec = SIZE_PRESETS.find((p) => p.id === id)
     if (!spec || spec.cpu == null || spec.memory == null || spec.disk == null) return // `custom` only reveals the controls
     const nextCpu = limits.cpu != null && spec.cpu > limits.cpu ? limits.cpu : spec.cpu
@@ -738,6 +781,7 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
+    if (!cpuValid) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -924,6 +968,8 @@ export const CreateBoxDialog = ({
             {sizePreset === 'custom' && (
               <div className="grid grid-cols-1 gap-[14px] border-t border-dashed border-border pt-[13px] sm:grid-cols-3">
                 <ResourceField
+                  fractional
+                  onValidityChange={setCpuValid}
                   label="CPU"
                   unit="vCPU"
                   value={cpu}
@@ -1082,6 +1128,11 @@ export const CreateBoxDialog = ({
             </>
           )}
           <div className="-mx-6">
+            {!cpuValid && (
+              <p role="alert" className="text-destructive">
+                Enter at least 0.125 CPU with up to three decimal places.
+              </p>
+            )}
             <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
             {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
             {(lifecycleError || mountError) && (
@@ -1101,7 +1152,12 @@ export const CreateBoxDialog = ({
             type="button"
             onClick={handleCreate}
             disabled={
-              submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
+              submitting ||
+              !cpuValid ||
+              !selectedOrganization?.id ||
+              !nameValid ||
+              Boolean(lifecycleError) ||
+              Boolean(mountError)
             }
           >
             {submitting ? 'Creating…' : 'Create Box'}
