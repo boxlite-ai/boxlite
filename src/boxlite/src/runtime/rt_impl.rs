@@ -169,7 +169,7 @@ pub struct RuntimeImpl {
 
     /// Runtime filesystem lock (held for lifetime). Prevent from multiple process run on same
     /// BOXLITE_HOME directory
-    pub(crate) _runtime_lock: RuntimeLock,
+    pub(crate) _runtime_lock: Arc<RuntimeLock>,
 
     // ========================================================================
     // SHUTDOWN COORDINATION
@@ -273,13 +273,15 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let runtime_lock = RuntimeLock::acquire(layout.home_dir()).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "Failed to acquire runtime lock at {}: {}",
-                layout.home_dir().display(),
-                e
-            ))
-        })?;
+        let runtime_lock = RuntimeLock::acquire(layout.home_dir())
+            .map(Arc::new)
+            .map_err(|e| {
+                BoxliteError::Internal(format!(
+                    "Failed to acquire runtime lock at {}: {}",
+                    layout.home_dir().display(),
+                    e
+                ))
+            })?;
 
         // Clean temp dir contents to avoid stale files from previous runs
         if let Ok(entries) = std::fs::read_dir(layout.temp_dir()) {
@@ -311,6 +313,7 @@ impl RuntimeImpl {
             options.image_registries,
             options.image_registry_proxy,
         )
+        .map(|manager| manager.with_runtime_lock(Arc::clone(&runtime_lock)))
         .map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to initialize image manager at {}: {}",
@@ -442,6 +445,7 @@ impl RuntimeImpl {
         name: Option<String>,
         reuse_existing: bool,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        let _cache_lease = self.image_manager.cache_lease().await;
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -1256,6 +1260,7 @@ impl RuntimeImpl {
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
+        let _cache_lease = self.image_manager.cache_lease().await;
         let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
         let now = Utc::now();
@@ -1883,6 +1888,15 @@ impl super::backend::RuntimeBackend for LocalRuntime {
 // Image operations (separate from RuntimeBackend)
 #[async_trait::async_trait]
 impl super::images::ImageBackend for LocalRuntime {
+    async fn resolve_image_ids(&self, ids: &[String]) -> BoxliteResult<Vec<BoxliteResult<String>>> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot resolve images: runtime has been shut down".into(),
+            ));
+        }
+        self.0.image_manager.resolve_ids(ids).await
+    }
+
     async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
         if self.0.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(

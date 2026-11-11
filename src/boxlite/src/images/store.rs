@@ -1474,7 +1474,10 @@ fn build_platform_ref(reference: &Reference, platform_digest: &str) -> String {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    mod fixtures;
     use crate::db::Database;
+    pub(crate) use fixtures::seed_removable_build;
     use std::path::Path;
 
     fn test_registry_password() -> String {
