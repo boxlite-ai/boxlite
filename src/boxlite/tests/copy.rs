@@ -386,7 +386,26 @@ async fn copy_integration() {
         )
         .await
         .expect("trusted host symlink parent must resolve");
-        assert!(!std::fs::read(&output).unwrap().is_empty());
+        let expected = std::fs::read(tmp.path().join("input.txt")).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), expected);
+        for suffix in ["directory-output/", "absent/../parent-output/"] {
+            let destination = linked.join(suffix);
+            bx.copy_out(
+                "/root/input.txt",
+                &destination,
+                CopyOptions::default().no_overwrite(),
+            )
+            .await
+            .expect("host destination directory intent must survive resolution");
+            assert!(
+                destination.is_dir(),
+                "trailing slash must create a directory"
+            );
+            assert_eq!(
+                std::fs::read(destination.join("input.txt")).unwrap(),
+                expected
+            );
+        }
         let leaf = linked.join("leaf-link");
         std::os::unix::fs::symlink(root.join("missing/new.txt"), &leaf).unwrap();
         assert!(

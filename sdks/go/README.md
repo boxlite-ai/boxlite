@@ -151,6 +151,9 @@ upload. A directory created by an earlier archive entry still receives its own
 later header's permissions. For protected downloads, the local runtime resolves
 trusted host parent paths (including macOS `/tmp` links) before extraction;
 the destination leaf and archive-created paths retain conflict and link checks.
+A trailing `/` still requests a destination directory. Missing host parents are
+created using filesystem path resolution, so `..` follows the resolved symlink
+parent rather than a lexical simplification of the path.
 
 A local runtime treats the archive as trusted because local applications own
 both the runtime and archive. A REST runtime uploads the file and relies on the
