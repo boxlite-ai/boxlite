@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import test from 'node:test'
 import { join } from 'node:path'
 import { parseBase, parseBuildConfig } from '../src/config.ts'
@@ -182,6 +183,65 @@ const lines: string[] = []
 const log = (line: string) => lines.push(line)
 const both = (repository: string) => new Set([`${repository}:${SHA}-console`, `${repository}:${SHA}-api`])
 
+test('the declared source version reaches the API image', async (t) => {
+  const repository = mkdtempSync(join(tmpdir(), 'mbuild-version-'))
+  t.after(() => rmSync(repository, { recursive: true, force: true }))
+  writeFileSync(join(repository, 'api-version.json'), JSON.stringify('0.13.0'))
+  const versioned = {
+    ...config,
+    repository,
+    artifacts: { api: { ...ARTIFACTS.api, versionFile: 'api-version.json' } },
+  }
+  const probe = registryDouble()
+  await publish({ config: versioned, stage: 'dev', registry: dev, tag: SHA, run: probe.run, log })
+  const build = probe.ran((call) => call[1] === 'build')[0]!
+  assert.ok(build.includes('VERSION=0.13.0'), build.join(' '))
+})
+
+test('release publication refuses mismatched, development, malformed and missing identities before external calls', async (t) => {
+  const repository = mkdtempSync(join(tmpdir(), 'mbuild-release-version-'))
+  t.after(() => rmSync(repository, { recursive: true, force: true }))
+  const versioned = { ...config, repository, artifacts: { api: { ...ARTIFACTS.api, versionFile: 'version.json' } } }
+  for (const value of ['0.12.0', '0.13.0+dev.abcdef', '', 'v0.13.0', '0.13.0\n', null, {}, 13]) {
+    writeFileSync(join(repository, 'version.json'), JSON.stringify(value))
+    const probe = registryDouble()
+    await assert.rejects(
+      publish({ config: versioned, stage: 'dev', registry: dev, tag: `v0.13.0-${SHA}`, run: probe.run, log }),
+      PublishError,
+    )
+    assert.equal(probe.ran(() => true).length, 0)
+  }
+  rmSync(join(repository, 'version.json'))
+  await assert.rejects(
+    publish({ config: versioned, stage: 'dev', registry: dev, tag: SHA, run: registryDouble().run, log }),
+    /Could not read/,
+  )
+  writeFileSync(join(repository, 'version.json'), '"0.13.0"')
+  const probe = registryDouble()
+  await publish({ config: versioned, stage: 'dev', registry: dev, tag: `v0.13.0-${SHA}`, run: probe.run, log })
+  assert.ok(probe.ran((call) => call[1] === 'build')[0]!.includes('VERSION=0.13.0'))
+  writeFileSync(join(repository, 'version.json'), '"0.13.0+dev.abcdef"')
+  const development = registryDouble()
+  await publish({ config: versioned, stage: 'dev', registry: dev, tag: SHA, run: development.run, log })
+  assert.ok(development.ran((call) => call[1] === 'build')[0]!.includes('VERSION=0.13.0+dev.abcdef'))
+})
+
+test('the API artifact reads the generated contract identity from a contained path', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const source = readFileSync(path, 'utf8')
+  const parsed = parseBase(path.pathname, source)
+  assert.equal(parsed.artifacts.api!.versionFile, 'src/boxlite/src/rest/api_version.json')
+  assert.equal(
+    typeof JSON.parse(readFileSync(join(parsed.repository, parsed.artifacts.api!.versionFile!), 'utf8')),
+    'string',
+  )
+  for (const versionFile of ['../outside.json', '/tmp/version.json', 12]) {
+    const raw = JSON.parse(source)
+    raw.artifacts.api.versionFile = versionFile
+    assert.throws(() => parseBase(path.pathname, JSON.stringify(raw)), /versionFile/)
+  }
+})
+
 test('the registry password reaches docker through stdin, not through argv', async () => {
   // An unfed `--password-stdin` does not fail on the password: docker prompts
   // instead, and dies on the runner's missing terminal. That reads as a broken
@@ -347,10 +407,7 @@ test('a failed audit reports what npm said, from whichever stream carried it', a
     command === 'npm' && args.includes('audit')
       ? { code: 1, stdout: '', stderr: 'npm error code ENOLOCK' }
       : probe.run(command, args, options)
-  await assert.rejects(
-    () => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }),
-    /ENOLOCK/,
-  )
+  await assert.rejects(() => publish({ config, stage: 'dev', registry: dev, tag: SHA, run, log }), /ENOLOCK/)
 })
 
 test('a re-publish that builds nothing is not gated by the audit', async () => {
@@ -408,7 +465,11 @@ test('the log names each artifact as its build starts, not only once it is pushe
 test('a publish addresses the stage it was given, not a default one', async () => {
   const probe = registryDouble()
   const outcomes = await publish({ config, stage: 'prod', registry: prod, tag: SHA, run: probe.run, log })
-  assert.ok(outcomes.every((outcome) => outcome.address.includes('.ecr.us-east-1.') && outcome.address.includes('/boxlite-backoffice-prod:')))
+  assert.ok(
+    outcomes.every(
+      (outcome) => outcome.address.includes('.ecr.us-east-1.') && outcome.address.includes('/boxlite-backoffice-prod:'),
+    ),
+  )
 })
 
 test('a repository that does not exist yet is created immutable and scanning', async () => {
@@ -939,10 +1000,7 @@ test('the base file points the audit at a lockfile the declared manager can read
 test('a config that does not say where the repository is refuses to load', async () => {
   // Guessing would mean guessing wrong once, silently, in whichever direction
   // the caller happened to be standing.
-  assert.throws(
-    () => parseBase('/repo/apps/infra/mstage.env.json', JSON.stringify({ artifacts: {} })),
-    /must set root/,
-  )
+  assert.throws(() => parseBase('/repo/apps/infra/mstage.env.json', JSON.stringify({ artifacts: {} })), /must set root/)
 })
 
 test('the existence check asks Artifact Registry alone, never Container Analysis', async () => {

@@ -62,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import boxlite
+from boxlite.boxlite import _api_version
 from config import (
     DEFAULT_ENV_FILE_PATH,
     ServerConfig,
@@ -619,7 +620,7 @@ async def runtime_error_handler(request: Request, err: RuntimeError):
 @app.get("/v1/config")
 async def get_config():
     return {
-        "api_version": boxlite.__version__,
+        "api_version": _api_version,
         "defaults": {
             "cpus": 2,
             "memory_mib": 512,

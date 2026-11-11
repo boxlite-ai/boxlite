@@ -54,6 +54,7 @@ use pyo3::prelude::*;
 
 #[pymodule(name = "boxlite")]
 fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("_api_version", boxlite::api_version())?;
     m.add_class::<PyOptions>()?;
     m.add_class::<PyImageRegistry>()?;
     m.add_class::<PyBoxOptions>()?;

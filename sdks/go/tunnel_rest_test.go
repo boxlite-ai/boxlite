@@ -39,7 +39,7 @@ func newTunnelCloud(t *testing.T) (*httptest.Server, chan string) {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/boxes/box1":
 			_, _ = io.WriteString(w, `{"box_id":"box1","status":"running","created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z","image":"alpine","cpus":1,"memory_mib":256}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/config":
-			_, _ = io.WriteString(w, `{"capabilities":{"private_tunnels_enabled":true}}`)
+			_, _ = io.WriteString(w, apiVersionConfig(t))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/boxes/box1/network/tunnel" && r.URL.RawQuery == "port=3000":
 			body, _ := io.ReadAll(r.Body)
 			bodies <- string(body)

@@ -618,6 +618,7 @@ impl ApiClient {
         else {
             return Ok(());
         };
+        required.check_planned()?;
         let server = self
             .server_version
             .get_or_try_init(|| async {
@@ -799,10 +800,7 @@ mod tests {
         .unwrap();
         let _: serde_json::Value = client.get("/boxes").await.unwrap();
         client
-            .authorized_request(Method::GET, "/boxes/box-1/files")
-            .await
-            .unwrap()
-            .send()
+            .send_file(Method::GET, "/boxes/box-1/files", None)
             .await
             .unwrap();
         let requests = server.await.unwrap();

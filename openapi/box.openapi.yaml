@@ -16,7 +16,7 @@
 openapi: 3.1.1
 info:
   title: BoxLite Box API
-  version: 0.12.0
+  version: next-release
   description: |
     HTTP API for BoxLite boxes — hardware-isolated VMs for secure code
     execution. Exposes box lifecycle management, command execution, file
@@ -620,7 +620,7 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: createSnapshot
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Create a snapshot
       description: |
         Creates a named snapshot from the box's current stopped disk state.
@@ -645,7 +645,7 @@ paths:
           $ref: "#/components/responses/ConflictError"
     get:
       operationId: listSnapshots
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: List box snapshots
       tags: [Boxes]
       responses:
@@ -669,7 +669,7 @@ paths:
           type: string
     get:
       operationId: getSnapshot
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Get snapshot details
       tags: [Boxes]
       responses:
@@ -683,7 +683,7 @@ paths:
           $ref: "#/components/responses/NotFoundError"
     delete:
       operationId: removeSnapshot
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Remove a snapshot
       tags: [Boxes]
       responses:
@@ -705,7 +705,7 @@ paths:
           type: string
     post:
       operationId: restoreSnapshot
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Restore box from snapshot
       description: Restores the box's stopped disks from a named snapshot.
       tags: [Boxes]
@@ -723,7 +723,7 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: cloneBox
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Clone a box
       description: |
         Creates a new box cloned from the source box's current stopped disk state.
@@ -753,7 +753,7 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: exportBox
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Export a box archive
       description: Exports a stopped box as a portable archive payload.
       tags: [Boxes]
@@ -777,7 +777,7 @@ paths:
       - $ref: "#/components/parameters/prefix"
     post:
       operationId: importBox
-      x-boxlite-min-server-version: "0.12.0"
+      x-boxlite-min-server-version: "next-release"
       summary: Import a box from an archive
       description: |
         Imports a `.boxlite` archive (produced by the export endpoint) to create
@@ -1281,7 +1281,7 @@ paths:
               type: object
               properties:
                 isPublic:
-                  x-boxlite-min-server-version: "0.12.0"
+                  x-boxlite-min-server-version: "next-release"
                   x-boxlite-version-check: non-default
                   type: boolean
                   default: true
@@ -2846,13 +2846,13 @@ components:
       additionalProperties: false
       properties:
         privileged:
-          x-boxlite-min-server-version: "0.12.0"
+          x-boxlite-min-server-version: "next-release"
           x-boxlite-version-check: non-default
           type: boolean
           default: false
           description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities.
         capabilities:
-          x-boxlite-min-server-version: "0.12.0"
+          x-boxlite-min-server-version: "next-release"
           x-boxlite-version-check: present
           $ref: "#/components/schemas/CreateContainerCapabilities"
 
@@ -3219,7 +3219,7 @@ components:
           default: false
           description: Enable pseudo-terminal allocation
         user:
-          x-boxlite-min-server-version: "0.12.0"
+          x-boxlite-min-server-version: "next-release"
           x-boxlite-version-check: present
           type: string
           description: >-

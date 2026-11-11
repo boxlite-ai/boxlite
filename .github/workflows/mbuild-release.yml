@@ -274,6 +274,12 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.resolve.outputs.sha }}
 
+      - uses: ./.github/actions/setup-python
+      - name: Validate API release metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: make setup:openapi check:openapi:release
+
       - uses: ./.github/actions/setup-infra
         with:
           stages: dev

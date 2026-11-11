@@ -454,7 +454,7 @@ const configuration = {
   turnstile: turnstileConfig(),
   checkpoint: checkpointConfig(),
   production: process.env.NODE_ENV === 'production',
-  version: process.env.VERSION || '0.0.0-dev',
+  version: process.env.VERSION || (require('../../../../src/boxlite/src/rest/api_version.json') as string),
   environment: process.env.ENVIRONMENT,
   runMigrations: process.env.RUN_MIGRATIONS === 'true',
   port: parseInt(process.env.PORT, 10),

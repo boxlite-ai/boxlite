@@ -39,6 +39,7 @@ COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 # The MCP endpoint builds its tools from these specs; the API build bundles them as assets.
 COPY openapi/box.openapi.yaml openapi/admin.openapi.yaml ../openapi/
+COPY src/boxlite/src/rest/api_version.json ../src/boxlite/src/rest/api_version.json
 
 RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && \
   node --check dist/apps/api/main.js && node --test api/test/production-metadata.cjs
@@ -60,7 +61,7 @@ COPY --from=build --chown=node:node /boxlite/apps/NOTICE ./NOTICE
 COPY --from=build --chown=node:node /boxlite/apps/dist/apps/api ./dist/apps/api
 COPY --from=build --chown=node:node /boxlite/apps/dist/apps/dashboard ./dist/apps/dashboard
 
-ARG VERSION=0.0.1
+ARG VERSION
 ENV VERSION=${VERSION}
 
 EXPOSE 3000
