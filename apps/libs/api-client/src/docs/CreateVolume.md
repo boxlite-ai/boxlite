@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **name** | **string** |  | [optional] [default to undefined]
+**instance** | **string** | The Filestore instance the volume's data directory lives on; filestore volumes only | [optional] [default to undefined]
 
 ## Example
 
@@ -14,6 +15,7 @@ import { CreateVolume } from './api';
 
 const instance: CreateVolume = {
     name,
+    instance,
 };
 ```
 

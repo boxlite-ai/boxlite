@@ -50,6 +50,10 @@ export interface VolumeDto {
      * The error reason of the volume
      */
     'errorReason': string | null;
+    /**
+     * Filestore-only: the NFS instance holding the volume's data directory. Absent for object-storage volumes, whose data lives in boxlite-volume-<id>.
+     */
+    'instance'?: string;
 }
 
 

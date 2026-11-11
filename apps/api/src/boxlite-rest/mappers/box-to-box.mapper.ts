@@ -64,12 +64,10 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.autoResume = dto.auto_resume
   createDto.volumes = dto.volumes?.map((volume) => ({
     // `volumeId` is the internal DTO's name for what the volume service looks
-    // up by id *or* by name (see VolumeService.validateVolumes). Absent for
-    // filestore volumes, which carry the instance reference instead — the
-    // request validator guarantees exactly one of the two per volume.
+    // up by id *or* by name (see VolumeService.validateVolumes). Filestore
+    // volumes are Volume rows like any other and resolve the same way.
     volumeId: volume.managed_volume,
     mountPath: volume.guest_path,
-    ...(volume.filestore ? { filestore: { instance: volume.filestore.instance } } : {}),
   }))
   createDto.secrets = dto.secrets?.map((secret) => ({
     name: secret.name,

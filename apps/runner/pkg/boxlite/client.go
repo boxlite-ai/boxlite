@@ -476,8 +476,8 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	// Also before any side effect: the box id becomes part of filesystem
-	// paths — volume mount records ({id}.json) and filestore data
-	// directories ({id}-{n}). The control plane mints ids from
+	// paths — volume mount records ({id}.json) and the runtime's own box
+	// name. The control plane mints ids from
 	// [0-9A-Za-z]{12}, which cannot carry separators or '..', but this
 	// boundary must not lean on that: a traversal-shaped id is rejected
 	// before any mount or record work runs. The literal Contains checks stay
