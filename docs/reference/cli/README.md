@@ -713,7 +713,8 @@ boxlite inspect -l --format yaml
 
 Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a `BOX:PATH` reference.
 End a directory `SRC` with `/.` to copy its contents rather than the directory itself, as
-`docker cp` does.
+`docker cp` does. A path that is absolute or starts with `.` is always a host path, so a host
+file name may contain `:`; spell a relative one `./name:with-colon`.
 
 **Options:**
 

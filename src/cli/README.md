@@ -717,6 +717,8 @@ Copy files or directories between host and box.
 
 - **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). End a directory
   `SRC` with `/.` to copy its contents rather than the directory itself, as `docker cp` does.
+  A path that is absolute or starts with `.` is always a host path, so a host file name
+  may contain `:` (`./report:v2.txt`).
 
 | Option | Description |
 |--------|-------------|

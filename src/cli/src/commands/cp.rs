@@ -2,7 +2,7 @@ use crate::cli::GlobalFlags;
 use anyhow::{Result, anyhow};
 use boxlite::{CopyOptions, LiteBox};
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 pub struct CpArgs {
@@ -117,7 +117,15 @@ pub(crate) enum Direction {
     },
 }
 
+/// Split an operand into an optional box and a path.
+///
+/// An absolute path, or a relative one starting with `.`, is always a host
+/// path, so a host file name may contain a colon. This is `docker cp`'s rule
+/// (`splitCpArg` in `docker/cli/cli/command/container/cp.go`).
 fn parse_endpoint(input: &str) -> (Option<String>, String) {
+    if Path::new(input).is_absolute() || input.starts_with('.') {
+        return (None, input.to_string());
+    }
     if let Some(idx) = input.find(':') {
         let (a, b) = input.split_at(idx);
         let path = b.trim_start_matches(':').to_string();
@@ -238,6 +246,31 @@ mod tests {
         }
         match parse_direction("./dist/.", "mybox:/app").unwrap() {
             Direction::HostToBox { host, .. } => assert_eq!(host.as_os_str(), "./dist/."),
+            _ => panic!("wrong direction"),
+        }
+    }
+
+    /// A host path keeps its colons when it is absolute or starts with `.`,
+    /// so neither is mistaken for a `BOX:PATH` reference.
+    #[test]
+    fn a_host_path_with_a_colon_stays_on_the_host() {
+        match parse_direction("/tmp/log-12:30.txt", "mybox:/logs").unwrap() {
+            Direction::HostToBox {
+                host,
+                box_name,
+                box_path,
+            } => {
+                assert_eq!(host.as_os_str(), "/tmp/log-12:30.txt");
+                assert_eq!(box_name, "mybox");
+                assert_eq!(box_path, "/logs");
+            }
+            _ => panic!("wrong direction"),
+        }
+        match parse_direction("mybox:/out", "./report:v2.txt").unwrap() {
+            Direction::BoxToHost { host, box_path, .. } => {
+                assert_eq!(host.as_os_str(), "./report:v2.txt");
+                assert_eq!(box_path, "/out");
+            }
             _ => panic!("wrong direction"),
         }
     }
