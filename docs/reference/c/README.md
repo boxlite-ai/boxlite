@@ -1079,6 +1079,30 @@ alive until the completion has been drained.
 
 ### Images
 
+`boxlite_image_remove_by_id(handle, image_id, cb, user_data, out_error)` removes an eligible local image by full manifest ID or unique hex prefix.
+It uses the normal post-and-drain callback model; a selected REST backend returns `Unsupported`.
+
+The `CBoxImageRemoveByIdCb` callback receives an owned `CImageRemovalResult*` on success and null on failure.
+Its error pointer is borrowed for the callback duration.
+The result contains `image_id`, `removed_references`, `removed_references_count` and `reclaimed_bytes` (`uint64_t`).
+Free the result and its nested strings once with `boxlite_free_image_removal_result(result)`.
+
+```c
+static void removed(CImageRemovalResult *result, CBoxliteError *error, void *user_data) {
+    if (result != NULL) {
+        printf("%s: %llu bytes\n", result->image_id,
+               (unsigned long long)result->reclaimed_bytes);
+        boxlite_free_image_removal_result(result);
+    }
+}
+/* Drain the parent runtime to dispatch this callback. */
+boxlite_image_remove_by_id(images, "1f8c03c8f5e5", removed, NULL, &error);
+```
+
+Errors distinguish `AmbiguousImageId`, `ImageHasTags`, `ImageUsedByBoxes`, `NotFound`, `InvalidState` (busy), and `Unsupported`.
+Existing error numbers and name-based `boxlite_image_remove` behavior are unchanged.
+See [local removal semantics](../../concepts/images.md#removing-local-images) for dependency protection and byte accounting.
+
 `boxlite_runtime_images()` returns a `CBoxliteImageHandle*` for the images a
 runtime can boot from: the local cache on a runtime from
 `boxlite_runtime_new()`, the server's catalog on one from

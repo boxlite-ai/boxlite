@@ -1082,6 +1082,7 @@ mod image_catalog {
     }
 
     type UsageSeen = (u64, u64, u64);
+    type RemovalSeen = (String, Vec<String>, u64);
 
     unsafe fn owned_string(s: *const c_char) -> String {
         if s.is_null() {
@@ -1148,6 +1149,29 @@ mod image_catalog {
 
     extern "C" fn record_removal(error: *mut FFIError, user_data: *mut c_void) {
         unsafe { (*user_data.cast::<Delivery<()>>()).record_error(error) };
+    }
+
+    extern "C" fn record_id_removal(
+        result: *mut CImageRemovalResult,
+        error: *mut FFIError,
+        user_data: *mut c_void,
+    ) {
+        unsafe {
+            let delivery = &mut *user_data.cast::<Delivery<RemovalSeen>>();
+            delivery.record_error(error);
+            if !result.is_null() {
+                let value = &*result;
+                delivery.value = Some((
+                    owned_string(value.image_id),
+                    entries(value.removed_references, value.removed_references_count)
+                        .iter()
+                        .map(|&reference| owned_string(reference))
+                        .collect(),
+                    value.reclaimed_bytes,
+                ));
+                boxlite_free_image_removal_result(result);
+            }
+        }
     }
 
     extern "C" fn record_usage(
@@ -1266,6 +1290,28 @@ mod image_catalog {
             })
         }
 
+        fn remove_by_id(&self, id: &CStr) -> Delivery<RemovalSeen> {
+            self.deliver(|user_data, error| unsafe {
+                boxlite_image_remove_by_id(
+                    self.handle,
+                    id.as_ptr(),
+                    Some(record_id_removal),
+                    user_data,
+                    error,
+                )
+            })
+        }
+
+        fn from_removal_fixture(fixture: &boxlite::LocalImageFixture) -> Self {
+            let runtime = Box::into_raw(Box::new(RuntimeHandle {
+                runtime: fixture.runtime().clone(),
+                tokio_rt: crate::runtime::create_tokio_runtime().unwrap(),
+                liveness: std::sync::Arc::new(crate::runtime::RuntimeLiveness::new()),
+                queue: std::sync::Arc::new(crate::event_queue::EventQueue::new()),
+            }));
+            Self::of(runtime, None, None)
+        }
+
         /// Queues one call with a fresh delivery slot, then drains until its
         /// callback has run.
         fn deliver<T>(
@@ -1314,6 +1360,88 @@ mod image_catalog {
                 let _ = std::fs::remove_dir_all(home_dir);
             }
         }
+    }
+
+    #[test]
+    fn removal_by_id_dispatches_owned_results_and_distinct_errors() {
+        let fixture = boxlite::LocalImageFixture::new();
+        let images = Images::from_removal_fixture(&fixture);
+        let id = CString::new(&fixture.image_id[7..19]).unwrap();
+        let result = images.remove_by_id(&id);
+        assert_eq!(result.code, Some(BoxliteErrorCode::Ok));
+        let (resolved, references, bytes) = result.value.unwrap();
+        assert_eq!(resolved, fixture.image_id);
+        assert_eq!(references.len(), 2);
+        assert!(bytes > 0);
+        assert!(!fixture.manifest_path.exists());
+        assert_eq!(
+            images.remove_by_id(&id).code,
+            Some(BoxliteErrorCode::NotFound)
+        );
+
+        let tagged = boxlite::LocalImageFixture::new();
+        tagged.add_tag();
+        let images = Images::from_removal_fixture(&tagged);
+        let id = CString::new(tagged.image_id.clone()).unwrap();
+        let result = images.remove_by_id(&id);
+        assert_eq!(result.code, Some(BoxliteErrorCode::ImageHasTags));
+        assert!(result.message.contains("one.example/app:latest"));
+        assert!(result.value.is_none());
+        assert!(tagged.manifest_path.exists());
+    }
+
+    #[test]
+    fn removal_by_id_is_unsupported_on_rest_without_a_delete_request() {
+        let images = Images::on_rest_server(&[]);
+        let id = CString::new("123").unwrap();
+        let result = images.remove_by_id(&id);
+        assert_eq!(result.code, Some(BoxliteErrorCode::Unsupported));
+        assert!(result.value.is_none());
+        assert!(images.requests_received().is_empty());
+    }
+
+    #[test]
+    fn removal_by_id_validates_callbacks_arguments_and_runtime_liveness_before_queueing() {
+        let fixture = boxlite::LocalImageFixture::new();
+        let mut images = Images::from_removal_fixture(&fixture);
+        let id = CString::new(fixture.image_id.clone()).unwrap();
+        let mut error = FFIError::default();
+        unsafe {
+            let code = boxlite_image_remove_by_id(
+                images.handle,
+                id.as_ptr(),
+                None,
+                ptr::null_mut(),
+                &mut error,
+            );
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+            assert!(owned_string(error.message).contains("cb"));
+            boxlite_error_free(&mut error);
+            let code = boxlite_image_remove_by_id(
+                images.handle,
+                ptr::null(),
+                Some(record_id_removal),
+                ptr::null_mut(),
+                &mut error,
+            );
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+            assert!(owned_string(error.message).contains("image_id"));
+            boxlite_error_free(&mut error);
+            boxlite_free_image_removal_result(ptr::null_mut());
+            images.free_runtime();
+            let code = boxlite_image_remove_by_id(
+                images.handle,
+                id.as_ptr(),
+                Some(record_id_removal),
+                ptr::null_mut(),
+                &mut error,
+            );
+            assert_eq!(code, BoxliteErrorCode::Stopped);
+            let message = owned_string(error.message);
+            assert!(message.contains("shut down") || message.contains("closed"));
+            boxlite_error_free(&mut error);
+        }
+        assert!(fixture.manifest_path.exists());
     }
 
     #[test]
