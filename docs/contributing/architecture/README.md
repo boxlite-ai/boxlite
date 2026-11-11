@@ -148,6 +148,16 @@ gRPC-based communication layer between host and guest.
 - `Connection`: Lazy gRPC channel management
 - Service interfaces: `GuestInterface`, `ContainerInterface`, `ExecutionInterface`
 
+Guest-ready confirms the guest agent's listener, while libkrun initializes the
+host Unix listener asynchronously. The portal attempts to connect immediately,
+then retries missing or refused sockets with asynchronous backoff from 10 ms to
+100 ms, bounded by the existing 30-second connection timeout.
+
+Other connection errors return immediately. A socket that never becomes
+connectable reaches the timeout; the retry covers connection establishment and
+does not replay RPCs. Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=portal::connection`
+for delayed-listener, timeout, and permanent-error regressions.
+
 ### Guest agent
 
 Runs inside the Box, receives commands from host via gRPC.
