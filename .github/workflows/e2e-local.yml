@@ -443,13 +443,24 @@ jobs:
           # tee to persistent volume so logs survive runner Worker death.
           # The next run's Stage step rescues + uploads "$LOG_DIR".
           set -o pipefail
+          export PYTHONPATH="${PWD}/scripts/ci${PYTHONPATH:+:${PYTHONPATH}}"
+          export PYTEST_ADDOPTS="-p pr2524_network_probe"
           make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
+
+      - name: Capture diagnostic host state
+        if: always()
+        run: |
+          mkdir -p /tmp/pr2524-rpc-observed
+          dmesg -T > /tmp/pr2524-rpc-observed/kernel.log 2>&1 || true
+          free -h > /tmp/pr2524-rpc-observed/memory.txt
+          df -h > /tmp/pr2524-rpc-observed/disk.txt
+          ps -eo pid,ppid,stat,comm > /tmp/pr2524-rpc-observed/processes.txt
 
       - name: Upload test logs on failure or cancellation
         # `failure()` alone misses cancelled jobs (concurrency cancellation,
         # host reboot, timeout — all surface as `cancelled()`, not failure).
-        # We want logs for every non-success outcome.
-        if: failure() || cancelled()
+        # This diagnostic branch also retains captures from successful runs.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-local-logs-${{ github.run_id }}-${{ github.run_attempt }}
@@ -458,6 +469,8 @@ jobs:
             /tmp/boxlite-*/
             !/tmp/boxlite-rescue/
             /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/
+            /tmp/pr2524-rpc-observed/
+            /tmp/pr2524-rootcause-network-observed/
           retention-days: 7
           if-no-files-found: ignore
 

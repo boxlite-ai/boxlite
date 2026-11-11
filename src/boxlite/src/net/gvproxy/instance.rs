@@ -97,6 +97,17 @@ impl GvproxyInstance {
             .with_secrets(secrets)
             .with_rate_limit(spec.rate_limit);
         config.outbound_disabled = spec.outbound_disabled;
+        // Temporary PR #2524 diagnostic capture; preserve the existing policy and logging level.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        config.capture_file = Some(
+            spec.socket_path
+                .with_file_name(format!("pr2524-network-{stamp}.pcap"))
+                .to_string_lossy()
+                .into_owned(),
+        );
 
         if let (Some(cert), Some(key)) = (spec.ca_cert_pem.as_deref(), spec.ca_key_pem.as_deref()) {
             config = config.with_ca(cert.to_string(), key.to_string());

@@ -59,6 +59,8 @@ async fn connect_transport(transport: &BoxTransport) -> BoxliteResult<Channel> {
 }
 
 async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
+    let diagnostic_path = socket_path.to_path_buf();
+    let diagnostic_started = std::time::Instant::now();
     let socket_path = socket_path.to_path_buf();
 
     let channel = Endpoint::try_from("http://[::]:50051")?
@@ -70,7 +72,48 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
                 Ok::<_, std::io::Error>(TokioIo::new(stream))
             }
         }))
-        .await?;
+        .await
+        .inspect_err(|error| {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let directory = std::path::PathBuf::from(format!(
+                "/tmp/pr2524-rpc-observed/{}-{stamp}",
+                std::process::id()
+            ));
+            let details = format!(
+                "elapsed={:?} path={:?} error={error:?} metadata={:?}\n",
+                diagnostic_started.elapsed(),
+                diagnostic_path,
+                std::fs::metadata(&diagnostic_path)
+            );
+            eprintln!("[PR2524-DIAG] {details} evidence={}", directory.display());
+            let _ = std::fs::create_dir_all(&directory);
+            let _ = std::fs::write(directory.join("rpc-error.txt"), details);
+            if let Some(parent) = diagnostic_path.parent() {
+                let real = std::fs::canonicalize(parent).or_else(|_| std::fs::read_link(parent));
+                if let Ok(sockets) = real {
+                    if let Some(box_home) = sockets.parent() {
+                        let _ = std::fs::write(
+                            directory.join("box-home.txt"),
+                            box_home.display().to_string(),
+                        );
+                        for name in ["shim.stderr", "shim.pid", "exit.json"] {
+                            let _ = std::fs::copy(box_home.join(name), directory.join(name));
+                        }
+                        if let Ok(logs) = std::fs::read_dir(box_home.join("logs")) {
+                            for log in logs.flatten() {
+                                if log.file_type().is_ok_and(|kind| kind.is_file()) {
+                                    let _ =
+                                        std::fs::copy(log.path(), directory.join(log.file_name()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })?;
 
     tracing::debug!("Connected via Unix socket");
     Ok(channel)
