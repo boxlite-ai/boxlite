@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import {
   ConfirmedWorkerAbsent,
   ConfirmedWorkerCreationRejected,
+  DEFAULT_WORKER_DISK_GIB,
   decodeScope,
   ExecutionJournal,
   ExecutionLease,
@@ -239,7 +240,7 @@ export class BoxLiteWorkers {
             image: launch.image,
             cpus: launch.cpus,
             memory_mib: launch.memoryMiB,
-            disk_size_gb: launch.diskGiB ?? 10,
+            disk_size_gb: launch.diskGiB ?? DEFAULT_WORKER_DISK_GIB,
             user: 'runner',
             working_dir: '/home/runner',
             entrypoint: launch.entrypoint,

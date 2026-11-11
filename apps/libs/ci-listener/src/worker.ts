@@ -1,5 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
+export const DEFAULT_WORKER_DISK_GIB = 10
+
 /** Runtime configuration only. GitHub JIT credentials are delivered after boot. */
 export interface WorkerResources {
   cpus: number
@@ -8,7 +10,7 @@ export interface WorkerResources {
 }
 
 export function validateWorkerResources(resources: WorkerResources): void {
-  const disk = resources.diskGiB ?? 10
+  const disk = resources.diskGiB ?? DEFAULT_WORKER_DISK_GIB
   if (
     !Number.isSafeInteger(resources.cpus) ||
     resources.cpus < 1 ||

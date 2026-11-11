@@ -56,7 +56,7 @@ integration('CI connect persistence (real Postgres)', () => {
   }
   beforeAll(async () => {
     if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
-      throw new Error('Disposable local database required')
+      throw new Error(`Disposable local database required: DB_HOST=${process.env.DB_HOST}`)
     const setup = await new DataSource({
       type: 'postgres',
       host: process.env.DB_HOST,

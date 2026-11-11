@@ -63,7 +63,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         other = database
       } else {
         if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
-          throw new Error('Disposable local PostgreSQL required')
+          throw new Error(`Disposable local PostgreSQL required: DB_HOST=${process.env.DB_HOST}`)
         schema = 'ci_scans_' + randomUUID().replaceAll('-', '')
         for (let i = 0; i < 2; i++)
           connections.push(

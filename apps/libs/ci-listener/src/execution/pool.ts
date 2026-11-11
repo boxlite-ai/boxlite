@@ -4,8 +4,14 @@ import { JobNotice, jobMatches, WorkflowJob } from '../jobs'
 import { GitHubRunners, JitRegistration, RunnerEffect } from '../runners'
 import { ExecutionLease } from '../state/store'
 import { LeaseLost, StateConflict, StateCorrupt } from '../state/database'
-import { ConfirmedWorkerCreationRejected, validateWorkerResources, WorkerExecutor, WorkerLaunch } from '../worker'
-import { parseResourceLabels, selectRunnerLabels } from '../resource-labels'
+import {
+  ConfirmedWorkerCreationRejected,
+  DEFAULT_WORKER_DISK_GIB,
+  validateWorkerResources,
+  WorkerExecutor,
+  WorkerLaunch,
+} from '../worker'
+import { DEFAULT_RESOURCE_LABEL, parseResourceLabels, selectRunnerLabels } from '../resource-labels'
 import { AllocationChange, AllocationRow, ExecutionJournal } from './journal'
 import { EffectKind, ExecutionScope } from './model'
 import { CapacityPolicy, captureCapacity } from '../capacity'
@@ -90,7 +96,7 @@ export class WorkerPool {
       !settings.labels.length ||
       settings.labels.length > 100 ||
       settings.labels.some((label) => !label || label.length > 128) ||
-      parseResourceLabels(settings.labels)?.label !== 'boxlite'
+      parseResourceLabels(settings.labels)?.label !== DEFAULT_RESOURCE_LABEL
     )
       throw new Error('Invalid CI worker settings')
     this.settings = { ...settings, labels: [...settings.labels] }
@@ -265,7 +271,7 @@ export class WorkerPool {
             image: this.settings.image,
             cpus: this.settings.cpus,
             memoryMiB: this.settings.memoryMiB,
-            diskGiB: 10,
+            diskGiB: DEFAULT_WORKER_DISK_GIB,
             ...selected.resources,
             entrypoint: ['/bin/bash', '-c', bootstrap],
           }

@@ -31,7 +31,8 @@ integration('CI managed organization group (real Postgres)', () => {
     beforeGroupRead: (() => Promise<void>) | undefined,
     reports: jest.SpyInstance
   beforeAll(async () => {
-    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!)) throw Error('Disposable database required')
+    if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
+      throw Error(`Disposable database required: DB_HOST=${process.env.DB_HOST}`)
     db = await new DataSource({
       type: 'postgres',
       host: process.env.DB_HOST,

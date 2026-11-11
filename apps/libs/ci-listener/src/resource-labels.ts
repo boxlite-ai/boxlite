@@ -1,6 +1,15 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { validateWorkerResources, WorkerResources } from './worker'
 
+export const DEFAULT_RESOURCE_LABEL = 'boxlite'
+/** Platform and default routing labels; job resource selection replaces the routing label. */
+export const DEFAULT_RUNNER_LABELS: readonly string[] = Object.freeze([
+  'self-hosted',
+  'linux',
+  'x64',
+  DEFAULT_RESOURCE_LABEL,
+])
+
 export interface ResourceSelection {
   readonly label: string
   readonly resources?: Readonly<WorkerResources>
@@ -12,12 +21,12 @@ export function parseResourceLabels(labels: readonly string[]): ResourceSelectio
     throw new Error('Invalid CI resource labels')
   const routing = labels.filter((label) => {
     const normalized = label.trim().toLowerCase()
-    return normalized === 'boxlite' || normalized.startsWith('boxlite-')
+    return normalized === DEFAULT_RESOURCE_LABEL || normalized.startsWith(DEFAULT_RESOURCE_LABEL + '-')
   })
   if (!routing.length) return null
   if (routing.length !== 1) throw new Error('Exactly one CI resource label is required')
   const label = routing[0].toLowerCase()
-  if (label === 'boxlite') return Object.freeze({ label })
+  if (label === DEFAULT_RESOURCE_LABEL) return Object.freeze({ label })
   // Example: boxlite-2vcpu-4gbmem-10gbdisk. GiB quantities are positive whole numbers.
   const match = /^boxlite-([1-9]\d*)vcpu-([1-9]\d*)gbmem-([1-9]\d*)gbdisk$/.exec(label)
   if (!match || match[0] !== label) throw new Error('Invalid CI resource label format')
@@ -38,7 +47,7 @@ export function selectRunnerLabels(
     return null
   }
   if (!selection) return null
-  const labels = supported.filter((label) => label.toLowerCase() !== 'boxlite')
+  const labels = supported.filter((label) => label.toLowerCase() !== DEFAULT_RESOURCE_LABEL)
   const available = new Set(labels.map((label) => label.toLowerCase()))
   available.add(selection.label)
   if (!requested.every((label) => available.has(label.toLowerCase()))) return null

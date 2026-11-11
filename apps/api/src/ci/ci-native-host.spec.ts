@@ -38,7 +38,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
   })
   beforeAll(async () => {
     if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
-      throw Error('Disposable local PostgreSQL required')
+      throw Error(`Disposable local PostgreSQL required: DB_HOST=${process.env.DB_HOST}`)
     db = await new DataSource({
       type: 'postgres',
       host: process.env.DB_HOST,

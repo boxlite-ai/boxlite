@@ -30,7 +30,9 @@ control plane through `runner` telemetry columns, `job` results and CPU incident
 
 The SQL-owned tables below are created by
 [`1793664000000-add-ci-connect-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1793664000000-add-ci-connect-migration.ts)
-and accessed by `CiConnectService`; they have no TypeORM entity mapping.
+and extended by the later CI migrations listed in the
+[development CI reset procedure](../../../../apps/api/README.md#resetting-development-ci-state).
+They are accessed by `CiConnectService` and have no TypeORM entity mapping.
 
 | Table                     | Stored state                                                                                                                                                                                                                                   | Enforced boundaries                                                                                                                       |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,8 +45,11 @@ and is not a stored opt-in. CI has not shipped, so there is no conversion of old
 Public consent into Private consent.
 
 For existing dev state, finish resource
-cleanup with the old version, stop its Listeners, and explicitly recreate CI
-tables and the journal; deleting rows alone retains the old schema. Shared scope
+cleanup with the old version, stop its Listeners, and follow that reset procedure:
+recreate the CI tables and journal, remove only their five migration-history
+entries, then rerun the complete CI migration chain. Replaying only the initial
+connect migration omits OAuth and account-selection fields; deleting rows alone
+retains the old schema. Shared scope
 hashes include both Public and Private decisions, so standalone operators also need old-resource cleanup and
 a fresh journal; their Public configuration remains independent and Private stays
 allowed.

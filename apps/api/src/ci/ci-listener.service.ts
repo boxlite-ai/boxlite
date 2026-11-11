@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { Injectable, OnModuleInit, OnModuleDestroy, ServiceUnavailableException } from '@nestjs/common'
-import { Listener, VerifiedWebhook } from '@boxlite-ai/ci-listener'
+import { DEFAULT_RUNNER_LABELS, Listener, VerifiedWebhook } from '@boxlite-ai/ci-listener'
 import { TypedConfigService } from '../config/typed-config.service'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeHost } from './ci-native-host'
@@ -34,7 +34,7 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
         image: this.config.get('ci.workerImage'),
         cpus: this.config.get('ci.workerCPUs'),
         memoryMiB: this.config.get('ci.workerMemoryGB') * 1024,
-        labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
+        labels: DEFAULT_RUNNER_LABELS,
       },
       capacity: this.settings,
     })

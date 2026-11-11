@@ -23,7 +23,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         database = local
       } else {
         if (!['localhost', '127.0.0.1', '::1'].includes(process.env.DB_HOST!))
-          throw new Error('Disposable local PostgreSQL required')
+          throw new Error(`Disposable local PostgreSQL required: DB_HOST=${process.env.DB_HOST}`)
         schema = 'ci_core_' + randomUUID().replaceAll('-', '')
         pg = await new DataSource({
           type: 'postgres',

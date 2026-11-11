@@ -18,7 +18,7 @@ It received an independent PASS before implementation; advice favored one immuta
 
 GitHub labels provide routing and the [JIT endpoint](https://docs.github.com/en/rest/actions/self-hosted-runners#create-configuration-for-a-just-in-time-runner-for-a-repository)
 accepts explicit labels. Neither allocates Box resources; the host request must carry the parsed quantities.
-GitLab's [bounded per-job resource overrides](https://docs.gitlab.com/runner/executors/kubernetes/#overwrite-the-containers-resources)
+GitLab's [bounded per-job resource overrides](https://docs.gitlab.com/runner/executors/kubernetes/#overwrite-container-resources)
 support retaining administrator ceilings on job-selected resources.
 
 ## Mechanism
@@ -66,7 +66,7 @@ PostgreSQL tests use the same `DB_*` settings and isolated-schema fixtures as ot
 | `make test:apps:api TEST_FILES='ci/\|1793700000000-add-ci-listener-state-migration.spec\|1793664000000-add-ci-connect-migration.spec\|box.service.quota.spec'` | 354 tests passed on Node 24 with real local PostgreSQL. |
 | `make test:apps:dashboard` on Node 24 | 1044 tests passed. |
 | `make test:apps:ci-listener FILTER='CI shared state'` without `DB_HOST` | 28 SQLite tests passed; PostgreSQL cases skipped. |
-| `make test:unit:cli NEXTEST_PROFILE_FLAG=commands::ci::` with dependency stubs | 3 CI command tests passed. |
+| `make test:unit:cli NEXTEST_PROFILE_FLAG=commands::ci::` with dependency stubs and nextest installed | 3 CI command tests passed. |
 | `make build:apps:ci-listener`, `make build:apps:github-ci-runner`, `make build:apps:api` | All builds passed. |
 | `make fmt:apps FILES=…`, `make fmt:check:rust`, `git diff --check` | Passed for the changed files. |
 
@@ -83,6 +83,12 @@ A temporary invocation-only type adapter let skipped new-capability tests compil
 After byte-for-byte restoration and adapter removal, all 167 standalone tests passed.
 Additional protocol tests control both CAS race orders, reopen SQLite after lost responses or failed ID persistence,
 and reject changed effects, scope, identity and leases.
+
+The focused CLI invocation requires nextest: the target's Cargo fallback ignores `NEXTEST_PROFILE_FLAG` and runs the full inline unit suite.
+Both hosts, hosted scans and shared validation now reuse immutable base runner labels and the same 10-GiB disk default.
+Resource labels still replace the base routing label per job; this extraction changes no resource quantities or matching behavior.
+Database fixtures retain existing `DB_*` and random-schema isolation, with rejected hosts included in guard errors.
+The Dashboard parent already excludes missing organizations before mounting the capacity summary; all summary hooks precede its early return.
 
 Unresolved validation outside this change: full app lint reports three module-boundary errors in the unchanged infra release-audit tests.
 The full CLI unit suite retains an unrelated SSH configure test returning HTTP 503; CI command tests pass independently.
