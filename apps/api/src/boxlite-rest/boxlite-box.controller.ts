@@ -206,7 +206,7 @@ export class BoxliteBoxController {
         dto.checkpoint_id,
         dto.name,
         maxCreatedBoxes,
-        bindRequest,
+        ...(bindRequest ? [bindRequest] : []),
       )
       recordBoxRequested('box.create', box, ctx)
     }

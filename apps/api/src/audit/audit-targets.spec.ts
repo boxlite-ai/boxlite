@@ -1,3 +1,4 @@
+import { BoxRequestService } from '../boxlite-rest/box-request.service'
 import { BadRequestException, INestApplication, NotFoundException, RequestTimeoutException } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import { Reflector } from '@nestjs/core'
@@ -62,6 +63,7 @@ describe('audit targets at HTTP boundaries', () => {
     const module = await Test.createTestingModule({
       controllers: [ObjectStorageController, BoxliteBoxController],
       providers: [
+        { provide: BoxRequestService, useValue: {} },
         ObjectStorageService,
         {
           provide: TypedConfigService,

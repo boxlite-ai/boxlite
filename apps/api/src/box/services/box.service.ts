@@ -394,15 +394,21 @@ export class BoxService {
       // and a name collision, which the insert itself settles, come after it.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
-        const insert = () =>
-          this.boxRepository.insert(
-            box,
-            options.maxCreatedBoxes,
-            options.onPersist,
-            undefined,
-            undefined,
-            options.bindRequest,
-          )
+        const insert = () => {
+          if (options.bindRequest) {
+            return this.boxRepository.insert(
+              box,
+              options.maxCreatedBoxes,
+              options.onPersist,
+              undefined,
+              undefined,
+              options.bindRequest,
+            )
+          }
+          return options.onPersist
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
+            : this.boxRepository.insert(box, options.maxCreatedBoxes)
+        }
         return createBoxDto.name
           ? insert()
           : persistWithGeneratedBoxName(box.id, (name) => {

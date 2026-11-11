@@ -1,3 +1,4 @@
+import { BoxRequestService } from '../boxlite-rest/box-request.service'
 import { randomUUID } from 'node:crypto'
 import { AddressInfo } from 'node:net'
 import { ClientRequest, createServer, request, Server, ServerResponse } from 'node:http'
@@ -91,6 +92,7 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
     const module = await Test.createTestingModule({
       controllers: [BoxliteProxyController],
       providers: [
+        { provide: BoxRequestService, useValue: {} },
         {
           provide: BoxService,
           useValue: {
