@@ -38,8 +38,12 @@ type KeyProvider interface {
 	Unwrap(ctx context.Context, wrapped WrappedDEK, aad []byte) ([]byte, error)
 }
 
+// Cipher authenticates version identity and routing policy with each value.
+// Construct it with NewCipher; concurrent calls require a concurrency-safe provider.
 type Cipher struct{ provider KeyProvider }
 
+// NewCipher rejects a nil provider with ErrInvalidInput. Callers must supply an
+// initialized provider; typed nil implementations are responsible for rejecting use.
 func NewCipher(provider KeyProvider) (*Cipher, error) {
 	if provider == nil {
 		return nil, ErrInvalidInput
@@ -49,6 +53,7 @@ func NewCipher(provider KeyProvider) (*Cipher, error) {
 
 // Encrypt creates a new DEK even when plaintext and identity are unchanged.
 // Callers enforce value-size and routing-policy restrictions before calling it.
+// Inputs are borrowed for the call; returned buffers belong to the caller.
 func (c *Cipher) Encrypt(ctx context.Context, identity SecretContext, plaintext []byte) (Envelope, error) {
 	if err := ctx.Err(); err != nil {
 		return Envelope{}, err
@@ -81,6 +86,7 @@ func (c *Cipher) Encrypt(ctx context.Context, identity SecretContext, plaintext 
 
 // Decrypt authenticates policy before releasing plaintext. The caller must send
 // the same authenticated version metadata to the runner, without rereading it.
+// The returned plaintext belongs to the caller; every failure returns nil plaintext.
 func (c *Cipher) Decrypt(ctx context.Context, identity SecretContext, envelope Envelope) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

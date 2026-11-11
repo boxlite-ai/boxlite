@@ -95,6 +95,8 @@ coverage\:go: dev\:go
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/runner.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd apps/image-service && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
+	(cd apps/secret-server && GOWORK=off go test -race -covermode=atomic -coverpkg=./... \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
 
 coverage\:python: _ensure-python-deps

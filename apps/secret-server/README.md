@@ -131,6 +131,11 @@ make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=
 The test target runs with the race detector and `GOWORK=off`, so it needs no VM,
 native SDK library, Node installation, cloud permissions, or external Go modules.
 The Nx test target delegates to the same make target for workspace test discovery.
+Nx caching is disabled for this target because the workspace default inputs exclude
+Go test files. Every invocation reaches Go, whose own test cache tracks test changes.
+The Go CI job selects Secret Server source and test changes and runs this package
+through `make coverage:go` with the race detector and `GOWORK=off`. It uploads
+`target/coverage/secret-server.out` to Codecov alongside the other Go reports.
 Tests cover real environment-key encryption, tampering, policy canonicalization,
 key selection, provider errors, cancellation, and concurrent use. An internal test
 checks the envelope format's rewrap compatibility; it does not expose rotation to callers.

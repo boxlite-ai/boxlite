@@ -14,6 +14,9 @@ type EnvKeyProvider struct {
 	key   [32]byte
 }
 
+// NewEnvKeyProvider copies one AES-256 key from canonical padded standard Base64.
+// The key ID must start with env:; invalid configuration returns ErrInvalidInput.
+// This constructor reads no environment variables and provides no rotation support.
 func NewEnvKeyProvider(keyID, encodedKey string) (*EnvKeyProvider, error) {
 	if !validKeyID(keyID) || len(encodedKey) != 44 {
 		return nil, ErrInvalidInput
@@ -41,6 +44,8 @@ func validKeyID(id string) bool {
 	return true
 }
 
+// Wrap authenticates the supplied AAD and configured key ID around a 32-byte DEK.
+// It returns independent ciphertext and rejects invalid inputs or canceled calls.
 func (p *EnvKeyProvider) Wrap(ctx context.Context, dek, aad []byte) (WrappedDEK, error) {
 	if err := ctx.Err(); err != nil {
 		return WrappedDEK{}, err
@@ -59,6 +64,9 @@ func (p *EnvKeyProvider) Wrap(ctx context.Context, dek, aad []byte) (WrappedDEK,
 	return WrappedDEK{KeyID: p.keyID, Ciphertext: sealed}, nil
 }
 
+// Unwrap returns a caller-owned DEK after authentication. A different key ID returns
+// ErrUnknownKey; malformed framing returns ErrInvalidInput; tampering returns
+// ErrAuthentication. Cancellation returns the context error without a DEK.
 func (p *EnvKeyProvider) Unwrap(ctx context.Context, wrapped WrappedDEK, aad []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
