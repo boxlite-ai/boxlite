@@ -104,6 +104,12 @@ let runtime = BoxliteRuntime::default_runtime();
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
 
+On a REST runtime, `list_info()` follows every continuation page and returns the
+combined boxes in server order. It sends each `next_page_token` as the next
+request's `pageToken`; an absent, null, or empty token ends the list. A repeated
+token or a failed page returns an error instead of a partial list. Servers that
+return all boxes in one response remain supported.
+
 #### Example
 
 ```rust

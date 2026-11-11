@@ -542,8 +542,28 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
-        let resp: ListBoxesResponse = self.client.get("/boxes").await?;
-        resp.boxes.iter().map(BoxResponse::to_box_info).collect()
+        let mut result = Vec::new();
+        let mut token = None::<String>;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let query = token
+                .as_deref()
+                .map(|value| vec![("pageToken", value)])
+                .unwrap_or_default();
+            let page: ListBoxesResponse = self.client.get_with_query("/boxes", &query).await?;
+            for box_response in page.boxes {
+                result.push(box_response.to_box_info()?);
+            }
+            match page.next_page_token.filter(|value| !value.is_empty()) {
+                Some(value) if seen.insert(value.clone()) => token = Some(value),
+                Some(_) => {
+                    return Err(BoxliteError::Internal(
+                        "box server repeated a pagination token".into(),
+                    ));
+                }
+                None => return Ok(result),
+            }
+        }
     }
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
@@ -745,6 +765,94 @@ mod tests {
             requests
         });
         (port, server)
+    }
+
+    const BOXES_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"first","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":"cursor+/="}"#;
+    const BOXES_LAST_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R6","name":"last","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":""}"#;
+
+    #[tokio::test]
+    async fn boxes_pagination_collects_pages_and_encodes_camel_case_token() {
+        let (port, server) = json_server(vec![BOXES_PAGE, BOXES_LAST_PAGE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let boxes = runtime.list_info().await.unwrap();
+        assert_eq!(boxes.len(), 2, "list_info must include every server page");
+        assert_eq!(boxes[0].name.as_deref(), Some("first"));
+        assert_eq!(boxes[1].name.as_deref(), Some("last"));
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/boxes HTTP/1.1",
+                "GET /v1/boxes?pageToken=cursor%2B%2F%3D HTTP/1.1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn boxes_pagination_accepts_terminal_tokens_and_empty_pages() {
+        for body in [
+            r#"{"boxes":[]}"#,
+            r#"{"boxes":[],"next_page_token":null}"#,
+            r#"{"boxes":[],"next_page_token":""}"#,
+        ] {
+            let (port, server) = json_server(vec![body]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            assert!(runtime.list_info().await.unwrap().is_empty());
+            assert_eq!(server.await.unwrap(), ["GET /v1/boxes HTTP/1.1"]);
+        }
+
+        let (port, server) = json_server(vec![
+            r#"{"boxes":[],"next_page_token":"cursor+/="}"#,
+            BOXES_LAST_PAGE,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let boxes = runtime.list_info().await.unwrap();
+        assert_eq!(boxes.len(), 1, "an empty page can still have a next page");
+        assert_eq!(boxes[0].name.as_deref(), Some("last"));
+        assert_eq!(server.await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn boxes_pagination_rejects_token_cycles() {
+        for replies in [
+            vec![BOXES_PAGE, BOXES_PAGE],
+            vec![
+                BOXES_PAGE,
+                r#"{"boxes":[],"next_page_token":"other"}"#,
+                BOXES_PAGE,
+            ],
+        ] {
+            let count = replies.len();
+            let (port, server) = json_server(replies).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let error = runtime.list_info().await.unwrap_err();
+            assert!(matches!(error, BoxliteError::Internal(_)));
+            assert!(error.to_string().contains("repeated a pagination token"));
+            assert_eq!(server.await.unwrap().len(), count);
+        }
+    }
+
+    #[tokio::test]
+    async fn boxes_pagination_propagates_later_page_errors() {
+        let (port, server) = http_server(vec![
+            (200, BOXES_PAGE),
+            (403, r#"{"error":{"code":"FORBIDDEN","message":"denied"}}"#),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        assert!(
+            runtime.list_info().await.is_err(),
+            "never return a partial list"
+        );
+        assert_eq!(server.await.unwrap().len(), 2);
     }
 
     #[tokio::test]
