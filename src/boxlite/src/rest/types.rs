@@ -507,7 +507,6 @@ fn default_auto_resume() -> bool {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
-    #[allow(dead_code)]
     pub next_page_token: Option<String>,
 }
 
