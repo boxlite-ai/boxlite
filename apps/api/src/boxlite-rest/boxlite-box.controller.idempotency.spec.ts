@@ -39,7 +39,13 @@ function setup() {
     }),
   }
   const limits = { resolveMaxCreatedBoxes: jest.fn(async () => 1) }
-  const controller = Reflect.construct(BoxliteBoxController, [service, {}, limits, requests]) as BoxliteBoxController
+  const controller = Reflect.construct(BoxliteBoxController, [
+    service,
+    {},
+    limits,
+    {},
+    requests,
+  ]) as BoxliteBoxController
   const call = (image = 'alpine') =>
     controller.createBox(auth as never, { image } as never, Context.user(), {
       headers: { 'idempotency-key': key },

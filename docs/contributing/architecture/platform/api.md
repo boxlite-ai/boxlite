@@ -577,7 +577,10 @@ The PostgreSQL request ledger binds fresh creation and warm-pool assignment in
 the resource transaction, so an API crash after creation recovers that box.
 Recovery converts the persisted entity through the same Box DTO mapping as normal
 creation, preserving memory units, reported status and network settings before
-saving the response for later replays.
+saving the response for later replays. Checkpoint-backed creation uses the same
+ledger and binds the new Box in the checkpoint import transaction. A failed
+startup wait still returns that Box ID; retrying its key rejoins the existing
+Box rather than scheduling another import.
 Keyed execution uses a random internal token carrying the fixed deadline and
 binds retries to one running VM generation. The guest retains startup results
 independently of process/output retention, rejects expired tokens and safely

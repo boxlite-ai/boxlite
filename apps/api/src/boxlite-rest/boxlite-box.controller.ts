@@ -134,10 +134,6 @@ export class BoxliteBoxController {
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
-    if (dto.checkpoint_id !== undefined) {
-      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
-    }
-
     // Attaching a managed volume grants the box read/write access to its data,
     // so it is authorized independently of WRITE_BOXES: the caller must hold the
     // volume permissions too. WRITE_BOXES alone must not reach another key's
@@ -148,6 +144,9 @@ export class BoxliteBoxController {
 
     const organization = authContext.organization
     const create = async (bindRequest?: BindBoxRequest, boxId?: string) => {
+      if (dto.checkpoint_id !== undefined) {
+        return this.createBoxFromCheckpoint(authContext, dto, ctx, request, bindRequest, boxId)
+      }
       let box
       if (boxId) {
         const persisted = await this.boxService.findOneByIdOrName(boxId, organization.id)
@@ -179,6 +178,8 @@ export class BoxliteBoxController {
     dto: CreateBoxDto,
     ctx: Context,
     request?: Request,
+    bindRequest?: BindBoxRequest,
+    recoveredBoxId?: string,
   ): Promise<BoxResponseDto> {
     const overrides = Object.entries(dto)
       .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
@@ -195,14 +196,20 @@ export class BoxliteBoxController {
       throw new BadRequestException('Invalid box name')
     }
 
-    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
-    const box = await this.checkpointRecoverService.createBox(
-      authContext.organization,
-      dto.checkpoint_id,
-      dto.name,
-      maxCreatedBoxes,
-    )
-    recordBoxRequested('box.create', box, ctx)
+    let box
+    if (recoveredBoxId) {
+      box = await this.boxService.findOneByIdOrName(recoveredBoxId, authContext.organizationId)
+    } else {
+      const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
+      box = await this.checkpointRecoverService.createBox(
+        authContext.organization,
+        dto.checkpoint_id,
+        dto.name,
+        maxCreatedBoxes,
+        bindRequest,
+      )
+      recordBoxRequested('box.create', box, ctx)
+    }
     if (request) request[AUDIT_TARGET_ID] = box.id
     try {
       return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))

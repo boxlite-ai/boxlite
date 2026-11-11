@@ -126,7 +126,7 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
       findOneByIdOrName: (id: string) => database.getRepository(Box).findOneByOrFail({ id }),
       toBoxDto: async (entity: Box) => BoxDto.fromBox(entity, {}),
     }
-    const controller = Reflect.construct(BoxliteBoxController, [service, {}, {}, requests]) as BoxliteBoxController
+    const controller = Reflect.construct(BoxliteBoxController, [service, {}, {}, {}, requests]) as BoxliteBoxController
     const result = await controller.createBox(
       { organizationId, organization: { id: organizationId }, userId: 'owner' } as never,
       payload as never,
