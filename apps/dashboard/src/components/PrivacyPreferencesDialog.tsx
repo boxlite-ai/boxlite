@@ -47,8 +47,8 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
           <div className="rounded-md border mx-5">
             <div className="flex items-start justify-between space-x-2 p-3 bg-muted/50">
               <div className="space-y-1">
-                <p className="font-medium text-sm">Essential</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="font-medium text-body">Essential</p>
+                <p className="text-meta text-muted-foreground">
                   Required for login sessions and core functionality. Cannot be disabled.
                 </p>
               </div>
@@ -59,8 +59,8 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
 
             <div className="flex items-start justify-between space-x-2 p-3">
               <div className="space-y-1">
-                <p className="font-medium text-sm">Analytics</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="font-medium text-body">Analytics</p>
+                <p className="text-meta text-muted-foreground">
                   Collects anonymous usage data to help us understand how the product is used and improve it.
                 </p>
               </div>
@@ -74,8 +74,8 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
 
             <div className="flex items-start justify-between space-x-2 p-3">
               <div className="space-y-1">
-                <p className="font-medium text-sm">Preferences</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="font-medium text-body">Preferences</p>
+                <p className="text-meta text-muted-foreground">
                   Remembers your settings like theme and layout across sessions.
                 </p>
               </div>
@@ -89,8 +89,8 @@ export function PrivacyPreferencesDialog({ open, onOpenChange, preferences, onSa
 
             <div className="flex items-start justify-between space-x-2 p-3">
               <div className="space-y-1">
-                <p className="font-medium text-sm">Marketing</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="font-medium text-body">Marketing</p>
+                <p className="text-meta text-muted-foreground">
                   Used for communications about BoxLite features and updates.
                 </p>
               </div>

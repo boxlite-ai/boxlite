@@ -779,6 +779,68 @@ Clicking Images in a compact rail reveals its children. Quota metadata uses read
 short Quickstart code blocks expand naturally. Billing and box details retain all
 data and actions while removing excess whitespace and dotted leaders.
 
+## Measured visual rules
+
+These rules came out of a full crawl of the console. Each has a check that keeps it true.
+
+```
+ rule                         kept true by
+ ───────────────────────────  ───────────────────────────────────────────────
+ six font sizes, no others    src/design-language.test.ts   (ceiling 0, plus 8 display numerals)
+ text contrast 4.5:1          scripts/ui-audit  ──► axe-core color-contrast
+ 24px hit targets             scripts/ui-audit  ──► axe-core target-size
+ no sideways page scroll      scripts/ui-audit  ──► page-hscroll at 390px and 320px
+ whole-pixel rows             scripts/ui-audit  ──► subpixel
+ one line per shared edge     scripts/ui-audit  ──► double-edge
+```
+
+**Type scale.** Text uses `text-label`, `text-meta`, `text-body`, `text-em`, `text-section` or
+`text-page`. Tailwind's stock sizes (`text-sm`, `text-xs`, …) and arbitrary `text-[Npx]` sizes are
+not allowed; the ratchet test counts both. The only exception is display numerals of 32px and over
+on the welcome screens and the stat tile. Line heights in the scale are whole pixels (page 32px,
+body 20px, meta 18px): a ratio such as 1.15 made the title 32.2px tall and blurred every 1px rule
+below it.
+
+**Contrast.** Enabled text reaches 4.5:1 on its surface in both themes.
+
+| Token or surface | Rule |
+| --- | --- |
+| `--muted-foreground` (light) | 42% lightness: 5.00:1 on `--card`, 4.66:1 on `--accent` |
+| `--brand-foreground` | Dark text. White on the brand cyan is 2.5:1; the dark value is 7.3:1 |
+| `--destructive-solid` | Fill for buttons with white text, 4.67:1 in both themes. `--destructive` stays for text and tints |
+| Code blocks | `readableCodeTheme` in `src/lib/readable-code-theme.ts` moves each Prism token colour to the closest value that passes |
+| Terminal | Its surface is black in both themes, so status text and the Reconnect button use fixed light colours, never theme tokens |
+
+A row that is busy is not dimmed: opacity pulled its text under 4.5:1. The status cell shows the
+spinner.
+
+**Hit targets.** A control is at least 24px in each direction. Small glyph buttons (copy, close)
+keep their glyph size and get a 24px box. Links inside a sentence are exempt.
+
+**Phone widths.** A list that cannot fit keeps its columns with a `min-w` and scrolls sideways
+inside its own box; the page never scrolls sideways. Volumes, Images, Private registries and API
+keys do this. Hostnames and names truncate with a `title`; they do not break mid-word.
+
+**Segmented controls.** Each segment carries a full border and overlaps its left neighbour by one
+pixel, so shared edges are one line. The theme switcher in the account menu marks selection with a
+raised fill and a bold label; the page tabs mark it with a brighter outline.
+
+**Wording.** Buttons, headers, tabs, dialog titles and labels use sentence case, with product
+nouns capitalised (Box, Volume, Checkpoint, API key). A dialog's title is the label of the button
+that opens it: New Box, New Volume, New Checkpoint, New API key. Units are vCPU, GiB and MiB. A
+destructive confirmation names its object, for example `Delete “web-api”?`.
+
+**Copy actions.** Every copy goes through `copyToClipboard` (`src/lib/copy-text.ts`) or the
+`useCopyToClipboard` hook, and shows success only when the write happened.
+
+**Page titles.** Each page calls `usePageTitle`, so the tab reads `Volumes · BoxLite`.
+
+**Focus.** `src/index.css` gives every focusable element a 2px ring-coloured outline by default.
+Components that draw their own indicator still do; unifying those is not done yet.
+
+To re-measure, see [`scripts/ui-audit/README.md`](./scripts/ui-audit/README.md). The crawl needs a
+local Chrome and the mock preview, so it is a manual check and not part of `make test`.
+
 ## GitHub CI dashboard and browser connect
 
 Primary navigation places **CI** in **Applications**, after Infrastructure, in both

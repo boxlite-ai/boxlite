@@ -364,7 +364,7 @@ const getColumns = ({
     },
     {
       accessorKey: 'lastUsedAt',
-      header: 'Last Used',
+      header: 'Last used',
       cell: ({ row }) => {
         return getRelativeTimeString(row.original.lastUsedAt).relativeTimeString
       },

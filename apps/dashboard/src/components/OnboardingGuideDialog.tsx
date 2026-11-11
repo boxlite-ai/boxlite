@@ -450,7 +450,7 @@ function QuickstartCode({ code, language }: { code: string; language: string }) 
 function QuickstartStepHeading({ title }: { title: string }) {
   const split = title.indexOf(' ')
   return (
-    <h2 className="font-display text-base font-semibold">
+    <h2 className="font-display text-em font-semibold">
       <span className="quickstart-step-number">{title.slice(0, split)}</span> {title.slice(split + 1)}
     </h2>
   )
@@ -499,10 +499,10 @@ function InlineCodeSteps({
       ).map((part, index) => (
         <section key={part.id} className="quickstart-step min-w-0">
           <QuickstartStepHeading title={part.title} />
-          <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">{part.note}</p>
+          <p className="mt-2 max-w-[900px] font-display text-body leading-relaxed text-muted-foreground">{part.note}</p>
           <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
             <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
-              <span className="font-mono text-xs tracking-normal text-muted-foreground">
+              <span className="font-mono text-meta tracking-normal text-muted-foreground">
                 {EXAMPLE_FILES[language]} · part {index + 1}
               </span>
               <QuickstartCopyButton
@@ -653,7 +653,7 @@ function OnboardingGuideContent({
         <div className="quickstart-sequence min-w-0">
           <section className="quickstart-step min-w-0">
             <QuickstartStepHeading title="1. Get an API key" />
-            <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-[900px] font-display text-body leading-relaxed text-muted-foreground">
               An API key connects your local code to your BoxLite organization. Create one here, or set BOXLITE_API_KEY
               in your terminal to use an existing key.
             </p>
@@ -673,20 +673,20 @@ function OnboardingGuideContent({
                   value={keyName}
                   onChange={(event) => setKeyName(event.target.value)}
                   placeholder="Key name (optional)"
-                  className="min-w-0 flex-1 rounded-none border border-border/60 bg-transparent px-3 py-2 font-display text-xs outline-none focus:border-brand"
+                  className="min-w-0 flex-1 rounded-none border border-border/60 bg-transparent px-3 py-2 font-display text-meta outline-none focus:border-brand"
                 />
                 <button
                   type="button"
                   disabled={creating || !canCreateApiKey}
                   onClick={() => void handleCreateKey()}
-                  className="bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50"
+                  className="bg-primary px-3 py-2 text-meta text-primary-foreground disabled:opacity-50"
                 >
                   {creating ? 'Creating…' : 'Create key'}
                 </button>
               </div>
             )}
             {createdKey && (
-              <p className="mt-3 font-display text-xs text-muted-foreground">
+              <p className="mt-3 font-display text-meta text-muted-foreground">
                 Your key is included in the examples below.
               </p>
             )}
@@ -696,7 +696,7 @@ function OnboardingGuideContent({
               <QuickstartStepHeading title="2. Choose your SDK or CLI" />
               <InterfacePicker quiet selected={language} onSelect={setLanguage} />
             </div>
-            <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-[900px] font-display text-body leading-relaxed text-muted-foreground">
               {language === 'cli'
                 ? 'Install the BoxLite CLI to create and manage Boxes from your terminal. The commands below connect using your API key.'
                 : language === 'rest'
@@ -705,7 +705,7 @@ function OnboardingGuideContent({
             </p>
             <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
               <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
-                <span className="font-mono text-xs tracking-normal text-muted-foreground">Local terminal</span>
+                <span className="font-mono text-meta tracking-normal text-muted-foreground">Local terminal</span>
                 <QuickstartCopyButton
                   quiet
                   copied={copiedTarget === 'install'}
@@ -715,7 +715,7 @@ function OnboardingGuideContent({
               <QuickstartCode code={activeExample.install} language="bash" />
             </div>
           </section>
-          <p className="font-display text-sm leading-relaxed text-muted-foreground">
+          <p className="font-display text-body leading-relaxed text-muted-foreground">
             Save parts 1–3 in order in <span className="font-mono text-foreground">{EXAMPLE_FILES[language]}</span>, or
             use Copy full example below. Run the complete file once to create your Box and open a preview.
           </p>
@@ -781,7 +781,7 @@ function OnboardingGuideContent({
               Maybe later
             </button>
             {preview && (
-              <button type="button" className="text-xs text-foreground hover:text-brand" onClick={preview.onConsole}>
+              <button type="button" className="text-meta text-foreground hover:text-brand" onClick={preview.onConsole}>
                 Try in console →
               </button>
             )}
@@ -807,7 +807,7 @@ function OnboardingGuideContent({
                       className={cn(
                         'flex size-6 flex-none items-center justify-center rounded-full border-[1.5px] text-label font-bold transition-colors',
                         isDone
-                          ? 'border-brand bg-brand text-white'
+                          ? 'border-brand bg-brand text-brand-foreground'
                           : active
                             ? 'border-brand text-brand'
                             : 'border-border text-muted-foreground',
@@ -840,7 +840,7 @@ function OnboardingGuideContent({
           {step > 0 && (
             <div className="shrink-0 border-t border-border px-8 py-4">
               {preview && (
-                <label className="flex items-center gap-3 text-xs text-muted-foreground sm:hidden">
+                <label className="flex items-center gap-3 text-meta text-muted-foreground sm:hidden">
                   Interface
                   <select
                     aria-label="SDK or interface"
@@ -1043,7 +1043,7 @@ function OnboardingGuideContent({
               Maybe later
             </button>
             {preview && !finished && (
-              <button type="button" className="text-xs text-foreground hover:text-brand" onClick={preview.onConsole}>
+              <button type="button" className="text-meta text-foreground hover:text-brand" onClick={preview.onConsole}>
                 Try in console →
               </button>
             )}

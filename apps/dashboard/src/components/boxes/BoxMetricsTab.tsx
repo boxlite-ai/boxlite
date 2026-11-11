@@ -108,7 +108,7 @@ function MetricGroupChart({
   return (
     <div className="rounded-md border border-border">
       <div className="flex items-center gap-2 px-4 py-3">
-        <h3 className="text-sm font-medium">{displayTitle}</h3>
+        <h3 className="text-body font-medium">{displayTitle}</h3>
         {viewMode && onViewModeChange && (
           <ToggleGroup
             type="single"
@@ -119,10 +119,10 @@ function MetricGroupChart({
             variant="outline"
             size="sm"
           >
-            <ToggleGroupItem value="%" className="text-xs px-2 h-6">
+            <ToggleGroupItem value="%" className="text-meta px-2 h-6">
               %
             </ToggleGroupItem>
-            <ToggleGroupItem value="GiB" className="text-xs px-2 h-6">
+            <ToggleGroupItem value="GiB" className="text-meta px-2 h-6">
               GiB
             </ToggleGroupItem>
           </ToggleGroup>
@@ -135,12 +135,12 @@ function MetricGroupChart({
             <XAxis
               dataKey="timestamp"
               tickFormatter={formatXAxis}
-              className="text-xs"
+              className="text-meta"
               tick={{ fill: 'hsl(var(--muted-foreground))' }}
             />
             <YAxis
               width={35}
-              className="text-xs"
+              className="text-meta"
               tick={{ fill: 'hsl(var(--muted-foreground))' }}
               tickFormatter={convertToGiB ? (value: number) => value.toFixed(2) : undefined}
               domain={viewMode === '%' ? [0, 100] : undefined}

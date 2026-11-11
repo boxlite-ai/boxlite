@@ -104,7 +104,7 @@ export default function WelcomeCreditsStep({
           {purpose.heading}
           <span className="block text-muted-foreground">{purpose.ending}</span>
         </h1>
-        <p className="mt-5 max-w-[390px] text-[15px] leading-7 text-muted-foreground">{purpose.description}</p>
+        <p className="mt-5 max-w-[390px] text-em leading-7 text-muted-foreground">{purpose.description}</p>
         <div ref={illustrationRef} className="mt-10 hidden max-w-[420px] lg:block">
           {illustrationRef ? <div className="aspect-[480/310]" /> : <WelcomeBoxIllustration />}
         </div>
@@ -131,11 +131,11 @@ export default function WelcomeCreditsStep({
             <h2 ref={successHeading} tabIndex={-1} className="mt-3 text-em font-medium">
               {couponMessage ? 'Promo code redeemed' : 'Card connected'}
             </h2>
-            <p className="mt-7 text-sm leading-6 text-muted-foreground">
+            <p className="mt-7 text-body leading-6 text-muted-foreground">
               {couponMessage ?? 'Choose how you want to build. Your first Box is next.'}
             </p>
             {connected && (
-              <p className="mt-5 flex items-center gap-2.5 text-xs">
+              <p className="mt-5 flex items-center gap-2.5 text-meta">
                 <Check className="size-4 text-brand" aria-hidden />
                 {typeof last4 === 'string' ? `${brand} ending in ${last4}` : 'Payment method connected'}
               </p>
@@ -143,7 +143,7 @@ export default function WelcomeCreditsStep({
           </>
         )}
 
-        <div aria-live="polite" className="text-sm leading-6 [&:not(:empty)]:mt-5">
+        <div aria-live="polite" className="text-body leading-6 [&:not(:empty)]:mt-5">
           {busy && (
             <p role="status" className="flex items-center gap-2">
               <Loader2 aria-hidden className="size-4 shrink-0 animate-spin" />
@@ -157,7 +157,7 @@ export default function WelcomeCreditsStep({
           {ready ? (
             <AsciiButton
               variant="primary"
-              className="flex h-12 items-center justify-between px-5 font-display text-sm"
+              className="flex h-12 items-center justify-between px-5 font-display text-body"
               onClick={onContinue}
             >
               Start quickstart <ArrowRightIcon aria-hidden className="size-4" />
@@ -166,7 +166,7 @@ export default function WelcomeCreditsStep({
             <AsciiButton
               variant="primary"
               disabled={busy}
-              className="flex h-12 items-center justify-between px-5 font-display text-sm"
+              className="flex h-12 items-center justify-between px-5 font-display text-body"
               onClick={() => {
                 setCheckoutStarted(true)
                 void connectCard()
@@ -179,13 +179,13 @@ export default function WelcomeCreditsStep({
               {!busy && <ArrowRightIcon aria-hidden className="size-4" />}
             </AsciiButton>
           ) : (
-            <p className="text-sm text-muted-foreground">Only organization owners can manage billing.</p>
+            <p className="text-body text-muted-foreground">Only organization owners can manage billing.</p>
           )}
         </div>
 
         {!ready && isOwner && (
           <>
-            <p className="mt-5 text-xs leading-5 text-muted-foreground">
+            <p className="mt-5 text-meta leading-5 text-muted-foreground">
               No verification fee. No paid plan is activated.
             </p>
             {(checkoutStarted || wallet.isError) && (
@@ -193,13 +193,13 @@ export default function WelcomeCreditsStep({
                 type="button"
                 onClick={refreshCard}
                 disabled={wallet.isFetching || paymentMethods.isFetching}
-                className="mt-3 text-xs text-muted-foreground underline-offset-4 hover:underline disabled:opacity-40"
+                className="mt-3 text-meta text-muted-foreground underline-offset-4 hover:underline disabled:opacity-40"
               >
                 Check card status
               </button>
             )}
             <div className="mt-6">
-              <div aria-hidden="true" className="flex items-center gap-3 text-xs text-muted-foreground">
+              <div aria-hidden="true" className="flex items-center gap-3 text-meta text-muted-foreground">
                 <span className="h-px flex-1 bg-border" />
                 <span>or</span>
                 <span className="h-px flex-1 bg-border" />
@@ -224,7 +224,7 @@ export default function WelcomeCreditsStep({
                   }
                 }}
               >
-                <label htmlFor="welcome-promo-code" className="mb-2 block text-xs text-muted-foreground">
+                <label htmlFor="welcome-promo-code" className="mb-2 block text-meta text-muted-foreground">
                   Promo code
                 </label>
                 <div className="flex gap-2">
@@ -241,14 +241,14 @@ export default function WelcomeCreditsStep({
                     autoComplete="off"
                     aria-invalid={!!couponError}
                     aria-describedby={couponError ? 'welcome-promo-error' : undefined}
-                    className="h-11 min-w-0 flex-1 border border-border bg-background px-3 font-mono text-sm outline-none focus:border-foreground disabled:opacity-50"
+                    className="h-11 min-w-0 flex-1 border border-border bg-background px-3 font-mono text-body outline-none focus:border-foreground disabled:opacity-50"
                   />
-                  <AsciiButton type="submit" disabled={busy} className="h-11 px-4 font-display text-sm">
+                  <AsciiButton type="submit" disabled={busy} className="h-11 px-4 font-display text-body">
                     Redeem
                   </AsciiButton>
                 </div>
                 {couponError && (
-                  <p id="welcome-promo-error" role="alert" className="mt-2 text-xs text-destructive">
+                  <p id="welcome-promo-error" role="alert" className="mt-2 text-meta text-destructive">
                     {couponError}
                   </p>
                 )}
@@ -263,19 +263,19 @@ export default function WelcomeCreditsStep({
                 type="button"
                 disabled={busy}
                 onClick={onBack}
-                className="py-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline disabled:opacity-40"
+                className="py-2 text-body text-muted-foreground underline-offset-4 hover:text-foreground hover:underline disabled:opacity-40"
               >
                 Back
               </button>
               <button
                 type="button"
                 onClick={onContinue}
-                className="flex items-center gap-2 py-2 text-sm underline-offset-4 hover:underline"
+                className="flex items-center gap-2 py-2 text-body underline-offset-4 hover:underline"
               >
                 Explore with BoxLite <ArrowRightIcon aria-hidden className="size-4" />
               </button>
             </div>
-            <p className="mt-2 text-right text-xs leading-5 text-muted-foreground">
+            <p className="mt-2 text-right text-meta leading-5 text-muted-foreground">
               You’ll need credits to create a Box.
             </p>
           </div>

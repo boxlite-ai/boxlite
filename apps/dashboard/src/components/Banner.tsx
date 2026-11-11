@@ -178,11 +178,11 @@ export const Banner = ({
           {icon || <IconComponent className="h-4 w-4 flex-shrink-0 text-current" />}
 
           <div className="flex items-center gap-3 overflow-hidden">
-            <span className="text-sm font-semibold shrink-0">{title}</span>
+            <span className="text-body font-semibold shrink-0">{title}</span>
             {description && (
               <>
                 <span className="hidden md:flex opacity-20 border-l border-current h-6" />
-                <span className="text-sm opacity-90 line-clamp-1 max-w-2xl">{description}</span>
+                <span className="text-body opacity-90 line-clamp-1 max-w-2xl">{description}</span>
               </>
             )}
           </div>
@@ -191,7 +191,7 @@ export const Banner = ({
             <button
               type="button"
               onClick={action.onClick}
-              className="text-sm font-medium underline-offset-4 underline row-[2] sm:row-[1] col-[2] sm:col-[3] justify-self-start"
+              className="text-body font-medium underline-offset-4 underline row-[2] sm:row-[1] col-[2] sm:col-[3] justify-self-start"
             >
               {action.label}
             </button>
@@ -201,7 +201,7 @@ export const Banner = ({
             <div className="flex items-center gap-3">
               <span className="opacity-20 border-l border-current h-6 ml-1" />
               <div className="flex items-center gap-1">
-                <span className="text-xs font-medium tabular-nums">
+                <span className="text-meta font-medium tabular-nums">
                   {currentIndex + 1}/{total}
                 </span>
                 <BannerButton onClick={() => onNext?.()} aria-label="Next Notification">

@@ -146,7 +146,7 @@ export const CreateRunnerDialog: React.FC<CreateRunnerDialogProps> = ({ regions,
                   onMouseLeave: () => setIsTokenRevealed(false),
                 }}
               />
-              <p className="text-sm text-muted-foreground">
+              <p className="text-body text-muted-foreground">
                 Save this token securely. You won't be able to see it again.
               </p>
             </div>
@@ -182,7 +182,7 @@ export const CreateRunnerDialog: React.FC<CreateRunnerDialogProps> = ({ regions,
                   ))}
                 </SelectContent>
               </Select>
-              {formErrors.regionId && <p className="text-sm text-destructive">{formErrors.regionId}</p>}
+              {formErrors.regionId && <p className="text-body text-destructive">{formErrors.regionId}</p>}
             </div>
 
             <div className="space-y-3">
@@ -195,7 +195,7 @@ export const CreateRunnerDialog: React.FC<CreateRunnerDialogProps> = ({ regions,
                 }}
                 placeholder="runner-1"
               />
-              {formErrors.name && <p className="text-sm text-destructive">{formErrors.name}</p>}
+              {formErrors.name && <p className="text-body text-destructive">{formErrors.name}</p>}
             </div>
           </form>
         )}

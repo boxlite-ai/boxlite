@@ -41,106 +41,118 @@ const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
  * Per-key loading state disables revocation while its request is in flight.
  */
 export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
+  const hasRows = loading || data.length > 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* header */}
-      <div className={`grid ${GRID} resource-list-head flex-none items-center`}>
-        <span>Name</span>
-        <span>Key</span>
-        <span>Permissions</span>
-        <span>Created</span>
-        <span>Last Used</span>
-        <span>Expires</span>
-        <span />
-      </div>
+      {/* One scroll box for header and rows: on a phone the table scrolls sideways inside it
+          and the page itself stays put. An empty list has no columns to keep, so it does not widen. */}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className={hasRows ? 'min-w-[720px]' : undefined}>
+          {/* header */}
+          <div className={`grid ${GRID} resource-list-head flex-none items-center ${hasRows ? '' : 'hidden'}`}>
+            <span>Name</span>
+            <span>Key</span>
+            <span>Permissions</span>
+            <span>Created</span>
+            <span>Last used</span>
+            <span>Expires</span>
+            <span />
+          </div>
 
-      {/* rows */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {loading ? (
-          Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
-              <div className="h-4 w-3/4 animate-pulse bg-card" />
-            </div>
-          ))
-        ) : data.length === 0 ? (
-          <ResourceEmptyState
-            title="No API Keys yet."
-            icon={<KeyRound className="size-6" />}
-            description="Create a key to get started."
-          >
-            <a href="https://docs.boxlite.ai" target="_blank" rel="noopener noreferrer" className="resource-guide-link">
-              Setup guide →
-            </a>
-          </ResourceEmptyState>
-        ) : (
-          data.map((key) => {
-            const busy = isLoadingKey(key)
-            return (
-              <div
-                key={`${key.userId}-${key.name}`}
-                className={`grid ${GRID} resource-list-row items-center ${
-                  busy ? 'pointer-events-none opacity-50' : ''
-                }`}
+          {/* rows */}
+          <div>
+            {loading ? (
+              Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
+                  <div className="h-4 w-3/4 animate-pulse bg-card" />
+                </div>
+              ))
+            ) : data.length === 0 ? (
+              <ResourceEmptyState
+                title="No API keys yet."
+                icon={<KeyRound className="size-6" />}
+                description="Create a key to get started."
               >
-                <span className="truncate font-semibold">{key.name}</span>
-                <span className="truncate font-mono text-[12px] text-muted-foreground">{key.value}</span>
-                <span>
-                  <PermissionsTooltip permissions={key.permissions} />
-                </span>
-                <span className="font-mono text-[12px] text-muted-foreground">
-                  {getRelativeTimeString(key.createdAt).relativeTimeString}
-                </span>
-                <span className="font-mono text-[12px] text-muted-foreground">
-                  {key.lastUsedAt ? getRelativeTimeString(key.lastUsedAt).relativeTimeString : 'Never'}
-                </span>
-                <span className="font-mono text-[12px] text-muted-foreground">
-                  {key.expiresAt ? getRelativeTimeString(key.expiresAt).relativeTimeString : 'Never'}
-                </span>
-                <span className="flex justify-end">
-                  <Dialog>
-                    <DialogTrigger asChild>
-                      <AsciiButton
-                        variant="danger"
-                        size="icon"
-                        aria-label="Revoke key"
-                        type="button"
-                        title="Revoke key"
-                        disabled={busy}
-                      >
-                        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                      </AsciiButton>
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Confirm Key Revocation</DialogTitle>
-                        <DialogDescription>
-                          Are you absolutely sure? This action cannot be undone and will permanently delete this API
-                          key.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <DialogFooter>
-                        <DialogClose asChild>
-                          <Button type="button" variant="secondary">
-                            Close
-                          </Button>
-                        </DialogClose>
-                        <DialogClose asChild>
-                          <Button variant="destructive" onClick={() => onRevoke(key)}>
-                            Revoke
-                          </Button>
-                        </DialogClose>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                </span>
-              </div>
-            )
-          })
-        )}
+                <a
+                  href="https://docs.boxlite.ai"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="resource-guide-link"
+                >
+                  Setup guide →
+                </a>
+              </ResourceEmptyState>
+            ) : (
+              data.map((key) => {
+                const busy = isLoadingKey(key)
+                return (
+                  <div
+                    key={`${key.userId}-${key.name}`}
+                    className={`grid ${GRID} resource-list-row items-center ${
+                      busy ? 'pointer-events-none opacity-50' : ''
+                    }`}
+                  >
+                    <span className="truncate font-semibold">{key.name}</span>
+                    <span className="truncate font-mono text-meta text-muted-foreground">{key.value}</span>
+                    <span>
+                      <PermissionsTooltip permissions={key.permissions} />
+                    </span>
+                    <span className="font-mono text-meta text-muted-foreground">
+                      {getRelativeTimeString(key.createdAt).relativeTimeString}
+                    </span>
+                    <span className="font-mono text-meta text-muted-foreground">
+                      {key.lastUsedAt ? getRelativeTimeString(key.lastUsedAt).relativeTimeString : 'Never'}
+                    </span>
+                    <span className="font-mono text-meta text-muted-foreground">
+                      {key.expiresAt ? getRelativeTimeString(key.expiresAt).relativeTimeString : 'Never'}
+                    </span>
+                    <span className="flex justify-end">
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <AsciiButton
+                            variant="danger"
+                            size="icon"
+                            aria-label="Revoke key"
+                            type="button"
+                            title="Revoke key"
+                            disabled={busy}
+                          >
+                            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                          </AsciiButton>
+                        </DialogTrigger>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Confirm Key Revocation</DialogTitle>
+                            <DialogDescription>
+                              Are you absolutely sure? This action cannot be undone and will permanently delete this API
+                              key.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <DialogFooter>
+                            <DialogClose asChild>
+                              <Button type="button" variant="secondary">
+                                Close
+                              </Button>
+                            </DialogClose>
+                            <DialogClose asChild>
+                              <Button variant="destructive" onClick={() => onRevoke(key)}>
+                                Revoke
+                              </Button>
+                            </DialogClose>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                    </span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
       </div>
 
       {/* footer */}
-      <div className="flex flex-none items-center justify-between px-0 py-4 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+      <div className="flex flex-none items-center justify-between px-0 py-4 font-mono text-meta text-muted-foreground">
         <span>
           Showing {data.length} key{data.length === 1 ? '' : 's'}
         </span>
@@ -169,12 +181,12 @@ function PermissionsTooltip({ permissions }: { permissions: ApiKeyListPermission
   return (
     <Popover>
       <PopoverTrigger>
-        <span className="inline-flex items-center border border-brand/30 px-[9px] py-[3px] font-mono text-[11px] tracking-[0.5px] text-brand">
+        <span className="inline-flex items-center border border-brand/30 px-[9px] py-[3px] font-mono text-meta tracking-[0.5px] text-brand">
           {badgeText}
         </span>
       </PopoverTrigger>
       <PopoverContent className="p-0">
-        <p className="border-b border-border p-2 text-xs font-medium text-muted-foreground">Permissions</p>
+        <p className="border-b border-border p-2 text-meta font-medium text-muted-foreground">Permissions</p>
         <div className="flex flex-col">
           {availableGroups.map((group) => {
             const selectedPermissions = group.permissions.filter((p) => permissions.includes(p))
@@ -182,7 +194,7 @@ function PermissionsTooltip({ permissions }: { permissions: ApiKeyListPermission
             if (selectedPermissions.length === 0 && !hasImplicitRead) return null
             return (
               <div key={group.name} className="flex justify-between gap-3 border-b border-border p-2 last:border-b-0">
-                <h3 className="text-sm">{group.name}</h3>
+                <h3 className="text-body">{group.name}</h3>
                 <div className="flex flex-wrap justify-end gap-2">
                   {hasImplicitRead && (
                     <Badge variant="outline" className="capitalize">

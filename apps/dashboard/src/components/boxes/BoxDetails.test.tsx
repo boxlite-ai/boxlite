@@ -204,7 +204,7 @@ describe('BoxDetails refresh', () => {
     await renderBoxDetails()
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
     const ssh = buttons.find((button) => button.textContent === 'Connect via SSH')!
-    const stop = buttons.find((button) => button.textContent?.trim() === 'stop')!
+    const stop = buttons.find((button) => button.textContent?.trim() === 'Stop')!
     expect(ssh).toBeDefined()
     expect(buttons.indexOf(ssh)).toBeLessThan(buttons.indexOf(stop))
     expect(document.querySelector('[role="tab"]')).toBeNull()
@@ -224,7 +224,7 @@ describe('BoxDetails refresh', () => {
     expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[data-testid="terminal"]')).not.toBeNull()
 
-    const refreshButton = document.querySelector<HTMLButtonElement>('button[title="refresh"]')
+    const refreshButton = document.querySelector<HTMLButtonElement>('button[title="Refresh"]')
     expect(refreshButton).not.toBeNull()
 
     await act(async () => {

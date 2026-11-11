@@ -21,6 +21,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
 import { generatePath, Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
@@ -110,7 +111,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
             {data.domains.length === 0 ? (
               <div className="mt-[14px]">
                 <ResourceEmptyState
-                  title="No domains yet"
+                  title="No Domains yet."
                   icon={<Globe className="size-6" />}
                   description="Request a name, then connect it to your Box using the CLI or SDK."
                 />
@@ -147,13 +148,15 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                         <td className="px-4 py-3 font-semibold text-foreground">
                           <div className="flex items-center gap-3">
                             <Globe className="size-6 shrink-0 text-muted-foreground" />
-                            <span className="min-w-0 break-all">{domain.hostname}</span>
+                            <span className="min-w-0 truncate" title={domain.hostname}>
+                              {domain.hostname}
+                            </span>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {domain.target ? (domain.target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
                         </td>
-                        <td className="break-all px-4 py-3 text-muted-foreground">
+                        <td className="truncate px-4 py-3 text-muted-foreground">
                           {domain.target?.type === 'box' ? (
                             <Link
                               to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(domain.target.box) })}
@@ -282,6 +285,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
 
 /** Remount organization-local form state when the selected organization changes. */
 export default function Domains() {
+  usePageTitle('Domains')
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   if (!selectedOrganization) return <p>Select an organization to view domains.</p>
   // Remount forms/mutations when switching organizations so late claim results

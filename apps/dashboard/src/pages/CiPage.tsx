@@ -5,8 +5,10 @@ import { RunnersPanel } from '@/components/ci/RunnersPanel'
 import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 export default function CiPage({ tab }: { tab: 'runners' | 'connects' }) {
+  usePageTitle(tab === 'connects' ? 'Connects' : 'Runners')
   const navigate = useNavigate()
   const { selectedOrganization } = useSelectedOrganization()
   if (!selectedOrganization) return null

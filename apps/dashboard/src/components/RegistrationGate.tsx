@@ -81,14 +81,14 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   return (
     <main className="flex min-h-svh flex-col items-center justify-center gap-6 px-6 text-center">
       <LogoText className="h-9 w-auto" />
-      <h1 className="text-xl font-semibold">Complete your account</h1>
-      <p className="max-w-md text-sm text-muted-foreground">
+      <h1 className="text-section font-semibold">Complete your account</h1>
+      <p className="max-w-md text-body text-muted-foreground">
         {needsRegistration
           ? 'Verify you are human to start using BoxLite.'
           : 'Registration is temporarily unavailable. Please try again.'}
       </p>
       {message && (
-        <p role="alert" className="max-w-md text-sm text-destructive">
+        <p role="alert" className="max-w-md text-body text-destructive">
           {message}
         </p>
       )}
@@ -104,7 +104,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
           Try again
         </Button>
       )}
-      <Link to={RoutePath.LOGOUT} className="text-sm underline underline-offset-4">
+      <Link to={RoutePath.LOGOUT} className="text-body underline underline-offset-4">
         Sign out
       </Link>
     </main>

@@ -21,9 +21,23 @@ const SRC = join(__dirname)
 
 const RULES = [
   {
+    // What is left are display numerals of 32px and over on the welcome screens and the
+    // stat tile; body text has none.
     name: 'arbitrary font sizes (use text-label/meta/body/em/section/page)',
     pattern: /\btext-\[\d+(?:\.\d+)?px\]/g,
-    ceiling: 291,
+    ceiling: 8,
+  },
+  {
+    // Tailwind's stock sizes are a second spelling of the same drift: `text-sm` is 14px,
+    // which is not a step of the scale, and the arbitrary-size rule above cannot see it.
+    name: 'stock Tailwind font sizes (use text-label/meta/body/em/section/page)',
+    pattern: /(?<![\w-])text-(?:xs|sm|base|lg|xl|2xl|3xl|4xl)(?![\w-])/g,
+    ceiling: 0,
+  },
+  {
+    name: 'lowercase units after a value (write vCPU and GiB)',
+    pattern: /\} (?:vcpu|gib)\b/g,
+    ceiling: 0,
   },
   { name: 'rounded corners (the language is square)', pattern: /\brounded-(?:sm|md|lg|xl|2xl|3xl)\b/g, ceiling: 64 },
   {

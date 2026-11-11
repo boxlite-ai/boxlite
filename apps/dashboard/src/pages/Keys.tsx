@@ -15,11 +15,13 @@ import { ApiKeyList, CreateApiKeyPermissionsEnum, OrganizationUserRoleEnum } fro
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiKeyTable } from '../components/ApiKeyTable'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 const DEFAULT_API_KEY_PERMISSIONS = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
 /** Lists the selected organization’s keys and limits creation options to the member’s assigned permissions. */
 const Keys: React.FC = () => {
+  usePageTitle('API keys')
   const { apiUrl } = useConfig()
   const [loadingKeys, setLoadingKeys] = useState<Record<string, boolean>>({})
 

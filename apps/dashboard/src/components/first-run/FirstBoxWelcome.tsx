@@ -119,7 +119,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
             }}
           >
             <h1 className="font-display text-page font-semibold">Create your organization</h1>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            <p className="mt-3 text-body leading-6 text-muted-foreground">
               A home for your Boxes, team, and billing. Working solo? Use your own name.
             </p>
             <label htmlFor="welcome-organization" className="mb-2 mt-8 block text-body">
@@ -136,8 +136,8 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               autoComplete="organization"
               className="h-12 w-full border border-border bg-card px-4 text-body outline-none focus:border-foreground/50"
             />
-            <p className="mt-2 font-mono text-xs text-muted-foreground">You can change this later.</p>
-            <div className="mt-6 flex items-start gap-2.5 text-sm leading-6 text-muted-foreground">
+            <p className="mt-2 font-mono text-meta text-muted-foreground">You can change this later.</p>
+            <div className="mt-6 flex items-start gap-2.5 text-body leading-6 text-muted-foreground">
               <input
                 id="welcome-terms"
                 type="checkbox"
@@ -201,7 +201,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
             }}
           >
             <h1 className="font-display text-page font-semibold">What are you building?</h1>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">What would you like to use BoxLite for?</p>
+            <p className="mt-3 text-body leading-6 text-muted-foreground">What would you like to use BoxLite for?</p>
             <fieldset className="mt-5" disabled={action.isPending}>
               <legend className="sr-only">Use case</legend>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -217,7 +217,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                         onChange={() => setUseCase(option.id)}
                         className="peer sr-only"
                       />
-                      <span className="flex min-h-[56px] items-center gap-3 rounded-none bg-foreground/[0.025] px-3.5 py-3 text-sm text-foreground/80 transition-colors duration-200 group-hover:bg-foreground/[0.055] peer-checked:bg-brand/[0.10] peer-checked:text-foreground peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring peer-disabled:cursor-wait">
+                      <span className="flex min-h-[56px] items-center gap-3 rounded-none bg-foreground/[0.025] px-3.5 py-3 text-body text-foreground/80 transition-colors duration-200 group-hover:bg-foreground/[0.055] peer-checked:bg-brand/[0.10] peer-checked:text-foreground peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ring peer-disabled:cursor-wait">
                         <Icon
                           aria-hidden
                           className={`size-4 shrink-0 transition-colors ${useCase === option.id ? 'text-brand' : 'text-muted-foreground group-hover:text-foreground'}`}
@@ -237,7 +237,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                   onChange={() => setUseCase('exploring')}
                   className="peer sr-only"
                 />
-                <span className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground peer-checked:text-foreground peer-focus-visible:underline">
+                <span className="text-body text-muted-foreground underline-offset-4 hover:text-foreground peer-checked:text-foreground peer-focus-visible:underline">
                   Just exploring
                 </span>
                 <Check
@@ -247,9 +247,9 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               </label>
             </fieldset>
             <details open={noteOpen} onToggle={(event) => setNoteOpen(event.currentTarget.open)} className="group mt-2">
-              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-muted-foreground outline-offset-4 hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-body text-muted-foreground outline-offset-4 hover:text-foreground [&::-webkit-details-marker]:hidden">
                 <ChevronRight aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-90" />
-                Add context <span className="ml-1 text-xs">(optional)</span>
+                Add context <span className="ml-1 text-meta">(optional)</span>
               </summary>
               <label htmlFor="welcome-note" className="sr-only">
                 Additional context
@@ -261,14 +261,14 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                 maxLength={600}
                 rows={3}
                 placeholder="e.g. Give my coding agent a safe place to run tests"
-                className="mt-3 w-full resize-y border border-border bg-card px-4 py-3 text-sm outline-none focus:border-foreground/50"
+                className="mt-3 w-full resize-y border border-border bg-card px-4 py-3 text-body outline-none focus:border-foreground/50"
               />
             </details>
             <div className="mt-5 flex items-center justify-between">
               <button
                 type="button"
                 disabled={action.isPending}
-                className="py-2 text-sm text-muted-foreground underline-offset-4 hover:text-foreground focus-visible:underline"
+                className="py-2 text-body text-muted-foreground underline-offset-4 hover:text-foreground focus-visible:underline"
                 onClick={() => {
                   action.reset()
                   setStep('organization')
@@ -279,7 +279,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               <AsciiButton
                 type="submit"
                 variant="primary"
-                className="h-10 min-w-[120px] border border-transparent px-6 font-display text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:border-border disabled:bg-card disabled:text-muted-foreground disabled:opacity-100"
+                className="h-10 min-w-[120px] border border-transparent px-6 font-display text-body focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:border-border disabled:bg-card disabled:text-muted-foreground disabled:opacity-100"
                 disabled={!useCase || action.isPending}
               >
                 {action.isPending
@@ -305,7 +305,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
           />
         )}
         {error && (
-          <p role="alert" className="mt-4 text-xs text-destructive">
+          <p role="alert" className="mt-4 text-meta text-destructive">
             {error}
           </p>
         )}

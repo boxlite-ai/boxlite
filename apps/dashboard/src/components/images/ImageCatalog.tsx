@@ -36,7 +36,8 @@ import { toast } from 'sonner'
 // One definition for the header and every row, for the reason spelled out in
 // Volumes: two grid containers solving independently drift apart column by
 // column.
-const ROW_GRID = 'grid grid-cols-[1.8fr_1.2fr_0.6fr_0.5fr_0.8fr_110px] items-center gap-3'
+// `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own box.
+const ROW_GRID = 'grid min-w-[760px] grid-cols-[1.8fr_1.2fr_0.6fr_0.5fr_0.8fr_110px] items-center gap-3'
 
 function BoxLinks({ boxes }: { boxes: Box[] }) {
   return (
@@ -175,7 +176,7 @@ export function ImageCatalog() {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-auto">
         <div className={cn(ROW_GRID, 'resource-list-head')}>
           <span>Image</span>
           <span>Tags</span>

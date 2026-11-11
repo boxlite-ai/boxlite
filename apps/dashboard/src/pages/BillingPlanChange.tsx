@@ -22,6 +22,7 @@ import { format } from 'date-fns'
 import { useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 /**
  * The confirmation step for a plan switch. Reached from a plan card, but also
@@ -70,11 +71,11 @@ function BillingPlanChange() {
     return (
       <PlanChangeShell>
         <Panel className="flex flex-col items-center gap-3 px-[22px] py-10">
-          <span className="font-mono text-[13px] text-foreground">Oops, something went wrong</span>
-          <span className="font-mono text-[11px] text-muted-foreground">There was an error loading billing data.</span>
+          <span className="font-mono text-body text-foreground">Oops, something went wrong</span>
+          <span className="font-mono text-meta text-muted-foreground">There was an error loading billing data.</span>
           <Button
             variant="outline"
-            className="mt-1 font-mono text-[12px]"
+            className="mt-1 font-mono text-meta"
             onClick={() => {
               planQuery.refetch()
               plansQuery.refetch()
@@ -189,16 +190,24 @@ function BillingPlanChange() {
 }
 
 function PlanChangeShell({ title = 'Change plan', children }: { title?: string; children: React.ReactNode }) {
+  usePageTitle(title)
   const navigate = useNavigate()
 
   return (
     <div className="page-container">
       <div className="flex flex-col gap-6 py-6">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => navigate(RoutePath.BILLING)}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0"
+            aria-label="Back to Billing"
+            title="Back to Billing"
+            onClick={() => navigate(RoutePath.BILLING)}
+          >
             <ArrowLeft className="size-4" />
           </Button>
-          <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">{title}</h1>
+          <h1 className="font-display text-page font-semibold leading-none tracking-tight">{title}</h1>
         </div>
         {children}
       </div>
@@ -208,7 +217,7 @@ function PlanChangeShell({ title = 'Change plan', children }: { title?: string; 
 
 function ComparisonRow({ comparison }: { comparison: PlanComparison }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border/40 py-3 font-mono text-[12px] last:border-b-0">
+    <div className="flex items-baseline justify-between gap-3 border-b border-border/40 py-3 font-mono text-meta last:border-b-0">
       <span className="uppercase tracking-[0.5px] text-muted-foreground">{comparison.label}</span>
       <span className="flex items-baseline gap-2 tabular-nums">
         <span className="text-muted-foreground line-through decoration-muted-foreground/40">{comparison.from}</span>
@@ -222,7 +231,7 @@ function ComparisonRow({ comparison }: { comparison: PlanComparison }) {
 function NoteLine({ note }: { note: PlanChangeNote }) {
   return (
     <p
-      className={`font-mono text-[11px] leading-relaxed ${
+      className={`font-mono text-meta leading-relaxed ${
         note.tone === 'warn' ? 'text-warning' : 'text-muted-foreground'
       }`}
     >
@@ -234,8 +243,8 @@ function NoteLine({ note }: { note: PlanChangeNote }) {
 function Notice({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Panel className="flex flex-col gap-2 px-[22px] py-6">
-      <span className="font-mono text-[13px] text-foreground">{title}</span>
-      <span className="font-mono text-[11px] leading-relaxed text-muted-foreground">{children}</span>
+      <span className="font-mono text-body text-foreground">{title}</span>
+      <span className="font-mono text-meta leading-relaxed text-muted-foreground">{children}</span>
     </Panel>
   )
 }
