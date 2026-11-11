@@ -130,7 +130,9 @@ impl BoxliteRuntime {
         runner_managed: bool,
     ) -> BoxliteResult<Self> {
         Ok(Self::from_local(LocalRuntime(RuntimeImpl::initialize(
-            options, features, runner_managed,
+            options,
+            features,
+            runner_managed,
         )?)))
     }
 

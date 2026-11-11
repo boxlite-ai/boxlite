@@ -207,8 +207,11 @@ async fn prepared_import_requires_the_target_runtime_feature_opt_in() {
         Err(error) => error,
         Ok(_) => panic!("checkpoint bypassed the target runtime feature gate"),
     };
+    assert!(matches!(&error, BoxliteError::Config(_)), "{error}");
     assert!(
-        error.to_string().contains("NestedVirtualization"),
+        error
+            .to_string()
+            .contains("BOXLITE_EXPERIMENTAL=nested-virtualization"),
         "{error}"
     );
     assert!(runtime.list_info().await.unwrap().is_empty());
@@ -220,6 +223,7 @@ async fn prepared_import_requires_the_target_runtime_feature_opt_in() {
             ..Default::default()
         },
         crate::experimental::ExperimentalFeatures::parse("nested-virtualization").unwrap(),
+        false,
     )
     .unwrap();
     crate::images::test_support::seed_cached_build(

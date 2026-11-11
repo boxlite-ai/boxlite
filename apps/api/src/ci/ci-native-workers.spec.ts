@@ -67,7 +67,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   let received: { url: string; auth: string; file: string; content: string }[]
   let respond: () => Promise<number>
   const beforePersist = jest.fn(),
-    organizations = { findOne: jest.fn() },
+    organizations = { findOne: jest.fn(), isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false) },
     limits = { resolveMaxCreatedBoxes: jest.fn() },
     runners = { findOneUncachedOrFail: jest.fn() }
   beforeAll(async () => {
