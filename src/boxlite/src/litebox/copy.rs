@@ -38,6 +38,32 @@ impl CopySourceKind {
     }
 }
 
+/// Resolve trusted host ancestors, leaving the destination leaf for extraction's
+/// no-overwrite check. Guest archive components never use this host policy.
+pub(super) fn host_copy_destination(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let Some(leaf) = absolute.file_name() else {
+        return absolute.canonicalize();
+    };
+    let mut parent = absolute.parent().unwrap();
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        match parent.canonicalize() {
+            Ok(path) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(parent.file_name().ok_or(error)?);
+                parent = parent.parent().unwrap();
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    resolved.push(leaf);
+    Ok(resolved)
+}
+
 /// Options controlling copy behavior.
 ///
 /// Whether a directory or its contents is copied is not an option: spell the

@@ -146,6 +146,12 @@ file/directory entry returns `ErrAlreadyExists` and retains existing contents.
 Entries written before a conflict can remain; there is no archive rollback.
 The existing call without an option retains `overwrite=true`.
 
+Directory metadata is retained only for directories that existed before the
+upload. A directory created by an earlier archive entry still receives its own
+later header's permissions. For protected downloads, the local runtime resolves
+trusted host parent paths (including macOS `/tmp` links) before extraction;
+the destination leaf and archive-created paths retain conflict and link checks.
+
 A local runtime treats the archive as trusted because local applications own
 both the runtime and archive. A REST runtime uploads the file and relies on the
 server's untrusted-upload policy.

@@ -1035,9 +1035,15 @@ impl BoxImpl {
             )
             .await?;
 
+        let extraction_destination = if opts.overwrite {
+            host_dst.to_path_buf()
+        } else {
+            super::copy::host_copy_destination(host_dst)
+                .map_err(|e| BoxliteError::Storage(format!("resolve host copy destination: {e}")))?
+        };
         boxlite_shared::tar::unpack(
             temp_tar.to_path_buf(),
-            host_dst.to_path_buf(),
+            extraction_destination,
             boxlite_shared::tar::UnpackContext {
                 overwrite: opts.overwrite,
                 mkdir_parents: true,

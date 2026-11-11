@@ -652,6 +652,68 @@ mod tests {
         );
     }
 
+    #[test]
+    fn copy_in_start_validates_arguments_before_dereferencing_handle() {
+        let dangling = std::ptr::NonNull::<CBoxHandle>::dangling().as_ptr();
+        let invalid_utf8 = [0xffu8, 0];
+        for (handle, path, code, message) in [
+            (
+                std::ptr::null_mut(),
+                c"/app".as_ptr(),
+                BoxliteErrorCode::InvalidArgument,
+                "handle is null",
+            ),
+            (
+                dangling,
+                std::ptr::null(),
+                BoxliteErrorCode::Internal,
+                "null",
+            ),
+            (
+                dangling,
+                invalid_utf8.as_ptr().cast(),
+                BoxliteErrorCode::Internal,
+                "UTF-8",
+            ),
+            (
+                dangling,
+                c"/app".as_ptr(),
+                BoxliteErrorCode::InvalidArgument,
+                "copy_cb is null",
+            ),
+        ] {
+            let mut error = CBoxliteError::default();
+            let stream = unsafe {
+                boxlite_copy_in_start_with_overwrite(
+                    handle,
+                    path,
+                    0,
+                    false,
+                    None,
+                    std::ptr::null_mut(),
+                    &mut error,
+                )
+            };
+            assert!(stream.is_null());
+            assert_error_contains(&error, code, message);
+            unsafe { crate::error::boxlite_error_free(&mut error) };
+        }
+        let mut error = CBoxliteError::default();
+        let stream = unsafe {
+            boxlite_copy_in_start(
+                std::ptr::null_mut(),
+                c"/app".as_ptr(),
+                0,
+                None,
+                std::ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert!(stream.is_null());
+        assert_error_contains(&error, BoxliteErrorCode::InvalidArgument, "handle is null");
+        unsafe { crate::error::boxlite_error_free(&mut error) };
+    }
+
     struct DropProbe(Arc<AtomicBool>);
 
     impl Drop for DropProbe {
