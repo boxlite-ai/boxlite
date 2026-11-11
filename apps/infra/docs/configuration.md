@@ -119,6 +119,26 @@ Invalid values stop API startup. Existing invitations retain their stored deadli
 and explicit API `expiresAt` / `expires_at` values override the default. Emails show
 the exact deadline in UTC. Opening the link joins after sign-in with the invited email.
 
+## Platform subdomain minimum length
+
+Set `PLATFORM_SUBDOMAIN_MIN_LENGTH` in the stage store, then redeploy the API
+with mdeploy using the updated manifest. Run from `apps/infra`:
+
+```bash
+npm run mstage env set -- PLATFORM_SUBDOMAIN_MIN_LENGTH=1 --stage dev
+```
+
+Use `--confirm` when writing a protected stage. Updating the store alone does
+not update a running API. The optional API group delivers this value on both
+AWS and GCP; unset or blank values keep the API default of `5`.
+
+The value must be an integer from `1` to `63`; invalid values stop API startup.
+For example, `1` permits a new single-character name such as `x` beneath the
+configured platform domain, subject to the existing format, reserved-name,
+availability and organization quota checks. The minimum applies only to new
+claims; existing names remain usable if it increases. The dashboard reads the
+minimum from the API, so no frontend setting is needed.
+
 ## Built-in images
 
 The curated set is the built-in `base`, `python` and `node` plus each `name=ref` entry in
