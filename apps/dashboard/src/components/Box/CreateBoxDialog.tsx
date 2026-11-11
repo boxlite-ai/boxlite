@@ -27,6 +27,7 @@ import { useUsagePricesQuery } from '@/hooks/queries/useUsagePricesQuery'
 import { useImagesQuery } from '@/hooks/queries/useImagesQuery'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { VolumeState } from '@boxlite-ai/api-client'
+import { MIN_CPUS } from '@boxlite-ai/resource-limits'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown } from '@/components/ui/icon'
@@ -159,7 +160,7 @@ function Stepper({
         value={text}
         inputMode={fractional ? 'decimal' : 'numeric'}
         aria-invalid={invalid}
-        title={invalid ? 'Enter at least 0.01 CPU with up to three decimal places' : undefined}
+        title={invalid ? `Enter at least ${MIN_CPUS} CPU with up to three decimal places` : undefined}
         aria-label="value"
         onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
@@ -211,7 +212,7 @@ function ResourceField({
       <Stepper
         value={value}
         onChange={onChange}
-        min={fractional ? 0.01 : 1}
+        min={fractional ? MIN_CPUS : 1}
         max={max}
         onExceed={onExceed}
         fractional={fractional}
@@ -1130,7 +1131,7 @@ export const CreateBoxDialog = ({
           <div className="-mx-6">
             {!cpuValid && (
               <p role="alert" className="text-destructive">
-                Enter at least 0.01 CPU with up to three decimal places.
+                Enter at least {MIN_CPUS} CPU with up to three decimal places.
               </p>
             )}
             <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />

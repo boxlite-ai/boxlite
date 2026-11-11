@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { MIN_CPUS } from '@boxlite-ai/resource-limits'
+
 import { act, type ReactNode } from 'react'
 import { focusManager, keepPreviousData, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { queryKeys } from '@/hooks/queries/queryKeys'
@@ -385,18 +387,21 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await flush()
   }
 
-  it.each(['0.01', '0.125', '0.5', '1.001', '1.5'])('submits fractional CPU %s without rounding', async (value) => {
-    await renderOpen()
-    const input = document.querySelector<HTMLInputElement>('input[aria-label="value"]')!
-    await act(async () => typeInto(input, value))
-    await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
-    await submit()
-    expect(mutationMocks.createBox).toHaveBeenCalledWith(
-      expect.objectContaining({ resources: expect.objectContaining({ cpu: Number(value) }) }),
-    )
-  })
+  it.each([String(MIN_CPUS), String(MIN_CPUS + 0.001), '0.5', '1.001', '1.5'])(
+    'submits fractional CPU %s without rounding',
+    async (value) => {
+      await renderOpen()
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="value"]')!
+      await act(async () => typeInto(input, value))
+      await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+      await submit()
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(
+        expect.objectContaining({ resources: expect.objectContaining({ cpu: Number(value) }) }),
+      )
+    },
+  )
 
-  it.each(['0', '-1', '0.001', '0.1234', 'abc'])(
+  it.each(['0', '-1', String(MIN_CPUS - 0.001), String(MIN_CPUS + 0.0001), 'abc'])(
     'blocks invalid CPU text %s instead of submitting the saved CPU',
     async (value) => {
       await renderOpen()
@@ -407,6 +412,20 @@ describe('CreateBoxDialog per-org resource cap', () => {
       expect(mutationMocks.createBox).not.toHaveBeenCalled()
     },
   )
+
+  it('clamps the CPU decrease button to the shared minimum', async () => {
+    await renderOpen()
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="value"]')!
+    const decrease = document.querySelector<HTMLButtonElement>('button[aria-label="decrease"]')!
+    await act(async () => typeInto(input, String(MIN_CPUS + 0.05)))
+    await act(async () => decrease.click())
+    expect(input.value).toBe(String(MIN_CPUS))
+    expect(decrease.disabled).toBe(true)
+    await submit()
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: expect.objectContaining({ cpu: MIN_CPUS }) }),
+    )
+  })
 
   describe('subscribed Cloud resource limits', () => {
     beforeEach(() => {

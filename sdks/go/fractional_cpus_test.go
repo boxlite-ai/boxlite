@@ -90,7 +90,7 @@ func TestFractionalCPUsRejectsInvalidWithoutRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	for _, cores := range []float64{0, -0.5, 0.009, 0.1255, math.NaN(), math.Inf(1)} {
+	for _, cores := range []float64{0, -0.5, 0.124, 0.1251, math.NaN(), math.Inf(1)} {
 		if _, err := rt.Create(context.Background(), "alpine", WithCPUs(cores)); err == nil {
 			t.Fatalf("accepted invalid cpus %v", cores)
 		}

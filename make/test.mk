@@ -522,6 +522,9 @@ test\:unit\:openapi:
 test\:unit\:scripts:
 	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
 
+test\:cpu-resources:
+	@python3 -m unittest discover -s tests/scripts -p 'test_cpu_resources.py' -v
+
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."

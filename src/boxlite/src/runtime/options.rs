@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
 use crate::runtime::constants::vm_defaults::MAX_CPUS;
+use crate::runtime::cpu_limits::MIN_CPUS;
 use crate::runtime::types::Bytes;
 use std::fmt;
 
@@ -943,7 +944,7 @@ impl BoxOptions {
         match self.cpus {
             Some(cpus) if self.cpus_beyond_guest_kernel().is_some() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
-                    "cpus must be between 0.01 and {MAX_CPUS} (the guest kernel brings up at \
+                    "cpus must be between {MIN_CPUS} and {MAX_CPUS} (the guest kernel brings up at \
                      most {MAX_CPUS} vCPUs), got {cpus}"
                 )),
             ),
@@ -2214,8 +2215,19 @@ mod tests {
     }
 
     #[test]
+    fn fractional_cpus_below_minimum_fail_persisted_and_create_validation() {
+        let options = BoxOptions {
+            cpus: Some(MIN_CPUS - 0.001),
+            ..Default::default()
+        };
+        for result in [options.sanitize_create(), options.sanitize_persisted()] {
+            assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+        }
+    }
+
+    #[test]
     fn fractional_cpus_common_validation_ignores_execution_host() {
-        for cpus in [0.01, 0.125, 1.5] {
+        for cpus in [MIN_CPUS, MIN_CPUS + 0.001, 1.5] {
             for jailer_enabled in [false, true] {
                 let mut options = BoxOptions {
                     cpus: Some(cpus),
@@ -2230,7 +2242,7 @@ mod tests {
 
     #[test]
     fn fractional_cpus_local_validation_requires_host_support() {
-        for cpus in [None, Some(2.0), Some(0.01), Some(1.5)] {
+        for cpus in [None, Some(2.0), Some(MIN_CPUS), Some(1.5)] {
             for jailer_enabled in [false, true] {
                 let mut options = BoxOptions {
                     cpus,

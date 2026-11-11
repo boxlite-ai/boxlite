@@ -73,10 +73,13 @@ Fractional allocations round up only the guest topology; information queries ret
 They do not reserve physical cores or guarantee latency.
 Integer allocations add no new cgroup requirement and continue working on macOS.
 
-**Range:** `0.01` to `16`, in increments of `0.001`, with the bundled guest kernel.
+**Range:** `0.125` to `16`, in increments of `0.001`, with the bundled guest kernel.
 Zero, negatives, non-finite values, and excessive precision are rejected.
 A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
 Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
+
+The minimum applies to creation, persisted configuration, import and recovery.
+CPU range query filters remain independent search thresholds.
 
 ### Fractional CPUs (Linux)
 
@@ -122,7 +125,7 @@ A successful fractional create must return exactly the requested allocation.
 Missing, rounded, or changed values produce an `Unsupported` error containing the created Box ID; inspect or remove that Box before retrying.
 The SDK never retries creation by rounding or dropping the value; ordinary HTTP failures retain their original error classification.
 Other features may still use `/config`.
-BoxLite Cloud accepts `cpus` from `0.01` to `16` in increments of `0.001`, subject to the organization's per-Box limit.
+BoxLite Cloud accepts `cpus` from `0.125` to `16` in increments of `0.001`, subject to the organization's per-Box limit.
 The dashboard's Custom CPU input accepts three decimal places and adjusts by `0.1`; invalid input blocks creation.
 Older Cloud servers may reject fractional values.
 

@@ -838,7 +838,7 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
 
 ## Fractional CPU allocations
 
-Create and recovery requests accept `cpuQuota` as a number of cores from `0.01` to `16`, in increments of `0.001`.
+Create and recovery requests accept `cpuQuota` in increments of `0.001` cores, within the [shared CPU range](../../docs/guides/resource-limits.md#cpu-configuration).
 Omission retains the one-core default; explicit zero, non-finite values, and excess precision are rejected.
 The HTTP and v2 job paths preserve the number through the Go SDK; recovery validates it before destroying the old Box.
 Fractional Linux allocations use the Runtime's cgroup quota and rounded-up guest topology, with its existing best-effort membership behavior.

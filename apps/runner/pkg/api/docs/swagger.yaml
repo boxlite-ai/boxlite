@@ -24,10 +24,10 @@ definitions:
           type: string
         type: array
       cpuQuota:
-        description: CPU allocation in cores (0.01–16), in increments of 0.001; omitted
-          means 1.
+        description: CPU allocation in cores, in increments of 0.001; omitted means
+          1.
         maximum: 16
-        minimum: 0.01
+        minimum: 0.125
         type: number
       entrypoint:
         items:
@@ -140,10 +140,10 @@ definitions:
   RecoverBoxDTO:
     properties:
       cpuQuota:
-        description: CPU allocation in cores (0.01–16), in increments of 0.001; omitted
-          means 1.
+        description: CPU allocation in cores, in increments of 0.001; omitted means
+          1.
         maximum: 16
-        minimum: 0.01
+        minimum: 0.125
         type: number
       env:
         additionalProperties:

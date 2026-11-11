@@ -42,7 +42,20 @@ async fn assert_quota(runtime: &BoxliteRuntime, id: &str, cpus: f64) {
 async fn fractional_cpus_over_serve_survive_restart() {
     let mut serve = ServeChild::start();
     let runtime = BoxliteRuntime::rest(BoxliteRestOptions::new(serve.url())).unwrap();
-    for cpus in [0.5, 1.5, 2.0] {
+    for cpus in [
+        boxlite::runtime::cpu_limits::MIN_CPUS - 0.001,
+        boxlite::runtime::cpu_limits::MIN_CPUS + 0.0001,
+    ] {
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/boxes", serve.url()))
+            .json(&serde_json::json!({"image": "alpine:latest", "cpus": cpus}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        assert!(runtime.list_info().await.unwrap().is_empty());
+    }
+    for cpus in [boxlite::runtime::cpu_limits::MIN_CPUS, 0.5, 1.5, 2.0] {
         let bx = runtime
             .create(
                 BoxOptions {

@@ -14,8 +14,8 @@ type CreateBoxDTO struct {
 	FromVolumeId string `json:"fromVolumeId,omitempty"`
 	Image        string `json:"image" validate:"required"`
 	OsUser       string `json:"osUser" validate:"required"`
-	// CPU allocation in cores (0.01–16), in increments of 0.001; omitted means 1.
-	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.01,max=16"`
+	// CPU allocation in cores, in increments of 0.001; omitted means 1.
+	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.125,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
@@ -52,8 +52,8 @@ type UpdateNetworkSettingsDTO struct {
 type RecoverBoxDTO struct {
 	FromVolumeId string `json:"fromVolumeId,omitempty"`
 	OsUser       string `json:"osUser" validate:"required"`
-	// CPU allocation in cores (0.01–16), in increments of 0.001; omitted means 1.
-	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.01,max=16"`
+	// CPU allocation in cores, in increments of 0.001; omitted means 1.
+	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.125,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
 	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`

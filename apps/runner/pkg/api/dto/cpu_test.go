@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"testing"
 )
@@ -14,8 +15,8 @@ func TestFractionalCPURequest(t *testing.T) {
 		want float64
 	}{
 		{`{}`, 1},
-		{`{"cpuQuota":0.01}`, 0.01},
-		{`{"cpuQuota":0.125}`, 0.125},
+		{fmt.Sprintf(`{"cpuQuota":%g}`, MinCPUs), MinCPUs},
+		{fmt.Sprintf(`{"cpuQuota":%g}`, MinCPUs+0.001), MinCPUs + 0.001},
 		{`{"cpuQuota":0.5}`, 0.5},
 		{`{"cpuQuota":1.001}`, 1.001},
 		{`{"cpuQuota":1.5}`, 1.5},
@@ -41,7 +42,7 @@ func TestFractionalCPURequest(t *testing.T) {
 			}
 		})
 	}
-	for _, n := range []float64{0, -1, 0.009, 0.1001, 16.001, math.NaN(), math.Inf(1), math.Inf(-1)} {
+	for _, n := range []float64{0, -1, MinCPUs - 0.001, MinCPUs + 0.0001, 16.001, math.NaN(), math.Inf(1), math.Inf(-1)} {
 		if _, err := CPUAllocation(&n); err == nil {
 			t.Errorf("accepted %v", n)
 		}

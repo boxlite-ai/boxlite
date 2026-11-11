@@ -1270,7 +1270,7 @@ impl CapabilityFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ResourceFlags {
-    /// CPU allocation (0.01-16); fractional values require a Linux execution host
+    /// CPU allocation; fractional values require a Linux execution host
     #[arg(long, value_parser = clap::value_parser!(f64))]
     pub cpus: Option<f64>,
 

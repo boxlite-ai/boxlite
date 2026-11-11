@@ -1955,7 +1955,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "invalid argument: cpus must be between 0.01 and 16, in increments of 0.001 cores"
+              message: "invalid argument: cpus must be between 0.125 and 16, in increments of 0.001 cores"
               type: InvalidArgumentError
               code: invalid_argument
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
@@ -2385,7 +2385,7 @@ components:
           example: python:3.11-slim
         cpus:
           type: number
-          minimum: 0.01
+          minimum: 0.125
           maximum: 255
           multipleOf: 0.001
           description: |
@@ -2525,7 +2525,7 @@ components:
             Mutually exclusive with `image`.
         cpus:
           type: number
-          minimum: 0.01
+          minimum: 0.125
           maximum: 16
           multipleOf: 0.001
           description: |

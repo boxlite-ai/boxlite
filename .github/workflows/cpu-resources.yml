@@ -1,0 +1,18 @@
+name: CPU resource contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check generated CPU resources and generator behavior
+        run: make check:cpu-resources test:cpu-resources SETUP_DONE=1

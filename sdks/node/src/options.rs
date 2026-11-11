@@ -174,7 +174,7 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
-    /// CPU allocation (default: 1, range: 0.01-16); fractional values require a Linux execution host
+    /// CPU allocation (default: 1); fractional values require a Linux execution host
     pub cpus: Option<f64>,
 
     /// Memory limit in MiB (default: 512)
@@ -944,12 +944,20 @@ mod tests {
             secrets: None,
         };
 
-        for cores in [0.01, 0.125, 1.5, 2.0] {
+        let minimum = boxlite::runtime::cpu_limits::MIN_CPUS;
+        for cores in [minimum, minimum + 0.001, 1.5, 2.0] {
             let mut options = js.clone();
             options.cpus = Some(cores);
             assert_eq!(BoxOptions::try_from(options).unwrap().cpus, Some(cores));
         }
-        for cores in [0.0, -0.5, 0.009, 0.1255, f64::NAN, f64::INFINITY] {
+        for cores in [
+            0.0,
+            -0.5,
+            minimum - 0.001,
+            minimum + 0.0001,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
             let mut options = js.clone();
             options.cpus = Some(cores);
             assert!(BoxOptions::try_from(options).is_err(), "{cores}");
