@@ -175,6 +175,10 @@ fn read_public_key(path: &Path) -> Result<String> {
     }
 }
 
+/// Dispatch explicit controls or return the default OpenSSH session's exit code.
+///
+/// Installation shares credential preparation with login but exits without
+/// connecting; explicit control operations retain their status/output contracts.
 pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<i32> {
     if args.configure {
         let config = args.source.load()?;
@@ -247,6 +251,7 @@ async fn forward(sandbox: &LiteBox, status: &SshStatus, listen: SocketAddress) -
     .await
 }
 
+/// Open forwarding only for an enabled, reachable guest SSH listener.
 async fn ssh_tunnel(sandbox: &LiteBox, status: &SshStatus) -> Result<BoxTunnel> {
     if !status.enabled {
         bail!(

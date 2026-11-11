@@ -5,6 +5,7 @@ fn test_home() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+/// Create a locked installation against an isolated canonical home.
 fn plan(home: &Path, alias: &str, identity: &str, overwrite: bool) -> Result<Installation> {
     Installation::with_home(&home.canonicalize()?, alias, identity, overwrite)
 }
@@ -21,6 +22,7 @@ fn managed(home: &Path) -> PathBuf {
     home.join(".boxlite/ssh/config")
 }
 
+/// Check the actual OpenSSH resolution rather than reconstructing Include rules.
 fn effective(home: &Path, alias: &str) -> String {
     let output = Command::new("ssh")
         .args(["-G", "-F"])
@@ -37,6 +39,7 @@ fn effective(home: &Path, alias: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// Reinstalling the same identity preserves handwritten bytes and backup.
 #[test]
 fn same_identity_updates_without_duplicate_include_or_rewriting_original() {
     let home = test_home();
@@ -95,6 +98,7 @@ fn conflicting_identity_requires_overwrite_but_only_owned_entry_changes() {
     assert!(effective(home.path(), "other").contains("hostname third\n"));
 }
 
+/// Failed managed-stanza validation and forged identities do not replace files.
 #[test]
 fn errors_leave_both_published_files_unchanged() {
     let home = test_home();
@@ -179,6 +183,7 @@ fn invalid_alias_and_unsafe_write_paths_are_rejected() {
     assert!(Installation::with_home(&selected, "dev", "A", false).is_err());
 }
 
+/// A managed marker must stay first; handwritten copies remain unowned.
 #[test]
 fn include_must_be_exactly_first_and_unique() {
     let home = test_home();
@@ -229,6 +234,7 @@ fn unsupported_include_expansion_and_relative_handwritten_collision_fail_preflig
     }
 }
 
+/// Nested Include conflicts are checked, while unrelated defaults remain usable.
 #[test]
 fn nested_includes_patterns_negation_defaults_and_cycles() {
     let home = test_home();
@@ -326,6 +332,7 @@ fn include_path_with_spaces_quotes_glob_chars_and_percent_is_literal() {
     assert_eq!(fs::read_dir(home.join(".boxlite/ssh")).unwrap().count(), 2);
 }
 
+/// Percent expansion follows the installed OpenSSH version's Include behavior.
 #[test]
 fn handwritten_percent_includes_match_openssh_conflict_detection() {
     for single_conflicts in [false, true] {
@@ -359,6 +366,7 @@ fn handwritten_percent_includes_match_openssh_conflict_detection() {
     }
 }
 
+/// An obsolete percent-escaped prefix can be repaired without editing user bytes.
 #[test]
 fn reinstall_repairs_percent_include_without_changing_user_configuration() {
     let parent = test_home();
@@ -389,6 +397,61 @@ fn reinstall_repairs_percent_include_without_changing_user_configuration() {
         fs::read_to_string(home.join(".ssh/config.boxlite-backup")).unwrap(),
         original
     );
+}
+
+/// A future backup must not turn an empty root or nested Include into recursion;
+/// dot-relative spellings require the same preflight refusal.
+#[test]
+fn backup_include_matches_fail_before_publishing_configuration() {
+    for (pattern, nested) in [
+        ("config.*", false),
+        ("./config.*", false),
+        ("../.ssh/config.*", false),
+        ("config.boxlite-backup", false),
+        ("config.boxlite-*", true),
+    ] {
+        let home = test_home();
+        let ssh = home.path().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        let include = format!("Include {pattern}\n");
+        let original = if nested {
+            fs::write(ssh.join("manual.conf"), &include).unwrap();
+            "Include manual.conf\n".to_owned()
+        } else {
+            include
+        };
+        fs::write(root(home.path()), &original).unwrap();
+        assert!(effective(home.path(), "unrelated").contains("hostname unrelated\n"));
+
+        let error = plan(home.path(), "dev", "A", false)
+            .err()
+            .expect("an Include matching the future backup must fail preflight");
+        assert!(error.to_string().contains("backup"), "{error:#}");
+        assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
+        assert!(!managed(home.path()).exists());
+        assert!(!ssh.join("config.boxlite-backup").exists());
+        assert!(effective(home.path(), "unrelated").contains("hostname unrelated\n"));
+    }
+}
+
+/// An absolute Include also names the future backup before the file exists.
+#[test]
+fn absolute_backup_include_fails_before_publishing_configuration() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    let original = format!("Include {}.boxlite-*\n", root(home.path()).display());
+    fs::write(root(home.path()), &original).unwrap();
+    assert!(effective(home.path(), "unrelated").contains("hostname unrelated\n"));
+
+    let error = plan(home.path(), "dev", "A", false)
+        .err()
+        .expect("an absolute Include matching the future backup must fail preflight");
+    assert!(error.to_string().contains("backup"), "{error:#}");
+    assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
+    assert!(!managed(home.path()).exists());
+    assert!(!ssh.join("config.boxlite-backup").exists());
+    assert!(effective(home.path(), "unrelated").contains("hostname unrelated\n"));
 }
 
 #[test]

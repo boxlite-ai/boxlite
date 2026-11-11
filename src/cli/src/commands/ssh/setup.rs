@@ -8,10 +8,14 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use boxlite::{BoxliteRestOptions, BoxliteRuntime, LiteBox, SshAccount, SshConfig, SshStatus};
+use nix::NixPath;
 use sha2::{Digest, Sha256};
 
 use crate::cli::GlobalFlags;
 
+/// Prepare a CLI-owned identity, then install an alias or return OpenSSH's exit code.
+/// Tool and installation preflights precede credential/service changes; the runtime
+/// remains owned here until the direct session and its forwarding cleanup finish.
 pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Result<i32> {
     require_openssh()?;
     let connection = ConnectionTarget {
@@ -152,6 +156,9 @@ impl ConnectionTarget {
             .transpose()
     }
 
+    /// Freeze routing and box identity in a shell-safe OpenSSH ProxyCommand.
+    /// Authentication is resolved at invocation time; percent tokens are escaped
+    /// before shell quoting because OpenSSH expands them first.
     fn proxy_command(&self, global: &GlobalFlags, home: &Path, id: &str) -> Result<String> {
         let mut command = String::new();
         let mut argument = |value: &str| -> Result<()> {
@@ -204,14 +211,46 @@ impl ConnectionTarget {
     }
 }
 
+/// Require regular PATH tools executable by the effective credentials before setup.
+/// Follow symlinks and skip denied executables, but preserve directory-search and
+/// unexpected I/O errors. This preflight does not replace later spawn diagnostics.
 fn require_openssh() -> Result<()> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     for name in ["ssh", "ssh-keygen"] {
         let mut found = false;
         let mut permission_error = None;
         for directory in std::env::split_paths(&path) {
-            match fs::metadata(directory.join(name)) {
-                Ok(metadata) if metadata.is_file() && metadata.mode() & 0o111 != 0 => {
+            let candidate = directory.join(name);
+            let executable = fs::metadata(&candidate).and_then(|metadata| {
+                if !metadata.is_file() {
+                    return Ok(false);
+                }
+                candidate
+                    .with_nix_path(|path| {
+                        // SAFETY: path is a live NUL-terminated string; AT_FDCWD
+                        // needs no descriptor, and the flags request effective access.
+                        let result = unsafe {
+                            nix::libc::faccessat(
+                                nix::libc::AT_FDCWD,
+                                path.as_ptr(),
+                                nix::libc::X_OK,
+                                nix::libc::AT_EACCESS,
+                            )
+                        };
+                        if result == 0 {
+                            return Ok(true);
+                        }
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() == std::io::ErrorKind::PermissionDenied {
+                            Ok(false)
+                        } else {
+                            Err(error)
+                        }
+                    })
+                    .map_err(std::io::Error::from)?
+            });
+            match executable {
+                Ok(true) => {
                     found = true;
                     break;
                 }
@@ -240,6 +279,9 @@ fn require_openssh() -> Result<()> {
     Ok(())
 }
 
+/// Reuse healthy SSH, enable saved state, or configure new/generation-zero state.
+/// Perform at most one service mutation and require the local host identity;
+/// failures never trigger a retry, key rotation, or a fallback reconfiguration.
 async fn prepare_ssh(
     sandbox: &LiteBox,
     config: SshConfig,
@@ -261,6 +303,7 @@ async fn prepare_ssh(
             ssh.configure(config).await?
         }
     };
+    /// Compare only the key algorithm and payload, not its optional comment.
     fn identity(key: &str) -> (Option<&str>, Option<&str>) {
         let mut fields = key.split_whitespace();
         (fields.next(), fields.next())
@@ -277,6 +320,9 @@ async fn prepare_ssh(
     Ok(status)
 }
 
+/// Return configuration and the host public key derived from private local keys.
+/// Publish a new key pair together; reject unsafe or incomplete existing identities
+/// without replacing them, so failed service preparation can reuse the same keys.
 fn managed_config(directory: &Path) -> Result<(SshConfig, String)> {
     match fs::symlink_metadata(directory) {
         Ok(_) => check_private(directory, true)?,
@@ -318,6 +364,8 @@ fn managed_config(directory: &Path) -> Result<(SshConfig, String)> {
     ))
 }
 
+/// Require an effective-user-owned directory or regular file with no group/other access.
+/// Inspect the path itself so symlinks cannot satisfy either credential contract.
 pub(super) fn check_private(path: &Path, directory: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path).context("inspect SSH credentials")?;
     // SAFETY: geteuid has no arguments or memory-safety preconditions.

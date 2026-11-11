@@ -33,6 +33,8 @@ struct Recording {
 }
 
 impl Recording {
+    /// Store only an accepted configuration and derive the status identity
+    /// from its real private host key; rejected writes leave status unchanged.
     fn configure(&mut self, config: Value) {
         let key = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(key.path(), config["host_private_key"].as_str().unwrap()).unwrap();
@@ -47,6 +49,8 @@ impl Recording {
         self.generation += 1;
     }
 
+    /// Report the saved generation even when disabled, but hide inactive
+    /// listener and host identity as the guest status API does.
     fn status(&self) -> Value {
         let (listen_address, public_key, fingerprint) = if self.enabled {
             (
@@ -83,6 +87,8 @@ impl Drop for Cloud {
     }
 }
 
+/// Record REST authorization headers and model SSH enable/configure transitions;
+/// the tunnel endpoint is deliberately separate from the non-SSH CONNECT peer.
 async fn route(
     State((state, tunnel)): State<(Arc<Mutex<Recording>>, String)>,
     method: Method,
@@ -151,6 +157,8 @@ async fn route(
 }
 
 impl Cloud {
+    /// Run a reusable CONNECT listener: echo mode exercises binary proxy data;
+    /// normal mode rejects SSH after CONNECT, proving routing rather than login.
     async fn start(echo: bool) -> Self {
         let state = Arc::new(Mutex::new(Recording::default()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -220,6 +228,7 @@ impl Cloud {
         .unwrap();
     }
 
+    /// Store OIDC credentials without an API key, to distinguish bearer selection.
     fn save_oidc_context(&self, home: &Path) {
         std::fs::write(
             home.join("credentials.toml"),
@@ -256,6 +265,8 @@ fn cli(home: &Path) -> Command {
     command
 }
 
+/// Run the real default CLI and expect OpenSSH's handshake-failure code:
+/// this fixture establishes authenticated CONNECT, not a successful SSH login.
 fn connect(home: &Path, flags: &[&str]) {
     cli(home)
         .args(flags)
@@ -265,6 +276,8 @@ fn connect(home: &Path, flags: &[&str]) {
         .stdout(predicates::str::is_empty());
 }
 
+/// Discover generated remote identities by their actual directory shape instead
+/// of duplicating the production hash of context, endpoint, and routing prefix.
 fn credential_directories(home: &Path) -> BTreeSet<PathBuf> {
     let root = home.join("ssh/remote");
     if !root.exists() {
@@ -277,12 +290,14 @@ fn credential_directories(home: &Path) -> BTreeSet<PathBuf> {
         .collect()
 }
 
+/// Require one managed remote identity for tests that do not vary routing scope.
 fn only_credential_directory(home: &Path) -> PathBuf {
     let directories = credential_directories(home);
     assert_eq!(directories.len(), 1, "expected one managed SSH identity");
     directories.into_iter().next().unwrap()
 }
 
+/// Create a genuine Ed25519 private/public pair for the explicit control fixture.
 fn generate_key(path: &Path) {
     let result = std::process::Command::new("ssh-keygen")
         .args(["-q", "-t", "ed25519", "-N", "", "-f"])
@@ -292,6 +307,8 @@ fn generate_key(path: &Path) {
     assert!(result.success(), "ssh-keygen failed for {}", path.display());
 }
 
+/// Configure SSH through the real CLI before proxy/tunnel tests, which otherwise
+/// would deadlock against this fixture's echo-only (non-SSH) CONNECT listener.
 fn configure_fixture(home: &Path) -> Value {
     let keys = tempfile::tempdir().unwrap();
     let host = keys.path().join("host");
@@ -319,6 +336,7 @@ fn configure_fixture(home: &Path) -> Value {
     serde_json::from_slice(&output).unwrap()
 }
 
+/// Prepare installation with a distinct user SSH home and credential home.
 fn install_command(home: &Path, user_home: &Path) -> Command {
     let mut command = cli(home);
     command
@@ -327,6 +345,8 @@ fn install_command(home: &Path, user_home: &Path) -> Command {
     command
 }
 
+/// Launch system OpenSSH with the installed user config; handshake failure is
+/// expected because this fixture authenticates CONNECT but never speaks SSH.
 fn installed_ssh(home: &Path, user_home: &Path, alias: &str) -> Command {
     let mut command = Command::new("ssh");
     isolated(&mut command, home);
@@ -338,6 +358,8 @@ fn installed_ssh(home: &Path, user_home: &Path, alias: &str) -> Command {
     command
 }
 
+/// Assert the installed ProxyCommand reached the selected REST root and CONNECT
+/// with the saved bearer, not that the remote SSH handshake succeeded.
 fn assert_installed_proxy(cloud: &Cloud, root: &str, token: &str) {
     let state = cloud.state.lock().unwrap();
     let target = format!("{root}/boxes/-remote");
@@ -370,6 +392,8 @@ fn assert_installed_proxy(cloud: &Cloud, root: &str, token: &str) {
     );
 }
 
+/// Explicit configure and control calls preserve saved host identity and
+/// authentication; lifecycle failures must not be retried.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_control_options_preserve_context_authentication_and_saved_configuration() {
     let cloud = Cloud::start(false).await;
@@ -463,6 +487,8 @@ async fn cloud_control_options_preserve_context_authentication_and_saved_configu
     );
 }
 
+/// A second real CLI connection reuses its identity and reads healthy status;
+/// both attempts reach authenticated CONNECT, then fail non-SSH handshake.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_connect_reuses_keys_and_routes_authenticated_connect() {
     let cloud = Cloud::start(false).await;
@@ -536,6 +562,8 @@ async fn cloud_connect_reuses_keys_and_routes_authenticated_connect() {
     }));
 }
 
+/// Reconnecting to a disabled saved identity enables it once without replacing
+/// keys or reconfiguring the guest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_connect_enables_saved_configuration_without_reconfiguring() {
     let cloud = Cloud::start(false).await;
@@ -571,6 +599,7 @@ async fn cloud_connect_enables_saved_configuration_without_reconfiguring() {
     }));
 }
 
+/// An explicitly empty prefix stays authoritative after persisted context edits.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[rstest::rstest]
 #[case("default")]
@@ -598,6 +627,8 @@ async fn cloud_connect_explicit_empty_prefix_survives_saved_context_changes(#[ca
     assert_eq!(state.connects.len(), 2);
 }
 
+/// CLI flag, process environment, then saved prefix precedence determines actual
+/// REST and CONNECT routing, not a printed command for a future invocation.
 #[rstest::rstest]
 #[case::inherited(None, None, "stored")]
 #[case::flag_clears(Some(""), Some("ambient"), "")]
@@ -648,6 +679,8 @@ async fn cloud_path_prefix_precedence(
     );
 }
 
+/// Binary stdio through explicit proxy mode uses the selected environment bearer
+/// without changing the independently configured guest SSH service.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key() {
     let cloud = Cloud::start(true).await;
@@ -683,6 +716,8 @@ async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key(
     );
 }
 
+/// Explicit tunnel mode retains its listener until interrupted and reports the
+/// fingerprint derived from the previously accepted host configuration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_tunnel_option_forwards_bytes_and_reports_server_fingerprint() {
     use std::process::Stdio;
@@ -763,6 +798,8 @@ async fn cloud_tunnel_option_forwards_bytes_and_reports_server_fingerprint() {
     );
 }
 
+/// Failed configure keeps its identity; changes in context, endpoint, or prefix
+/// create distinct credentials and authenticated CONNECT routes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_connect_isolates_context_endpoint_and_prefix_and_retains_failed_keys() {
     let cloud = Cloud::start(false).await;
@@ -836,6 +873,8 @@ async fn cloud_connect_isolates_context_endpoint_and_prefix_and_retains_failed_k
     assert_eq!(other.state.lock().unwrap().connects.len(), 1);
 }
 
+/// REST selection creates credentials in the new remote home without reading
+/// nonexistent local runtime config, for both present and empty prefixes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_connect_uses_new_credential_home_and_ignores_local_config() {
     for prefix in ["env-team", ""] {
@@ -876,6 +915,8 @@ async fn cloud_connect_uses_new_credential_home_and_ignores_local_config() {
     }
 }
 
+/// Default connection sends the persisted OIDC bearer to REST and CONNECT;
+/// the deliberately non-SSH peer still makes the OpenSSH process exit 255.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_connect_uses_stored_oidc_bearer() {
     let cloud = Cloud::start(false).await;
@@ -897,6 +938,7 @@ async fn cloud_connect_uses_stored_oidc_bearer() {
     );
 }
 
+/// Explicit proxy mode uses the stored OIDC bearer and the echo listener only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_proxy_uses_stored_oidc_bearer() {
     let cloud = Cloud::start(true).await;
@@ -925,6 +967,8 @@ async fn cloud_proxy_uses_stored_oidc_bearer() {
     );
 }
 
+/// Unconfigured/disabled SSH and missing boxes fail before CONNECT; an already
+/// configured proxy never changes the guest's SSH configuration.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_proxy_reports_disabled_missing_and_unsupported_with_saved_configuration() {
     let cloud = Cloud::start(false).await;
@@ -992,6 +1036,8 @@ async fn cloud_proxy_reports_disabled_missing_and_unsupported_with_saved_configu
     assert!(state.connects.is_empty());
 }
 
+/// Search failures in an earlier PATH component do not mask later valid tools;
+/// inaccessible-only search directories retain their permission diagnostics.
 #[rstest::rstest]
 #[case::file_prefix(false, true)]
 #[case::inaccessible_prefix(true, true)]
@@ -1047,6 +1093,63 @@ async fn cloud_connect_searches_past_invalid_path_entries(
     }
 }
 
+/// Owner permissions take precedence over execute bits granted to other users.
+/// Both PATH cases run only in CLI subprocesses: denied-only must touch no REST
+/// or credential state, while a later executable still reaches CONNECT.
+#[rstest::rstest]
+#[case::inaccessible_only(false)]
+#[case::later_executable(true)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_connect_checks_effective_execute_access(#[case] include_valid_ssh: bool) {
+    // SAFETY: geteuid has no arguments or memory-safety preconditions.
+    if unsafe { nix::libc::geteuid() } == 0 {
+        eprintln!("root bypasses owner execute permissions; skipping permission-class case");
+        return;
+    }
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    let tools = tempfile::tempdir().unwrap();
+    let inaccessible = tools.path().join("ssh");
+    std::fs::write(&inaccessible, "#!/bin/sh\nexit 99\n").unwrap();
+    std::fs::set_permissions(&inaccessible, std::fs::Permissions::from_mode(0o641)).unwrap();
+    let system_path = std::env::var_os("PATH").unwrap();
+    let keygen = std::env::split_paths(&system_path)
+        .map(|directory| directory.join("ssh-keygen"))
+        .find(|path| path.is_file())
+        .expect("the test runner needs system ssh-keygen");
+    symlink(
+        std::fs::canonicalize(keygen).unwrap(),
+        tools.path().join("ssh-keygen"),
+    )
+    .unwrap();
+    let mut path = vec![tools.path().to_path_buf()];
+    if include_valid_ssh {
+        path.extend(std::env::split_paths(&system_path));
+    }
+    let result = cli(home.path())
+        .env("PATH", std::env::join_paths(path).unwrap())
+        .args(["ssh", "dev"])
+        .assert();
+    let state = cloud.state.lock().unwrap();
+    if include_valid_ssh {
+        result.code(255);
+        assert_eq!(state.configs.len(), 1);
+        assert_eq!(state.connects.len(), 1);
+    } else {
+        result.failure();
+        assert!(
+            state.requests.is_empty(),
+            "inaccessible ssh must fail before any REST requests"
+        );
+        assert!(credential_directories(home.path()).is_empty());
+        assert!(state.attempted_configs.is_empty());
+        assert!(state.connects.is_empty());
+    }
+}
+
+/// Missing, directory, or nonexecuting OpenSSH tools fail before creating a
+/// runtime home, credentials, or sending even an initial REST lookup.
 #[rstest::rstest]
 #[case::empty_path(false, false, "ssh")]
 #[case::ssh_only(true, false, "ssh-keygen")]
@@ -1124,6 +1227,7 @@ async fn cloud_connect_requires_openssh_before_runtime_or_credentials(
     assert!(state.connects.is_empty());
 }
 
+/// Reject SSH-incompatible paths before mutating guest service or writing keys.
 #[rstest::rstest]
 #[case::environment_expansion("home-${HOME}")]
 #[case::control_character("home-\n")]
@@ -1170,6 +1274,8 @@ async fn cloud_connect_rejects_unusable_paths_before_side_effects(#[case] name: 
     );
 }
 
+/// A termination signal while tunnel preparation blocks must release the CLI
+/// without starting OpenSSH, retaining the expected signal-derived exit code.
 #[rstest::rstest]
 #[case::interrupt(nix::sys::signal::Signal::SIGINT)]
 #[case::terminate(nix::sys::signal::Signal::SIGTERM)]
@@ -1244,6 +1350,8 @@ async fn cloud_connect_cancels_pending_tunnel_preparation(
     );
 }
 
+/// Installing twice keeps keys and alias files byte-stable and never connects;
+/// using the installed alias later proves proxy routing only, not SSH login.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_install_prepares_without_connecting_and_repeats_idempotently() {
     let cloud = Cloud::start(false).await;
@@ -1311,6 +1419,8 @@ async fn cloud_install_prepares_without_connecting_and_repeats_idempotently() {
     assert_eq!(cloud.state.lock().unwrap().generation, 1);
 }
 
+/// Conflicting aliases fail before guest writes; overwrite changes only the
+/// selected alias while existing aliases retain their original endpoints.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_install_conflicts_before_guest_writes_and_overwrites_only_selected_alias() {
     let cloud = Cloud::start(false).await;
@@ -1410,6 +1520,8 @@ async fn cloud_install_conflicts_before_guest_writes_and_overwrites_only_selecte
     }
 }
 
+/// Installed proxy arguments freeze the selected routing despite later profile
+/// and ambient changes; shell metacharacters must not execute.
 #[rstest::rstest]
 #[case::named("-cloud ' \" \\ % ; $(touch injected)")]
 #[case::default_context("default")]
@@ -1480,6 +1592,8 @@ async fn cloud_install_freezes_routing_and_quotes_real_proxy_arguments(#[case] c
     assert_eq!(cloud.state.lock().unwrap().generation, 1);
 }
 
+/// An URL-only installation freezes an explicit empty prefix even when ambient
+/// and later persisted contexts point elsewhere.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_install_url_only_preserves_explicit_empty_prefix() {
     let cloud = Cloud::start(false).await;
@@ -1519,6 +1633,8 @@ async fn cloud_install_url_only_preserves_explicit_empty_prefix() {
     assert!(other.state.lock().unwrap().requests.is_empty());
 }
 
+/// Local proxy selection bypasses stale or malformed remote preferences instead
+/// of accidentally resolving the ambient cloud context.
 #[rstest::rstest]
 #[case::stale_context(false)]
 #[case::malformed_credentials(true)]

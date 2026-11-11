@@ -1,6 +1,8 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+/// Model the guest's reported status independently of the locally held host key;
+/// trailing comments are intentionally irrelevant to identity comparisons.
 fn managed_status(enabled: bool, generation: u64, host: &str) -> String {
     serde_json::to_string(&SshStatus {
         enabled,
@@ -12,6 +14,8 @@ fn managed_status(enabled: bool, generation: u64, host: &str) -> String {
     .unwrap()
 }
 
+/// Each persisted-state branch selects exactly one write (or status-only read),
+/// carrying the same locally generated host/client credentials on configure.
 #[tokio::test]
 async fn prepare_selects_one_service_operation_and_preserves_healthy_configuration() {
     use super::super::tests::Server;
@@ -68,6 +72,7 @@ async fn prepare_selects_one_service_operation_and_preserves_healthy_configurati
     }
 }
 
+/// A healthy service with a different host identity must not be overwritten.
 #[tokio::test]
 async fn changed_host_identity_is_rejected_without_mutation() {
     use super::super::tests::Server;
@@ -89,6 +94,8 @@ async fn changed_host_identity_is_rejected_without_mutation() {
     );
 }
 
+/// A failed first configure leaves the on-disk identity for the next invocation,
+/// which may configure again but must not regenerate either key.
 #[tokio::test]
 async fn failed_configure_retains_keys_for_the_next_invocation() {
     use super::super::tests::Server;
@@ -127,6 +134,7 @@ async fn failed_configure_retains_keys_for_the_next_invocation() {
     );
 }
 
+/// A rejected enable propagates immediately, without retry or reconfigure.
 #[tokio::test]
 async fn failed_enable_is_not_retried_or_reconfigured() {
     use super::super::tests::Server;
@@ -157,6 +165,8 @@ async fn failed_enable_is_not_retried_or_reconfigured() {
     );
 }
 
+/// Existing keys remain private and stable; corrupt, incomplete, or linked
+/// identities must fail instead of being silently replaced.
 #[test]
 fn keys_are_private_reused_and_invalid_state_is_not_replaced() {
     let temp = tempfile::tempdir().unwrap();

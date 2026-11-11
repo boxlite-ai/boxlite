@@ -87,14 +87,18 @@ boxlite ssh dev
 ```
 
 Default login takes no key options and requires `ssh` and `ssh-keygen` on PATH.
-The CLI checks both tools before creating credentials or changing guest SSH.
-PATH entries that are not directories or cannot be searched do not block tools
-in later entries. If no tool is found, a directory search permission error is
-preserved rather than reported as a missing installation.
+The CLI checks execute access using its effective user/group before creating
+credentials or changing guest SSH. Inaccessible tool files are skipped rather
+than accepted because another permission class has an execute bit. PATH entries
+that are not directories or cannot be searched do not block tools in later
+entries. If no tool is found, a directory search permission error is preserved
+rather than reported as a missing installation.
+
 It generates Ed25519 client and host keys under `<home>/boxes/<box-id>/ssh/`
 for local boxes, with a 0700 directory and 0600 private files. The client private
 key stays on the host. Corrupt, incomplete, symlinked or unsafe credentials fail
 instead of being regenerated.
+
 OpenSSH file paths must be UTF-8 and contain neither control characters nor
 literal `${`. These checks run before managed keys are created or guest SSH is
 configured/enabled, so an unusable path leaves existing SSH configuration unchanged.
@@ -242,6 +246,12 @@ including conventional nested Includes, are conflicts. General `Host *` defaults
 are permitted. Include paths support conventional quoting, relative paths,
 `~/` and globbing. Other token/environment expansions and Match conditions other
 than `Match all` are refused; the installer never executes `Match exec`.
+
+Handwritten Includes must not match `~/.ssh/config.boxlite-backup`, even when
+that backup does not exist yet. For example, narrow `Include config.*` to the
+intended configuration files before installing. Otherwise installation fails
+before publishing configuration or a backup, preventing recursive Includes
+from breaking connections to unrelated hosts.
 
 Generated ProxyCommands use the CLI's absolute executable path and capture runtime
 home/configuration for local boxes, or credential home, context, effective URL and

@@ -9,6 +9,10 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::cli::GlobalFlags;
 
+/// Relay a single existing SSH listener without configuring or enabling it.
+///
+/// Installed aliases may pin the backend/endpoint; termination cancels the relay
+/// so blocked parent stdio cannot retain the runtime home lock.
 pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Result<()> {
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;

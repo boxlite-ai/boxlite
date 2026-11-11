@@ -27,6 +27,7 @@ pub(super) struct ConnectionPaths {
 }
 
 impl ConnectionPaths {
+    /// Validate and encode credential paths before guest SSH can be changed.
     pub(super) fn new(directory: &Path) -> Result<Self> {
         let identity = ssh_config_path(&directory.join("client_key"))?;
         let known_hosts_path = directory.join("known_hosts");
@@ -39,6 +40,10 @@ impl ConnectionPaths {
     }
 }
 
+/// Pin the local host identity, then retain forwarding until OpenSSH is reaped.
+///
+/// Returns the child's exit code; cleanup errors replace only an otherwise
+/// successful session, never an existing failure or nonzero SSH status.
 pub(super) async fn execute(
     sandbox: &LiteBox,
     status: &SshStatus,
@@ -83,6 +88,7 @@ pub(super) async fn execute(
     result
 }
 
+/// Reject paths that OpenSSH cannot represent without expansion or line injection.
 pub(super) fn ssh_path(path: &Path) -> Result<&str> {
     let value = path.to_str().context("SSH command paths must be UTF-8")?;
     if value.chars().any(char::is_control) || value.contains("${") {
@@ -94,6 +100,7 @@ pub(super) fn ssh_path(path: &Path) -> Result<&str> {
     Ok(value)
 }
 
+/// Quote a literal identity/known-hosts path for ssh_config parsing, not a shell.
 pub(super) fn ssh_config_path(path: &Path) -> Result<String> {
     let value = ssh_path(path)?;
 
@@ -113,6 +120,10 @@ pub(super) fn ssh_config_path(path: &Path) -> Result<String> {
     Ok(encoded)
 }
 
+/// Atomically publish a private host pin derived from the validated local key.
+///
+/// Existing files must pass credential ownership/type checks; server-reported
+/// keys are never accepted here as a replacement trust source.
 pub(super) fn write_known_hosts(
     path: &Path,
     host_alias: &str,
@@ -151,6 +162,10 @@ pub(super) fn write_known_hosts(
     Ok(())
 }
 
+/// Supervise one SSH child against termination signals and forwarding failure.
+///
+/// Every path after spawning either observes exit or explicitly terminates and
+/// reaps the child before the caller can close its forwarder.
 async fn run_session(
     forwarder: &TunnelForwarder,
     identity: &str,
@@ -234,6 +249,7 @@ async fn run_session(
     result
 }
 
+/// Preserve normal SSH exit codes and encode Unix signals as `128 + signal`.
 fn exit_code(status: ExitStatus) -> Result<i32> {
     status
         .code()
@@ -241,6 +257,7 @@ fn exit_code(status: ExitStatus) -> Result<i32> {
         .context("OpenSSH exited without an exit code or termination signal")
 }
 
+/// Request termination, allow five seconds, then force exit and reap the child.
 async fn terminate_and_reap(child: &mut Child, signal: UnixSignal) {
     if let Some(pid) = child.id()
         && let Err(error) = kill(Pid::from_raw(pid as i32), signal)
@@ -273,6 +290,7 @@ struct TerminationSignals {
 }
 
 impl TerminationSignals {
+    /// Subscribe before spawning so early termination cannot orphan OpenSSH.
     fn new() -> Result<Self> {
         Ok(Self {
             interrupt: signal(SignalKind::interrupt()).context("register SSH SIGINT handler")?,
@@ -282,6 +300,7 @@ impl TerminationSignals {
         })
     }
 
+    /// Receive one host termination request without consuming remote Ctrl-C input.
     async fn recv(&mut self) -> UnixSignal {
         tokio::select! {
             _ = self.interrupt.recv() => UnixSignal::SIGINT,
@@ -297,6 +316,7 @@ struct TerminalRestore {
 }
 
 impl TerminalRestore {
+    /// Save TTY settings without changing modes; piped stdin needs no restoration.
     fn capture() -> Result<Self> {
         let stdin = std::io::stdin();
         let original = if stdin.is_terminal() {
@@ -309,6 +329,7 @@ impl TerminalRestore {
 }
 
 impl Drop for TerminalRestore {
+    /// Restore the original terminal even when session setup or shutdown fails.
     fn drop(&mut self) {
         if let Some(original) = &self.original
             && let Err(error) = tcsetattr(std::io::stdin(), SetArg::TCSANOW, original)

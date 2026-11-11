@@ -94,6 +94,7 @@ fn output_status(output: &std::process::Output, what: &str) -> SshStatus {
     })
 }
 
+/// Prove direct CLI login reaches a real guest shell and returns its exit status.
 fn assert_direct_login(ctx: &common::TestContext, id: &str) {
     let output = ctx
         .new_cmd()
@@ -384,6 +385,10 @@ async fn ssh_local_configure_forward_and_disable() {
     ctx.cleanup_box(&id);
 }
 
+/// Reuse managed identity across login, disable/enable, restart and failed setup.
+///
+/// Real guest execution and unchanged status distinguish reuse from silently
+/// reconfiguring SSH; unsafe local files must fail without changing the guest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ssh_local_connect_enable_and_restart() {
     let mut ctx = common::boxlite();
@@ -647,6 +652,7 @@ async fn ssh_local_connect_enable_and_restart() {
     ctx.cleanup_box(&id);
 }
 
+/// Non-detached boxes survive through the SSH shell, then stop on CLI teardown.
 #[tokio::test]
 async fn ssh_local_non_detached_lifetime() {
     let ctx = common::boxlite();
@@ -687,6 +693,7 @@ async fn ssh_local_non_detached_lifetime() {
     ctx.cleanup_box(&id);
 }
 
+/// Refuse a changed guest identity without rotating local keys or restoring SSH.
 #[tokio::test]
 async fn ssh_local_connect_rejects_changed_host_identity() {
     let ctx = common::boxlite();
@@ -741,6 +748,7 @@ async fn ssh_local_connect_rejects_changed_host_identity() {
     ctx.cleanup_box(&id);
 }
 
+/// An installed alias executes through real OpenSSH and reinstalls idempotently.
 #[tokio::test]
 async fn ssh_local_install_config() {
     let ctx = common::boxlite();

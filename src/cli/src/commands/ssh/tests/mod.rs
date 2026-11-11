@@ -113,6 +113,7 @@ fn configuration_sources_are_required_and_exclusive() {
     assert_eq!(orphan.kind(), ErrorKind::MissingRequiredArgument);
 }
 
+/// Bare box names select login even when they resemble former operation names.
 #[test]
 fn operations_are_options_and_connect_is_the_default() {
     let names: Vec<String> = crate::cli::command()
@@ -148,6 +149,7 @@ fn operations_are_options_and_connect_is_the_default() {
     assert!(parse(&["box", "--enable"]).unwrap().enable);
 }
 
+/// Control and installation modes remain mutually exclusive and need a target.
 #[test]
 fn operation_options_are_exclusive_and_require_a_box() {
     let operations = [
@@ -170,6 +172,7 @@ fn operation_options_are_exclusive_and_require_a_box() {
     }
 }
 
+/// Alias/proxy modifiers cannot change an operation they do not belong to.
 #[test]
 fn installation_and_generated_proxy_options_require_their_operation() {
     for options in [
@@ -205,6 +208,7 @@ fn installation_and_generated_proxy_options_require_their_operation() {
     }
 }
 
+/// Key and listener flags cannot leak from explicit controls into managed login.
 #[test]
 fn configuration_and_listener_options_are_scoped_to_their_operation() {
     for operation in [
@@ -474,6 +478,7 @@ impl Server {
         }
     }
 
+    /// Exercise parsed SSH dispatch against the stub without requiring a guest VM.
     async fn run(&self, args: &[&str]) -> anyhow::Result<()> {
         let home = self.home.path().to_str().unwrap();
         let cli = try_parse_from(
@@ -569,6 +574,7 @@ async fn configure_posts_the_complete_file_configuration_once() {
     assert_eq!(sent, config);
 }
 
+/// Invalid local configuration fails before login or proxy can create credentials.
 #[tokio::test]
 async fn connect_and_proxy_report_missing_runtime_configuration() {
     let temp = tempfile::tempdir().unwrap();

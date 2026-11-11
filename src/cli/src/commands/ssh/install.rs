@@ -48,11 +48,15 @@ struct ManagedEntry {
 }
 
 impl Installation {
+    /// Acquire the installation lock and reject handwritten conflicts before
+    /// guest preparation or publication can change the SSH configuration.
     pub(super) fn new(alias: &str, identity: &str, overwrite: bool) -> Result<Self> {
         let home = dirs::home_dir().context("cannot locate the user home for SSH configuration")?;
         Self::with_home(&home, alias, identity, overwrite)
     }
 
+    /// Validate the owning home, managed identity and complete handwritten
+    /// Include graph while holding the lock until `commit` or drop.
     fn with_home(home: &Path, alias: &str, identity: &str, overwrite: bool) -> Result<Self> {
         let alias = normalize_alias(alias)?;
         ensure!(
@@ -140,6 +144,10 @@ impl Installation {
         Ok(installation)
     }
 
+    /// Publish a validated managed stanza before activating its root Include.
+    ///
+    /// Recheck the snapshot and Include graph before creating the original
+    /// config backup so a preflight conflict cannot alter published files.
     pub(super) fn commit(mut self, stanza: &str) -> Result<()> {
         validate_stanza(stanza, &self.alias)?;
         let replacement = ManagedEntry {
@@ -224,6 +232,8 @@ impl Installation {
         Ok(())
     }
 
+    /// Detect edits or unsafe replacements of the locked installation inputs
+    /// before either managed or root configuration is published.
     fn check_unchanged(&self) -> Result<()> {
         for directory in [
             self.home.clone(),
@@ -246,12 +256,14 @@ impl Installation {
         Ok(())
     }
 
+    /// Scan only handwritten bytes, protecting files that installation may publish.
     fn scan_original(&self) -> Result<()> {
         let original = self.original.as_deref().unwrap_or_default();
         scan_config(
             &original[self.original_prefix_len..],
             &self.home,
             &self.managed,
+            &self.backup,
             &self.alias,
             self.expand_include_tokens,
             &mut Vec::new(),
@@ -259,6 +271,8 @@ impl Installation {
     }
 }
 
+/// Detect percent-token support in Include; reject unrecognized client banners
+/// rather than silently generating a path with the wrong expansion rules.
 fn include_expands_tokens() -> Result<bool> {
     let output = Command::new("ssh")
         .arg("-V")
@@ -286,6 +300,8 @@ fn include_expands_tokens() -> Result<bool> {
     Ok((major, minor) >= (9, 9))
 }
 
+/// Encode the marked Include using version-specific percent expansion.
+/// The caller has already escaped glob characters in the literal destination.
 fn include_prefix(literal: &str, expand_tokens: bool) -> Result<String> {
     let value = super::connect::ssh_path(Path::new(literal))?;
     let mut prefix = String::with_capacity(INCLUDE_MARKER.len() + value.len() + 11);
@@ -303,6 +319,7 @@ fn include_prefix(literal: &str, expand_tokens: bool) -> Result<String> {
     Ok(prefix)
 }
 
+/// Reject Host-pattern/injection characters and normalize owned alias matching.
 fn normalize_alias(alias: &str) -> Result<String> {
     ensure!(
         alias
@@ -317,6 +334,7 @@ fn normalize_alias(alias: &str) -> Result<String> {
     Ok(alias.to_ascii_lowercase())
 }
 
+/// Refuse symlink and parent-directory traversal before configuration mutations.
 fn check_ancestors(path: &Path) -> Result<()> {
     ensure!(
         path.is_absolute(),
@@ -340,6 +358,7 @@ fn check_ancestors(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Require a real, effective-user-owned directory without group/other writes.
 fn check_directory(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     // SAFETY: geteuid reads process credentials and has no pointer arguments.
@@ -355,6 +374,7 @@ fn check_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Create a missing private directory without repairing unsafe existing paths.
 fn private_directory(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {}
@@ -369,6 +389,8 @@ fn private_directory(path: &Path) -> Result<()> {
     check_directory(path)
 }
 
+/// Validate ownership, regular-file type and single-link identity.
+/// Managed files require exactly 0600; handwritten files may be world-readable.
 fn check_metadata(metadata: &fs::Metadata, path: &Path, private: bool) -> Result<()> {
     // SAFETY: geteuid reads process credentials and has no pointer arguments.
     let uid = unsafe { libc::geteuid() };
@@ -388,6 +410,7 @@ fn check_metadata(metadata: &fs::Metadata, path: &Path, private: bool) -> Result
     Ok(())
 }
 
+/// Validate existing destinations while allowing files not yet published.
 fn check_file(path: &Path, private: bool) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => check_metadata(&metadata, path, private),
@@ -396,6 +419,8 @@ fn check_file(path: &Path, private: bool) -> Result<()> {
     }
 }
 
+/// Read an optional owned file without following its final symlink, then
+/// recheck the opened descriptor so validation applies to the file actually read.
 fn read_owned(path: &Path, private: bool) -> Result<Option<Vec<u8>>> {
     check_file(path, private)?;
     let mut file = match OpenOptions::new()
@@ -415,6 +440,7 @@ fn read_owned(path: &Path, private: bool) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+/// Write and sync a private sibling file for the caller's atomic publication.
 fn temporary_file(destination: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
     let mut temporary =
         tempfile::NamedTempFile::new_in(destination.parent().context("SSH file has no parent")?)?;
@@ -426,6 +452,8 @@ fn temporary_file(destination: &Path, bytes: &[u8]) -> Result<tempfile::NamedTem
     Ok(temporary)
 }
 
+/// Accept only versioned, digest-verified entries owned by this installer.
+/// Reject manual edits rather than silently replacing user-maintained content.
 fn parse_managed(bytes: Option<&[u8]>) -> Result<Vec<ManagedEntry>> {
     let Some(bytes) = bytes else {
         return Ok(Vec::new());
@@ -471,6 +499,7 @@ fn parse_managed(bytes: Option<&[u8]>) -> Result<Vec<ManagedEntry>> {
     Ok(entries)
 }
 
+/// Bind alias, target identity and stanza with length-delimited digest inputs.
 fn entry_digest(alias: &str, identity: &str, stanza: &str) -> String {
     let mut digest = Sha256::new();
     for value in [alias, identity, stanza] {
@@ -480,6 +509,7 @@ fn entry_digest(alias: &str, identity: &str, stanza: &str) -> String {
     format!("{:x}", digest.finalize())
 }
 
+/// Keep each managed stanza inside its exact Host block; reject nested controls.
 fn validate_stanza(stanza: &str, alias: &str) -> Result<()> {
     let (host, body) = stanza
         .split_once('\n')
@@ -498,8 +528,8 @@ fn validate_stanza(stanza: &str, alias: &str) -> Result<()> {
     Ok(())
 }
 
-// Only control directives need their values parsed. ProxyCommand and other user
-// options may contain shell syntax which is not ssh_config token syntax.
+/// Parse only directive boundaries; shell-valued options such as ProxyCommand
+/// must not be interpreted with the quoting rules for control directives.
 fn directive(line: &str) -> Result<(String, &str)> {
     let line = line.trim_start_matches([' ', '\t', '\r']);
     if line.is_empty() || line.starts_with('#') {
@@ -523,6 +553,8 @@ fn directive(line: &str) -> Result<(String, &str)> {
     Ok((keyword.to_ascii_lowercase(), values))
 }
 
+/// Parse supported control-directive quoting without evaluating shell syntax.
+/// Ambiguous single quotes, escapes and unterminated quotes fail closed.
 fn words(value: &str) -> Result<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -571,10 +603,15 @@ fn words(value: &str) -> Result<Vec<String>> {
     Ok(words)
 }
 
+/// Reject alias conflicts and unsafe Include graphs without evaluating Match exec.
+///
+/// The backup is protected before enumerating included files, even when it does
+/// not exist yet, so publishing it cannot introduce a new recursive Include.
 fn scan_config(
     bytes: &[u8],
     home: &Path,
     managed: &Path,
+    backup: &Path,
     alias: &str,
     expand_include_tokens: bool,
     stack: &mut Vec<PathBuf>,
@@ -622,6 +659,10 @@ fn scan_config(
                         !glob::Pattern::new(&pattern)?.matches(managed_text),
                         "unowned or conditional Include of the BoxLite managed file; remove it manually"
                     );
+                    ensure!(
+                        !include_matches_backup(&pattern, backup)?,
+                        "SSH Include matches the BoxLite config backup; narrow it before installing"
+                    );
                     for included in glob::glob(&pattern).context("unsupported SSH Include glob")? {
                         let included = included.context("read SSH Include glob")?;
                         let canonical = fs::canonicalize(&included).with_context(|| {
@@ -644,7 +685,15 @@ fn scan_config(
                         let bytes = fs::read(&included)
                             .with_context(|| format!("read SSH Include {}", included.display()))?;
                         stack.push(canonical);
-                        scan_config(&bytes, home, managed, alias, expand_include_tokens, stack)?;
+                        scan_config(
+                            &bytes,
+                            home,
+                            managed,
+                            backup,
+                            alias,
+                            expand_include_tokens,
+                            stack,
+                        )?;
                         stack.pop();
                     }
                 }
@@ -662,6 +711,39 @@ fn scan_config(
     Ok(())
 }
 
+/// Match a future backup without requiring the backup file to exist.
+///
+/// Expand only its prospective parent directories, then resolve them through the
+/// filesystem. This preserves `.`/`..`, directory glob and symlink semantics
+/// rather than lexically collapsing paths that OpenSSH resolves differently.
+fn include_matches_backup(pattern: &str, backup: &Path) -> Result<bool> {
+    let (directory, filename) = pattern
+        .rsplit_once('/')
+        .context("SSH Include pattern must be absolute")?;
+    let backup_name = backup
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("SSH backup filename must be UTF-8")?;
+    if !glob::Pattern::new(filename)?.matches(backup_name) {
+        return Ok(false);
+    }
+    let backup_parent = backup.parent().context("SSH backup has no parent")?;
+    let directory = if directory.is_empty() { "/" } else { directory };
+    for parent in glob::glob(directory).context("unsupported SSH Include directory glob")? {
+        let parent = parent.context("read SSH Include directory glob")?;
+        let canonical = fs::canonicalize(&parent)
+            .with_context(|| format!("resolve SSH Include directory {}", parent.display()))?;
+        if canonical == backup_parent {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Resolve OpenSSH's supported Include spellings against the config home.
+///
+/// Leave glob components intact: prospective-file checks and existing-file
+/// enumeration must interpret the same pattern without expanding Match exec.
 fn include_pattern(value: &str, home: &Path, expand_tokens: bool) -> Result<String> {
     ensure!(
         !value.is_empty() && !value.contains('$') && !value.contains('`'),
@@ -698,7 +780,7 @@ fn include_pattern(value: &str, home: &Path, expand_tokens: bool) -> Result<Stri
     }
 }
 
-// OpenSSH Host patterns recognize only '*' and '?', not glob character classes.
+/// Match OpenSSH Host patterns: only '*' and '?' are wildcards, not glob classes.
 fn host_matches(pattern: &str, alias: &str) -> bool {
     let pattern = pattern.as_bytes();
     let alias = alias.as_bytes();
