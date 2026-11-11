@@ -903,6 +903,7 @@ make test:apps:runner
 
 # Just the attach + exec_manager suites
 make test:apps:runner FILTER='Attach|ExecManager'
+make test:apps:runner FILTER='TestBoxliteExec.*HTTP'
 
 # With race detector (recommended; cleanupLoop ticker + attach goroutines)
 make test:apps:runner GOTEST_FILTER='-race'
@@ -963,3 +964,12 @@ Omission retains the one-core default; explicit zero, non-finite values, and exc
 The HTTP and v2 job paths preserve the number through the Go SDK; recovery validates it before destroying the old Box.
 Fractional Linux allocations use the Runtime's cgroup quota and rounded-up guest topology, with its existing best-effort membership behavior.
 Upgrade all Runners and matching native libraries before enabling fractional creation in the API, including migration destinations.
+
+The keyed execution controller keeps SDK metadata/startup behind `executionBackend`.
+HTTP tests substitute that boundary while exercising Gin parsing, VM generation
+checks, option forwarding and error status mapping without a VM. The production
+adapter still delegates startup to `ExecManager`; its initialization failures
+remain server errors on startup, while the generation lookup retains its 404
+lookup contract. Malformed startup JSON is rejected before SDK lookup, so request
+validation remains observable even if the runner is unavailable. Runtime generation tests exercise real guest RPC handling,
+and C ABI tests validate malformed keys and unsupported remote-runtime requests.

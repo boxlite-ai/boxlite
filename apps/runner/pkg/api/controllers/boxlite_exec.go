@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -86,9 +87,40 @@ type ResizeRequest struct {
 	Rows uint32 `json:"rows"`
 }
 
+// executionBackend keeps SDK access at the controller boundary. The handler
+// owns generation validation, request translation, and HTTP error mapping.
+type executionBackend interface {
+	Info(context.Context) (*sdkboxlite.BoxInfo, error)
+	Start(context.Context, string, boxlite.StartOptions) (string, error)
+}
+
+type sdkExecutionBackend struct{ box *sdkboxlite.Box }
+
+func (b sdkExecutionBackend) Info(ctx context.Context) (*sdkboxlite.BoxInfo, error) {
+	return b.box.Info(ctx)
+}
+
+func (b sdkExecutionBackend) Start(ctx context.Context, boxID string, options boxlite.StartOptions) (string, error) {
+	return execManager.Start(ctx, b.box, boxID, options)
+}
+
+var errExecutionRunnerUnavailable = errors.New("execution runner unavailable")
+
+var getExecutionBackend = func(ctx *gin.Context, boxID string) (executionBackend, error) {
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errExecutionRunnerUnavailable, err)
+	}
+	bx, err := r.Boxlite.GetBox(ctx.Request.Context(), boxID)
+	if err != nil {
+		return nil, err
+	}
+	return sdkExecutionBackend{box: bx}, nil
+}
+
 // A generation binds an uncertain request to one running VM. It is checked
 // again at startup; an old request must never boot a replacement VM.
-func executionGeneration(ctx *gin.Context, bx *sdkboxlite.Box) (string, error) {
+func executionGeneration(ctx *gin.Context, bx executionBackend) (string, error) {
 	info, err := bx.Info(ctx.Request.Context())
 	if err != nil {
 		return "", err
@@ -100,7 +132,7 @@ func executionGeneration(ctx *gin.Context, bx *sdkboxlite.Box) (string, error) {
 }
 
 func BoxliteExecGeneration(ctx *gin.Context) {
-	bx, err := getExecutionBox(ctx, ctx.Param("boxId"))
+	bx, err := getExecutionBackend(ctx, ctx.Param("boxId"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -114,12 +146,6 @@ func BoxliteExecGeneration(ctx *gin.Context) {
 }
 
 func BoxliteExec(ctx *gin.Context) {
-	r, err := runner.GetInstance(nil)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
 	boxId := ctx.Param("boxId")
 
 	var req ExecRequest
@@ -128,9 +154,13 @@ func BoxliteExec(ctx *gin.Context) {
 		return
 	}
 
-	bx, err := r.Boxlite.GetBox(ctx.Request.Context(), boxId)
+	bx, err := getExecutionBackend(ctx, boxId)
 	if err != nil {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("box not found: %s", err)})
+		if errors.Is(err, errExecutionRunnerUnavailable) {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		} else {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("box not found: %s", err)})
+		}
 		return
 	}
 
@@ -147,7 +177,7 @@ func BoxliteExec(ctx *gin.Context) {
 		parts := strings.Split(expected, ":")
 		options.ExpectedStartedAt, _ = strconv.ParseInt(parts[len(parts)-1], 10, 64)
 	}
-	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, options)
+	execId, err := bx.Start(ctx.Request.Context(), boxId, options)
 	if err != nil {
 		ctx.JSON(execStartStatus(err), gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return

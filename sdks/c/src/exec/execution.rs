@@ -1080,6 +1080,71 @@ mod tests {
     }
 
     #[test]
+    fn keyed_exec_validates_key_and_rejects_remote_runtime_without_execution() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .starts_with("GET /v1/boxes/ffi-box ")
+            );
+            let body = r#"{"box_id":"ffi-box","status":"running","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine","cpus":1,"memory_mib":512}"#;
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let runtime = boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(format!(
+            "http://{address}"
+        )))
+        .unwrap();
+        let tokio_rt = crate::runtime::create_tokio_runtime().unwrap();
+        let handle = tokio_rt.block_on(runtime.get("ffi-box")).unwrap().unwrap();
+        server.join().unwrap();
+        let mut handle = BoxHandle {
+            box_id: handle.id().clone(),
+            handle: Arc::new(handle),
+            tokio_rt,
+            queue: Arc::new(EventQueue::new()),
+        };
+        let cmd = BoxliteCommand {
+            command: c"true".as_ptr(),
+            args: ptr::null(),
+            argc: 0,
+            env_pairs: ptr::null(),
+            env_count: 0,
+            workdir: ptr::null(),
+            user: ptr::null(),
+            timeout_secs: 0.0,
+            tty: 0,
+        };
+        let invalid_key = [0xff_u8, 0];
+        for (key, expected) in [
+            (c"request".as_ptr(), BoxliteErrorCode::Unsupported),
+            (
+                invalid_key.as_ptr().cast(),
+                BoxliteErrorCode::InvalidArgument,
+            ),
+        ] {
+            let mut output = ptr::dangling_mut();
+            let mut error = FFIError::default();
+            let code = unsafe {
+                boxlite_box_exec_keyed(&mut handle, &cmd, key, 1234, &mut output, &mut error)
+            };
+            assert_eq!(code, expected);
+            assert!(output.is_null());
+            assert!(!error.message.is_null());
+            unsafe { crate::boxlite_error_free(&mut error) };
+        }
+    }
+
+    #[test]
     fn box_exec_rejects_null_handle() {
         let command = CString::new("/bin/sh").expect("command cstring");
         let cmd = BoxliteCommand {
