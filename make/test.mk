@@ -10,6 +10,7 @@ PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
+PHONY_TARGETS += test\:integration\:lifecycle-race
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -470,6 +471,19 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 	else \
 		cargo test -p boxlite --features krun,gvproxy,native --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
+	fi
+
+# Explicit opt-in: these ignored tests must execute, not merely match FILTER.
+test\:integration\:lifecycle-race: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_REPRO_ROOTFS" -a -d "$$BOXLITE_REPRO_ROOTFS" || { \
+		echo "Set BOXLITE_REPRO_ROOTFS to a local OCI image directory" >&2; exit 1; }
+	@test -z "$$BOXLITE_DEPS_STUB" || { echo "Real VM tests cannot use dependency stubs" >&2; exit 1; }
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --features krun,gvproxy,native --test start_stop_race \
+			--run-ignored only --no-tests=fail --no-fail-fast --profile vm; \
+	else \
+		cargo test -p boxlite --features krun,gvproxy,native --test start_stop_race \
+			-- --ignored --test-threads=1 --nocapture; \
 	fi
 
 # OpenCode agent adapter and `boxlite agent` CLI tests (requires VM). Ignored by the suites above:

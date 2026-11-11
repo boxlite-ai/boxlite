@@ -117,6 +117,61 @@ Linux.
 See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)
 and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/flock.2).
 
+### Per-box lifecycle ownership
+
+`BoxImpl::with_operation` acquires the box's lifecycle write lock and refreshes
+persisted state before start/stop, implicit boot/adoption, outbound updates, and
+watcher reports. Internal boot and attach helpers reuse that admission; they never
+acquire a second lifecycle lock. An initialized handle cannot attach its old live
+resources to a different PID or `started_at`.
+
+Watcher observes processes and probes health without holding admission. It reports
+events through a weak runtime reference; resolving an event does not arm another
+watcher. The facade checks PID/`started_at` and owns health persistence and shared
+stop finalization: exit records, cache invalidation, and configured removal.
+Successful automatic removal is recorded on that handle, so a later `stop()` remains
+idempotent even after its row and lock are gone. Unrelated missing state is not
+treated as completed automatic removal.
+
+Explicit start keeps `Container.Start` background and cancellable. Outbound updates
+use the host network backend without awaiting that RPC: a pending container start
+cannot hold lifecycle admission and prevent stop. Returning live resources releases
+admission before subsequent executions, streams, or tunnels; metadata reads retain
+their short state lock.
+
+Explicit removal uses a nonblocking lifecycle write attempt and returns
+`InvalidState` when busy. Synchronous shutdown skips detached boxes and defers busy
+cleanup. Async shutdown marks cleanup pending before awaiting stops and clears it
+only after every stop succeeds. Timeout, failure, or cancellation leaves a later
+synchronous shutdown or runtime Drop able to retry.
+
+Disk APIs still use the existing **per-handle `disk_ops` mutex**, not a disk-lock
+registry. Quiescing snapshot creation, clone, and export run their existing complete
+operation in an owner task retaining the same facade and mutex. Dropping the caller
+detaches its wait; the task finishes disk work, resume/thaw, snapshot-marker cleanup,
+and later clone/export phases before releasing `disk_ops`. A weak self-reference
+preserves the original facade after cache invalidation rather than reconstructing
+a handle with a different mutex.
+
+Only the quiesce bracket also takes lifecycle write admission, through resume/thaw.
+The order is `disk_ops` → lifecycle → state; lifecycle entrypoints never acquire
+`disk_ops`. Final archive writing releases lifecycle admission but retains disk
+exclusion. This needs a live Tokio executor; executor/process destruction is not
+an asynchronous-cleanup guarantee.
+
+Stopped-disk operations retain their existing coordination limits. There is no
+cross-handle disk registry or lifecycle-read/disk-write composition yet; complete
+snapshot/clone/export lock migration is separate work.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` and
+`BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=quiesce_cancel` for host admission and
+cleanup checks. Stand-in shims, loopback guest RPCs, real disk helpers, and archive
+FIFOs are not VM evidence. For the real boot control/race cases, leave dependency
+stubs unset and run `make test:integration:lifecycle-race` with
+`BOXLITE_REPRO_ROOTFS` pointing to a local OCI image layout, not an unpacked rootfs;
+this target explicitly runs the ignored tests.
+
+
 ### ShimController
 
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate
