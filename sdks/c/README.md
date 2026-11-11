@@ -1416,6 +1416,7 @@ cargo build -p boxlite-c
 See `sdks/c/tests/` for the test suite.
 
 - `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- Rust FFI tests borrowing runtime out-pointers should use `runtime.as_ref().expect(...)` at the borrow site, making the non-null precondition explicit to static analysis. Keep the allocation alive through the reference's last use, then free the runtime; a null check alone does not establish pointer validity.
 - `make test:unit:ffi FILTER=checkpoint` exercises checkpoint create/list/get/import/remove through loopback HTTP and the real post-and-drain queue, including callback-owned metadata, Box handles and errors. Native binding coverage runs these Rust FFI tests alongside the C executable tests; no VM is needed.
 - `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
