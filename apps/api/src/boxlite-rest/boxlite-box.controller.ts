@@ -153,6 +153,7 @@ export class BoxliteBoxController {
     }
   }
 
+  /** Page the authenticated organization's live inventory with a continuation only when matches remain. */
   @Get()
   @ApiResponse({
     status: 200,

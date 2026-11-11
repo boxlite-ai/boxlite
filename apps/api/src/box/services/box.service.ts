@@ -495,6 +495,7 @@ export class BoxService {
     return this.toBoxDto(updatedBox)
   }
 
+  /** Return at most pageSize + 1 visible matches after an immutable ID, before enrichment. */
   async findInventory(
     organizationId: string,
     query: { pageSize: number; status?: BoxPublicStatus; after?: string },
