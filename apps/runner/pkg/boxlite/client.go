@@ -466,6 +466,18 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err != nil {
 		return "", "", err
 	}
+
+	// Also before any side effect: the box id becomes part of filesystem
+	// paths — volume mount records ({id}.json) and filestore data
+	// directories ({id}-{n}). The control plane mints ids from
+	// [0-9A-Za-z]{12}, which cannot carry separators or '..', but this
+	// boundary must not lean on that: a traversal-shaped id is rejected
+	// before any mount or record work runs. The literal Contains checks stay
+	// inline so static analysis sees the validation on every path.
+	if strings.ContainsAny(boxDto.Id, "/\\") || strings.Contains(boxDto.Id, "..") {
+		return "", "", fmt.Errorf("invalid box id %q: must not contain path separators or '..'", boxDto.Id)
+	}
+
 	operation, err := c.checkpointOperations().Lock(ctx, boxDto.Id)
 	if err != nil {
 		return "", "", err
@@ -703,6 +715,13 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	// Same boundary check as Create: Start replays the volume mount record
+	// write from metadata and looks the box up by name, so a
+	// traversal-shaped id is rejected before any of that runs.
+	if strings.ContainsAny(boxId, "/\\") || strings.Contains(boxId, "..") {
+		return "", fmt.Errorf("invalid box id %q: must not contain path separators or '..'", boxId)
+	}
+
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
 		return "", err
@@ -748,6 +767,13 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	// Same boundary check as Create/Start: the runtime removal and the
+	// volume mount record paths below all key off boxId, so a
+	// traversal-shaped id is rejected before any of them runs.
+	if strings.ContainsAny(boxId, "/\\") || strings.Contains(boxId, "..") {
+		return fmt.Errorf("invalid box id %q: must not contain path separators or '..'", boxId)
+	}
+
 	operation, err := c.checkpointOperations().Lock(ctx, boxId)
 	if err != nil {
 		return err

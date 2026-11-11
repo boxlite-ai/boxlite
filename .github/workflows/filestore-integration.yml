@@ -76,8 +76,11 @@ jobs:
         run: mkdir -p filestore-export
 
       - name: Start nfs-ganesha
-        # Entry point override is required (see the header comment). NFSv4.1
-        # serves everything over TCP 2049 — no mountd/statd ports to publish.
+        # Entry point override is required (see the header comment). rpcbind
+        # and statd run before ganesha — ganesha binds 2049 only after them in
+        # this image — and dbus is deliberately skipped: `dbus-daemon --system
+        # --fork` hangs in this container and ganesha runs fine without it.
+        # NFSv4.1 serves everything over TCP 2049 — no mountd ports to publish.
         run: |
           docker run -d --name nfs-ganesha \
             --publish 2049:2049 \
@@ -85,20 +88,25 @@ jobs:
             --volume "$PWD/filestore-export:/export" \
             --entrypoint /bin/sh \
             longhornio/nfs-ganesha \
-            -c 'ganesha.nfsd -F -L /var/log/ganesha.log'
+            -c 'mkdir -p /run/rpcbind && rpcbind && rpc.statd -L; sleep 1; exec /usr/bin/ganesha.nfsd -F -f /etc/ganesha/ganesha.conf'
 
       - name: Wait for the NFS server to accept connections
+        # The probe targets the container IP, not the published port: the
+        # docker proxy binds the host port the moment the container starts,
+        # so a 127.0.0.1 probe can report "open" while ganesha is still
+        # initializing (verified false positive during local bring-up).
         run: |
+          ip=$(docker inspect -f '{{.NetworkSettings.IPAddress}}' nfs-ganesha)
           deadline=$((SECONDS + 30))
-          until (echo > /dev/tcp/127.0.0.1/2049) 2>/dev/null; do
+          until (echo > /dev/tcp/$ip/2049) 2>/dev/null; do
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "nfs-ganesha did not accept connections on 127.0.0.1:2049 within 30s" >&2
+              echo "nfs-ganesha did not accept connections on $ip:2049 within 30s" >&2
               docker logs nfs-ganesha || true
               exit 1
             fi
             sleep 1
           done
-          echo "nfs-ganesha is accepting connections on 127.0.0.1:2049"
+          echo "nfs-ganesha is accepting connections on $ip:2049"
 
       - name: Run the filestore integration test
         # Mounting needs root; -E plus an explicit PATH keeps sudo on the

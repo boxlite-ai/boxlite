@@ -49,6 +49,7 @@ export * from './box-progress';
 export * from './box-progress-phase';
 export * from './box-state';
 export * from './box-volume';
+export * from './box-volume-filestore-ref';
 export * from './boxlite-configuration';
 export * from './cpu-incident-list-dto';
 export * from './create-api-key';

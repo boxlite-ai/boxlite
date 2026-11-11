@@ -14,18 +14,25 @@
 
 
 
+// May contain unused imports in some cases
+// @ts-ignore
+import type { BoxVolumeFilestoreRef } from './box-volume-filestore-ref';
+
 export interface BoxVolume {
     /**
-     * The ID of the volume
+     * The ID of the managed volume; absent for filestore volumes
      */
-    'volumeId': string;
+    'volumeId'?: string;
     /**
      * The mount path for the volume
      */
     'mountPath': string;
     /**
+     * The Filestore instance reference; absent for managed volumes
+     */
+    'filestore'?: BoxVolumeFilestoreRef;
+    /**
      * Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.
      */
     'subpath'?: string;
 }
-
