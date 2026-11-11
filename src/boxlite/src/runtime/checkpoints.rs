@@ -42,8 +42,12 @@ pub(crate) trait CheckpointBackend: Send + Sync {
     async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>>;
     async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo>;
     async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()>;
-    async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox>;
-    async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox>;
+    async fn import_box(
+        &self,
+        key: &str,
+        name: Option<String>,
+        box_id: Option<&str>,
+    ) -> BoxliteResult<LiteBox>;
 }
 
 /// Checkpoint management through a REST server; local runtimes return Unsupported.
@@ -93,36 +97,6 @@ impl CheckpointHandle {
     pub async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()> {
         checked_name(key)?;
         self.backend()?.remove(key, force).await
-    }
-
-    /// Import into a new box, or replace an idle target selected by `box_id`.
-    /// Name and target are mutually exclusive. Replacement preserves the public identity.
-    /// Import retains the checkpoint archive for subsequent uses.
-    pub async fn import_box(
-        &self,
-        key: &str,
-        name: Option<String>,
-        box_id: Option<&str>,
-    ) -> BoxliteResult<LiteBox> {
-        checked_name(key)?;
-        if name.is_some() && box_id.is_some() {
-            return Err(BoxliteError::InvalidArgument(
-                "name and box_id are mutually exclusive".into(),
-            ));
-        }
-        if let Some(target) = box_id {
-            if target.is_empty() || target.contains('\0') {
-                return Err(BoxliteError::InvalidArgument(
-                    "import target must be a box ID or name".into(),
-                ));
-            }
-            self.backend()?.recover_box(key, target).await
-        } else {
-            if let Some(name) = &name {
-                checked_name(name)?;
-            }
-            self.backend()?.create_box(key, name).await
-        }
     }
 
     fn backend(&self) -> BoxliteResult<&dyn CheckpointBackend> {

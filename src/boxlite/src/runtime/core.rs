@@ -9,7 +9,7 @@ use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::checkpoints::{CheckpointBackend, CheckpointHandle};
 use crate::runtime::images::ImageBackend;
-use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
+use crate::runtime::options::{BoxImportSource, BoxOptions, BoxliteOptions};
 use crate::runtime::registries::RegistryBackend;
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
@@ -388,17 +388,49 @@ impl BoxliteRuntime {
         self.backend.remove(id_or_name, force).await
     }
 
-    /// Import a box from a `.boxlite` archive.
+    /// Import a box from a `.boxlite` archive or a REST-managed checkpoint.
     ///
     /// Creates a new box with a new ID from archived disk images and configuration.
     /// Pass `name=None` to keep the imported box unnamed.
     /// Support depends on backend capabilities (local backends implement import).
     pub async fn import_box(
         &self,
-        archive: BoxArchive,
+        source: impl Into<BoxImportSource>,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        self.backend.import_box(archive, name).await
+        match source.into() {
+            BoxImportSource::Archive(archive) => self.backend.import_box(archive, name).await,
+            BoxImportSource::Checkpoint {
+                checkpoint_id,
+                box_id,
+            } => {
+                crate::runtime::checkpoints::checked_name(&checkpoint_id)?;
+                if name.is_some() && box_id.is_some() {
+                    return Err(BoxliteError::InvalidArgument(
+                        "name and box_id are mutually exclusive".into(),
+                    ));
+                }
+                if let Some(name) = &name {
+                    crate::runtime::checkpoints::checked_name(name)?;
+                }
+                if let Some(target) = &box_id {
+                    if target.is_empty() || target.contains('\0') {
+                        return Err(BoxliteError::InvalidArgument(
+                            "import target must be a box ID or name".into(),
+                        ));
+                    }
+                }
+                self.checkpoint_backend
+                    .as_deref()
+                    .ok_or_else(|| {
+                        BoxliteError::Unsupported(
+                            "checkpoints are only implemented for REST runtimes".into(),
+                        )
+                    })?
+                    .import_box(&checkpoint_id, name, box_id.as_deref())
+                    .await
+            }
+        }
     }
 
     /// REST-managed disk checkpoints. Operations return Unsupported on local runtimes.
@@ -632,13 +664,25 @@ mod tests {
             checkpoints.get("base").await.unwrap_err(),
             checkpoints.remove("base", false).await.unwrap_err(),
             checkpoints.remove("base", true).await.unwrap_err(),
-            checkpoints
-                .import_box("base", Some("worker".into()), None)
+            runtime
+                .import_box(
+                    BoxImportSource::Checkpoint {
+                        checkpoint_id: "base".into(),
+                        box_id: None,
+                    },
+                    Some("worker".into()),
+                )
                 .await
                 .err()
                 .expect("local checkpoint import must fail"),
-            checkpoints
-                .import_box("base", None, Some("target"))
+            runtime
+                .import_box(
+                    BoxImportSource::Checkpoint {
+                        checkpoint_id: "base".into(),
+                        box_id: Some("target".into()),
+                    },
+                    None,
+                )
                 .await
                 .err()
                 .expect("local checkpoint import must fail"),

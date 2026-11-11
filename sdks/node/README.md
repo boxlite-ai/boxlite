@@ -16,17 +16,20 @@ The source must be stopped before `create`; stop it and wait for `stopped` first
 Checkpoint creation rejects other states and never stops the source automatically.
 
 The REST runtime's `checkpoints` handle exposes `create`, `list`,
-`get`, `remove` and `importBox(key, name?, boxId?)` as promises. Checkpoints survive
+`get` and `remove` as promises. Checkpoints survive
 their source box and inherit its saved execution settings without overrides.
 
 ```typescript
 const checkpoint = await runtime.checkpoints.create("source", "dev-base");
-const worker = await runtime.checkpoints.importBox(checkpoint.id, "worker");
+const worker = await runtime.importBox(undefined, "worker", { checkpointId: checkpoint.id });
 ```
+
+The original `runtime.importBox(archivePath, name)` call stays compatible.
+Specify `checkpointId` in the third argument instead of `archivePath`; the two sources are mutually exclusive.
 
 Omit `boxId` to create a new Box; `name` and `boxId` are mutually exclusive.
 Cloud capture may initially report `creating`; query until `ready` before use.
-`importBox(checkpointId, undefined, targetId)` requires an idle stopped or failed target.
+`runtime.importBox(undefined, undefined, { checkpointId, boxId: targetId })` requires an idle stopped or failed target.
 REST replacement preserves the public Box ID. `remove(key, true)` ignores
 absence only. Storage and replacement coordination belong to the server.
 Local runtime checkpoint operations reject with an unsupported-operation error.

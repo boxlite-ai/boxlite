@@ -1598,6 +1598,39 @@ impl BoxArchive {
     }
 }
 
+/// Source for the runtime's archive or REST checkpoint import operation.
+#[derive(Debug, Clone)]
+pub enum BoxImportSource {
+    Archive(BoxArchive),
+    Checkpoint {
+        checkpoint_id: String,
+        box_id: Option<String>,
+    },
+}
+
+impl From<BoxArchive> for BoxImportSource {
+    fn from(archive: BoxArchive) -> Self {
+        Self::Archive(archive)
+    }
+}
+
+impl BoxImportSource {
+    /// Select exactly one source; only checkpoints support replacing a Box.
+    pub fn from_options(
+        archive: Option<BoxArchive>,
+        checkpoint_id: Option<String>,
+        box_id: Option<String>,
+    ) -> BoxliteResult<Self> {
+        match (archive, checkpoint_id, box_id) {
+            (Some(archive), None, None) => Ok(Self::Archive(archive)),
+            (None, Some(checkpoint_id), box_id) => Ok(Self::Checkpoint { checkpoint_id, box_id }),
+            _ => Err(BoxliteError::InvalidArgument(
+                "specify exactly one of archive_path or checkpoint_id; box_id requires a checkpoint".into(),
+            )),
+        }
+    }
+}
+
 /// Forward-compatible options for creating a snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct SnapshotOptions {}

@@ -11,11 +11,10 @@ use boxlite::{BoxliteError, BoxliteResult, BoxliteRuntime, CheckpointInfo};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::archive::TokioRuntimeDropGuard;
-use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxRemoveBoxCb, CCheckpointInfoCb, CCheckpointListCb, CRuntimeImportCb, EventQueue,
-    OwnedFfiPtr, RuntimeEvent, push_event,
+    CBoxRemoveBoxCb, CCheckpointInfoCb, CCheckpointListCb, EventQueue, OwnedFfiPtr, RuntimeEvent,
+    push_event,
 };
 use crate::info::{free_raw_slice, into_raw_slice};
 use crate::{CBoxliteError, CBoxliteRuntime};
@@ -267,57 +266,6 @@ pub unsafe extern "C" fn boxlite_checkpoint_remove(
             }
         })
     }
-}
-
-/// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
-/// A non-null box_id replaces an idle target; the callback owns the Box handle.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_checkpoint_import_box(
-    runtime: *mut CBoxliteRuntime,
-    key: *const c_char,
-    name: *const c_char,
-    box_id: *const c_char,
-    cb: CRuntimeImportCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    let cb = crate::unwrap_cb_or_return!(cb, out_error);
-    let key = input_or_return!(unsafe { required(key) }, out_error);
-    let name = input_or_return!(unsafe { optional(name) }, out_error);
-    let box_id = input_or_return!(unsafe { optional(box_id) }, out_error);
-    let user_data = user_data as usize;
-    unsafe {
-        submit(
-            runtime,
-            out_error,
-            move |runtime, tokio_rt, queue| async move {
-                let result = runtime
-                    .checkpoints()
-                    .import_box(&key, name, box_id.as_deref())
-                    .await
-                    .map(|handle| boxed_result(handle, tokio_rt, queue));
-                RuntimeEvent::RuntimeImport {
-                    cb,
-                    user_data,
-                    result,
-                }
-            },
-        )
-    }
-}
-
-fn boxed_result(
-    handle: boxlite::LiteBox,
-    tokio_rt: Arc<TokioRuntime>,
-    queue: Arc<EventQueue>,
-) -> OwnedFfiPtr<BoxHandle> {
-    let box_id = handle.id().clone();
-    OwnedFfiPtr::new(Box::new(BoxHandle {
-        handle: Arc::new(handle),
-        box_id,
-        tokio_rt,
-        queue,
-    }))
 }
 
 unsafe fn submit<F>(
@@ -747,11 +695,14 @@ mod tests {
                 for (name, target) in [(name.as_ptr(), ptr::null()), (ptr::null(), target.as_ptr())]
                 {
                     assert_eq!(
-                        boxlite_checkpoint_import_box(
+                        crate::archive::boxlite_runtime_import_with_options(
                             &mut runtime,
-                            key.as_ptr(),
-                            name,
-                            target,
+                            &crate::archive::CBoxImportOptions {
+                                archive_path: ptr::null(),
+                                name,
+                                checkpoint_id: key.as_ptr(),
+                                box_id: target
+                            },
                             Some(checkpoint_box_reply),
                             data,
                             ptr::null_mut()

@@ -8,7 +8,7 @@ use std::os::raw::{c_char, c_void};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxliteError, ExportOptions};
+use boxlite::{BoxArchive, BoxImportSource, BoxliteError, ExportOptions};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::box_handle::BoxHandle;
@@ -40,6 +40,47 @@ impl Drop for TokioRuntimeDropGuard {
                 drop(std::thread::spawn(move || drop(runtime)));
             }
         }
+    }
+}
+
+/// Import source selection. Specify archive_path or checkpoint_id, not both.
+/// box_id is only valid for a checkpoint and is mutually exclusive with name.
+#[repr(C)]
+pub struct CBoxImportOptions {
+    pub archive_path: *const c_char,
+    pub name: *const c_char,
+    pub checkpoint_id: *const c_char,
+    pub box_id: *const c_char,
+}
+
+/// Queue an archive or checkpoint import; inputs are copied before returning.
+/// The callback owns the returned Box handle, released with boxlite_box_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_import_with_options(
+    runtime: *mut CBoxliteRuntime,
+    options: *const CBoxImportOptions,
+    cb: CRuntimeImportCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    if options.is_null() {
+        unsafe {
+            write_error(out_error, null_pointer_error("options"));
+        }
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    let options = unsafe { &*options };
+    unsafe {
+        import_box(
+            runtime,
+            options.archive_path,
+            options.name,
+            options.checkpoint_id,
+            options.box_id,
+            cb,
+            user_data,
+            out_error,
+        )
     }
 }
 
@@ -77,6 +118,8 @@ pub unsafe extern "C" fn boxlite_runtime_import(
             runtime,
             archive_path,
             name_or_null,
+            std::ptr::null(),
+            std::ptr::null(),
             cb,
             user_data,
             out_error,
@@ -135,6 +178,8 @@ unsafe fn import_box(
     runtime: *mut RuntimeHandle,
     archive_path: *const c_char,
     name_or_null: *const c_char,
+    checkpoint_id: *const c_char,
+    box_id: *const c_char,
     cb: CRuntimeImportCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -144,8 +189,29 @@ unsafe fn import_box(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        let archive_path = match parse_required_path(archive_path, "archive_path") {
-            Ok(archive_path) => archive_path,
+        let source = (|| {
+            let archive = if archive_path.is_null() {
+                None
+            } else {
+                Some(BoxArchive::new(parse_required_path(
+                    archive_path,
+                    "archive_path",
+                )?))
+            };
+            let checkpoint_id = if checkpoint_id.is_null() {
+                None
+            } else {
+                Some(parse_required_string(checkpoint_id, "checkpoint_id")?)
+            };
+            let box_id = if box_id.is_null() {
+                None
+            } else {
+                Some(parse_required_string(box_id, "box_id")?)
+            };
+            BoxImportSource::from_options(archive, checkpoint_id, box_id)
+        })();
+        let source = match source {
+            Ok(source) => source,
             Err(error) => {
                 let code = error_to_code(&error);
                 write_error(out_error, error);
@@ -163,6 +229,11 @@ unsafe fn import_box(
         let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
+        if let Err(error) = crate::util::ensure_runtime_live(&runtime_ref.liveness, "import box") {
+            let code = error_to_code(&error);
+            write_error(out_error, error);
+            return code;
+        }
         let runtime = runtime_ref.runtime.clone();
         let tokio_rt = runtime_ref.tokio_rt.clone();
         let queue = runtime_ref.queue.clone();
@@ -176,8 +247,7 @@ unsafe fn import_box(
             let _runtime_drop_guard = TokioRuntimeDropGuard::new(task_tokio_rt);
             // Local runtimes intentionally trust caller-managed archives. A
             // REST server applies its own untrusted-upload policy server-side.
-            let archive = BoxArchive::new(archive_path);
-            let result = runtime.import_box(archive, name).await.map(|handle| {
+            let result = runtime.import_box(source, name).await.map(|handle| {
                 let box_id = handle.id().clone();
                 OwnedFfiPtr::new(Box::new(BoxHandle {
                     handle: Arc::new(handle),

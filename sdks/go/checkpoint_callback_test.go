@@ -52,7 +52,7 @@ func TestCheckpointCallbackEmptySuccessIsRejectedByMetadataAndBoxDecoders(t *tes
 	handle = registerHandleForDispatch(cgo.NewHandle(imported))
 	goBoxliteOnRuntimeImport(nil, nil, handleToPtr(handle))
 	completed := <-imported
-	box, err := checkpointBoxFromHandle(runtime, completed.value)
+	box, err := importedBoxFromHandle(runtime, completed.value)
 	if box != nil || err == nil {
 		t.Fatalf("empty native Box was accepted: %#v %v", box, err)
 	}

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxImportSource, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -12,6 +12,14 @@ use crate::metrics::JsRuntimeMetrics;
 use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
 use crate::util::map_err;
 use crate::volumes::JsVolumeHandle;
+
+#[napi(object)]
+pub struct JsImportOptions {
+    #[napi(js_name = "checkpointId")]
+    pub checkpoint_id: Option<String>,
+    #[napi(js_name = "boxId")]
+    pub box_id: Option<String>,
+}
 
 /// BoxLite runtime instance.
 ///
@@ -101,10 +109,24 @@ impl JsBoxlite {
 
     /// Import a box from a `.boxlite` archive.
     #[napi(js_name = "importBox")]
-    pub async fn import_box(&self, archive_path: String, name: Option<String>) -> Result<JsBox> {
+    pub async fn import_box(
+        &self,
+        archive_path: Option<String>,
+        name: Option<String>,
+        options: Option<JsImportOptions>,
+    ) -> Result<JsBox> {
         let runtime = Arc::clone(&self.runtime);
-        let archive = BoxArchive::new(archive_path);
-        let handle = runtime.import_box(archive, name).await.map_err(map_err)?;
+        let options = options.unwrap_or(JsImportOptions {
+            checkpoint_id: None,
+            box_id: None,
+        });
+        let source = BoxImportSource::from_options(
+            archive_path.map(BoxArchive::new),
+            options.checkpoint_id,
+            options.box_id,
+        )
+        .map_err(map_err)?;
+        let handle = runtime.import_box(source, name).await.map_err(map_err)?;
         Ok(JsBox {
             handle: Arc::new(handle),
         })

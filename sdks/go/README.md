@@ -18,22 +18,25 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ### Managed checkpoints
 
+`Runtime.Import(ctx, archivePath, name)` retains its original signature.
+Use `Runtime.ImportWithOptions` with `ImportOptions{CheckpointID: key, BoxID: target}` for checkpoint creation or replacement.
+Archive paths and checkpoint IDs are mutually exclusive.
+
 The source must be stopped before `Create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`
-and `ImportBox(ctx, key, name, boxID)`, each taking a context. The handle follows its runtime's
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get` and `Remove`, each taking a context. The handle follows its runtime's
 lifetime and needs no separate close. Captured archives survive source deletion.
 
 ```go
 checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
 if err != nil { return err }
-worker, err := runtime.Checkpoints().ImportBox(ctx, checkpoint.ID, "worker", "")
+worker, err := runtime.ImportWithOptions(ctx, "", "worker", boxlite.ImportOptions{CheckpointID: checkpoint.ID})
 if err != nil { return err }
 defer worker.Close()
 ```
 
-Pass an empty `boxID` for a new Box; a nonempty `boxID` replaces that target.
+Leave `ImportOptions.BoxID` empty for a new Box; a nonempty value replaces that target.
 Name and target are mutually exclusive.
 
 Cloud capture may report `creating`; query until `ready` before use. New imports

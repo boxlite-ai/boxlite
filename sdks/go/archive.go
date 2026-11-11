@@ -113,6 +113,13 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 	}
 }
 
+// ImportOptions selects a managed checkpoint instead of an archive file.
+// BoxID replaces an idle Box and cannot be combined with a name.
+type ImportOptions struct {
+	CheckpointID string
+	BoxID        string
+}
+
 // Import imports a .boxlite archive and returns a new, stopped box.
 //
 // Local runtimes treat caller-provided archives as trusted and preserve their
@@ -125,7 +132,21 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 // Import never consumes or deletes archivePath. The caller owns the archive
 // and is responsible for retaining, moving, or deleting it.
 func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, error) {
-	if err := validateArchiveArgument(archivePath, "archive path", false); err != nil {
+	return r.ImportWithOptions(ctx, archivePath, name, ImportOptions{})
+}
+
+// ImportWithOptions imports an archive or managed checkpoint through the runtime.
+func (r *Runtime) ImportWithOptions(ctx context.Context, archivePath, name string, opts ImportOptions) (*Box, error) {
+	if (archivePath == "") == (opts.CheckpointID == "") || (opts.BoxID != "" && (opts.CheckpointID == "" || name != "")) {
+		return nil, &Error{Code: ErrInvalidArgument, Message: "specify archive path or checkpoint ID; box ID requires a checkpoint and no name"}
+	}
+	if err := validateArchiveArgument(opts.CheckpointID, "checkpoint ID", true); err != nil {
+		return nil, err
+	}
+	if err := validateArchiveArgument(opts.BoxID, "box ID", true); err != nil {
+		return nil, err
+	}
+	if err := validateArchiveArgument(archivePath, "archive path", opts.CheckpointID != ""); err != nil {
 		return nil, err
 	}
 	if err := validateArchiveArgument(name, "import name", true); err != nil {
@@ -135,10 +156,17 @@ func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, e
 		return nil, err
 	}
 
+	if r == nil || r.handle == nil {
+		return nil, ErrRuntimeClosed
+	}
 	r.ensureDrainRunning()
 
-	cArchivePath := toCString(archivePath)
-	defer C.free(unsafe.Pointer(cArchivePath))
+	cArchivePath, freePath := archiveNameCString(archivePath)
+	defer freePath()
+	cCheckpoint, freeCheckpoint := archiveNameCString(opts.CheckpointID)
+	defer freeCheckpoint()
+	cTarget, freeTarget := archiveNameCString(opts.BoxID)
+	defer freeTarget()
 	cName, freeName := archiveNameCString(name)
 	defer freeName()
 
@@ -151,14 +179,8 @@ func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, e
 	}
 
 	var cError C.CBoxliteError
-	code := C.boxlite_runtime_import(
-		r.handle,
-		cArchivePath,
-		cName,
-		C.cbRuntimeImport(),
-		handleToPtr(handle),
-		&cError,
-	)
+	source := C.CBoxImportOptions{archive_path: cArchivePath, name: cName, checkpoint_id: cCheckpoint, box_id: cTarget}
+	code := C.boxlite_runtime_import_with_options(r.handle, &source, C.cbRuntimeImport(), handleToPtr(handle), &cError)
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return nil, freeError(&cError)
@@ -175,7 +197,7 @@ func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, e
 			dispose(completed.value)
 			return nil, completed.err
 		}
-		return newBoxFromHandle(r, completed.value, name), nil
+		return importedBoxFromHandle(r, completed.value)
 	case <-ctx.Done():
 		abandonOwnedResult(result, handle, dispose)
 		return nil, ctx.Err()
@@ -183,4 +205,17 @@ func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, e
 		abandonOwnedResult(result, handle, dispose)
 		return nil, ErrRuntimeClosed
 	}
+}
+
+func importedBoxFromHandle(runtime *Runtime, native *C.CBoxHandle) (*Box, error) {
+	if native == nil {
+		return nil, &Error{Code: ErrInternal, Message: "import callback returned no Box"}
+	}
+	box := newBoxFromHandle(runtime, native, "")
+	name := C.boxlite_box_name(native)
+	if name != nil {
+		box.name = cString(name)
+		freeBoxliteString(name)
+	}
+	return box, nil
 }
