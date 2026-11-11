@@ -85,10 +85,17 @@ Remaining validation criteria:
 - Through real REST and MCP entry points, upload conflicting bytes with false and read the guest file back. Repeat with true and omitted overwrite, checking replacement, other archive entries and unrelated existing files. Exercise hinted and hintless guest paths.
 - Keep the REST SDK old-server refusal covered. Report missing dependencies, skipped checks and environment failures separately; do not label unit mocks as VM integration.
 
-The implementation is split by behavior: shared/native extraction, guest and portal
-conflicts, and host copy-out path handling form the core change. Option-aware C
-and Go stream APIs ship with the runner/serve HTTP adapters in the dependent
-change. Existing C and Go entry points retain their default behavior in both.
+The implementation delivers shared/native extraction, guest and portal conflicts,
+host copy-out compatibility, option-aware C/Go stream APIs, and runner/serve
+forwarding together. Existing C and Go entry points retain their default behavior.
+Partial failures retain extraction progress so ownership finalization runs before
+the original conflict is returned. Untouched conflicting destinations keep their
+owner; newly created empty destinations still belong to the box user.
+
+Host destination resolution runs on a blocking worker. Normal merges include the
+main branch changes through `6435328ebe`; both investigation-index entries are
+retained. Local validation and updated CI results must be assessed on this final
+combined tree.
 
 The original core CI exposed macOS temporary-root symlinks. Policy fixtures now
 use canonical roots; host copy-out resolves trusted parents while retaining leaf
