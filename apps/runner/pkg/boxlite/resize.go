@@ -7,7 +7,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
-func (c *Client) ResizeResources(ctx context.Context, boxID string, cpus uint8, memoryMiB uint32) (*dto.BoxResources, error) {
+func (c *Client) ResizeResources(ctx context.Context, boxID string, cpus float64, memoryMiB uint32) (*dto.BoxResources, error) {
 	box, err := c.GetBox(ctx, boxID)
 	if err != nil {
 		return nil, err

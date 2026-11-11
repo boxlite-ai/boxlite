@@ -75,22 +75,12 @@ func (e *Executor) applyResize(ctx context.Context, job *apiclient.Job) (*dto.Bo
 	if !ok {
 		return nil, fmt.Errorf("backend does not support resource resize")
 	}
-	current, err := resizer.ResizeResources(ctx, job.GetResourceId(), 0, 0)
-	if err != nil {
+	if _, err := resizer.ResizeResources(ctx, job.GetResourceId(), 0, 0); err != nil {
 		return nil, err
-	}
-	cpus := uint8(target.CPUs)
-	if float64(cpus) != target.CPUs {
-		// Memory-only growth retains an existing fractional quota. CPU targets
-		// accepted by the resize API are still whole numbers.
-		if current == nil || current.CPUs != target.CPUs {
-			return nil, fmt.Errorf("fractional resize CPU target differs from current allocation")
-		}
-		cpus = 0
 	}
 	// Mapped RAM can equal the target before guest hotplug finishes. Always submit
 	// the explicit target: the runtime then waits for pending hotplug as well.
-	result, err := resizer.ResizeResources(ctx, job.GetResourceId(), cpus, target.MemoryMiB)
+	result, err := resizer.ResizeResources(ctx, job.GetResourceId(), target.CPUs, target.MemoryMiB)
 	if err != nil {
 		return nil, err
 	}

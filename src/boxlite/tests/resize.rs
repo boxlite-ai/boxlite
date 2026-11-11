@@ -115,7 +115,7 @@ async fn resize_memory_grows_without_restart() {
     let large_target = current.max_memory_mib;
     let large =
         t.bx.resize(ResizeOptions {
-            cpus: Some(current.max_cpus.min(2)),
+            cpus: Some(f64::from(current.max_cpus.min(2))),
             memory_mib: Some(large_target),
         })
         .await
@@ -170,7 +170,7 @@ async fn resize_memory_works_without_network_or_spare_cpus() {
         }
         assert!(matches!(
             t.bx.resize(ResizeOptions {
-                cpus: Some(current.max_cpus + 1),
+                cpus: Some(f64::from(current.max_cpus) + 1.0),
                 memory_mib: Some(384),
             })
             .await,
@@ -206,6 +206,121 @@ fn box_cgroup(box_id: &str) -> std::path::PathBuf {
         format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service").into()
     };
     base.join("boxlite").join(box_id)
+}
+
+#[tokio::test]
+async fn resize_fractional_cpu_quota_topology_and_recovery() {
+    use boxlite::ResizeOptions;
+    let t = BoxTestBase::with_options(BoxOptions {
+        cpus: Some(0.5),
+        memory_mib: Some(256),
+        ..common::alpine_opts()
+    })
+    .await;
+    t.bx.start().await.unwrap();
+    let pid = t.bx.info().await.unwrap().pid;
+    let initial = t.bx.resize(ResizeOptions::default()).await.unwrap();
+    assert!(
+        initial.max_cpus >= 2,
+        "test host needs two CPUs and delegated cgroups"
+    );
+    let cpu_max = box_cgroup(t.bx.id().as_str()).join("cpu.max");
+    for cpus in [0.75_f64, 0.999, 1.0, 1.001, 1.5] {
+        let resources =
+            t.bx.resize(ResizeOptions {
+                cpus: Some(cpus),
+                memory_mib: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(resources.cpus, cpus);
+        assert_eq!(t.bx.info().await.unwrap().pid, pid);
+        assert_eq!(
+            t.exec_stdout("nproc", &[]).await.trim(),
+            cpus.ceil().to_string()
+        );
+        let quota = format!("{} 100000", (cpus * 1000.0).round() as u64 * 100);
+        assert_eq!(std::fs::read_to_string(&cpu_max).unwrap().trim(), quota);
+        let memory =
+            t.bx.resize(ResizeOptions {
+                cpus: None,
+                memory_mib: Some(384),
+            })
+            .await
+            .unwrap();
+        assert_eq!(memory.cpus, cpus);
+        for invalid in [cpus - 0.001, f64::from(initial.max_cpus) + 0.001] {
+            assert!(
+                t.bx.resize(ResizeOptions {
+                    cpus: Some(invalid),
+                    memory_mib: None
+                })
+                .await
+                .is_err()
+            );
+            assert_eq!(std::fs::read_to_string(&cpu_max).unwrap().trim(), quota);
+        }
+    }
+    t.bx.stop().await.unwrap();
+    let recovered = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
+    recovered.start().await.unwrap();
+    assert_eq!(recovered.info().await.unwrap().cpus, 1.5);
+    assert_eq!(
+        std::fs::read_to_string(&cpu_max).unwrap().trim(),
+        "150000 100000"
+    );
+    // The remaining growth uses a fresh handle after recovery.
+    recovered
+        .resize(ResizeOptions {
+            cpus: Some(2.0),
+            memory_mib: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(recovered.info().await.unwrap().cpus, 2.0);
+    assert_eq!(
+        std::fs::read_to_string(&cpu_max).unwrap().trim(),
+        "200000 100000"
+    );
+    recovered.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn resize_fractional_cpu_restores_quota_after_persistence_failure() {
+    use boxlite::{BoxliteError, ResizeOptions};
+    let t = BoxTestBase::with_options(BoxOptions {
+        cpus: Some(0.75),
+        ..common::alpine_opts()
+    })
+    .await;
+    t.bx.start().await.unwrap();
+    let db = rusqlite::Connection::open(t.home_dir().join("db/boxlite.db")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER reject_resize BEFORE UPDATE OF json ON box_state
+        WHEN json_extract(NEW.json, '$.resources.cpus') = 1.5
+        BEGIN SELECT RAISE(ABORT, 'injected resize save failure'); END;",
+    )
+    .unwrap();
+    let options = ResizeOptions {
+        cpus: Some(1.5),
+        memory_mib: None,
+    };
+    let error = t.bx.resize(options).await.unwrap_err();
+    assert!(matches!(error, BoxliteError::Database(_)), "{error}");
+    let cpu_max = box_cgroup(t.bx.id().as_str()).join("cpu.max");
+    assert_eq!(
+        std::fs::read_to_string(&cpu_max).unwrap().trim(),
+        "75000 100000"
+    );
+    assert_eq!(t.bx.info().await.unwrap().cpus, 0.75);
+    assert_eq!(t.exec_stdout("nproc", &[]).await.trim(), "2");
+    db.execute_batch("DROP TRIGGER reject_resize").unwrap();
+    assert_eq!(t.bx.resize(options).await.unwrap().cpus, 1.5);
+    assert_eq!(t.bx.info().await.unwrap().cpus, 1.5);
+    assert_eq!(
+        std::fs::read_to_string(&cpu_max).unwrap().trim(),
+        "150000 100000"
+    );
 }
 
 #[tokio::test]
@@ -250,7 +365,7 @@ async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     }
     let resized =
         t.bx.resize(ResizeOptions {
-            cpus: Some(2),
+            cpus: Some(2.0),
             ..Default::default()
         })
         .await
@@ -274,7 +389,7 @@ async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     );
     assert!(matches!(
         t.bx.resize(ResizeOptions {
-            cpus: Some(1),
+            cpus: Some(1.0),
             ..Default::default()
         })
         .await,
@@ -282,7 +397,7 @@ async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     ));
     assert!(matches!(
         t.bx.resize(ResizeOptions {
-            cpus: Some(2),
+            cpus: Some(2.0),
             memory_mib: Some(resized.memory_mib - 1)
         })
         .await,
@@ -290,7 +405,7 @@ async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     ));
     assert_eq!(
         t.bx.resize(ResizeOptions {
-            cpus: Some(2),
+            cpus: Some(2.0),
             ..Default::default()
         })
         .await

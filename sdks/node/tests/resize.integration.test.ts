@@ -43,7 +43,7 @@ test("resize crosses the native binding and REST transport", async () => {
     }
     response.end(
       JSON.stringify({
-        cpus: 2,
+        cpus: target.cpus ?? 0.5,
         memory_mib: 512,
         max_cpus: 8,
         max_memory_mib: 4096,
@@ -69,13 +69,13 @@ test("resize crosses the native binding and REST transport", async () => {
     });
     expect(requests).toEqual([{ cpus: 2, memory_mib: 512 }]);
     for (const invalid of [
-      { cpus: 2.5 },
+      { cpus: 0.1251 },
       { cpus: 4294967298 },
       { memoryMib: 512.5 },
       { memoryMib: 4294967808 },
       { memoryMib: Number.NaN },
     ]) {
-      await expect(box.resize(invalid)).rejects.toThrow(/integer/);
+      await expect(box.resize(invalid)).rejects.toThrow();
     }
     expect(requests).toHaveLength(1);
     let failure: unknown;
@@ -86,6 +86,19 @@ test("resize crosses the native binding and REST transport", async () => {
     }
     expect(errorCode(failure)).toBe("invalid_argument");
     expect(requests).toEqual([{ cpus: 2, memory_mib: 512 }, { cpus: 1 }]);
+    for (const cpus of [0.125, 0.75, 1.5, 2.5]) {
+      expect((await box.resize({ cpus })).cpus).toBe(cpus);
+      expect(requests.at(-1)).toEqual({ cpus });
+    }
+    expect((await box.resize({})).cpus).toBe(0.5);
+    expect(requests.at(-1)).toEqual({});
+    expect((await box.resize({ memoryMib: 512 })).cpus).toBe(0.5);
+    expect(requests.at(-1)).toEqual({ memory_mib: 512 });
+    const before = requests.length;
+    for (const cpus of [0, -1, 0.124, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(box.resize({ cpus })).rejects.toThrow();
+    }
+    expect(requests).toHaveLength(before);
   } finally {
     runtime.close();
     await new Promise<void>((resolve, reject) =>

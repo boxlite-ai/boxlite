@@ -6,7 +6,7 @@ pub struct ResizeArgs {
     pub target: String,
     /// Absolute CPU allocation (grow only)
     #[arg(long)]
-    pub cpus: Option<u8>,
+    pub cpus: Option<f64>,
     /// Absolute memory allocation in MiB (grow only)
     #[arg(long)]
     pub memory: Option<u32>,

@@ -93,7 +93,7 @@ impl JsBox {
     pub async fn resize(&self, options: JsResizeOptions) -> Result<JsBoxResources> {
         // Read JS numbers without napi's integer coercion, which truncates
         // fractions and wraps values larger than u32 before we can reject them.
-        let cpus = resize_target(options.cpus, u8::MAX.into(), "cpus")?.map(|n| n as u8);
+        let cpus = options.cpus;
         let memory_mib = resize_target(options.memory_mib, u32::MAX, "memoryMib")?;
         let value = self
             .handle

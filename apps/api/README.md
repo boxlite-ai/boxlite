@@ -634,6 +634,17 @@ accept this field before rolling out the added response property.
 
 ## Cloud resize
 
+Admission reuses creation's Runner score threshold, READY state and scheduling
+flags for the Box's current Runner. It does not rank or migrate that Runner,
+query its resources, or reserve capacity. Targets use committed Box CPU/memory;
+CPU accepts 0.125–16 in 0.001 steps, and memory rounds up to GiB. Organization
+limits still apply. Boot ceilings are enforced during execution, so an accepted
+job can fail without changing the committed size or billing.
+
+Explicit same-size requests also create idempotent jobs. Matching in-flight
+requests join their job even if the Runner's score falls after admission.
+Empty requests remain live resource queries and do not use the score gate.
+
 `BoxResizeService` accepts the existing SDK/CLI resize request. Under a usage
 lease and Box row lock, it stores the target CPU/GiB in a `RESIZE_BOX` payload,
 sets `resizePhase=APPLY`, and writes only `pending`/`resizeJobId` to the Box.
@@ -654,8 +665,9 @@ the old Box size and usage period stay unchanged, and stop/suspension proceeds.
 Late completion reports are rejected. Same-target requests reuse the job; the HTTP
 wait expires after 30 seconds without cancelling it.
 
-Rollout order: install the additive migration, upgrade every API instance and
-Runner, then set `CLOUD_RESIZE_ENABLED=true` (default false). Old API claim/status
+Rollout order: install the additive migration, upgrade every runtime, SDK/ABI
+consumer, Runner and API instance, then set `CLOUD_RESIZE_ENABLED=true` (default
+false). Fractional targets require updated Runners. Old API claim/status
 writers cannot safely coexist with active resize jobs; older Runner clients also
 reject the new `RESIZE_BOX` response enum. Disable admission before
 rollback and drain all resize jobs before restoring old API binaries or schema.

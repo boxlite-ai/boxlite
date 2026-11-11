@@ -144,7 +144,7 @@ class SyncBox:
         self._sync(self._box.stop())
 
     def resize(
-        self, *, cpus: int | None = None, memory_mib: int | None = None
+        self, *, cpus: float | None = None, memory_mib: int | None = None
     ) -> "BoxResources":
         """Grow a running box; omitted resources retain their allocation."""
         return self._sync(self._box.resize(cpus=cpus, memory_mib=memory_mib))

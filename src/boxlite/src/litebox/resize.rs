@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::BoxResources;
-#[cfg(any(target_os = "linux", test))]
 use crate::runtime::cpu_count::CpuCount;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 
@@ -11,16 +10,24 @@ use boxlite_shared::{BoxliteError, BoxliteResult};
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResizeOptions {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpus: Option<u8>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::runtime::cpu_count::serialize_optional"
+    )]
+    pub cpus: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mib: Option<u32>,
 }
 
-#[cfg(any(target_os = "linux", test))]
 impl ResizeOptions {
+    pub(crate) fn validate(&self) -> BoxliteResult<()> {
+        self.cpus.map(CpuCount::new).transpose()?;
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", test))]
     fn target(self, current: BoxResources) -> BoxliteResult<BoxResources> {
-        let cpus = self.cpus.map_or(current.cpus, f64::from);
+        let cpus = self.cpus.unwrap_or(current.cpus);
         CpuCount::new(cpus)?;
         let memory_mib = self.memory_mib.unwrap_or(current.memory_mib);
         if cpus < current.cpus || cpus > f64::from(current.max_cpus) {
@@ -150,39 +157,41 @@ impl super::box_impl::BoxImpl {
             let current_vcpus = u32::from(CpuCount::new(current.cpus)?.vcpus());
             let target_vcpus = CpuCount::new(target.cpus)?.vcpus();
             cap(target.cpus)?;
-            let response = tokio::time::timeout(Duration::from_secs(10), async {
-                live.guest_session
-                    .guest()
-                    .await?
-                    .online_cpus(target_vcpus)
-                    .await
-            })
-            .await
-            .unwrap_or_else(|_| Err(BoxliteError::Engine("guest CPU resize timed out".into())));
-            let response = match response {
-                Ok(response)
-                    if (current_vcpus..=u32::from(target_vcpus)).contains(&response.online) =>
-                {
-                    response
+            if u32::from(target_vcpus) > current_vcpus {
+                let response = tokio::time::timeout(Duration::from_secs(10), async {
+                    live.guest_session
+                        .guest()
+                        .await?
+                        .online_cpus(target_vcpus)
+                        .await
+                })
+                .await
+                .unwrap_or_else(|_| Err(BoxliteError::Engine("guest CPU resize timed out".into())));
+                let response = match response {
+                    Ok(response)
+                        if (current_vcpus..=u32::from(target_vcpus)).contains(&response.online) =>
+                    {
+                        response
+                    }
+                    result => {
+                        cap(current.cpus)?;
+                        return match result {
+                            Err(error) => Err(error),
+                            Ok(response) => Err(BoxliteError::Engine(format!(
+                                "guest reported {} online CPUs outside the allocated range; CPU quota restored",
+                                response.online
+                            ))),
+                        };
+                    }
+                };
+                target.cpus = f64::from(response.online).min(requested.cpus);
+                cap(target.cpus)?;
+                if !response.error.is_empty() || target.cpus != requested.cpus {
+                    failures.push(format!(
+                        "CPU: {} allocated, requested {}: {}",
+                        target.cpus, requested.cpus, response.error
+                    ));
                 }
-                result => {
-                    cap(current.cpus)?;
-                    return match result {
-                        Err(error) => Err(error),
-                        Ok(response) => Err(BoxliteError::Engine(format!(
-                            "guest reported {} online CPUs outside the allocated range; CPU quota restored",
-                            response.online
-                        ))),
-                    };
-                }
-            };
-            target.cpus = f64::from(response.online).min(requested.cpus);
-            cap(target.cpus)?;
-            if !response.error.is_empty() || target.cpus != requested.cpus {
-                failures.push(format!(
-                    "CPU: {} allocated, requested {}: {}",
-                    target.cpus, requested.cpus, response.error
-                ));
             }
         }
         if target.memory_mib != current.memory_mib || wait_for_memory {
@@ -235,6 +244,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resize_fractional_cpu_contract() {
+        let current = BoxResources {
+            cpus: 0.125,
+            memory_mib: 128,
+            max_cpus: 2,
+            max_memory_mib: 512,
+        };
+        for cpus in [0.125, 0.126, 0.75, 0.999, 1.0, 1.001, 1.5, 2.0] {
+            let options: ResizeOptions =
+                serde_json::from_value(serde_json::json!({"cpus": cpus})).unwrap();
+            options.validate().unwrap();
+            assert_eq!(options.target(current).unwrap().cpus, cpus);
+            let wire = serde_json::to_value(options).unwrap();
+            assert_eq!(wire["cpus"].as_f64(), Some(cpus));
+            assert!(wire.get("memory_mib").is_none());
+            assert_eq!(wire["cpus"].is_u64(), cpus.fract() == 0.0);
+        }
+        for cpus in [0.0, -1.0, 0.124, 0.1251, 255.001, f64::NAN, f64::INFINITY] {
+            assert!(
+                ResizeOptions {
+                    cpus: Some(cpus),
+                    memory_mib: None
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            ResizeOptions {
+                cpus: Some(2.001),
+                memory_mib: None
+            }
+            .target(current)
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(ResizeOptions::default()).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
     fn resize_retains_fractional_cpus_when_only_memory_changes() {
         for cpus in [0.125, 0.5, 1.5] {
             let current = BoxResources {
@@ -253,7 +304,7 @@ mod tests {
             assert_eq!((target.cpus, target.memory_mib), (cpus, 640));
             assert_eq!(serde_json::to_value(target).unwrap()["cpus"], cpus);
             let grown = ResizeOptions {
-                cpus: Some(2),
+                cpus: Some(2.0),
                 memory_mib: None,
             }
             .target(current)
@@ -262,7 +313,7 @@ mod tests {
             assert_eq!(serde_json::to_value(grown).unwrap()["cpus"], 2);
             assert!(
                 ResizeOptions {
-                    cpus: Some(0),
+                    cpus: Some(0.0),
                     memory_mib: None
                 }
                 .target(current)
@@ -280,7 +331,7 @@ mod tests {
             max_memory_mib: 1024,
         };
         assert_eq!(ResizeOptions::default().target(current).unwrap(), current);
-        for cpus in [0, 1, 5] {
+        for cpus in [0.0, 1.0, 5.0] {
             assert!(
                 ResizeOptions {
                     cpus: Some(cpus),
@@ -293,7 +344,7 @@ mod tests {
         for memory_mib in [0, 256, 1025] {
             assert!(
                 ResizeOptions {
-                    cpus: Some(4),
+                    cpus: Some(4.0),
                     memory_mib: Some(memory_mib)
                 }
                 .target(current)
@@ -302,7 +353,7 @@ mod tests {
         }
         assert_eq!(
             ResizeOptions {
-                cpus: Some(4),
+                cpus: Some(4.0),
                 memory_mib: Some(1024)
             }
             .target(current)

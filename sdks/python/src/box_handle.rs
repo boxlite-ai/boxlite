@@ -160,7 +160,7 @@ impl PyBox {
     fn resize<'py>(
         &self,
         py: Python<'py>,
-        cpus: Option<u8>,
+        cpus: Option<f64>,
         memory_mib: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);

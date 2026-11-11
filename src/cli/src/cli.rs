@@ -1884,14 +1884,19 @@ mod tests {
             panic!("expected resize")
         };
         assert_eq!(args.target, "mybox");
-        assert_eq!(args.cpus, Some(2));
+        assert_eq!(args.cpus, Some(2.0));
         assert_eq!(args.memory, Some(512));
+        let fractional = parse_projected(&["boxlite", "resize", "mybox", "--cpus", "1.5"]);
+        let Commands::Resize(args) = fractional.command else {
+            panic!("expected resize")
+        };
+        assert_eq!(args.cpus, Some(1.5));
         let query = parse_projected(&["boxlite", "resize", "mybox"]);
         let Commands::Resize(args) = query.command else {
             panic!("expected resize")
         };
         assert!(args.cpus.is_none() && args.memory.is_none());
-        assert!(try_parse_from(["boxlite", "resize", "mybox", "--cpus", "256"]).is_err());
+        assert!(try_parse_from(["boxlite", "resize", "mybox", "--cpus", "invalid"]).is_err());
     }
 
     #[test]

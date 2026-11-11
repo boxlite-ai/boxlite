@@ -54,10 +54,12 @@ export class BoxResizeService {
     if (!this.config.get('cloudResizeEnabled'))
       throw new ServiceUnavailableException('Cloud resize admission is disabled')
     this.assertRunning(box)
-    const current = await this.observe(box)
-    const target = resizeTarget(request, current)
+    const target = resizeTarget(request, { cpus: box.cpu, memory_mib: box.mem * 1024 })
     const targetMemoryGiB = Math.ceil(target.memory_mib / 1024)
     assertWithinPerBoxLimits(target.cpus, targetMemoryGiB, box.disk, organization)
+    const runner = await this.runners.findAvailableRunner(box.runnerId)
+    if (!runner || runner.apiVersion !== '2')
+      throw new ServiceUnavailableException('Runner is unavailable for resize admission')
 
     const job = await this.usage.withResourceLock(box.id, async (signal) =>
       this.db.transaction(async (manager) => {
@@ -70,13 +72,6 @@ export class BoxResizeService {
         this.assertRunning(locked)
         if (locked.pending || locked.runnerId !== box.runnerId || locked.cpu !== box.cpu || locked.mem !== box.mem)
           throw new ConflictException('Box changed; retry resize')
-        if (
-          target.cpus === current.cpus &&
-          target.memory_mib === current.memory_mib &&
-          locked.cpu === target.cpus &&
-          locked.mem === targetMemoryGiB
-        )
-          return null
         if (target.cpus < locked.cpu || targetMemoryGiB < locked.mem)
           throw new ConflictException('Resize cannot shrink the committed Box size')
         const existing = await manager.findOneBy(Job, {
@@ -115,7 +110,6 @@ export class BoxResizeService {
       }),
     )
 
-    if (!job) return current
     this.cache.invalidate({ id: box.id, organizationId: box.organizationId, name: box.name })
     try {
       await this.jobs.notifyRunner(job.runnerId, job.id)

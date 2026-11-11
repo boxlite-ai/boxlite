@@ -1119,7 +1119,7 @@ enum BoxliteErrorCode boxlite_runtime_import(CBoxliteRuntime *runtime,
 // resources and error pointers are borrowed only during dispatch; copy them
 // to retain the result. Completion is delivered by boxlite_runtime_drain.
 enum BoxliteErrorCode boxlite_resize_box(CBoxHandle *handle,
-                                         uint8_t cpus,
+                                         double cpus,
                                          uint32_t memory_mib,
                                          CBoxResizeCb cb,
                                          void *user_data,

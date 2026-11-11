@@ -57,7 +57,12 @@ def resize_server():
                 return
             self.reply(
                 200,
-                {"cpus": 2, "memory_mib": 512, "max_cpus": 8, "max_memory_mib": 4096},
+                {
+                    "cpus": body.get("cpus", 0.5),
+                    "memory_mib": 512,
+                    "max_cpus": 8,
+                    "max_memory_mib": 4096,
+                },
             )
 
         def log_message(self, *_args):
@@ -89,6 +94,16 @@ async def test_resize_crosses_native_binding(resize_server):
     with pytest.raises(boxlite.InvalidArgumentError, match="cannot shrink"):
         await box.resize(cpus=1)
     assert requests[-1] == ("/v1/boxes/box1/resize", {"cpus": 1})
+    for cpus in [0.125, 0.75, 1.5, 2.5]:
+        assert (await box.resize(cpus=cpus)).cpus == cpus
+        assert requests[-1] == ("/v1/boxes/box1/resize", {"cpus": cpus})
+    assert (await box.resize()).cpus == 0.5
+    assert requests[-1] == ("/v1/boxes/box1/resize", {})
+    before = len(requests)
+    for cpus in [0, -1, 0.124, 0.1251, 256, float("nan"), float("inf")]:
+        with pytest.raises(boxlite.InvalidArgumentError):
+            await box.resize(cpus=cpus)
+    assert len(requests) == before
 
 
 def test_sync_resize_uses_native_binding(resize_server):

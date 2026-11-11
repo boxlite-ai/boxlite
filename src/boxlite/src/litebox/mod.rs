@@ -112,6 +112,7 @@ impl LiteBox {
     /// Once started, an update completes even if the caller drops its future;
     /// inspect the box or retry the same target after a transport interruption.
     pub async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources> {
+        options.validate()?;
         let backend = self.box_backend.clone();
         tokio::spawn(async move { backend.resize(options).await })
             .await

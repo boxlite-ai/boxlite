@@ -157,7 +157,7 @@ class SyncSimpleBox:
         return self._created
 
     def resize(
-        self, *, cpus: int | None = None, memory_mib: int | None = None
+        self, *, cpus: float | None = None, memory_mib: int | None = None
     ) -> "BoxResources":
         """Grow the running box without restarting its workload."""
         if self._box is None:

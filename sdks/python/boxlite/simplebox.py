@@ -285,7 +285,7 @@ class SimpleBox:
         return self._box.id
 
     async def resize(
-        self, *, cpus: int | None = None, memory_mib: int | None = None
+        self, *, cpus: float | None = None, memory_mib: int | None = None
     ) -> "BoxResources":
         """Grow a running box; omitted targets retain their current allocation."""
         if self._box is None:

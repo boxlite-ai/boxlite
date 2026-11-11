@@ -480,9 +480,13 @@ paths:
       description: |
         Absolute targets, never deltas. Omitted fields retain their current
         allocation; an empty object reads allocations and boot ceilings.
-        Shrinking or exceeding a boot ceiling is rejected before changes.
+        The execution host rejects shrinking or exceeding a boot ceiling.
         Local memory growth must be a multiple of 128 MiB. Cloud rounds a
-        supplied memory target up to whole GiB before checking ceilings.
+        supplied memory target up to whole GiB and uses committed Box sizes.
+        Cloud admission uses the current Runner's creation score policy without
+        querying live resources; boot ceilings are checked during job execution.
+        CPU targets accept 0.001-core increments, with cloud applying the same
+        0.125–16 range and organization limits as creation.
         The allocation includes all guest RAM, including the kernel mapping.
         Requires a running Linux/KVM box. An interrupted or failed request
         may have partially completed; inspect the box or retry the same target.
@@ -2558,9 +2562,11 @@ components:
       additionalProperties: false
       properties:
         cpus:
-          type: integer
-          minimum: 1
+          type: number
+          minimum: 0.125
+          multipleOf: 0.001
           maximum: 255
+          description: Absolute CPU allocation; cloud applies the creation limit of 16 and organization limits
         memory_mib:
           type: integer
           minimum: 1

@@ -158,8 +158,16 @@ Boot and device I/O also consume this budget; very small allocations can hit exi
 | Information queries | Return configured `cpus`, not CPU usage, reserved capacity, or proof of enforcement |
 
 Creation options remain fixed; [online growth](#online-growth) changes the active
-allocation and preserves it across restarts. CPU resize targets are whole numbers;
-resource queries and memory-only growth preserve an existing fractional allocation.
+allocation and preserves it across restarts. CPU resize targets use the same
+0.001-core precision as creation. For example, `0.5 → 0.75` changes only the
+bandwidth quota; `0.75 → 1.5` also brings a second vCPU online. Memory-only
+growth preserves the current CPU allocation. Shrinking remains unsupported.
+
+Cloud admission uses the current Runner's creation score threshold, READY state
+and scheduling flags. It calculates targets from the committed Box size without
+querying live resources or reserving capacity. The runtime checks boot ceilings
+when executing the job, so admission does not guarantee successful expansion.
+Cloud CPU targets use the same 0.125–16 range and organization limits as creation.
 Disk-only `restore_from_archive` retains the destination Box's CPU configuration.
 
 After option and security compatibility checks, `get_or_create` keeps an existing named Box's saved `cpus` for integer, fractional, and omitted requests.
@@ -246,23 +254,23 @@ queries the allocation and the ceilings established for that boot.
 
 ```python
 resources = await box.resize()
-resources = await box.resize(cpus=2, memory_mib=2048)
+resources = await box.resize(cpus=1.5, memory_mib=2048)
 print(resources.cpus, resources.memory_mib)
 print(resources.max_cpus, resources.max_memory_mib)
 ```
 
 The same operation is available as Rust `LiteBox::resize(ResizeOptions)`,
-Node `box.resize({ cpus: 2, memoryMib: 2048 })`, Go `Box.Resize`,
+Node `box.resize({ cpus: 1.5, memoryMib: 2048 })`, Go `Box.Resize`,
 C `boxlite_resize_box`, and the Python synchronous wrappers. In C and Go,
 zero means leave that resource unchanged.
 
 ```bash
-boxlite resize mybox --cpus 2 --memory 2048
+boxlite resize mybox --cpus 1.5 --memory 2048
 boxlite resize mybox
 ```
 
 REST clients use `POST /v1/boxes/{box_id}/resize` with
-`{"cpus":2,"memory_mib":2048}`. The response contains `cpus`, `memory_mib`,
+`{"cpus":1.5,"memory_mib":2048}`. The response contains `cpus`, `memory_mib`,
 `max_cpus`, and `max_memory_mib`.
 
 Cloud uses the same SDK and CLI calls, rounding memory targets up to whole GiB:

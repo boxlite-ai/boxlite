@@ -3,6 +3,7 @@
 Persist cloud resize targets at admission, but commit Box CPU/RAM and the usage billing switch only after the Runner confirms the target.
 
 Design: [recoverable cloud CPU and memory resize](https://github.com/boxlite-ai/boxlite/issues/2203).
+Admission and fractional targets: [shared creation policy](https://github.com/boxlite-ai/boxlite/issues/2557).
 
 ## Scope
 
@@ -56,8 +57,11 @@ Local constraints found during review:
 ## How it works
 
 `POST /v1[/{prefix}]/boxes/:id/resize` checks ownership, `write:boxes`, organization
-suspension, running state, per-box limits and Runner capability. A supplied memory
-target rounds up to GiB once, before checking the current boot ceiling. `{}` reads
+suspension, running state, per-box limits and Runner API version. Admission shares
+creation's READY, scheduling flags and availability-score filter for the current
+Runner, without ranking or reassignment. Targets derive from committed Box sizes;
+there is no resource HTTP preflight. CPU uses creation's fractional validator and
+memory rounds up to GiB once. Runtime execution checks boot ceilings. `{}` reads
 actual allocation without creating a job or changing Box or billing.
 
 | Phase | Atomic write | Failure behavior |
@@ -87,15 +91,15 @@ remains fenced until completion or terminal failure.
 
 A Runner can apply the native resize and fail to report before the job is
 terminalized. No automatic runtime reconcile is added. A same-target request does not
-take the no-op path unless the committed Box and the runtime both equal the target;
-when only the runtime is ahead, admission creates a reconciliation job. `POST
+return an early no-op: every explicit target creates or joins an idempotent job.
+When only the runtime is ahead, this reconciles the committed size. `POST
 /resize {}` reports runtime allocation while `GET box` reports committed resources,
 so operators can detect the mismatch and retry. Without a retry, the mismatch persists.
 
 ## Validation
 
 The tests in [cloud-resize.integration.spec.ts](../../../apps/api/src/box/services/cloud-resize.integration.spec.ts)
-use isolated PostgreSQL schemas, Redis leases and HTTP Runner preflight. They cover
+use isolated PostgreSQL schemas, Redis leases and live resource-query fixtures. They cover
 admission leaving Box/billing old, immediate claimability, completion updating Box and
 both usage periods atomically, completion failure rollback, duplicate completion,
 bounded retry/terminal failure, late-report rejection, lease expiry, cache

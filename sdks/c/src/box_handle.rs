@@ -54,7 +54,7 @@ pub struct CBoxResources {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_resize_box(
     handle: *mut CBoxHandle,
-    cpus: u8,
+    cpus: f64,
     memory_mib: u32,
     cb: crate::event_queue::CBoxResizeCb,
     user_data: *mut c_void,
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn boxlite_resize_box(
     handle.tokio_rt.spawn(async move {
         let result = lite
             .resize(boxlite::ResizeOptions {
-                cpus: (cpus != 0).then_some(cpus),
+                cpus: (cpus != 0.0).then_some(cpus),
                 memory_mib: (memory_mib != 0).then_some(memory_mib),
             })
             .await

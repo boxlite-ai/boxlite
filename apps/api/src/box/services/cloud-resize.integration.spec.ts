@@ -43,6 +43,8 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
   let enabled: boolean
   let runtimeResources: typeof target
   let organization: Organization
+  const availableRunner = jest.fn()
+  let resourceQueries = 0
   const removeCache = jest.fn().mockResolvedValue(undefined)
   const cache = new BoxLookupCacheInvalidationService({ queryResultCache: { remove: removeCache } } as never)
 
@@ -90,6 +92,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       leases,
     )
     server = createServer((req, res) => {
+      resourceQueries++
       if (req.headers.authorization !== 'Bearer test-runner-key') {
         res.writeHead(401).end()
         return
@@ -102,6 +105,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       db,
       { findOneByIdOrName: async () => box } as never,
       {
+        findAvailableRunner: availableRunner,
         findOne: async () => ({
           apiVersion: '2',
           apiKey: 'test-runner-key',
@@ -127,6 +131,8 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
 
   beforeEach(async () => {
     enabled = true
+    resourceQueries = 0
+    availableRunner.mockReset().mockResolvedValue({ apiVersion: '2' })
     removeCache.mockClear()
     runtimeResources = { ...target, cpus: 1, memory_mib: 1024 }
     await db.query('TRUNCATE "job", "box_usage_periods", "box" CASCADE')
@@ -187,6 +193,8 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     await freshAdmission()
     const request = coordinator.resize(box.id, organization, { cpus: 4, memory_mib: 1537 })
     const accepted = await untilJob('APPLY')
+    expect(resourceQueries).toBe(0)
+    expect(availableRunner).toHaveBeenCalledWith(runnerId)
     expect(accepted.getPayload()).toMatchObject({ version: 1, cpus: 4, memory_mib: 2048 })
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
       cpu: 1,
@@ -253,20 +261,67 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
   it('queries actual allocation and rejects unauthorized, disabled, oversized or conflicting changes before writes', async () => {
     await freshAdmission()
     expect(await coordinator.resize(box.id, organization, {})).toEqual(runtimeResources)
-    expect(await coordinator.resize(box.id, organization, { cpus: 1 })).toEqual(runtimeResources)
     await expect(
       coordinator.resize(box.id, Object.assign(new Organization(), organization, { id: randomUUID() }), { cpus: 2 }),
     ).rejects.toThrow()
     enabled = false
     await expect(coordinator.resize(box.id, organization, { cpus: 2 })).rejects.toThrow('disabled')
     enabled = true
-    await expect(coordinator.resize(box.id, organization, { memory_mib: 8193 })).rejects.toThrow('ceilings')
+    await expect(coordinator.resize(box.id, organization, { memory_mib: 8193 })).rejects.toThrow('per-box limit')
     organization.maxCpuPerBox = 2
     await expect(coordinator.resize(box.id, organization, { cpus: 4 })).rejects.toThrow('per-box limit')
     await db.getRepository(Box).update(box.id, { pending: true })
     await expect(coordinator.resize(box.id, organization, { cpus: 2 })).rejects.toThrow('Box changed')
     expect(await db.getRepository(Job).count()).toBe(0)
     expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+  })
+
+  it.each([null, { apiVersion: '1' }])(
+    'rejects an unavailable or incompatible Runner before writes: %j',
+    async (runner) => {
+      await freshAdmission()
+      availableRunner.mockResolvedValue(runner)
+      await expect(coordinator.resize(box.id, organization, { cpus: 2 })).rejects.toThrow('unavailable')
+      expect(resourceQueries).toBe(0)
+      expect(await db.getRepository(Job).count()).toBe(0)
+    },
+  )
+
+  it.each([1, 1.5])('applies an explicit %s CPU target without observing runtime resources', async (cpus) => {
+    await freshAdmission()
+    // Admission must not consult these stale boot ceilings, even for a no-op target.
+    runtimeResources = { cpus: 1, memory_mib: 1024, max_cpus: 1, max_memory_mib: 1024 }
+    const request = coordinator.resize(box.id, organization, { cpus })
+    const accepted = await untilJob('APPLY')
+    expect(accepted.getPayload()).toMatchObject({ cpus, memory_mib: 1024 })
+    expect(resourceQueries).toBe(0)
+    availableRunner.mockResolvedValue(null)
+    const retry = coordinator.resize(box.id, organization, { cpus })
+    const [claimed] = await claim()
+    const result = { ...target, cpus, memory_mib: 1024 }
+    await leases.report(
+      accepted.id,
+      runnerId,
+      claimed.claimToken,
+      JobStatus.COMPLETED,
+      undefined,
+      JSON.stringify(result),
+    )
+    expect(await request).toEqual(result)
+    expect(await retry).toEqual(result)
+    expect(availableRunner).toHaveBeenCalledTimes(1)
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({ cpu: cpus, mem: 1 })
+    expect(await open()).toEqual([expect.objectContaining({ cpu: cpus, mem: 1 })])
+    const count = await db.getRepository(BoxUsagePeriod).count()
+    await leases.report(
+      accepted.id,
+      runnerId,
+      claimed.claimToken,
+      JobStatus.COMPLETED,
+      undefined,
+      JSON.stringify(result),
+    )
+    expect(await db.getRepository(BoxUsagePeriod).count()).toBe(count)
   })
 
   it('treats a duplicate completion as a no-op', async () => {

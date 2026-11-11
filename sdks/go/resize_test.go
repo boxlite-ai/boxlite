@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,8 +30,8 @@ func TestResizeCrossesFFIAndREST(t *testing.T) {
 			return
 		}
 		var body struct {
-			CPUs      uint8  `json:"cpus"`
-			MemoryMiB uint32 `json:"memory_mib"`
+			CPUs      float64 `json:"cpus"`
+			MemoryMiB uint32  `json:"memory_mib"`
 		}
 		if err := json.Unmarshal(raw, &body); err != nil {
 			t.Error(err)
@@ -46,7 +47,7 @@ func TestResizeCrossesFFIAndREST(t *testing.T) {
 			_, _ = io.WriteString(w, `{"cpus":0.5,"memory_mib":512,"max_cpus":8,"max_memory_mib":4096}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"cpus":2,"memory_mib":512,"max_cpus":8,"max_memory_mib":4096}`)
+		_ = json.NewEncoder(w).Encode(map[string]any{"cpus": body.CPUs, "memory_mib": 512, "max_cpus": 8, "max_memory_mib": 4096})
 	}))
 	defer server.Close()
 	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
@@ -69,8 +70,8 @@ func TestResizeCrossesFFIAndREST(t *testing.T) {
 	}
 	sent := <-requests
 	var sentBody struct {
-		CPUs      uint8  `json:"cpus"`
-		MemoryMiB uint32 `json:"memory_mib"`
+		CPUs      float64 `json:"cpus"`
+		MemoryMiB uint32  `json:"memory_mib"`
 	}
 	if err := json.Unmarshal(sent, &sentBody); err != nil {
 		t.Fatal(err)
@@ -114,5 +115,26 @@ func TestResizeCrossesFFIAndREST(t *testing.T) {
 		if _, present := body["memory_mib"]; present != (opts.MemoryMiB != 0) {
 			t.Fatalf("memory target presence changed: %v", body)
 		}
+	}
+	for _, cpus := range []float64{0.125, 0.75, 1.5, 2.5} {
+		got, err := box.Resize(context.Background(), ResizeOptions{CPUs: cpus})
+		if err != nil || got.CPUs != cpus {
+			t.Fatalf("fractional target lost: %+v %v", got, err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(<-requests, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["cpus"] != cpus || len(body) != 1 {
+			t.Fatalf("unexpected fractional request: %v", body)
+		}
+	}
+	for _, cpus := range []float64{-1, 0.124, 0.1251, 256, math.NaN(), math.Inf(1)} {
+		if _, err := box.Resize(context.Background(), ResizeOptions{CPUs: cpus}); !networkErrorCode(err, ErrInvalidArgument) {
+			t.Fatalf("invalid CPU %v accepted: %v", cpus, err)
+		}
+	}
+	if len(requests) != 0 {
+		t.Fatal("invalid targets reached the server")
 	}
 }

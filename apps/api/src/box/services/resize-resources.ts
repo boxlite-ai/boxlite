@@ -40,18 +40,13 @@ export function validResources(value: unknown): value is BoxResources {
   )
 }
 
-export function resizeTarget(request: Partial<ResizeTarget>, current: BoxResources): ResizeTarget {
+export function resizeTarget(request: Partial<ResizeTarget>, current: ResizeTarget): ResizeTarget {
   const target = {
     cpus: request.cpus ?? current.cpus,
     memory_mib: request.memory_mib === undefined ? current.memory_mib : Math.ceil(request.memory_mib / 1024) * 1024,
   }
-  if (
-    target.cpus < current.cpus ||
-    target.memory_mib < current.memory_mib ||
-    target.cpus > current.max_cpus ||
-    target.memory_mib > current.max_memory_mib
-  ) {
-    throw new BadRequestException('Resize must grow within the current boot ceilings after cloud memory rounding')
+  if (target.cpus < current.cpus || target.memory_mib < current.memory_mib) {
+    throw new BadRequestException('Resize must grow from the committed Box size after cloud memory rounding')
   }
   return target
 }

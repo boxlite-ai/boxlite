@@ -603,6 +603,9 @@ organization membership.
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/resize` | Grows CPU/RAM through a durable job; `{}` queries actual allocation. |
 
 Resize requires `write:boxes` and a running Linux Box on a compatible Runner.
+Admission uses the current Runner's creation score threshold and scheduling
+flags without a live resource preflight. CPU accepts 0.125–16 in 0.001 steps,
+subject to organization limits. Runtime execution validates boot ceilings.
 Memory is rounded up to whole GiB. Acceptance stores the target and a durable job,
 but leaves the Box and usage period at their old values until the Runner confirms
 the target. Completion then updates Box CPU/RAM and switches the usage period in one

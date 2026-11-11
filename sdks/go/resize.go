@@ -12,7 +12,7 @@ import (
 
 // ResizeOptions specifies absolute resource targets. Zero leaves a resource unchanged.
 type ResizeOptions struct {
-	CPUs      uint8
+	CPUs      float64
 	MemoryMiB uint32
 }
 
@@ -42,7 +42,7 @@ func (b *Box) Resize(ctx context.Context, opts ResizeOptions) (*BoxResources, er
 	ch := make(chan resizeResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	var cerr C.CBoxliteError
-	code := C.boxlite_resize_box(b.handle, C.uint8_t(opts.CPUs), C.uint32_t(opts.MemoryMiB), C.cbResizeBox(), handleToPtr(h), &cerr)
+	code := C.boxlite_resize_box(b.handle, C.double(opts.CPUs), C.uint32_t(opts.MemoryMiB), C.cbResizeBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)

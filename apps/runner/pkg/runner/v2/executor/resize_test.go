@@ -77,12 +77,12 @@ type resizeBackend struct {
 	wait         bool
 }
 
-func (b *resizeBackend) ResizeResources(ctx context.Context, _ string, cpus uint8, memory uint32) (*dto.BoxResources, error) {
+func (b *resizeBackend) ResizeResources(ctx context.Context, _ string, cpus float64, memory uint32) (*dto.BoxResources, error) {
 	if cpus == 0 && memory == 0 && b.queryFailure != nil {
 		return nil, b.queryFailure
 	}
 	if cpus != 0 || memory != 0 {
-		b.targets = append(b.targets, dto.ResizeBoxPayload{CPUs: float64(cpus), MemoryMiB: memory})
+		b.targets = append(b.targets, dto.ResizeBoxPayload{CPUs: cpus, MemoryMiB: memory})
 		if b.wait {
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -113,10 +113,10 @@ func TestResizeMemoryPreservesFractionalCPUAllocation(t *testing.T) {
 			h.executor.backend = b
 			job := migrateJob(apiclient.JOBTYPE_RESIZE_BOX, fmt.Sprintf(`{"version":1,"cpus":%g,"memory_mib":2048}`, cpus))
 			result, err := h.executor.applyResize(context.Background(), job)
-			if err != nil || result.CPUs != cpus || len(b.targets) != 1 || b.targets[0].CPUs != 0 || b.targets[0].MemoryMiB != 2048 {
+			if err != nil || result.CPUs != cpus || len(b.targets) != 1 || b.targets[0].CPUs != cpus || b.targets[0].MemoryMiB != 2048 {
 				t.Fatalf("fractional allocation changed: result=%+v targets=%+v error=%v", result, b.targets, err)
 			}
-			for _, invalid := range []float64{0, 0.1251, 2.5, 256} {
+			for _, invalid := range []float64{0, 0.1251, 256} {
 				b.targets = nil
 				job = migrateJob(apiclient.JOBTYPE_RESIZE_BOX, fmt.Sprintf(`{"version":1,"cpus":%g,"memory_mib":2048}`, invalid))
 				if _, err := h.executor.applyResize(context.Background(), job); err == nil || len(b.targets) != 0 {

@@ -13,7 +13,8 @@ describe('Cloud resize request contract', () => {
   it.each([
     { cpus: 0 },
     { cpus: 256 },
-    { cpus: 1.5 },
+    { cpus: 0.1251 },
+    { cpus: 17 },
     { cpus: '4' },
     { cpus: null },
     { memory_mib: 0 },
@@ -25,10 +26,15 @@ describe('Cloud resize request contract', () => {
     await expect(pipe.transform(body, meta)).rejects.toThrow()
   })
 
-  it.each([{}, { cpus: 4 }, { memory_mib: 1537 }, { cpus: 4, memory_mib: 2048 }])(
-    'accepts query and partial targets %j',
-    async (body) => {
-      expect(await pipe.transform(body, meta)).toEqual(body)
-    },
-  )
+  it.each([
+    {},
+    { cpus: 0.125 },
+    { cpus: 0.75 },
+    { cpus: 1.5 },
+    { cpus: 4 },
+    { memory_mib: 1537 },
+    { cpus: 4, memory_mib: 2048 },
+  ])('accepts query and partial targets %j', async (body) => {
+    expect(await pipe.transform(body, meta)).toEqual(body)
+  })
 })
