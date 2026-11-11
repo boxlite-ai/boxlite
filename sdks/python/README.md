@@ -225,6 +225,20 @@ print(pull.reference, pull.config_digest, pull.layer_count)
 See [the Python reference](../../docs/reference/python/README.md#boxliteimagehandle)
 for each method on each runtime.
 
+For local cache reclamation, use the separate ID-based operation:
+
+```python
+removed = await runtime.images.remove_by_id("1f8c03c8f5e5")
+print(removed.image_id, removed.removed_references, removed.reclaimed_bytes)
+# With SyncBoxlite, call runtime.images.remove_by_id(...) without await.
+```
+
+The result is an `ImageRemovalResult`; `reclaimed_bytes` is an integer.
+`AmbiguousImageIdError`, `ImageHasTagsError` and `ImageUsedByBoxesError` identify conflicts.
+Unknown IDs raise `NotFoundError`; busy cache consumers raise `InvalidStateError` and REST raises `UnsupportedError`.
+Existing name-based `remove()` keeps its behavior.
+See [local removal semantics and limits](../../docs/concepts/images.md#removing-local-images).
+
 #### Private Registry Logins
 
 On `Boxlite.rest(...)`, `runtime.images.registries` manages the logins the server

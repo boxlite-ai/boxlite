@@ -17,7 +17,7 @@ import pytest
 
 pytest.importorskip("greenlet")
 
-from boxlite.errors import NotFoundError
+from boxlite.errors import ImageHasTagsError, NotFoundError
 from boxlite.sync_api import SyncBoxlite, SyncImageHandle
 
 NAME = "quay.io/acme/app"
@@ -28,6 +28,7 @@ class _NativeImages:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
+        self.removal_result = object()
 
     async def pull(self, reference: str) -> str:
         self.calls.append(("pull", reference))
@@ -45,6 +46,12 @@ class _NativeImages:
 
     async def remove(self, name: str) -> None:
         self.calls.append(("remove", name))
+
+    async def remove_by_id(self, image_id: str):
+        self.calls.append(("remove_by_id", image_id))
+        if image_id == "tagged":
+            raise ImageHasTagsError("image has tags: one.example/app:latest")
+        return self.removal_result
 
     async def usage(self) -> str:
         self.calls.append(("usage",))
@@ -106,6 +113,17 @@ class TestFactories:
 
 
 class TestImages:
+    def test_remove_by_id_bridges_the_result_and_typed_errors(self):
+        with SyncBoxlite.rest(object()) as runtime:
+            result = runtime.images.remove_by_id("123abc")
+            assert result is runtime.runtime.images.removal_result
+            with pytest.raises(ImageHasTagsError, match="one.example/app:latest"):
+                runtime.images.remove_by_id("tagged")
+        assert runtime.runtime.images.calls == [
+            ("remove_by_id", "123abc"),
+            ("remove_by_id", "tagged"),
+        ]
+
     def test_each_call_returns_what_the_native_call_answered(self):
         with SyncBoxlite.rest(object()) as runtime:
             images = runtime.images
