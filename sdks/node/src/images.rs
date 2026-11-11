@@ -8,6 +8,28 @@ use napi_derive::napi;
 
 use crate::util::map_err;
 
+/// Completed local image removal, including actual allocated cache bytes.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsImageRemovalResult {
+    #[napi(js_name = "imageId")]
+    pub image_id: String,
+    #[napi(js_name = "removedReferences")]
+    pub removed_references: Vec<String>,
+    #[napi(js_name = "reclaimedBytes")]
+    pub reclaimed_bytes: i64,
+}
+
+impl From<boxlite::ImageRemovalResult> for JsImageRemovalResult {
+    fn from(result: boxlite::ImageRemovalResult) -> Self {
+        Self {
+            image_id: result.image_id,
+            removed_references: result.removed_references,
+            reclaimed_bytes: js_number(result.reclaimed_bytes),
+        }
+    }
+}
+
 /// Public metadata about a cached image.
 #[napi(object)]
 #[derive(Clone, Debug)]
@@ -236,6 +258,14 @@ impl JsImageHandle {
         handle.remove(&name).await.map_err(map_err)
     }
 
+    /// Remove an untagged local image by manifest ID or unique hex prefix.
+    #[napi(js_name = "removeById")]
+    pub async fn remove_by_id(&self, image_id: String) -> Result<JsImageRemovalResult> {
+        Ok(JsImageRemovalResult::from(
+            self.handle.remove_by_id(&image_id).await.map_err(map_err)?,
+        ))
+    }
+
     /// Images held against the allowance; REST runtimes only.
     #[napi]
     pub async fn usage(&self) -> Result<JsImageUsage> {
@@ -281,6 +311,45 @@ mod tests {
     use boxlite::{BoxliteRestOptions, BoxliteRuntime};
 
     use super::*;
+
+    #[test]
+    fn removal_by_id_returns_core_results_and_propagates_tag_and_missing_errors() {
+        let fixture = boxlite::LocalImageFixture::new();
+        let images = JsImageHandle {
+            handle: Arc::new(fixture.runtime().images().unwrap()),
+        };
+        let listed = block_on(images.list()).unwrap();
+        let id = listed[0].id.clone();
+        let result = block_on(images.remove_by_id(id[7..19].to_string())).unwrap();
+        assert_eq!(result.image_id, id);
+        assert_eq!(result.removed_references.len(), 2);
+        assert!(result.reclaimed_bytes > 0);
+        assert!(!fixture.manifest_path.exists());
+        assert!(block_on(images.list()).unwrap().is_empty());
+        assert!(
+            block_on(images.remove_by_id(id))
+                .unwrap_err()
+                .reason
+                .starts_with("not found:")
+        );
+
+        let fixture = boxlite::LocalImageFixture::new();
+        fixture.add_tag();
+        let images = JsImageHandle {
+            handle: Arc::new(fixture.runtime().images().unwrap()),
+        };
+        let error = block_on(images.remove_by_id(fixture.image_id.clone())).unwrap_err();
+        assert!(error.reason.starts_with("image has tags:"));
+        assert!(error.reason.contains("one.example/app:latest"));
+        assert!(fixture.manifest_path.exists());
+    }
+
+    #[test]
+    fn removal_by_id_on_rest_is_unsupported_without_network_io() {
+        let error = block_on(images_at("http://127.0.0.1:1".into()).remove_by_id("123".into()))
+            .unwrap_err();
+        assert!(error.reason.starts_with("unsupported:"));
+    }
 
     fn version(digest: &str, size_bytes: Option<u64>, recorded_secs: u64) -> ImageVersion {
         ImageVersion {

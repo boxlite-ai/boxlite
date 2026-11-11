@@ -45,7 +45,7 @@ pub use litebox::{
 pub use portal::GuestSession;
 pub use runtime::{
     AuthHandle, BoxliteRuntime, Domain, DomainHandle, DomainList, DomainTarget, ImageHandle,
-    Principal,
+    ImageRemovalResult, Principal,
 };
 
 pub use boxlite_shared::BoxByteStream;
@@ -73,6 +73,8 @@ pub use runtime::options::{
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(any(test, feature = "test-support"))]
+pub use images::test_support::LocalImageFixture;
 pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{

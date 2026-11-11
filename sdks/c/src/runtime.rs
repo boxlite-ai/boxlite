@@ -650,6 +650,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::ImageRemoveById {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CImageRemovalResult>(result, user_data, cb),
             RuntimeEvent::ImageUsage {
                 cb,
                 user_data,

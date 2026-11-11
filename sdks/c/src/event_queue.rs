@@ -13,7 +13,9 @@ use std::sync::{Condvar, Mutex};
 use boxlite::BoxliteError;
 
 use crate::exec::CExecutionInfoList;
-use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
+use crate::images::{
+    CImageDetail, CImageInfoList, CImagePullResult, CImageRemovalResult, CImageUsage,
+};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
 use crate::registries::{CRegistryCredential, CRegistryCredentialList};
@@ -144,6 +146,13 @@ pub(crate) type CBoxImageGetFn =
 /// dispatch only and no result allocation is produced.
 pub type CBoxImageRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxImageRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Removal by ID completion. The callback owns a successful result and frees
+/// it with `boxlite_free_image_removal_result`. The error is borrowed.
+pub type CBoxImageRemoveByIdCb =
+    Option<extern "C" fn(*mut CImageRemovalResult, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxImageRemoveByIdFn =
+    extern "C" fn(*mut CImageRemovalResult, *mut crate::CBoxliteError, *mut c_void);
 
 /// Image usage completion. The usage (null on failure) and error pointers are
 /// borrowed for callback dispatch only; there is nothing to free.
@@ -463,6 +472,11 @@ pub enum RuntimeEvent {
         cb: CBoxImageRemoveFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
+    },
+    ImageRemoveById {
+        cb: CBoxImageRemoveByIdFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CImageRemovalResult>, BoxliteError>,
     },
     ImageUsage {
         cb: CBoxImageUsageFn,

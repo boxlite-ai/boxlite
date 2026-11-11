@@ -25,6 +25,7 @@ extern CBoxImagePullCb cbImagePull(void);
 extern CBoxImageListCb cbImageList(void);
 extern CBoxImageGetCb cbImageGet(void);
 extern CBoxImageRemoveCb cbImageRemove(void);
+extern CBoxImageRemoveByIdCb cbImageRemoveByID(void);
 extern CBoxImageUsageCb cbImageUsage(void);
 
 extern CBoxVolumeCreateCb cbVolumeCreate(void);

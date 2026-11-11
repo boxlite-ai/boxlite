@@ -4,6 +4,24 @@
 
 BoxLite uses a centralized error enum with specific variants for different error categories.
 
+### Local image removal
+
+The ID-based removal operation exposes three additional native SDK categories:
+
+| Rust variant / C code | Python class | Node machine code | Go code |
+| --- | --- | --- | --- |
+| `AmbiguousImageId` | `AmbiguousImageIdError` | `ambiguous_image_id` | `ErrAmbiguousImageID` |
+| `ImageHasTags` | `ImageHasTagsError` | `image_has_tags` | `ErrImageHasTags` |
+| `ImageUsedByBoxes` | `ImageUsedByBoxesError` | `image_used_by_boxes` | `ErrImageUsedByBoxes` |
+
+Dependency messages list blocking tags or box IDs.
+Unknown IDs use `NotFound`; malformed IDs use `InvalidArgument`; active cache consumers use `InvalidState` with retry guidance.
+REST-backed handles return `Unsupported` for local cache removal.
+
+These local categories do not expand the HTTP error enum.
+If serialized through a generic HTTP error handler, ambiguity maps to `InvalidArgumentError` and dependency conflicts map to `InvalidStateError`.
+Existing native exception classes and HTTP codes keep their previous mappings.
+
 ### `UnsupportedEngine`
 
 Platform or hypervisor not supported.

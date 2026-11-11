@@ -33,6 +33,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite restart`](#boxlite-restart)
   - [`boxlite pull`](#boxlite-pull)
   - [`boxlite images`](#boxlite-images)
+  - [`boxlite rmi`](#boxlite-rmi)
   - [`boxlite inspect`](#boxlite-inspect)
   - [`boxlite cp`](#boxlite-cp)
   - [`boxlite info`](#boxlite-info)
@@ -669,6 +670,27 @@ List cached images.
 |------|-------|---------|-------------|
 | `--quiet` | `-q` | `false` | Print only image IDs; conflicts with `--format` |
 | `--format FMT` | — | `table` | Output format; conflicts with `--quiet` (see [Output Formats](#output-formats)) |
+
+---
+
+### `boxlite rmi`
+
+**Synopsis:** `boxlite rmi <IMAGE_ID>...`
+
+Remove untagged local manifests by full ID or unambiguous hex prefix.
+Tags and existing boxes, including stopped boxes, block deletion and are identified in errors.
+All target IDs are resolved before deletion; later targets are processed after individual failures.
+
+Successful full IDs are printed to stdout; errors and total reclaimed bytes go to stderr.
+Exit status is nonzero if any target fails.
+There is no confirmation prompt or command-specific flag; runtime selection and `--home` use the standard global options.
+Selected REST backends return unsupported without touching local data.
+
+```bash
+boxlite --home /srv/boxlite rmi 1f8c03c8f5e5 e402cca67371
+```
+
+See [cache protection and accounting limits](../../concepts/images.md#removing-local-images).
 
 ---
 

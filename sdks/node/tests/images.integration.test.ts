@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -15,6 +16,97 @@ const testRegistries = [
   { host: "docker.1ms.run", search: true },
   { host: "docker.io", search: true },
 ];
+
+test("removeById crosses the native binding with results and typed conflicts", async () => {
+  const digest = (bytes: Buffer) =>
+    `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  const config = Buffer.from(
+    JSON.stringify({
+      architecture: "amd64",
+      os: "linux",
+      rootfs: { type: "layers", diff_ids: [] },
+    }),
+  );
+  const layer = Buffer.alloc(0);
+  const manifest = Buffer.from(
+    JSON.stringify({
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      config: {
+        digest: digest(config),
+        size: config.length,
+        mediaType: "application/vnd.oci.image.config.v1+json",
+      },
+      layers: [
+        {
+          digest: digest(layer),
+          size: 0,
+          mediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+        },
+      ],
+    }),
+  );
+  const server = createServer((request, response) => {
+    response.setHeader("Connection", "close");
+    if (request.url === "/v2/") {
+      response.end("{}");
+    } else if (request.url?.includes("/manifests/")) {
+      response.setHeader(
+        "Content-Type",
+        "application/vnd.oci.image.manifest.v1+json",
+      );
+      response.setHeader("Docker-Content-Digest", digest(manifest));
+      response.end(manifest);
+    } else if (request.url?.endsWith(`/blobs/${digest(config)}`)) {
+      response.end(config);
+    } else if (request.url?.endsWith(`/blobs/${digest(layer)}`)) {
+      response.end(layer);
+    } else {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const homeDir = mkdtempSync("/tmp/boxlite-test-node-rmi-");
+  const previousNoProxy = process.env.NO_PROXY;
+  process.env.NO_PROXY = "127.0.0.1,localhost";
+  let runtime: Boxlite | undefined;
+  try {
+    runtime = new JsBoxlite({
+      homeDir,
+      imageRegistries: [{ host, transport: "http" }],
+    });
+    const images = runtime.images;
+    await images.pull(`${host}/app:latest`);
+    const id = (await images.list())[0].id;
+    expect(errorCode(await failureOf(images.removeById(id)))).toBe(
+      "image_has_tags",
+    );
+    await images.remove(`${host}/app`);
+    await images.pull(`${host}/app@${id}`);
+    await images.pull(`${host}/mirror@${id}`);
+    const result = await images.removeById(id.slice(7, 19));
+    expect(result.imageId).toBe(id);
+    expect(result.removedReferences).toEqual([
+      `${host}/app@${id}`,
+      `${host}/mirror@${id}`,
+    ]);
+    expect(result.reclaimedBytes).toBeGreaterThan(0);
+    expect(await images.list()).toEqual([]);
+    expect(errorCode(await failureOf(images.removeById(id)))).toBe("not_found");
+  } finally {
+    await runtime?.shutdown();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    rmSync(homeDir, { recursive: true, force: true });
+    if (previousNoProxy === undefined) delete process.env.NO_PROXY;
+    else process.env.NO_PROXY = previousNoProxy;
+  }
+});
 
 function newIsolatedRuntime() {
   const homeDir = mkdtempSync("/tmp/boxlite-test-node-images-");

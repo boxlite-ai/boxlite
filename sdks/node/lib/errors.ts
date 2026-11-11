@@ -111,8 +111,8 @@ export class ParseError extends BoxliteError {
 
 /**
  * The machine code of a failure the native runtime reported: the code
- * `BoxliteError::http()` (src/shared/src/errors.rs) gives it, which is also
- * the code a REST server answers the same failure with.
+ * `BoxliteError::native()` (src/shared/src/errors.rs) gives it. Local cache
+ * removal has finer categories than the unchanged HTTP error contract.
  */
 export type BoxliteErrorCode =
   | "invalid_argument"
@@ -123,6 +123,9 @@ export type BoxliteErrorCode =
   | "invalid_state"
   | "stopped"
   | "image_pull_failed"
+  | "ambiguous_image_id"
+  | "image_has_tags"
+  | "image_used_by_boxes"
   | "execution_failed"
   | "resource_exhausted"
   | "network_unavailable"
@@ -144,6 +147,9 @@ const DISPLAY_PREFIXES: ReadonlyArray<readonly [string, BoxliteErrorCode]> = [
   ["configuration error: ", "config_error"],
   ["storage error: ", "storage_error"],
   ["images error: ", "image_pull_failed"],
+  ["ambiguous image ID: ", "ambiguous_image_id"],
+  ["image has tags: ", "image_has_tags"],
+  ["image used by boxes: ", "image_used_by_boxes"],
   ["portal error: ", "upstream_unavailable"],
   ["network error: ", "network_unavailable"],
   ["gRPC/tonic error: ", "upstream_unavailable"],

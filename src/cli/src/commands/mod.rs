@@ -15,6 +15,7 @@ pub mod network;
 pub mod pull;
 pub mod restart;
 pub mod rm;
+pub mod rmi;
 pub mod run;
 pub mod serve;
 pub mod signal;

@@ -118,6 +118,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Create(args) => commands::create::execute(args, &global).await.map(|_| 0),
         cli::Commands::List(args) => commands::list::execute(args, &global).await.map(|_| 0),
         cli::Commands::Rm(args) => commands::rm::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Rmi(args) => commands::rmi::execute(args, &global).await.map(|_| 0),
         cli::Commands::Start(args) => commands::start::execute(args, &global).await.map(|_| 0),
         cli::Commands::Stop(args) => commands::stop::execute(args, &global).await.map(|_| 0),
         cli::Commands::Restart(args) => commands::restart::execute(args, &global).await.map(|_| 0),
