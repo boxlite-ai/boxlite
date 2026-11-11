@@ -63,7 +63,7 @@ func TestIntegrationSelfStoppedBoxRestartsAfterCachedHandleGoesSpent(t *testing.
 
 	// The dashboard's Start button. The cached handle is spent by now, so this
 	// only succeeds if the cache hands back a fresh one.
-	if _, err := client.Start(ctx, createDto.Id, nil, nil); err != nil {
+	if _, err := client.Start(ctx, createDto.Id, nil, nil, false); err != nil {
 		t.Fatalf("restarting a self-stopped box must succeed, got: %v", err)
 	}
 

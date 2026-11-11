@@ -107,7 +107,25 @@ pub unsafe extern "C" fn boxlite_start_box(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    start_box(handle, cb, user_data, out_error)
+    start_box(handle, None, cb, user_data, out_error)
+}
+
+/// Internal Runner ABI; ordinary SDK builds do not expose this operation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_internal_runner_start_box(
+    handle: *mut CBoxHandle,
+    nested_virtualization: c_int,
+    cb: CBoxStartBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    start_box(
+        handle,
+        Some(nested_virtualization != 0),
+        cb,
+        user_data,
+        out_error,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -377,6 +395,7 @@ unsafe fn remove_box(
 
 unsafe fn start_box(
     handle: *mut BoxHandle,
+    runner_nested_virtualization: Option<bool>,
     cb: CBoxStartBoxCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -394,7 +413,10 @@ unsafe fn start_box(
         let user_data_addr = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = lite.start().await;
+            let result = match runner_nested_virtualization {
+                Some(enabled) => boxlite::experimental::runner::start(&lite, enabled).await,
+                None => lite.start().await,
+            };
             push_event(
                 &queue,
                 RuntimeEvent::StartBox {

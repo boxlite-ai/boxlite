@@ -37,6 +37,9 @@ type CreateBoxDTO struct {
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
 	SkipStart        *bool             `json:"skipStart,omitempty"`
 
+	// Requires explicit authorization on the Runner process; omitted means off.
+	NestedVirtualization bool `json:"nestedVirtualization,omitempty"`
+
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`
@@ -50,8 +53,9 @@ type UpdateNetworkSettingsDTO struct {
 } //	@name	UpdateNetworkSettingsDTO
 
 type RecoverBoxDTO struct {
-	FromVolumeId string `json:"fromVolumeId,omitempty"`
-	OsUser       string `json:"osUser" validate:"required"`
+	NestedVirtualization bool   `json:"nestedVirtualization,omitempty"`
+	FromVolumeId         string `json:"fromVolumeId,omitempty"`
+	OsUser               string `json:"osUser" validate:"required"`
 	// CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.
 	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.125,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`

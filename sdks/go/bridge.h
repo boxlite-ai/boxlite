@@ -7,6 +7,10 @@
 
 #include "boxlite.h"
 
+// Private Cloud Runner ABI, excluded from the public SDK header.
+extern enum BoxliteErrorCode boxlite_internal_runner_start_box(
+    CBoxHandle *, int, CBoxStartBoxCb, void *, CBoxliteError *);
+
 extern CBoxStdoutCb cbStdout(void);
 extern CBoxStderrCb cbStderr(void);
 extern CBoxExitCb cbExit(void);

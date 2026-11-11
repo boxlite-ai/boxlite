@@ -302,7 +302,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     authToken: string,
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
-    const response = await this.boxApiClient.start(boxId, authToken, metadata)
+    const response = await this.boxApiClient.start(boxId, undefined, authToken, metadata)
 
     if (!response?.data?.daemonVersion) {
       return undefined

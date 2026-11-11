@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,8 @@ type Client struct {
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
 
+	nestedVirtualizationAllowed bool
+
 	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
 	// check, before it fetches a handle. Tests use it to land a stop in that
 	// window; nil in production.
@@ -68,6 +71,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	KernelPath                   string
+	ExperimentalFeatures         string
 	InsecureRegistries           []string
 	RegistryProxy                RegistryProxy
 	AWSRegion                    string
@@ -324,10 +328,17 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
-	if config.KernelPath != "" {
-		opts = append(opts, boxlite.WithExperimentalFeatures("custom-kernel"))
+	var features []string
+	if raw := strings.TrimSpace(config.ExperimentalFeatures); raw != "" {
+		features = strings.Split(raw, ",")
+		for i := range features {
+			features[i] = strings.TrimSpace(features[i])
+		}
 	}
+	if config.KernelPath != "" && !slices.Contains(features, "custom-kernel") {
+		features = append(features, "custom-kernel")
+	}
+	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir), boxlite.WithExperimentalFeatures(features...)}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -346,6 +357,8 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
+		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+
 		runtime:             rt,
 		logger:              logger,
 		homeDir:             homeDir,
@@ -414,6 +427,12 @@ func (c *Client) Close() error {
 		delete(c.boxes, id)
 	}
 	return c.runtime.Close()
+}
+
+// NestedVirtualizationEnabled reports the feature set validated at startup.
+// It authorizes requests; it does not establish hardware availability.
+func (c *Client) NestedVirtualizationEnabled() bool {
+	return c.nestedVirtualizationAllowed && nestedVirtualizationAvailable()
 }
 
 // Create creates a new box (VM) from the given image and configuration.
@@ -544,7 +563,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		boxDto.Image,
 	)
 
-	// bx.Start must stay the last step of Create that can fail.
+	// bx.StartRunner must stay the last step of Create that can fail.
 	//
 	// A successful Start publishes StartedAt when BoxLite moves the box to Running,
 	// and BoxSync reads it as evidence this job body succeeded — it is what
@@ -554,7 +573,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
-		if err := bx.Start(ctx); err != nil {
+		if err := bx.StartRunner(ctx, boxDto.NestedVirtualization && c.NestedVirtualizationEnabled()); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
 		c.recordPulledImage(ctx, boxDto.Id, bx)
@@ -601,7 +620,7 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 }
 
 // Start starts a stopped box and returns the runtime version.
-func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string, nestedVirtualization bool) (string, error) {
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
@@ -610,7 +629,7 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	if err != nil {
 		return "", err
 	}
-	if err := bx.Start(ctx); err != nil {
+	if err := bx.StartRunner(ctx, nestedVirtualization && c.NestedVirtualizationEnabled()); err != nil {
 		return "", err
 	}
 	// The other place a box is first started: one created with SkipStart has

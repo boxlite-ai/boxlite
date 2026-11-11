@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 pub mod custom_kernel;
 pub mod native_vmm;
 pub mod nested_virtualization;
+#[doc(hidden)]
+pub mod runner;
 
 /// Comma-separated list of release-candidate features enabled for this process.
 pub const EXPERIMENTAL_FEATURES_ENV: &str = "BOXLITE_EXPERIMENTAL";

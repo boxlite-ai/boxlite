@@ -30,8 +30,8 @@ func (a *BoxliteAdapter) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (s
 	return a.client.Create(ctx, boxDto)
 }
 
-func (a *BoxliteAdapter) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
-	return a.client.Start(ctx, boxId, authToken, metadata)
+func (a *BoxliteAdapter) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string, nestedVirtualization bool) (string, error) {
+	return a.client.Start(ctx, boxId, authToken, metadata, nestedVirtualization)
 }
 
 func (a *BoxliteAdapter) Stop(ctx context.Context, boxId string, force bool) error {

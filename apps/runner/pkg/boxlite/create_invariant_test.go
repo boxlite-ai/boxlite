@@ -13,9 +13,9 @@ import (
 )
 
 // TestCreateHasNoFallibleStepAfterStart guards the coupling documented at the
-// bx.Start call in Create.
+// bx.StartRunner call in Create.
 //
-// A successful bx.Start publishes StartedAt when BoxLite moves the box to Running, which
+// A successful bx.StartRunner publishes StartedAt when BoxLite moves the box to Running, which
 // BoxSync reads as evidence that this whole job body succeeded. That only holds
 // while Start is the last step of Create that can fail. Nothing about the
 // current code enforces it — replacing the hardcoded daemon version with a real
@@ -39,8 +39,8 @@ func TestCreateHasNoFallibleStepAfterStart(t *testing.T) {
 	}
 	for _, violation := range violations {
 		t.Errorf(
-			"Client.Create returns a non-nil error at %s, after bx.Start already "+
-				"published StartedAt. Move the fallible step above bx.Start, or "+
+			"Client.Create returns a non-nil error at %s, after bx.StartRunner already "+
+				"published StartedAt. Move the fallible step above bx.StartRunner, or "+
 				"revisit what that timestamp means.",
 			violation,
 		)
@@ -48,7 +48,7 @@ func TestCreateHasNoFallibleStepAfterStart(t *testing.T) {
 }
 
 // TestFallibleReturnsAfterStart exercises the guard itself. Its first version
-// keyed off the index of the *top-level statement* containing bx.Start, so a
+// keyed off the index of the *top-level statement* containing bx.StartRunner, so a
 // fallible step added beside the call — inside the same `if !skipStart` block,
 // which is where Create actually puts it — fell outside the scanned range and
 // went unreported.
@@ -63,7 +63,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
-		if err := bx.Start(ctx); START_CONDITION {
+		if err := bx.StartRunner(ctx, false); START_CONDITION {
 // START_GUARD_BODY
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
@@ -165,7 +165,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 }
 
 // fallibleReturnsAfterStart reports every return in fn that can carry a non-nil
-// error once bx.Start has already succeeded, as printable positions.
+// error once bx.StartRunner has already succeeded, as printable positions.
 //
 // Scoping is by source position rather than by statement index: the call sits
 // inside a block, so "after it" has to mean after the call itself, at any depth,
@@ -173,7 +173,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 //
 // The start's own error handler is the one exemption — it runs precisely when
 // the call did *not* succeed, so nothing was published. Recognising it requires
-// the `if err := bx.Start(ctx); err != nil` shape; anything else is reported as
+// the `if err := bx.StartRunner(ctx, false); err != nil` shape; anything else is reported as
 // an error rather than guessed at, because a guard that silently stops covering
 // the invariant is worse than no guard.
 func fallibleReturnsAfterStart(fileSet *token.FileSet, fn *ast.FuncDecl) ([]string, error) {
@@ -188,7 +188,7 @@ func fallibleReturnsAfterStart(fileSet *token.FileSet, fn *ast.FuncDecl) ([]stri
 		if !ok || ifStatement.Init == nil {
 			return true
 		}
-		if findCall(ifStatement.Init, "bx", "Start") == nil {
+		if findCall(ifStatement.Init, "bx", "StartRunner") == nil {
 			return true
 		}
 		startCall = startCallFromErrorGuard(ifStatement)
@@ -201,14 +201,14 @@ func fallibleReturnsAfterStart(fileSet *token.FileSet, fn *ast.FuncDecl) ([]stri
 	})
 
 	if startCall == nil {
-		if findCall(fn.Body, "bx", "Start") == nil {
+		if findCall(fn.Body, "bx", "StartRunner") == nil {
 			return nil, fmt.Errorf(
-				"no bx.Start call in %s; update this guard if the start step moved",
+				"no bx.StartRunner call in %s; update this guard if the start step moved",
 				fn.Name.Name,
 			)
 		}
 		return nil, fmt.Errorf(
-			"bx.Start in %s is no longer of the form `if err := bx.Start(ctx); err != nil`; "+
+			"bx.StartRunner in %s is no longer of the form `if err := bx.StartRunner(ctx, false); err != nil`; "+
 				"this guard cannot tell its own error handler from a later fallible step — "+
 				"update it to match the new shape",
 			fn.Name.Name,
@@ -246,7 +246,7 @@ func startCallFromErrorGuard(ifStatement *ast.IfStmt) *ast.CallExpr {
 		return nil
 	}
 	startCall, ok := assignment.Rhs[0].(*ast.CallExpr)
-	if !ok || !isCall(startCall, "bx", "Start") {
+	if !ok || !isCall(startCall, "bx", "StartRunner") {
 		return nil
 	}
 

@@ -5,6 +5,7 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
@@ -142,6 +143,7 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 //
 //	@Tags			box
 //	@Summary		Start box
+//	@Param			nestedVirtualization	query	bool	false	"Enable optional nested virtualization for this cold start"
 //	@Description	Start box
 //	@Produce		json
 //	@Param			boxId		path		string					true	"Box ID"
@@ -158,6 +160,13 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 //	@id				Start
 func Start(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
+
+	values, present := ctx.Request.URL.Query()["nestedVirtualization"]
+	if present && (len(values) != 1 || (values[0] != "true" && values[0] != "false")) {
+		ctx.Error(common_errors.NewInvalidBodyRequestError(fmt.Errorf("nestedVirtualization must be a boolean")))
+		return
+	}
+	nested := present && values[0] == "true"
 
 	runner, err := runner.GetInstance(nil)
 	if err != nil {
@@ -178,7 +187,7 @@ func Start(ctx *gin.Context) {
 		authToken = &tokenQuery
 	}
 
-	daemonVersion, err := runner.Boxlite.Start(ctx.Request.Context(), boxId, authToken, metadata)
+	daemonVersion, err := runner.Boxlite.Start(ctx.Request.Context(), boxId, authToken, metadata, nested)
 	if err != nil {
 		ctx.Error(err)
 		return

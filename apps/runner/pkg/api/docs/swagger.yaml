@@ -53,6 +53,10 @@ definitions:
         additionalProperties:
           type: string
         type: object
+      nestedVirtualization:
+        description: Requires explicit authorization on the Runner process; omitted
+          means off.
+        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -159,6 +163,8 @@ definitions:
       memoryQuota:
         minimum: 1
         type: integer
+      nestedVirtualization:
+        type: boolean
       osUser:
         type: string
       outboundAllowNet:
@@ -207,6 +213,8 @@ definitions:
         type: string
       metrics:
         $ref: '#/definitions/RunnerMetrics'
+      nestedVirtualizationEnabled:
+        type: boolean
       serviceHealth:
         items:
           $ref: '#/definitions/RunnerServiceInfo'
@@ -589,6 +597,10 @@ paths:
       description: Start box
       operationId: Start
       parameters:
+        - description: Enable optional nested virtualization for this cold start
+          in: query
+          name: nestedVirtualization
+          type: boolean
         - description: Box ID
           in: path
           name: boxId

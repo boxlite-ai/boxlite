@@ -626,6 +626,32 @@ jobs:
       - name: Run Go SDK, networking, runner and image-service tests with coverage
         run: make coverage:go
 
+      - name: Qualify nested runtime metadata with KVM coverage
+        id: nested-runtime-coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 5
+        env:
+          BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS: '1'
+        run: |
+          mkdir -p target/coverage/full-go
+          for module in go-sdk gvproxy runner image-service; do
+            cp "target/coverage/$module.out" "target/coverage/full-go/$module.out"
+          done
+          sudo chmod a+rw /dev/kvm
+          make _ensure-kvm
+          make coverage:go GOTEST_FILTER='-count=1 -run NestedVirtualization'
+          # Both passes instrument this checkout with the same atomic mode.
+          # Keep the complete suite's blocks as well as the hardware pass.
+          for module in go-sdk gvproxy runner image-service; do
+            report="target/coverage/$module.out"
+            full="target/coverage/full-go/$module.out"
+            if [[ "$(head -n 1 "$report")" != 'mode: atomic' || "$(head -n 1 "$full")" != 'mode: atomic' ]]; then
+              echo "Expected atomic coverage profiles for $module" >&2
+              exit 1
+            fi
+            tail -n +2 "$full" >> "$report"
+          done
+
       # coverage:go has already built the native library needed by both analyzers.
       - name: Run Go vet
         if: matrix.platform.target == 'linux-x64-gnu'

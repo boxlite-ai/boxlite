@@ -19,7 +19,7 @@ type BoxBackend interface {
 	// Box lifecycle — returns (containerId, daemonVersion, error)
 	Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error)
 	// Start returns daemonVersion
-	Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error)
+	Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string, nestedVirtualization bool) (string, error)
 	Stop(ctx context.Context, boxId string, force bool) error
 	Destroy(ctx context.Context, boxId string) error
 	RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error

@@ -72,20 +72,21 @@ func validateRecreatableSecrets(secrets []dto.SecretDTO) error {
 // runtime: a field not copied here is silently lost on a recovered box.
 func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
 	return dto.CreateBoxDTO{
-		Id:               boxId,
-		Image:            "alpine:latest",
-		OsUser:           recoverDto.OsUser,
-		CpuQuota:         recoverDto.CpuQuota,
-		GpuQuota:         recoverDto.GpuQuota,
-		MemoryQuota:      recoverDto.MemoryQuota,
-		StorageQuota:     recoverDto.StorageQuota,
-		Env:              recoverDto.Env,
-		Privileged:       recoverDto.Privileged,
-		Volumes:          recoverDto.Volumes,
-		Secrets:          recoverDto.Secrets,
-		OutboundEnabled:  recoverDto.OutboundEnabled,
-		OutboundAllowNet: recoverDto.OutboundAllowNet,
-		FromVolumeId:     recoverDto.FromVolumeId,
+		NestedVirtualization: recoverDto.NestedVirtualization,
+		Id:                   boxId,
+		Image:                "alpine:latest",
+		OsUser:               recoverDto.OsUser,
+		CpuQuota:             recoverDto.CpuQuota,
+		GpuQuota:             recoverDto.GpuQuota,
+		MemoryQuota:          recoverDto.MemoryQuota,
+		StorageQuota:         recoverDto.StorageQuota,
+		Env:                  recoverDto.Env,
+		Privileged:           recoverDto.Privileged,
+		Volumes:              recoverDto.Volumes,
+		Secrets:              recoverDto.Secrets,
+		OutboundEnabled:      recoverDto.OutboundEnabled,
+		OutboundAllowNet:     recoverDto.OutboundAllowNet,
+		FromVolumeId:         recoverDto.FromVolumeId,
 	}
 }
 

@@ -420,6 +420,12 @@ const docTemplate = `{
                 "operationId": "Start",
                 "parameters": [
                     {
+                        "type": "boolean",
+                        "description": "Enable optional nested virtualization for this cold start",
+                        "name": "nestedVirtualization",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "description": "Box ID",
                         "name": "boxId",
@@ -690,6 +696,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "nestedVirtualization": {
+                    "description": "Requires explicit authorization on the Runner process; omitted means off.",
+                    "type": "boolean"
+                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"
@@ -835,6 +845,9 @@ const docTemplate = `{
                     "type": "integer",
                     "minimum": 1
                 },
+                "nestedVirtualization": {
+                    "type": "boolean"
+                },
                 "osUser": {
                     "type": "string"
                 },
@@ -897,6 +910,9 @@ const docTemplate = `{
                 },
                 "metrics": {
                     "$ref": "#/definitions/RunnerMetrics"
+                },
+                "nestedVirtualizationEnabled": {
+                    "type": "boolean"
                 },
                 "serviceHealth": {
                     "type": "array",

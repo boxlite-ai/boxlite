@@ -91,7 +91,7 @@ func (f *fakeBackend) Create(context.Context, dto.CreateBoxDTO) (string, string,
 	return "", "", fmt.Errorf("Create must not be called by a migration job")
 }
 
-func (f *fakeBackend) Start(context.Context, string, *string, map[string]string) (string, error) {
+func (f *fakeBackend) Start(context.Context, string, *string, map[string]string, bool) (string, error) {
 	return "", fmt.Errorf("Start must not be called by a migration job")
 }
 

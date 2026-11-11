@@ -299,6 +299,14 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        self.start_with_nesting(None).await
+    }
+
+    pub(crate) async fn runner_start(&self, requested: bool) -> BoxliteResult<()> {
+        self.start_with_nesting(Some(requested)).await
+    }
+
+    async fn start_with_nesting(&self, nested_virtualization: Option<bool>) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -324,7 +332,9 @@ impl BoxImpl {
         // Boot creates the container; running its init is the separate step that
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
-        let live = self.ensure_booted().await?;
+        let live = self
+            .ensure_booted_with_nesting(nested_virtualization)
+            .await?;
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
@@ -1198,6 +1208,13 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        self.ensure_booted_with_nesting(None).await
+    }
+
+    async fn ensure_booted_with_nesting(
+        &self,
+        nested_virtualization: Option<bool>,
+    ) -> BoxliteResult<&LiveState> {
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1209,7 +1226,7 @@ impl BoxImpl {
         }
 
         self.live
-            .get_or_try_init(|| self.init_live_state(true))
+            .get_or_try_init(|| self.init_live_state_with_nesting(true, nested_virtualization))
             .await
     }
 
@@ -1330,6 +1347,28 @@ impl BoxImpl {
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
     async fn init_live_state(&self, allow_start: bool) -> BoxliteResult<LiveState> {
+        self.init_live_state_with_nesting(allow_start, None).await
+    }
+
+    fn boot_config(&self, nested_virtualization: Option<bool>) -> BoxConfig {
+        let mut config = self.config.clone();
+        if self.state.read().status != BoxStatus::Running
+            && let Some(enabled) = nested_virtualization
+        {
+            config.options.advanced.nested_virtualization = enabled
+                && self
+                    .runtime
+                    .experimental_features
+                    .is_enabled(crate::experimental::ExperimentalFeature::NestedVirtualization);
+        }
+        config
+    }
+
+    async fn init_live_state_with_nesting(
+        &self,
+        allow_start: bool,
+        nested_virtualization: Option<bool>,
+    ) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
@@ -1374,7 +1413,11 @@ impl BoxImpl {
             .box_manager
             .update_box(&self.config.id)?
             .outbound_policy;
-        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
+        let builder = BoxBuilder::new(
+            Arc::clone(&self.runtime),
+            self.boot_config(nested_virtualization),
+            state,
+        )?;
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
@@ -1880,6 +1923,79 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     mod execution_recovery;
+
+    #[tokio::test]
+    async fn runner_boot_policy_is_transient_and_local_config_is_unchanged() {
+        for authorized in [false, true] {
+            for saved in [false, true] {
+                let home = TempDir::new().unwrap();
+                let mut runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                    home_dir: home.path().to_path_buf(),
+                    ..Default::default()
+                })
+                .unwrap();
+                if authorized {
+                    Arc::get_mut(&mut runtime).unwrap().experimental_features =
+                        crate::experimental::ExperimentalFeatures::parse("nested-virtualization")
+                            .unwrap();
+                }
+                let mut options = BoxOptions::default();
+                options.advanced.nested_virtualization = saved;
+                let box_handle = runtime
+                    .create(options, Some("policy".into()))
+                    .await
+                    .unwrap();
+                let (config, state) = runtime
+                    .box_manager
+                    .box_by_id(box_handle.id())
+                    .unwrap()
+                    .unwrap();
+                let implementation = BoxImpl::new(
+                    config,
+                    state,
+                    runtime.clone(),
+                    runtime.shutdown_token.child_token(),
+                );
+                assert_eq!(
+                    implementation
+                        .boot_config(None)
+                        .options
+                        .advanced
+                        .nested_virtualization,
+                    saved
+                );
+                for requested in [false, true, false] {
+                    assert_eq!(
+                        implementation
+                            .boot_config(Some(requested))
+                            .options
+                            .advanced
+                            .nested_virtualization,
+                        requested && authorized
+                    );
+                    let (stored, _) = runtime
+                        .box_manager
+                        .box_by_id(box_handle.id())
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(stored.options.advanced.nested_virtualization, saved);
+                }
+                implementation.state.write().status = BoxStatus::Running;
+                assert_eq!(
+                    implementation
+                        .boot_config(Some(!saved))
+                        .options
+                        .advanced
+                        .nested_virtualization,
+                    saved
+                );
+                implementation.state.write().status = BoxStatus::Configured;
+                drop(implementation);
+                drop(box_handle);
+                runtime.shutdown(None).await.unwrap();
+            }
+        }
+    }
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

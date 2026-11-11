@@ -4,33 +4,36 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
-The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
-Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
-API for SDK clients and the control-plane API. One runner process hosts many
-boxes; each box hosts many executions; each execution can be attached to at
-most one client at a time.
+## Nested virtualization capability
 
-Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3003`
-behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
-and [runner operations](../infra/docs/runners.md).
+Cloud requests nesting as an optional capability for each create or cold start.
+The API supplies the current organization policy; the Runner combines it with
+its startup `BOXLITE_EXPERIMENTAL` allowlist and the host's KVM nested settings.
+Missing permission, unsupported hosts and unreadable host settings use an ordinary
+VM. This does not grant guest privilege.
 
-`BOXLITE_KERNEL_PATH` selects an operator-installed kernel for newly created
-Boxes. It must be an absolute readable regular file; invalid settings fail
-startup. The Runner enables the local `custom-kernel` RC capability through
-the Go/C SDK and preserves the guest privilege policy separately. An unset
-path keeps the bundled default. Cloud deployment downloads and verifies the
-file; the Runner itself performs no download. Existing Boxes retain their
-saved boot configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
-custom-kernel Boxes: clearing it removes the feature opt-in needed to restart them.
-The `--kernel` flag belongs to the local CLI; the Runner uses the environment
-variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
+On Linux x86_64 the capability probe follows libkrun's Intel/AMD KVM module setting
+checks. Other Runner hosts report unavailable. The V0 `/info` response reports
+`nestedVirtualizationEnabled`; the Cloud layer also carries that report through
+its authenticated V2 heartbeat.
 
-The health response includes `custom_kernel: "supported"` to identify binaries
-that implement this setting. It describes build capability; deployment also
-checks the running process's kernel environment and listening socket.
+The Runner creates ordinary saved box configuration and passes the current
+choice through its private `StartRunner` bridge. Both initial start and restart
+use that bridge, so no per-box nesting choice is persisted. Removing an org from
+the allowlist disables nesting on the next cold boot. A running VM is reused
+without a hot capability change; `get_or_create` remains idempotent.
 
-For the system-wide context (CDN, load balancers, where the runner fits in
-the request path), see the [hosted platform](../../docs/contributing/architecture/platform/README.md).
+Standard local SDK and CLI behavior follows main unchanged: explicit RC options,
+feature authorization, saved local configuration and local reuse checks remain
+owned by the local runtime. Cloud's transient override is available only through
+the Runner integration; it does not change ordinary `Box.Start`.
+
+Kernel and privileged options remain saved configuration. Runner tests cover
+optional fallback, valid startup features, the host probe, and creation/replay
+without booting a VM. Hardware VM/L2 execution requires separate qualification.
+
+Cloud stages deliver Runner process settings through
+[`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
 
 ---
 
@@ -778,18 +781,17 @@ that the guest listener restarts.
 
 ```bash
 # All runner tests
-cd apps/runner && go test -tags boxlite_dev ./...
+make test:apps:runner
 
 # Just the attach + exec_manager suites
-cd apps/runner && go test -tags boxlite_dev ./pkg/api/controllers/... ./pkg/boxlite/...
+make test:apps:runner FILTER='Attach|ExecManager'
 
 # With race detector (recommended; cleanupLoop ticker + attach goroutines)
-cd apps/runner && go test -tags boxlite_dev -race ./...
+make test:apps:runner GOTEST_FILTER='-race'
 ```
 
-The `boxlite_dev` build tag is required because the Go SDK uses FFI
-symbols that aren't in the released `libboxlite.a`. The dev tag links
-against the local cargo-built version.
+These make targets configure both required tags: `boxlite_dev` links the local
+C library, and `boxlite_runner` enables the private control-plane bridge.
 
 If you hit "libboxlite.a not found" or unresolved-symbol errors:
 

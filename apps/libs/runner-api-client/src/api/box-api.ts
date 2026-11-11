@@ -244,12 +244,13 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
          * Start box
          * @summary Start box
          * @param {string} boxId Box ID
+         * @param {boolean} [nestedVirtualization] Enable optional nested virtualization for this cold start
          * @param {string} [token] Auth token
          * @param {object} [metadata] Metadata
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        start: async (boxId: string, token?: string, metadata?: object, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        start: async (boxId: string, nestedVirtualization?: boolean, token?: string, metadata?: object, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'boxId' is not null or undefined
             assertParamExists('start', 'boxId', boxId)
             const localVarPath = `/boxes/{boxId}/start`
@@ -267,6 +268,10 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
 
             // authentication Bearer required
             await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            if (nestedVirtualization !== undefined) {
+                localVarQueryParameter['nestedVirtualization'] = nestedVirtualization;
+            }
 
             if (token !== undefined) {
                 localVarQueryParameter['token'] = token;
@@ -447,13 +452,14 @@ export const BoxApiFp = function(configuration?: Configuration) {
          * Start box
          * @summary Start box
          * @param {string} boxId Box ID
+         * @param {boolean} [nestedVirtualization] Enable optional nested virtualization for this cold start
          * @param {string} [token] Auth token
          * @param {object} [metadata] Metadata
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async start(boxId: string, token?: string, metadata?: object, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<StartBoxResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.start(boxId, token, metadata, options);
+        async start(boxId: string, nestedVirtualization?: boolean, token?: string, metadata?: object, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<StartBoxResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.start(boxId, nestedVirtualization, token, metadata, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.start']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -551,13 +557,14 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          * Start box
          * @summary Start box
          * @param {string} boxId Box ID
+         * @param {boolean} [nestedVirtualization] Enable optional nested virtualization for this cold start
          * @param {string} [token] Auth token
          * @param {object} [metadata] Metadata
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        start(boxId: string, token?: string, metadata?: object, options?: RawAxiosRequestConfig): AxiosPromise<StartBoxResponse> {
-            return localVarFp.start(boxId, token, metadata, options).then((request) => request(axios, basePath));
+        start(boxId: string, nestedVirtualization?: boolean, token?: string, metadata?: object, options?: RawAxiosRequestConfig): AxiosPromise<StartBoxResponse> {
+            return localVarFp.start(boxId, nestedVirtualization, token, metadata, options).then((request) => request(axios, basePath));
         },
         /**
          * Stop box
@@ -649,13 +656,14 @@ export class BoxApi extends BaseAPI {
      * Start box
      * @summary Start box
      * @param {string} boxId Box ID
+     * @param {boolean} [nestedVirtualization] Enable optional nested virtualization for this cold start
      * @param {string} [token] Auth token
      * @param {object} [metadata] Metadata
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public start(boxId: string, token?: string, metadata?: object, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).start(boxId, token, metadata, options).then((request) => request(this.axios, this.basePath));
+    public start(boxId: string, nestedVirtualization?: boolean, token?: string, metadata?: object, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).start(boxId, nestedVirtualization, token, metadata, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

@@ -29,13 +29,17 @@ func TestPulledImageIsReadAfterTheBoxStarts(t *testing.T) {
 		t.Fatalf("parse client.go: %v", err)
 	}
 
-	for _, method := range []string{"Create", "Start"} {
+	for _, entry := range []struct{ method, startMethod string }{
+		{"Create", "StartRunner"},
+		{"Start", "StartRunner"},
+	} {
+		method := entry.method
 		fn := findMethod(parsed, "Client", method)
 		if fn == nil {
 			t.Fatalf("Client.%s not found in client.go; update this guard if it was renamed", method)
 		}
 
-		startPos := positionOfCall(fn, "bx", "Start")
+		startPos := positionOfCall(fn, "bx", entry.startMethod)
 		if startPos == token.NoPos {
 			t.Fatalf("Client.%s no longer starts the box; this guard assumes it does", method)
 		}
@@ -49,10 +53,11 @@ func TestPulledImageIsReadAfterTheBoxStarts(t *testing.T) {
 		}
 		if recordPos < startPos {
 			t.Errorf(
-				"Client.%s reads the pulled image at %s, before bx.Start at %s. Nothing is "+
+				"Client.%s reads the pulled image at %s, before bx.%s at %s. Nothing is "+
 					"pulled until the box starts, so that read always comes back empty.",
 				method,
 				fileSet.Position(recordPos),
+				entry.startMethod,
 				fileSet.Position(startPos),
 			)
 		}

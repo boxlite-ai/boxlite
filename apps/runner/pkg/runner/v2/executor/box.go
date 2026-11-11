@@ -41,7 +41,7 @@ func (e *Executor) startBox(ctx context.Context, job *apiclient.Job) (any, error
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	daemonVersion, err := e.backend.Start(ctx, job.ResourceId, payload.AuthToken, payload.Metadata)
+	daemonVersion, err := e.backend.Start(ctx, job.ResourceId, payload.AuthToken, payload.Metadata, payload.NestedVirtualization)
 	if err != nil {
 		return nil, common.FormatRecoverableError(err)
 	}
