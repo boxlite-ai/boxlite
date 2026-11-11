@@ -7,7 +7,8 @@ use boxlite_shared::{ExecRequest, ExecResponse};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    sync::{Arc, Mutex as ClockMutex},
+    time::Instant,
 };
 use tokio::sync::{watch, Mutex};
 use tonic::Status;
@@ -21,6 +22,7 @@ struct RequestEntry {
 #[derive(Default)]
 pub(crate) struct ExecutionRequests {
     entries: Mutex<HashMap<String, RequestEntry>>,
+    clock: ClockMutex<Option<(u64, Instant)>>,
 }
 
 impl ExecutionRequests {
@@ -40,6 +42,21 @@ impl ExecutionRequests {
         request: ExecRequest,
         now: u64,
     ) -> Result<ExecResponse, Status> {
+        // Wall time supplies the shared deadline domain; monotonic elapsed time
+        // prevents rollback from making any reclaimed token valid again.
+        let now = {
+            let mut clock = self.clock.lock().unwrap();
+            let tick = Instant::now();
+            let floor = clock
+                .as_ref()
+                .map(|(wall, anchor)| {
+                    wall.saturating_add(tick.duration_since(*anchor).as_millis() as u64)
+                })
+                .unwrap_or(now);
+            let current = now.max(floor);
+            *clock = Some((current, tick));
+            current
+        };
         let deadline = request_deadline(key, now)?;
         let hash: [u8; 32] = Sha256::digest(
             serde_json::to_vec(&(
@@ -170,6 +187,37 @@ mod tests {
         assert!(!requests.entries.lock().await.contains_key(&key));
         let error = requests
             .execute_at(&server, &key, payload, now + 1000)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn clock_rollback_cannot_reopen_a_reclaimed_token() {
+        let server = GuestServer::new(GuestLayout::new());
+        let requests = Arc::new(ExecutionRequests::default());
+        let now = super::super::now_ms();
+        let key = format!("old.{}", now + 1000);
+        let payload = ExecRequest {
+            execution_id: Some("forbidden".into()),
+            ..Default::default()
+        };
+        requests
+            .execute_at(&server, &key, payload.clone(), now)
+            .await
+            .unwrap();
+        requests
+            .execute_at(
+                &server,
+                &format!("new.{}", now + 5000),
+                payload.clone(),
+                now + 2000,
+            )
+            .await
+            .unwrap();
+        assert!(!requests.entries.lock().await.contains_key(&key));
+        let error = requests
+            .execute_at(&server, &key, payload, now)
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
