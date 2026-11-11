@@ -1,3 +1,4 @@
+import { Context } from '../../common/context/context'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 
@@ -24,7 +25,9 @@ describe('Saved nested box recovery', () => {
 
   it.each([false, undefined, null, 'true', 1])('rejects unconfirmed capability %p before recovery', async (value) => {
     const h = fixture(value)
-    await expect(h.service.recover(h.box.id, h.organization as any)).rejects.toThrow('Nested boxes require')
+    await expect(h.service.recover(h.box.id, h.organization as any, Context.user())).rejects.toThrow(
+      'Nested boxes require',
+    )
     expect(h.recoverBox).not.toHaveBeenCalled()
     expect(h.updateWhere).not.toHaveBeenCalled()
     expect(h.start).not.toHaveBeenCalled()
@@ -34,29 +37,31 @@ describe('Saved nested box recovery', () => {
     const h = fixture(true)
     if (mode === 'error') h.runnerInfo.mockRejectedValue(new Error('Runner unavailable'))
     else h.runnerInfo.mockImplementation(() => new Promise(() => {}))
-    await expect(h.service.recover(h.box.id, h.organization as any)).rejects.toThrow('Nested boxes require')
+    await expect(h.service.recover(h.box.id, h.organization as any, Context.user())).rejects.toThrow(
+      'Nested boxes require',
+    )
     expect(h.recoverBox).not.toHaveBeenCalled()
     expect(h.updateWhere).not.toHaveBeenCalled()
   })
 
   it('recovers the saved nested decision after the organization grant is revoked', async () => {
     const h = fixture(true)
-    await expect(h.service.recover(h.box.id, h.organization as any)).resolves.toBe(h.box)
+    await expect(h.service.recover(h.box.id, h.organization as any, Context.user())).resolves.toBe(h.box)
     expect(h.runnerInfo).toHaveBeenCalledTimes(1)
     expect(h.recoverBox).toHaveBeenCalledWith(h.box)
-    expect(h.start).toHaveBeenCalledWith(h.box.id, h.organization)
+    expect(h.start).toHaveBeenCalledWith(h.box.id, h.organization, Context.user())
   })
 
   it('keeps ordinary recovery independent of discovery', async () => {
     const h = fixture(undefined, false)
-    await h.service.recover(h.box.id, h.organization as any)
+    await h.service.recover(h.box.id, h.organization as any, Context.user())
     expect(h.runnerInfo).not.toHaveBeenCalled()
     expect(h.recoverBox).toHaveBeenCalledWith(h.box)
   })
 
   it('rejects nested recovery on V2 before dispatch', async () => {
     const h = fixture(true, true, '2')
-    await expect(h.service.recover(h.box.id, h.organization as any)).rejects.toThrow(
+    await expect(h.service.recover(h.box.id, h.organization as any, Context.user())).rejects.toThrow(
       'Recovering boxes with runner API version 2 is not supported',
     )
     expect(h.recoverBox).not.toHaveBeenCalled()

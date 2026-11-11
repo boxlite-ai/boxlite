@@ -451,7 +451,9 @@ export class BoxService {
           box.nestedVirtualization = await this.resolveNestedVirtualization(organization, runner, box.id)
           await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
           const insert = () =>
-            this.boxRepository.insert(box, options.maxCreatedBoxes, undefined, options.onPersist)
+            options.onPersist
+              ? this.boxRepository.insert(box, options.maxCreatedBoxes, undefined, options.onPersist)
+              : this.boxRepository.insert(box, options.maxCreatedBoxes)
           return createBoxDto.name
             ? insert()
             : persistWithGeneratedBoxName(box.id, (name) => {

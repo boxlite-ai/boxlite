@@ -42,7 +42,12 @@ describe('BoxManager nested start preflight recovery', () => {
       box.enforceInvariants()
       return box
     })
-    const repository = { findOneOrFail: jest.fn().mockResolvedValue(box), update: persist, updateWhere: persist }
+    const repository = {
+      findOneOrFail: jest.fn().mockResolvedValue(box),
+      findWithCheckpointState: jest.fn().mockResolvedValue({ box }),
+      update: persist,
+      updateWhere: persist,
+    }
     const runnerRepository = { findOne: jest.fn(async () => report) }
     const jobs = { createJob: jest.fn().mockResolvedValue(undefined) }
     const adapter = v0?.adapter ?? new RunnerAdapterV2(repository as never, {} as never, jobs as never)

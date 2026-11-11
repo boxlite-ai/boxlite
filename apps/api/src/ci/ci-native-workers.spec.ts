@@ -23,6 +23,7 @@ import { CiNativeWorkers } from './ci-native-workers'
 import { CiSettingsService } from './ci-settings.service'
 import { Box } from '../box/entities/box.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
+import { BoxCheckpointState } from '../box/entities/box-checkpoint-state.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
@@ -76,7 +77,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       type: 'postgres',
       url: database,
       schema,
-      entities: [Box, BoxLastActivity],
+      entities: [Box, BoxLastActivity, BoxCheckpointState],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       extra: { options: `-c search_path=${schema},public` },
@@ -119,7 +120,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         desiredState: BoxDesiredState.STARTED,
         pending: false,
       })
-      await repository.insert(box, options?.maxCreatedBoxes, options?.onPersist)
+      await repository.insert(box, options?.maxCreatedBoxes, undefined, options?.onPersist)
       return { ...box } as any
     })
     jest.spyOn(platform, 'toBoxDtoWithExitCode').mockImplementation(async (box) => ({ ...box }) as any)
@@ -160,7 +161,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }
   })
   beforeEach(async () => {
-    await db.query('TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity')
+    await db.query(
+      'TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity,box_checkpoint_state',
+    )
     await db.query(
       `INSERT INTO ci_installation_binding VALUES($1,1,'github.com',$2,10,20,'owner','User',$3,$4,true,true,'ready')`,
       [binding, app, org, actor],

@@ -63,7 +63,7 @@ func TestCheckpointClientLifecycleRefusesCorruptJournalAndCancelledAdmission(t *
 					_, _, err := client.Create(ctx, dto.CreateBoxDTO{Id: "target", OutboundEnabled: &enabled})
 					return err
 				},
-				"start":   func() error { _, err := client.Start(ctx, "target", nil, nil); return err },
+				"start":   func() error { _, err := client.Start(ctx, "target", nil, nil, false); return err },
 				"stop":    func() error { return client.Stop(ctx, "target", false) },
 				"destroy": func() error { return client.Destroy(ctx, "target") },
 				"export":  func() error { _, err := client.ExportBox(ctx, "target", t.TempDir()); return err },
@@ -153,8 +153,8 @@ func TestCheckpointClientRestorePropagatesInvalidAdmission(t *testing.T) {
 	}
 }
 
-func TestCheckpointClientLifecycleUsesNativeRESTUnderTargetLease(t *testing.T) {
-	for _, action := range []string{"start", "stop", "export"} {
+func TestCheckpointClientStopAndExportUseNativeRESTUnderTargetLease(t *testing.T) {
+	for _, action := range []string{"stop", "export"} {
 		for _, scenario := range []string{"success", "lookup-error", "native-error"} {
 			t.Run(action+"/"+scenario, func(t *testing.T) {
 				nativeCalls := 0
@@ -191,8 +191,6 @@ func TestCheckpointClientLifecycleUsesNativeRESTUnderTargetLease(t *testing.T) {
 				})
 				var err error
 				switch action {
-				case "start":
-					_, err = client.Start(t.Context(), "target", nil, nil)
 				case "stop":
 					err = client.Stop(t.Context(), "target", false)
 					if client.boxes["target"] != nil {
@@ -216,10 +214,27 @@ func TestCheckpointClientLifecycleUsesNativeRESTUnderTargetLease(t *testing.T) {
 					wantNative = 0
 				}
 				if nativeCalls != wantNative {
-					t.Fatalf("native lifecycle calls: got %d, want %d", nativeCalls, wantNative)
+					t.Fatalf("native lifecycle calls: got %d, want %d (operation error: %v)", nativeCalls, wantNative, err)
 				}
 			})
 		}
+	}
+}
+
+// Runner starts use the managed local backend; REST is only a transport fixture
+// for ordinary stop/export, and cannot exercise the managed native start entry.
+func TestCheckpointClientStartRequiresLocalManagedRuntime(t *testing.T) {
+	client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("managed start reached REST: %s %s", r.Method, r.URL)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, checkpointWireBox("target", "target", "stopped", "alpine:latest"))
+	})
+	_, err := client.Start(t.Context(), "target", nil, nil, false)
+	var runtimeErr *sdk.Error
+	if !errors.As(err, &runtimeErr) || runtimeErr.Code != sdk.ErrUnsupported {
+		t.Fatalf("managed start on REST: got %v, want unsupported", err)
 	}
 }
 

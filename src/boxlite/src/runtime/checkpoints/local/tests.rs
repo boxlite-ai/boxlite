@@ -357,7 +357,9 @@ async fn checkpoint_preparation_requires_the_target_runtime_feature_opt_in() {
         Ok(_) => panic!("checkpoint bypassed the target runtime feature gate"),
     };
     assert!(
-        error.to_string().contains("NestedVirtualization"),
+        error
+            .to_string()
+            .contains("nested virtualization support is disabled"),
         "{error}"
     );
     assert!(runtime.list_info().await.unwrap().is_empty());
@@ -369,6 +371,7 @@ async fn checkpoint_preparation_requires_the_target_runtime_feature_opt_in() {
             ..Default::default()
         },
         crate::experimental::ExperimentalFeatures::parse("nested-virtualization").unwrap(),
+        false,
     )
     .unwrap();
     crate::images::test_support::seed_cached_build(

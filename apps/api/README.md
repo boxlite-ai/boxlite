@@ -1176,7 +1176,10 @@ operation intents. The native ledger uses `box-native/<allocation-id>` in the sa
 state table. BoxService's `onPersist` callback checks the current execution epoch,
 original binding and owner, and records the actual Box ID in the Box transaction.
 A denied or stale callback rolls back both rows. Commerce limits still apply;
-providing the callback forces fresh Box creation.
+providing the callback forces fresh Box creation. The repository runs this callback
+after inserting the Box and before committing its admission transaction. Checkpoint
+imports retain their separate pre-insert validation and post-insert job scheduling,
+so integrating CI cannot move checkpoint row locks past Box creation.
 
 Cleanup uses the known original Box ID and scope, even after admission is revoked.
 A missing ownership record is an error. Only absence of the known original Box row

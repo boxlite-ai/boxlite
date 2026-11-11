@@ -71,7 +71,7 @@ func (b *checkpointBackend) ExportCheckpoint(ctx context.Context, boxID, directo
 	return archive, "example/app@sha256:" + strings.Repeat("a", 64), err
 }
 
-func (b *checkpointBackend) Start(context.Context, string, *string, map[string]string) (string, error) {
+func (b *checkpointBackend) Start(context.Context, string, *string, map[string]string, bool) (string, error) {
 	if b.start != nil {
 		b.start()
 	}

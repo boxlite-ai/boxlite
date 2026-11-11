@@ -407,7 +407,7 @@ describe('BoxService inbound defaults', () => {
     warmPoolService.fetchWarmPoolBox.mockRejectedValue(new Error('Warm assignment cannot record this ownership'))
     const transaction = { query: jest.fn() }
     const onPersist = jest.fn(async (_tx, _box) => undefined)
-    boxRepository.insert.mockImplementation(async (box, _limit, callback) => {
+    boxRepository.insert.mockImplementation(async (box, _limit, _initialize, callback) => {
       await callback(transaction, box)
       return box
     })
@@ -420,7 +420,12 @@ describe('BoxService inbound defaults', () => {
       transaction,
       expect.objectContaining({ id: result.id, organizationId: activeOrg.id }),
     )
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ id: result.id }), 7, onPersist)
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: result.id }),
+      7,
+      undefined,
+      onPersist,
+    )
   })
 
   /**
