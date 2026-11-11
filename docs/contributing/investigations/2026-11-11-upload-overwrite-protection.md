@@ -85,4 +85,22 @@ Remaining validation criteria:
 - Through real REST and MCP entry points, upload conflicting bytes with false and read the guest file back. Repeat with true and omitted overwrite, checking replacement, other archive entries and unrelated existing files. Exercise hinted and hintless guest paths.
 - Keep the REST SDK old-server refusal covered. Report missing dependencies, skipped checks and environment failures separately; do not label unit mocks as VM integration.
 
-Before publication of an implementation PR, update meaningful project usage docs, record the actual failure/pass evidence and measure the final diff against the intended base.
+The implementation is split by behavior: shared/native extraction, guest and portal
+conflicts, and host copy-out path handling form the core change. Option-aware C
+and Go stream APIs ship with the runner/serve HTTP adapters in the dependent
+change. Existing C and Go entry points retain their default behavior in both.
+
+The original core CI exposed macOS temporary-root symlinks. Policy fixtures now
+use canonical roots; host copy-out resolves trusted parents while retaining leaf
+protection. A VM regression failed on the prior core and passed after correction.
+Additional regressions caught dropped trailing-slash directory intent and failure
+on missing parents containing `..`; both failed against the earlier resolver and
+passed after filesystem parent resolution. Directory intent is passed separately
+from the resolved path. A directory-symlink leaf regression already rejected before
+that separation, so the separation is not claimed as a demonstrated security fix.
+
+A late archive directory header also exposed lost permissions on a directory
+created by an earlier file entry. Its regression observed mode `0755` instead of
+`0700` before correction and passed afterward. Only directories that predate the
+archive retain their original metadata. Local green results do not establish that
+the updated cross-platform CI or patch-coverage gate has passed.
