@@ -35,6 +35,13 @@ BoxService resolves organization resource ceilings; Commerce quota still fences 
 A typed pre-persistence resource denial uses the existing original-operation rejection ledger and releases capacity.
 Other errors retain their existing uncertainty rules.
 
+Standalone creation also fences admission and repository-read failures before dispatch.
+Rejection and dispatch claim the same existing REST ledger key with an expected-null write,
+conditioned on the execution lease and original allocation version.
+A successful claim for rejection prevents POST and survives restart without another upstream read.
+A dispatch claim prevents late rejection; response loss or original-ID persistence failure retains capacity and forbids repeated POST.
+Existing requested allocations without a ledger remain uncertain.
+
 No resource fields are added to durable allocations.
 A reservation without a create attempt rereads its original job before launching.
 An uncertain create recovers the original Box ID before any optional job read; it never repeats POST.
@@ -55,7 +62,7 @@ PostgreSQL tests use the same `DB_*` settings and isolated-schema fixtures as ot
 | Check | Observed result |
 | --- | --- |
 | `make test:apps:ci-listener` with standard local `DB_*` settings | 689 tests passed, including both database adapters. |
-| `make test:apps:github-ci-runner` | 152 tests passed. |
+| `make test:apps:github-ci-runner` | 167 tests passed, including standalone rejection and dispatch fences. |
 | `make test:apps:api TEST_FILES='ci/\|1793700000000-add-ci-listener-state-migration.spec\|1793664000000-add-ci-connect-migration.spec\|box.service.quota.spec'` | 354 tests passed on Node 24 with real local PostgreSQL. |
 | `make test:apps:dashboard` on Node 24 | 1044 tests passed. |
 | `make test:apps:ci-listener FILTER='CI shared state'` without `DB_HOST` | 28 SQLite tests passed; PostgreSQL cases skipped. |
@@ -68,6 +75,14 @@ With every resource-feature production change restored to its base state, the te
 expected `ConfirmedWorkerCreationRejected`, received `BadRequestException`.
 A temporary test-only adapter allowed skipped new-label tests to compile; it changed no defect assertion or production code.
 After removing that adapter and restoring all production changes, the same test passed.
+
+The standalone review correction has separate full-revert proof against `24f324125`.
+With both changed production files restored, five regression cases reached their assertions and failed:
+four expected definitive rejection but received ordinary errors; concurrent create sent two POSTs instead of one.
+A temporary invocation-only type adapter let skipped new-capability tests compile; it implemented no rejection behavior.
+After byte-for-byte restoration and adapter removal, all 167 standalone tests passed.
+Additional protocol tests control both CAS race orders, reopen SQLite after lost responses or failed ID persistence,
+and reject changed effects, scope, identity and leases.
 
 Unresolved validation outside this change: full app lint reports three module-boundary errors in the unchanged infra release-audit tests.
 The full CLI unit suite retains an unrelated SSH configure test returning HTTP 503; CI command tests pass independently.

@@ -8,11 +8,13 @@ import { join } from 'node:path'
 import { Header } from 'tar'
 import {
   ConfirmedWorkerAbsent,
+  ConfirmedWorkerCreationRejected,
   ExecutionJournal,
   ExecutionLease,
   ExecutionScope,
   ListenerState,
   WorkerExecutor,
+  WorkerPool,
   parseResourceLabels,
 } from '@boxlite-ai/ci-listener'
 import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
@@ -159,6 +161,215 @@ describe('Standalone BoxLite execution boundary', () => {
     await advance({ delivery: 'requested', effect: { id: randomUUID(), kind: 'jit-deliver' } })
   }
   const posts = () => calls.filter((call) => call.path === '/v1/tenant-a/boxes' && call.method === 'POST')
+  it.each(['admission', 'principal-read'])('settles a create rejected before dispatch: %s', async (failure) => {
+    const effect = randomUUID()
+    const row = await advance({ box: { phase: 'requested', id: null }, effect: { id: effect, kind: 'box-create' } })
+    if (failure === 'admission') allowed = false
+    else {
+      const previous = global.fetch
+      global.fetch = jest.fn(async (input, options) => {
+        if (new URL(String(input)).pathname === '/v1/me') throw new Error('Principal read unavailable')
+        return previous(input, options)
+      }) as typeof fetch
+    }
+    await expect(worker.create(launch())).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    await expect(worker.create(launch())).rejects.toMatchObject({ rejectedCreationEffect: effect })
+    expect(posts()).toHaveLength(0)
+    const recovered = service.bind(scope, lease, async () => {
+      throw new Error('Admission remains unavailable')
+    })
+    await expect(recovered.get(name)).rejects.toMatchObject({ rejectedCreationEffect: effect })
+    await journal.rejectCreation(lease, row.record.key, row.record.version, effect)
+    expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(true)
+  })
+  it('fences concurrent create attempts before either POST', async () => {
+    await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
+    const outcomes = await Promise.allSettled([worker.create(launch()), worker.create(launch())])
+    expect(posts()).toHaveLength(1)
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+  })
+  it('lets durable rejection win against a create paused before dispatch', async () => {
+    const effect = randomUUID(),
+      row = await advance({ box: { phase: 'requested', id: null }, effect: { id: effect, kind: 'box-create' } })
+    let entered!: () => void, resume!: () => void
+    const started = new Promise<void>((resolve) => {
+        entered = resolve
+      }),
+      wait = new Promise<void>((resolve) => {
+        resume = resolve
+      })
+    meGate = { entered, wait }
+    const pending = worker.create(launch()).catch((error) => error)
+    await started
+    try {
+      const rejecting = service.bind(scope, lease, async () => {
+        throw new Error('Admission revoked')
+      })
+      await expect(rejecting.create(launch())).rejects.toMatchObject({ rejectedCreationEffect: effect })
+    } finally {
+      resume()
+    }
+    expect(await pending).toBeInstanceOf(Error)
+    expect(posts()).toHaveLength(0)
+    await journal.rejectCreation(lease, row.record.key, row.record.version, effect)
+    expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(true)
+  })
+  it('keeps an in-flight POST reserved when a rejection arrives late', async () => {
+    const effect = randomUUID()
+    await advance({ box: { phase: 'requested', id: null }, effect: { id: effect, kind: 'box-create' } })
+    let entered!: () => void, resume!: () => void
+    const started = new Promise<void>((resolve) => {
+        entered = resolve
+      }),
+      wait = new Promise<void>((resolve) => {
+        resume = resolve
+      }),
+      previous = global.fetch
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname === '/v1/tenant-a/boxes' && options?.method === 'POST') {
+        entered()
+        await wait
+      }
+      return previous(input, options)
+    }) as typeof fetch
+    const pending = worker.create(launch())
+    await started
+    try {
+      const rejecting = service.bind(scope, lease, async () => {
+        throw new Error('Admission revoked')
+      })
+      await expect(rejecting.rejectUndispatchedCreate(name, effect)).rejects.not.toBeInstanceOf(
+        ConfirmedWorkerCreationRejected,
+      )
+      expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(false)
+      const [record] = await state.read(['box-rest/' + name])
+      expect(record.payload).toMatchObject({ box: null, dispatchEffect: effect })
+    } finally {
+      resume()
+      await pending
+    }
+    expect(posts()).toHaveLength(1)
+  })
+  it.each(['response', 'persistence'])(
+    'retains an uncertain %s across SQLite restart without repeating POST',
+    async (failure) => {
+      await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
+      loseCreate = failure === 'response'
+      const commit = state.commit.bind(state),
+        spy = jest.spyOn(state, 'commit').mockImplementation(async (owner, changes, checks) => {
+          if (
+            failure === 'persistence' &&
+            changes.some(
+              (change) =>
+                change.key === 'box-rest/' + name &&
+                typeof (change.payload as { box?: unknown } | undefined)?.box === 'string',
+            )
+          )
+            throw new Error('Original ID persistence unavailable')
+          return commit(owner, changes, checks)
+        })
+      try {
+        await expect(worker.create(launch())).rejects.toThrow()
+      } finally {
+        spy.mockRestore()
+      }
+      await db.close()
+      db = new SqliteStateDatabase(directory)
+      state = new ListenerState(db, namespace)
+      journal = new ExecutionJournal(state)
+      service = await BoxLiteWorkers.connect(state, 'https://box.test', 'private-box-api-key')
+      const bound = service.bind(scope, lease, async () => {})
+      await expect(bound.get(name)).rejects.toThrow('not durably known')
+      const allocation = [...(await inspectJournal(state, lease)).allocations.values()][0]
+      await expect(bound.rejectUndispatchedCreate(name, allocation.value.effect!.id)).rejects.not.toBeInstanceOf(
+        ConfirmedWorkerCreationRejected,
+      )
+      const unexpected = async (): Promise<never> => {
+          throw new Error('Unexpected retry effect')
+        },
+        pool = new WorkerPool(
+          journal,
+          key,
+          async () => ({ workers: bound, admit: unexpected, job: unexpected, runners: unexpected }),
+          { image: 'runner', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+        )
+      try {
+        for (let attempt = 0; attempt < 2; attempt++)
+          await expect(pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))).rejects.toThrow()
+      } finally {
+        await pool.close()
+      }
+      expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(false)
+      expect(posts()).toHaveLength(1)
+    },
+  )
+  it.each(['effect', 'identity', 'lease', 'scope'])(
+    'refuses a rejection after original %s changes',
+    async (changed) => {
+      const effect = randomUUID()
+      await advance({ box: { phase: 'requested', id: null }, effect: { id: effect, kind: 'box-create' } })
+      const bound = service.bind(scope, lease, async () => {})
+      if (changed === 'effect') await advance({ effect: { id: randomUUID(), kind: 'box-create' } })
+      if (changed === 'identity') {
+        const [root] = await state.read(['backend/boxlite'])
+        await state.commit(lease, [{ key: root.key, expected: root.version }])
+      }
+      if (changed === 'lease')
+        await db.transaction(namespace, async (tx) => {
+          const owner = (await tx.get('@owner', true))!,
+            payload = owner.payload as { epoch: number }
+          await tx.put(
+            { ...owner, version: randomUUID(), payload: { ...(owner.payload as object), epoch: payload.epoch + 1 } },
+            owner.version,
+          )
+        })
+      if (changed === 'scope') {
+        const [record] = await state.read(['box-rest/' + name])
+        expect(record).toBeUndefined()
+        const foreign = service.bind({ ...scope, binding: 'different-binding' }, lease, async () => {})
+        await expect(foreign.rejectUndispatchedCreate(name, effect)).rejects.not.toBeInstanceOf(
+          ConfirmedWorkerCreationRejected,
+        )
+        expect((await state.read(['box-rest/' + name])).length).toBe(0)
+        return
+      }
+      await expect(bound.rejectUndispatchedCreate(name, effect)).rejects.not.toBeInstanceOf(
+        ConfirmedWorkerCreationRejected,
+      )
+      expect((await state.read(['box-rest/' + name])).length).toBe(0)
+      expect(posts()).toHaveLength(0)
+    },
+  )
+  it('recovers durable rejection after SQLite restart while upstream verification is unavailable', async () => {
+    const effect = randomUUID(),
+      row = await advance({ box: { phase: 'requested', id: null }, effect: { id: effect, kind: 'box-create' } })
+    allowed = false
+    await expect(worker.create(launch())).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    await db.close()
+    db = new SqliteStateDatabase(directory)
+    state = new ListenerState(db, namespace)
+    journal = new ExecutionJournal(state)
+    service = await BoxLiteWorkers.connect(state, 'https://box.test', 'private-box-api-key')
+    const bound = service.bind(scope, lease, async () => {
+      throw new Error('Admission unavailable')
+    })
+    global.fetch = jest.fn(async () => {
+      throw new Error('All upstream reads unavailable')
+    }) as typeof fetch
+    await expect(bound.get(name)).rejects.toMatchObject({ rejectedCreationEffect: effect })
+    await expect(bound.rejectUndispatchedCreate(name, effect)).rejects.toMatchObject({ rejectedCreationEffect: effect })
+    expect(global.fetch).not.toHaveBeenCalled()
+    await journal.rejectCreation(lease, row.record.key, row.record.version, effect)
+    expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(true)
+    expect(posts()).toHaveLength(0)
+  })
+  it('keeps a legacy requested allocation uncertain when it has no REST ledger', async () => {
+    await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })
+    await expect(worker.get(name)).rejects.toThrow('not durably known')
+    expect((await state.read(['box-rest/' + name])).length).toBe(0)
+    expect(await journal.hasCapacity(lease, key, testCapacity({ account: 1, tenant: 1 }))).toBe(false)
+    expect(posts()).toHaveLength(0)
+  })
   it('translates parsed resource quantities into the real REST create request', async () => {
     const selected = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!
     await advance({ box: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'box-create' } })

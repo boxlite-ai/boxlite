@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   WorkerPool,
+  ConfirmedWorkerCreationRejected,
   Listener,
   ListenerState,
   ExecutionLease,
@@ -141,6 +142,53 @@ describe('Standalone App binding and HTTP ingress', () => {
     global.fetch = originalFetch
     await db.close()
     rmSync(directory, { recursive: true, force: true })
+  })
+  it.each(['admission', 'repository-read'])('recovers standalone pre-dispatch rejection: %s', async (failure) => {
+    const scope = (await discover()).scopes[0],
+      journal = new ExecutionJournal(state),
+      key = scopeKey(scope),
+      notice = { repository: 21, run: 33, job: 55 },
+      capacity = testCapacity({ account: 1, tenant: 1 })
+    const reserved = (await journal.reserve(lease, key, notice, capacity))!
+    const effect = randomUUID()
+    await journal.advance(lease, reserved.record.key, reserved.record.version, {
+      box: { phase: 'requested', id: null },
+      effect: { id: effect, kind: 'box-create' },
+    })
+    const backend = await host.backend(scope, lease),
+      previous = global.fetch
+    let creates = 0
+    global.fetch = jest.fn(async (input, options) => {
+      const url = new URL(String(input))
+      if (url.origin === 'https://box.test' && url.pathname.endsWith('/boxes') && options?.method === 'POST') creates++
+      if (url.pathname === (failure === 'admission' ? '/app/installations/1' : '/repositories/21'))
+        throw new Error('Upstream read unavailable')
+      return previous(input, options)
+    }) as typeof fetch
+    try {
+      await expect(
+        backend.workers.create({
+          name: reserved.value.name,
+          image: 'runner',
+          cpus: 2,
+          memoryMiB: 2048,
+          entrypoint: ['bash'],
+        }),
+      ).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+      expect(creates).toBe(0)
+      const pool = new WorkerPool(journal, key, async () => backend, {
+        image: 'runner',
+        cpus: 2,
+        memoryMiB: 2048,
+        labels: ['boxlite'],
+      })
+      await pool.tick(lease, capacity)
+      expect(await journal.allocation(lease, reserved.record.key)).toBeUndefined()
+      expect(await journal.hasCapacity(lease, key, capacity)).toBe(true)
+      expect(await journal.reserve(lease, key, notice, capacity)).toBeDefined()
+    } finally {
+      await backend.close()
+    }
   })
   it.each(['valid', 'suspended', 'owner', 'actions', 'administration'])(
     'rechecks App admission before dispatch: %s',

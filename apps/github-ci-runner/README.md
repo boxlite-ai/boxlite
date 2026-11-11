@@ -278,6 +278,16 @@ a conflicting record cannot redirect stop/delete/JIT operations to another Box.
 An HTTP 408 from a Box mutation can follow server-side creation and is therefore
 an uncertain outcome, not permission to retry the create or return its quota.
 
+Admission or repository-read failure before dispatch records a definitive rejection
+for the original create operation, allowing the controller to release its slot.
+Rejection and dispatch compete atomically for the same REST ledger entry under the
+execution lease and allocation version. Once dispatch wins, a late rejection cannot
+release capacity, even if the POST response or returned-ID persistence fails.
+Persisted rejection can be recovered locally while upstream reads remain unavailable;
+all actual Box operations still verify the original live principal.
+An older requested allocation without a ledger remains uncertain; missing state alone
+never proves that its create was rejected.
+
 The default directory refresh and successful compensation interval is five minutes.
 Two independent scan lanes claim durable repository tasks, with one effective scan
 lease per GitHub App installation (or pinned PAT repository). Different installations
