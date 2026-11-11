@@ -1047,7 +1047,7 @@ impl BoxImpl {
             boxlite_shared::tar::UnpackContext {
                 overwrite: opts.overwrite,
                 mkdir_parents: true,
-                force_directory: false,
+                force_directory: host_dst.as_os_str().to_string_lossy().ends_with('/'),
             },
         )
         .await?;

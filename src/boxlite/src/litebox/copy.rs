@@ -57,9 +57,6 @@ pub(super) fn host_copy_destination(path: &std::path::Path) -> std::io::Result<s
         Err(error) => return Err(error),
     };
     resolved.push(leaf);
-    if path.as_os_str().to_string_lossy().ends_with('/') {
-        resolved.push("");
-    }
     Ok(resolved)
 }
 
@@ -122,7 +119,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("missing/output/");
         let resolved = host_copy_destination(&output).unwrap();
-        assert!(resolved.as_os_str().to_string_lossy().ends_with('/'));
+        assert_eq!(
+            resolved,
+            root.path().canonicalize().unwrap().join("missing/output")
+        );
     }
 
     #[test]

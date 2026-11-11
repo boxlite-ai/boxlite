@@ -406,6 +406,21 @@ async fn copy_integration() {
                 expected
             );
         }
+        let target = root.join("directory-target");
+        std::fs::create_dir(&target).unwrap();
+        let directory_leaf = root.join("directory-leaf");
+        std::os::unix::fs::symlink(&target, &directory_leaf).unwrap();
+        assert!(
+            bx.copy_out(
+                "/root/input.txt",
+                &directory_leaf.join(""),
+                CopyOptions::default().no_overwrite(),
+            )
+            .await
+            .is_err(),
+            "trailing slash must not bypass leaf link rejection"
+        );
+        assert!(!target.join("input.txt").exists());
         let leaf = linked.join("leaf-link");
         std::os::unix::fs::symlink(root.join("missing/new.txt"), &leaf).unwrap();
         assert!(
