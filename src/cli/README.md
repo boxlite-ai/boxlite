@@ -187,8 +187,8 @@ The CLI uses the runtime checkpoint handle for management and REST imports.
 The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
 Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
 management routes. Existing binary archive export/import remains available.
-The cloud runner validates downloaded archives through its separate native
-archive helper before using ordinary native import; this creates no local
+The cloud runner verifies the downloaded artifact SHA before ordinary native
+import, which owns archive validation; this creates no local
 checkpoint catalog or recovery records.
 
 ## Connecting to a remote server
