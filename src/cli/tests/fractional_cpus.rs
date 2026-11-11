@@ -27,6 +27,18 @@ async fn assert_quota(runtime: &BoxliteRuntime, id: &str, cpus: f64) {
         .find_map(|line| line.strip_prefix("0::"))
         .unwrap();
     let group = PathBuf::from("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+    // The quota is enforceable only when the VM joined its own Box cgroup and
+    // that cgroup has the CPU controller; otherwise the Box starts unthrottled.
+    let controllers = std::fs::read_to_string(group.join("cgroup.controllers")).unwrap();
+    let enforceable = group.file_name().is_some_and(|name| name == id)
+        && controllers.split_whitespace().any(|name| name == "cpu");
+    if !enforceable {
+        eprintln!(
+            "skipping cpu.max check: {} cannot enforce a CPU quota",
+            group.display()
+        );
+        return;
+    }
     let quota = std::fs::read_to_string(group.join("cpu.max")).unwrap();
     if cpus.fract() == 0.0 {
         assert!(quota.starts_with("max "));
