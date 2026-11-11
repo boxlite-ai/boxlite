@@ -1,11 +1,11 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-
 import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
 import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
+import { RequestDrivenCustomDomains1794398400000 } from '../../migrations/pre-deploy/1794398400000-request-driven-custom-domains-migration'
 import { CustomDomainService } from './custom-domain.service'
-import { CustomDomainWorkerService } from './custom-domain-worker.service'
+import { CustomDomainWorkflowService } from './custom-domain-workflow.service'
 import { DomainSetupError } from './custom-domain-dns.service'
 import { CustomDomainRow } from './custom-domain-policy'
 
@@ -14,12 +14,13 @@ const org = '00000000-0000-4000-8000-000000000001'
 const other = '00000000-0000-4000-8000-000000000002'
 const schema = `custom_lifecycle_${randomUUID().replaceAll('-', '')}`
 
-describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
+describeWithDatabase('confirmed custom domain lifecycle (real Postgres)', () => {
   let db: DataSource
   let domains: CustomDomainService
-  let worker: CustomDomainWorkerService
-  const subscription = { refresh: jest.fn() }
-  const dns = { verify: jest.fn(), verifyTls: jest.fn() }
+  let workflow: CustomDomainWorkflowService
+  let migrated: any[]
+  const subscription = { refresh: jest.fn(), read: jest.fn() }
+  const dns = { checkAll: jest.fn(), verifyTls: jest.fn() }
   const provider = { reconcile: jest.fn() }
   const settings = { enabled: true, trafficHost: 'custom.platform.com', reservedSuffixes: [], edgeIps: ['192.0.2.1'] }
   const config = {
@@ -33,7 +34,40 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
       })[key],
     getOrThrow: (key: string) => config.get(key),
   }
-
+  const records = (hostname: string) => ({ name: `_acme.${hostname}`, type: 'CNAME', value: 'auth.google.test.' })
+  async function cloud(row: CustomDomainRow, mode: string) {
+    if (row.deleted_at) return { state: row.provider_state, phase: 'deleting', expires: null, cleaned: true }
+    if (mode === 'prepare')
+      return {
+        state: { ...row.provider_state, authorizationRecord: records(row.hostname), progress: 'awaiting_dns' },
+        phase: 'pending_certificate_dns',
+        expires: null,
+        cleaned: false,
+      }
+    if (!row.provider_state.certificateSubmitted)
+      return {
+        state: { ...row.provider_state, certificateSubmitted: true, progress: 'certificate_pending' },
+        phase: 'provisioning',
+        expires: null,
+        cleaned: false,
+      }
+    return {
+      state: { ...row.provider_state, progress: 'tls_pending', certificateState: 'ACTIVE' },
+      phase: 'ready',
+      expires: '2030-01-01T00:00:00Z',
+      cleaned: false,
+    }
+  }
+  async function due(id: string) {
+    await db.query(`UPDATE custom_domain_config SET next_check_at = '-infinity' WHERE id = $1`, [id])
+  }
+  async function ready(owner = org, hostname = 'app.example.com') {
+    const draft = await domains.create(owner, hostname)
+    await domains.verify(owner, draft.id)
+    await due(draft.id)
+    await domains.advance(owner, draft.id)
+    return domains.get(owner, draft.id)
+  }
   beforeAll(async () => {
     db = await new DataSource({
       type: 'postgres',
@@ -51,471 +85,459 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
     try {
       await new AddDomain1792972800000().up(runner)
       await new AddCustomDomainConfig1793764800000().up(runner)
+      await runner.query(
+        `INSERT INTO custom_domain_config (organization_id, hostname, challenge, challenge_expires_at, phase, error_code)
+        VALUES ($1, 'old-ready.example.com', 'old', now(), 'ready', NULL),
+        ($1, 'old-invalid.example.com', 'old', now(), 'ready', 'ownership_txt_mismatch'),
+        ($1, 'old-pending.example.com', 'old', now(), 'provisioning', NULL)`,
+        [org],
+      )
+      await new RequestDrivenCustomDomains1794398400000().up(runner)
+      migrated = await runner.query(
+        `SELECT hostname, phase, confirmed_at, certificate_expires_at FROM custom_domain_config ORDER BY hostname`,
+      )
     } finally {
       await runner.release()
     }
-    domains = new CustomDomainService(db, config as never, subscription as never)
-    worker = new CustomDomainWorkerService(db, config as never, subscription as never, dns as never, provider as never)
-  })
-  afterAll(async () => {
-    if (!db?.isInitialized) return
-    try {
-      await db.query(`DROP SCHEMA "${schema}" CASCADE`)
-    } finally {
-      await db.destroy()
-    }
-  })
-  beforeEach(async () => {
-    jest.clearAllMocks()
-    settings.enabled = true
-    await db.query(`TRUNCATE domain, custom_domain_config, organization`)
-    await db.query(`INSERT INTO organization (id) VALUES ($1), ($2)`, [org, other])
-    subscription.refresh.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 86_400_000 })
-    dns.verify.mockResolvedValue(undefined)
-    dns.verifyTls.mockResolvedValue(new Date(Date.now() + 3_600_000).toISOString())
-    provider.reconcile.mockImplementation(async (row: CustomDomainRow) => ({
-      state: row.provider_state,
-      phase: 'ready',
-      expires: new Date(Date.now() + 3_600_000).toISOString(),
-      cleaned: !!row.deleted_at,
-    }))
-  })
-
-  it('creates only durable domain configuration, without a subscription table', async () => {
-    expect(
-      await db.query(
-        `SELECT table_name FROM information_schema.tables
-      WHERE table_schema = $1 AND table_name LIKE 'custom_domain_%' ORDER BY table_name`,
-        [schema],
-      ),
-    ).toEqual([{ table_name: 'custom_domain_config' }])
-  })
-
-  it('checks the subscription deadline after waiting for the organization lock', async () => {
-    const expiresAt = Date.now() + 2_000
-    subscription.refresh.mockResolvedValue({ status: 'active', expiresAt })
-    const draft = await domains.create(org, 'locked.example.com')
-    const blocker = db.createQueryRunner()
-    await blocker.connect()
-    await blocker.startTransaction()
-    const [{ pid }] = await blocker.query(`SELECT pg_backend_pid() AS pid`)
-    await blocker.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [org])
-    const pending = worker.reconcileDue()
-    try {
-      const deadline = Date.now() + 1_500
-      let waiting = false
-      while (Date.now() < deadline) {
-        const [row] = await db.query(
-          `SELECT EXISTS (
-          SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))
-        ) AS waiting`,
-          [pid],
-        )
-        if (row.waiting) {
-          waiting = true
-          break
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      expect(waiting).toBe(true)
-      await blocker.query(`SELECT pg_sleep(GREATEST(0, extract(epoch FROM ($1::timestamptz - clock_timestamp()))))`, [
-        new Date(expiresAt),
-      ])
-    } finally {
-      await blocker.commitTransaction()
-      await blocker.release()
-      await pending
-    }
-    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
-    expect(provider.reconcile).not.toHaveBeenCalled()
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: false, errorCode: 'subscription_not_ready' })
-  })
-
-  it('revokes readiness on denial while keeping deletion and cleanup available', async () => {
-    const draft = await domains.create(org, 'denied.example.com')
-    await worker.reconcileDue()
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: true })
-    subscription.refresh.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
-    await db.query(`UPDATE custom_domain_config SET next_check_at = now()`)
-    await worker.reconcileDue()
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: false, errorCode: 'subscription_required' })
-    expect((await domains.list(org)).subscription).toBe('required')
-    await domains.delete(org, draft.id)
-    subscription.refresh.mockClear()
-    await worker.reconcileDue()
-    expect(subscription.refresh).not.toHaveBeenCalled()
-    expect(provider.reconcile.mock.calls.at(-1)[0].deleted_at).not.toBeNull()
-  })
-
-  it('cannot acquire ownership for an organization removed after its eligibility was cached', async () => {
-    await domains.create(org, 'removed.example.com')
-    await db.query(`DELETE FROM organization WHERE id = $1`, [org])
-    await worker.reconcileDue()
-    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
-    expect(provider.reconcile).not.toHaveBeenCalled()
-    await expect(domains.create(org, 'another.example.com')).rejects.toMatchObject({ status: 404 })
-  })
-
-  it('deduplicates drafts within an organization without reserving the global hostname', async () => {
-    const [first, duplicate] = await Promise.all([
-      domains.create(org, 'App.Example.com.'),
-      domains.create(org, 'app.example.com'),
-    ])
-    expect(duplicate.id).toBe(first.id)
-    expect(duplicate.dnsRecords).toEqual(first.dnsRecords)
-    const foreign = await domains.create(other, 'app.example.com')
-    expect(foreign.id).not.toBe(first.id)
-    expect(foreign.dnsRecords[1]).not.toEqual(first.dnsRecords[1])
-    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
-    await expect(domains.get(other, first.id)).rejects.toMatchObject({ status: 404 })
-    await expect(domains.delete(other, first.id)).rejects.toMatchObject({ status: 404 })
-  })
-
-  it('denies free organizations and disabled deployments before inserting a draft', async () => {
-    subscription.refresh.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
-    await expect(domains.create(org, 'app.example.com')).rejects.toMatchObject({ status: 403 })
-    settings.enabled = false
-    await expect(domains.create(org, 'app.example.com')).rejects.toMatchObject({ status: 503 })
-    expect(await db.query(`SELECT * FROM custom_domain_config`)).toEqual([])
-  })
-
-  it.each(['pending', 'failed', 'expired', 'ready'])(
-    'limits an organization to one %s custom domain',
-    async (state) => {
-      const first = await domains.create(org, 'app.example.com')
-      if (state === 'failed') {
-        dns.verify.mockRejectedValue(new DomainSetupError('ownership_txt_mismatch', true))
-        await worker.reconcileDue()
-      }
-      if (state === 'expired') {
-        await db.query(`UPDATE custom_domain_config SET challenge_expires_at = now() - interval '1 second'`)
-      }
-      if (state === 'ready') await worker.reconcileDue()
-      await expect(domains.create(org, 'second.example.com')).rejects.toMatchObject({
-        status: 400,
-        response: { code: 'custom_domain_count_limit_reached' },
-      })
-      const duplicate = await domains.create(org, 'App.Example.com.')
-      expect(duplicate.id).toBe(first.id)
-      if (state === 'expired') expect(duplicate.dnsRecords[1]).not.toEqual(first.dnsRecords[1])
-      await expect(domains.create(other, 'second.example.com')).resolves.toMatchObject({
-        hostname: 'second.example.com',
-      })
-      expect((await domains.list(org)).domains).toHaveLength(1)
-      await domains.delete(org, first.id)
-      await expect(domains.create(org, 'replacement.example.com')).resolves.toMatchObject({
-        hostname: 'replacement.example.com',
-      })
-      expect((await domains.list(org)).domains).toHaveLength(1)
-    },
-  )
-
-  it('retains legacy configurations but requires deleting all of them before adding another hostname', async () => {
-    const first = await domains.create(org, 'first.example.com')
-    const second = await domains.create(other, 'second.example.com')
-    // Model records admitted before the allowance, using service-created configurations.
-    await db.query(`UPDATE custom_domain_config SET organization_id = $1 WHERE id = $2`, [org, second.id])
-    await expect(domains.create(org, 'third.example.com')).rejects.toMatchObject({
-      status: 400,
-      response: { code: 'custom_domain_count_limit_reached' },
-    })
-    await expect(domains.create(org, first.hostname)).resolves.toMatchObject({ id: first.id })
-    await expect(domains.create(org, second.hostname)).resolves.toMatchObject({ id: second.id })
-    await domains.delete(org, first.id)
-    await expect(domains.create(org, 'third.example.com')).rejects.toMatchObject({
-      response: { code: 'custom_domain_count_limit_reached' },
-    })
-    await domains.delete(org, second.id)
-    await expect(domains.create(org, 'third.example.com')).resolves.toMatchObject({ hostname: 'third.example.com' })
-  })
-
-  it('admits only one of two concurrent custom-domain creates after the organization lock', async () => {
-    const blocker = db.createQueryRunner()
-    await blocker.connect()
-    await blocker.startTransaction()
-    await blocker.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [org])
-    const pending = Promise.allSettled([
-      domains.create(org, 'first.example.com'),
-      domains.create(org, 'second.example.com'),
-    ])
-    try {
-      const deadline = Date.now() + 2_000
-      let waiting = 0
-      while (Date.now() < deadline) {
-        const [row] = await db.query(
-          `SELECT count(*)::int AS waiting FROM pg_stat_activity
-          WHERE query = 'SELECT id FROM organization WHERE id = $1 FOR UPDATE'
-            AND cardinality(pg_blocking_pids(pid)) > 0`,
-        )
-        waiting = row.waiting
-        if (waiting === 2) break
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      expect(waiting).toBe(2)
-    } finally {
-      await blocker.commitTransaction()
-      await blocker.release()
-      await pending
-    }
-    const results = await pending
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
-      reason: { status: 400, response: { code: 'custom_domain_count_limit_reached' } },
-    })
-    expect(
-      await db.query(`SELECT id FROM custom_domain_config WHERE organization_id = $1 AND deleted_at IS NULL`, [org]),
-    ).toHaveLength(1)
-  })
-
-  it('does not claim a name or call GCP on failed DNS proof', async () => {
-    const draft = await domains.create(org, 'app.example.com')
-    dns.verify.mockRejectedValue(new DomainSetupError('ownership_txt_mismatch', true))
-    await worker.reconcileDue()
-    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
-    expect(provider.reconcile).not.toHaveBeenCalled()
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: false, errorCode: 'ownership_txt_mismatch' })
-  })
-
-  it('persists custom ownership without consuming the zero platform allowance and probes TLS', async () => {
-    const draft = await domains.create(org, 'app.example.com')
-    await db.query(`UPDATE organization SET domain_count_limit = 0`)
-    await worker.reconcileDue()
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: true, phase: 'ready' })
-    expect(await db.query(`SELECT hostname, kind, organization_id, box_id FROM domain`)).toEqual([
-      { hostname: 'app.example.com', kind: 'custom', organization_id: org, box_id: null },
-    ])
-    expect(dns.verifyTls).toHaveBeenCalledWith('app.example.com')
-  })
-
-  it('lets only one organization acquire a globally unique name', async () => {
-    await domains.create(org, 'app.example.com')
-    await domains.create(other, 'app.example.com')
-    await worker.reconcileDue()
-    expect(await db.query(`SELECT hostname FROM domain`)).toHaveLength(1)
-    expect(provider.reconcile).toHaveBeenCalledTimes(1)
-    const configs = await db.query(`SELECT error_code FROM custom_domain_config`)
-    expect(configs).toContainEqual({ error_code: 'domain_already_owned' })
-  })
-
-  it('renews ready domains from DNS and served TLS without spending cloud read quota', async () => {
-    const draft = await domains.create(org, 'app.example.com')
-    await worker.reconcileDue()
-    provider.reconcile.mockClear()
-    await db.query(`UPDATE custom_domain_config SET next_check_at = now()`)
-    await worker.reconcileDue()
-    expect(provider.reconcile).not.toHaveBeenCalled()
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: true })
-    dns.verifyTls.mockRejectedValue(new DomainSetupError('https_not_ready'))
-    await db.query(`UPDATE custom_domain_config SET next_check_at = now()`)
-    await worker.reconcileDue()
-    expect(await domains.get(org, draft.id)).toMatchObject({
-      ready: false,
-      phase: 'provisioning',
-      errorCode: 'https_not_ready',
-    })
-  })
-
-  it.each(['provider_capacity_exhausted', 'certificate_provisioning_failed'])(
-    'does not let manual retries bypass %s backoff',
-    async (code) => {
-      const draft = await domains.create(org, 'app.example.com')
-      provider.reconcile.mockRejectedValue(new DomainSetupError(code))
-      await worker.reconcileDue()
-      const [before] = await db.query(`SELECT next_check_at FROM custom_domain_config WHERE id = $1`, [draft.id])
-      await domains.verify(org, draft.id)
-      const [after] = await db.query(`SELECT next_check_at FROM custom_domain_config WHERE id = $1`, [draft.id])
-      expect(after.next_check_at).toEqual(before.next_check_at)
-      await worker.reconcileDue()
-      expect(provider.reconcile).toHaveBeenCalledTimes(1)
-    },
-  )
-
-  it('returns to the certificate DNS step when its record no longer matches', async () => {
-    const draft = await domains.create(org, 'app.example.com')
-    await worker.reconcileDue()
-    await db.query(`UPDATE custom_domain_config SET phase = 'provisioning', next_check_at = now()`)
-    provider.reconcile.mockRejectedValue(new DomainSetupError('certificate_dns_mismatch'))
-    await worker.reconcileDue()
-    expect(await domains.get(org, draft.id)).toMatchObject({
-      phase: 'pending_certificate_dns',
-      ready: false,
-      errorCode: 'certificate_dns_mismatch',
-    })
-  })
-
-  it('bounds two replicas and ignores overlapping ticks without processing a hostname twice', async () => {
-    for (let offset = 0; offset < 96; offset += 16) {
-      await Promise.all(
-        Array.from({ length: 16 }, async (_, index) => {
-          const organizationId = randomUUID()
-          await db.query(`INSERT INTO organization (id) VALUES ($1)`, [organizationId])
-          return domains.create(organizationId, `batch-${offset + index}.example.com`)
-        }),
-      )
-    }
-    const replica = new CustomDomainWorkerService(
+    workflow = new CustomDomainWorkflowService(
       db,
       config as never,
       subscription as never,
       dns as never,
       provider as never,
     )
-    const active = new Set<string>()
-    const seen = new Set<string>()
-    const duplicates: string[] = []
-    let peak = 0
-    let release!: () => void
-    let entered!: () => void
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve
+    domains = new CustomDomainService(db, config as never, subscription as never, workflow)
+  })
+  afterAll(async () => {
+    if (db?.isInitialized) {
+      await db.query(`DROP SCHEMA "${schema}" CASCADE`)
+      await db.destroy()
+    }
+  })
+  beforeEach(async () => {
+    jest.resetAllMocks()
+    settings.enabled = true
+    await db.query(`TRUNCATE domain, custom_domain_config, organization`)
+    await db.query(`INSERT INTO organization (id) VALUES ($1), ($2)`, [org, other])
+    subscription.refresh.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    subscription.read.mockImplementation(() => subscription.refresh.getMockImplementation()!())
+    dns.checkAll.mockResolvedValue(
+      ['ownership', 'traffic', 'certificate'].map((record) => ({ record, status: 'passed' })),
+    )
+    dns.verifyTls.mockResolvedValue('2030-01-01T00:00:00Z')
+    provider.reconcile.mockImplementation(cloud)
+  })
+
+  it('migrates completed setups without trusting capped expiry or reactivating failed ownership', () => {
+    expect(migrated[0]).toMatchObject({
+      hostname: 'old-invalid.example.com',
+      phase: 'pending_verification',
+      confirmed_at: null,
+      certificate_expires_at: null,
     })
-    const bothReplicasEntered = new Promise<void>((resolve) => {
+    expect(migrated[1]).toMatchObject({ hostname: 'old-pending.example.com', confirmed_at: null })
+    expect(migrated[2]).toMatchObject({
+      hostname: 'old-ready.example.com',
+      phase: 'ready',
+      confirmed_at: expect.any(Date),
+      certificate_expires_at: null,
+    })
+  })
+
+  it('prepares all three records once without checking DNS, submitting a certificate or rotating expired TXT', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    expect(draft.dnsRecords).toHaveLength(3)
+    expect(draft.confirmed).toBe(false)
+    expect(draft.submissionStatus).toBe('not_submitted')
+    expect(dns.checkAll).not.toHaveBeenCalled()
+    expect(provider.reconcile.mock.calls.every(([, mode]) => mode === 'prepare')).toBe(true)
+    await db.query(`UPDATE custom_domain_config SET challenge_expires_at = now() - interval '1 day'`)
+    expect((await domains.create(org, 'app.example.com')).dnsRecords).toEqual(draft.dnsRecords)
+    provider.reconcile.mockClear()
+    subscription.refresh.mockClear()
+    await domains.list(org)
+    await domains.get(org, draft.id)
+    expect(subscription.refresh).not.toHaveBeenCalled()
+    expect(provider.reconcile).not.toHaveBeenCalled()
+    expect(dns.checkAll).not.toHaveBeenCalled()
+  })
+
+  it.each(['ownership', 'traffic', 'certificate'])(
+    'keeps the draft and does not claim or submit when %s fails',
+    async (record) => {
+      const draft = await domains.create(org, 'app.example.com')
+      dns.checkAll.mockResolvedValue([{ record, status: 'failed', errorCode: `${record}_mismatch` }])
+      provider.reconcile.mockClear()
+      const result = await domains.verify(org, draft.id)
+      expect(result.errorCode).toBe(`${record}_mismatch`)
+      expect(result.confirmed).toBe(false)
+      expect(result.dnsRecords).toEqual(draft.dnsRecords)
+      expect(await db.query(`SELECT * FROM domain`)).toEqual([])
+      expect(provider.reconcile).not.toHaveBeenCalled()
+    },
+  )
+
+  it('does not accept an advance call as user confirmation', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    await due(draft.id)
+    expect(await domains.advance(org, draft.id)).toMatchObject({ confirmed: false, errorCode: 'confirmation_required' })
+    expect(dns.checkAll).not.toHaveBeenCalled()
+  })
+
+  it('persists confirmation before submission and publishes ready only after a later TLS check', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    provider.reconcile.mockImplementation(async (row, mode) => {
+      const [saved] = await db.query(`SELECT confirmed_at, submission_status FROM custom_domain_config WHERE id = $1`, [
+        row.id,
+      ])
+      expect(saved.confirmed_at).not.toBeNull()
+      expect(saved.submission_status).toBe('unknown')
+      return cloud(row, mode)
+    })
+    expect(await domains.verify(org, draft.id)).toMatchObject({ submissionStatus: 'accepted', ready: false })
+    expect(dns.verifyTls).not.toHaveBeenCalled()
+    provider.reconcile.mockImplementation(cloud)
+    await due(draft.id)
+    expect(await domains.advance(org, draft.id)).toMatchObject({
+      ready: true,
+      certificateExpiresAt: new Date('2030-01-01T00:00:00Z'),
+    })
+    expect(dns.verifyTls).toHaveBeenCalledTimes(1)
+  })
+
+  it('distinguishes an explicit certificate rejection from an unknown submission', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    provider.reconcile.mockRejectedValueOnce(new DomainSetupError('provider_request_rejected', false, true))
+    expect(await domains.verify(org, draft.id)).toMatchObject({
+      submissionStatus: 'not_submitted',
+      errorCode: 'provider_request_rejected',
+      ready: false,
+    })
+  })
+
+  it('preserves unknown submission outcomes and restores them through a fresh service instance', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    provider.reconcile.mockRejectedValueOnce(new DomainSetupError('provider_unavailable'))
+    expect(await domains.verify(org, draft.id)).toMatchObject({
+      submissionStatus: 'unknown',
+      confirmed: true,
+      ready: false,
+    })
+    const replica = new CustomDomainWorkflowService(
+      db,
+      config as never,
+      subscription as never,
+      dns as never,
+      provider as never,
+    )
+    await due(draft.id)
+    await replica.run(org, draft.id, 'advance')
+    expect(await domains.get(org, draft.id)).toMatchObject({ submissionStatus: 'accepted' })
+    expect(dns.checkAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not report submission when the cloud result could not be saved', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    const spy = jest.spyOn(workflow as any, 'save').mockRejectedValueOnce(new Error('storage unavailable'))
+    try {
+      expect(await domains.verify(org, draft.id)).toMatchObject({ submissionStatus: 'unknown', ready: false })
+    } finally {
+      spy.mockRestore()
+    }
+    await due(draft.id)
+    expect(await domains.advance(org, draft.id)).toMatchObject({ submissionStatus: 'accepted' })
+  })
+
+  it('supersedes the old owner and all pending applications only after the latest applicant verifies', async () => {
+    const first = await ready()
+    await db.query(`UPDATE domain SET box_id = 'old-box', port = 3000`)
+    const next = await domains.create(other, first.hostname)
+    expect((await domains.get(org, first.id)).ready).toBe(true)
+    dns.checkAll.mockResolvedValueOnce([{ record: 'ownership', status: 'failed', errorCode: 'ownership_txt_mismatch' }])
+    await domains.verify(other, next.id)
+    expect((await domains.get(org, first.id)).ready).toBe(true)
+    await domains.verify(other, next.id)
+    expect(await domains.get(org, first.id)).toMatchObject({ phase: 'superseded', ready: false })
+    expect(await db.query(`SELECT organization_id, box_id, port FROM domain`)).toEqual([
+      { organization_id: other, box_id: null, port: null },
+    ])
+    await expect(domains.verify(org, first.id)).rejects.toMatchObject({ status: 409 })
+    await expect(domains.advance(org, first.id)).rejects.toMatchObject({ status: 409 })
+    const [old] = await db.query(`SELECT domain_id, superseded_by FROM custom_domain_config WHERE id = $1`, [first.id])
+    expect(old).toEqual({ domain_id: null, superseded_by: next.id })
+    await due(next.id)
+    await domains.advance(other, next.id)
+    expect(provider.reconcile.mock.calls.at(-1)![0].id).toBe(first.id)
+  })
+
+  it('does not clear a winning target on repeated verification or recheck ready DNS', async () => {
+    const winner = await ready()
+    await db.query(`UPDATE domain SET box_id = 'new-box', port = 8080`)
+    dns.checkAll.mockClear()
+    dns.verifyTls.mockClear()
+    provider.reconcile.mockClear()
+    await domains.verify(org, winner.id)
+    await due(winner.id)
+    await domains.advance(org, winner.id)
+    expect(await db.query(`SELECT box_id, port FROM domain`)).toEqual([{ box_id: 'new-box', port: 8080 }])
+    expect(dns.checkAll).not.toHaveBeenCalled()
+    expect(dns.verifyTls).not.toHaveBeenCalled()
+    expect(provider.reconcile).not.toHaveBeenCalled()
+  })
+
+  it('serializes concurrent confirmations across organizations and requires a new draft after losing', async () => {
+    const a = await domains.create(org, 'app.example.com')
+    const b = await domains.create(other, 'app.example.com')
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
       entered = resolve
     })
-    dns.verify.mockImplementation(async (hostname: string) => {
-      if (seen.has(hostname)) duplicates.push(hostname)
-      seen.add(hostname)
-      active.add(hostname)
-      peak = Math.max(peak, active.size)
-      if (active.size === 16) entered()
-      await blocked
-      active.delete(hostname)
-    })
-    const pending = Promise.all([worker.reconcileDue(), worker.reconcileDue(), replica.reconcileDue()])
-    let deadline: ReturnType<typeof setTimeout>
-    try {
-      await Promise.race([
-        bothReplicasEntered,
-        new Promise((_, reject) => {
-          deadline = setTimeout(() => reject(new Error('Replicas did not enter DNS checks')), 5_000)
+    dns.checkAll.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve([{ record: 'ownership', status: 'passed' }])
+          entered()
         }),
-      ])
-      expect(active.size).toBe(16)
+    )
+    const first = domains.verify(org, a.id)
+    await started
+    try {
+      expect((await domains.verify(other, b.id)).confirmed).toBe(false)
+      expect(dns.checkAll).toHaveBeenCalledTimes(1)
     } finally {
-      clearTimeout(deadline!)
+      release()
+      await first
+    }
+    await expect(domains.verify(other, b.id)).rejects.toMatchObject({ status: 409 })
+    expect(await db.query(`SELECT organization_id FROM domain`)).toEqual([{ organization_id: org }])
+  })
+
+  it.each(['expired', 'deleted'])('does not publish a late result after its lease is %s', async (reason) => {
+    const draft = await domains.create(org, 'app.example.com')
+    await domains.verify(org, draft.id)
+    await due(draft.id)
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    dns.verifyTls.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve('2030-01-01T00:00:00Z')
+          entered()
+        }),
+    )
+    const pending = workflow.run(org, draft.id, 'advance')
+    await started
+    try {
+      if (reason === 'expired') await db.query(`UPDATE custom_domain_config SET lease_until = '-infinity'`)
+      else await domains.delete(org, draft.id)
+    } finally {
       release()
       await pending
     }
-    expect(peak).toBe(16)
-    expect(duplicates).toEqual([])
-    expect(seen.size).toBe(64)
-    expect(await db.query(`SELECT id FROM custom_domain_config WHERE phase = 'ready'`)).toHaveLength(64)
-    await Promise.all([worker.reconcileDue(), replica.reconcileDue()])
-    expect(seen.size).toBe(96)
-    expect(duplicates).toEqual([])
-    expect(await db.query(`SELECT id FROM custom_domain_config WHERE phase = 'ready'`)).toHaveLength(96)
-  }, 30_000)
+    const [row] = await db.query(`SELECT phase FROM custom_domain_config WHERE id = $1`, [draft.id])
+    expect(row.phase).not.toBe('ready')
+  })
 
-  it('rechecks 1000 ready domains across replicas without cloud reads or abandoned leases', async () => {
-    const replicas = [
-      worker,
-      new CustomDomainWorkerService(db, config as never, subscription as never, dns as never, provider as never),
-    ]
-    for (let offset = 0; offset < 1000; offset += 20) {
-      await Promise.all(
-        Array.from({ length: 20 }, async (_, index) => {
-          const organizationId = randomUUID()
-          await db.query(`INSERT INTO organization (id) VALUES ($1)`, [organizationId])
-          return domains.create(organizationId, `scale-${offset + index}.example.com`)
+  it('fences a late TLS result after a newer organization verifies with a replacement lease', async () => {
+    const first = await domains.create(org, 'app.example.com')
+    await domains.verify(org, first.id)
+    await due(first.id)
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    dns.verifyTls.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve('2030-01-01T00:00:00Z')
+          entered()
         }),
-      )
+    )
+    const pending = workflow.run(org, first.id, 'advance')
+    await started
+    let next: Awaited<ReturnType<typeof domains.create>>
+    try {
+      next = await domains.create(other, first.hostname)
+      expect(next.dnsRecords).toEqual([])
+      await db.query(`UPDATE custom_domain_config SET lease_until = '-infinity' WHERE id = $1`, [first.id])
+      await domains.prepare(other, next.id)
+      await domains.verify(other, next.id)
+    } finally {
+      release()
+      await pending
     }
-    for (let round = 0; round < 16; round++) await Promise.all(replicas.map((replica) => replica.reconcileDue()))
-    expect(await db.query(`SELECT id FROM custom_domain_config WHERE phase = 'ready'`)).toHaveLength(1000)
+    expect((await domains.get(org, first.id)).phase).toBe('superseded')
+    expect(await db.query(`SELECT organization_id FROM domain`)).toEqual([{ organization_id: other }])
+    expect((await domains.get(other, next!.id)).confirmed).toBe(true)
+  })
+
+  it('retains completed setup on an observation timeout, while cleanup requires no subscription or DNS', async () => {
+    const winner = await ready()
+    dns.verifyTls.mockRejectedValueOnce(new DomainSetupError('https_not_ready'))
+    await workflow.run(org, winner.id, 'observe')
+    expect((await domains.get(org, winner.id)).ready).toBe(true)
+    subscription.refresh.mockRejectedValue(new Error('no subscription'))
+    dns.checkAll.mockClear()
+    await domains.delete(org, winner.id)
+    expect(dns.checkAll).not.toHaveBeenCalled()
+    const [row] = await db.query(`SELECT deleted_at, cleaned_at FROM custom_domain_config WHERE id = $1`, [winner.id])
+    expect(row.deleted_at).not.toBeNull()
+    expect(row.cleaned_at).not.toBeNull()
+    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
+  })
+
+  it('bounds quota, rejects reserved names and prevents cross-organization operations', async () => {
+    await expect(domains.create(org, 'x.apps.platform.com')).rejects.toMatchObject({ status: 400 })
+    const draft = await domains.create(org, 'app.example.com')
+    await expect(domains.create(org, 'second.example.com')).rejects.toMatchObject({ status: 400 })
+    await expect(domains.verify(other, draft.id)).rejects.toMatchObject({ status: 404 })
+    await expect(domains.delete(other, draft.id)).rejects.toMatchObject({ status: 404 })
+    subscription.refresh.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
+    expect(await domains.verify(org, draft.id)).toMatchObject({ errorCode: 'subscription_required', confirmed: false })
+    expect(dns.checkAll).not.toHaveBeenCalled()
+  })
+
+  it('resumes a persisted submission on a replacement API without a page request', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    await domains.verify(org, draft.id)
+    await due(draft.id)
     provider.reconcile.mockClear()
-    dns.verify.mockClear()
-    dns.verifyTls.mockClear()
-    await db.query(`UPDATE custom_domain_config SET next_check_at = now()`)
-    for (let round = 0; round < 16; round++) await Promise.all(replicas.map((replica) => replica.reconcileDue()))
-    expect(provider.reconcile).not.toHaveBeenCalled()
-    expect(dns.verify).toHaveBeenCalledTimes(1000)
-    expect(dns.verifyTls).toHaveBeenCalledTimes(1000)
-    expect(
-      await db.query(`SELECT id FROM custom_domain_config WHERE phase = 'ready'
-      AND dns_valid_until > now() AND certificate_valid_until > now() AND lease_owner IS NULL`),
-    ).toHaveLength(1000)
-  }, 120_000)
-
-  it('rejects a worker publication after its lease is revoked', async () => {
-    const draft = await domains.create(org, 'app.example.com')
-    let finish!: () => void
-    let started!: () => void
-    const began = new Promise<void>((resolve) => {
-      started = resolve
-    })
-    provider.reconcile.mockImplementationOnce(async (row: CustomDomainRow) => {
-      started()
-      await new Promise<void>((resolve) => {
-        finish = resolve
-      })
-      return { state: row.provider_state, phase: 'ready', expires: new Date(Date.now() + 60_000).toISOString() }
-    })
-    const pending = worker.reconcileDue()
-    await began
-    // A stale worker must not publish after losing its configuration lease.
-    await db.query(`UPDATE custom_domain_config SET lease_owner = NULL, dns_valid_until = '-infinity'`)
-    finish()
-    await pending
-    expect(await domains.get(org, draft.id)).toMatchObject({ ready: false, phase: 'pending_certificate_dns' })
+    dns.checkAll.mockClear()
+    const replacement = new CustomDomainWorkflowService(
+      db,
+      config as never,
+      subscription as never,
+      dns as never,
+      provider as never,
+    )
+    await replacement.advancePending()
+    expect((await domains.get(org, draft.id)).ready).toBe(true)
+    expect(provider.reconcile).toHaveBeenCalledTimes(1)
+    expect(provider.reconcile.mock.calls[0][0].provider_state.certificateSubmitted).toBe(true)
+    expect(dns.checkAll).not.toHaveBeenCalled()
   })
 
-  it('keeps deletion final when a cloud operation returns after the user deletes', async () => {
-    const draft = await domains.create(org, 'app.example.com')
-    let finish!: () => void
-    let started!: () => void
-    const began = new Promise<void>((resolve) => {
-      started = resolve
-    })
-    provider.reconcile.mockImplementationOnce(async () => {
-      started()
-      await new Promise<void>((resolve) => {
-        finish = resolve
-      })
-      return {
-        state: { certificate: 'late-certificate' },
-        phase: 'ready',
-        expires: new Date(Date.now() + 60_000).toISOString(),
+  it.each(['unconfirmed', 'ready', 'deleted', 'superseded', 'backoff', 'busy hostname'])(
+    'does not auto-advance a %s configuration',
+    async (reason) => {
+      const draft = await domains.create(org, 'app.example.com')
+      if (reason !== 'unconfirmed') await domains.verify(org, draft.id)
+      await due(draft.id)
+      if (reason === 'ready') await domains.advance(org, draft.id)
+      if (reason === 'deleted') await domains.delete(org, draft.id)
+      if (reason === 'ready' || reason === 'deleted') await due(draft.id)
+      if (reason === 'superseded') await db.query(`UPDATE custom_domain_config SET superseded_by = $1`, [randomUUID()])
+      if (reason === 'backoff')
+        await db.query(`UPDATE custom_domain_config SET next_check_at = now() + interval '1 hour'`)
+      if (reason === 'busy hostname') {
+        const competing = await domains.create(other, draft.hostname)
+        await db.query(
+          `UPDATE custom_domain_config SET lease_owner = $2, lease_until = now() + interval '1 hour' WHERE id = $1`,
+          [competing.id, randomUUID()],
+        )
       }
-    })
-    const pending = worker.reconcileDue()
-    await began
-    await domains.delete(org, draft.id)
-    finish()
-    await pending
-    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
-    await expect(domains.get(org, draft.id)).rejects.toMatchObject({ status: 404 })
-    const [tombstone] = await db.query(`SELECT phase, provider_state FROM custom_domain_config WHERE id = $1`, [
-      draft.id,
-    ])
-    expect(tombstone).toEqual({ phase: 'deleting', provider_state: { certificate: 'late-certificate' } })
-    await db.query(`UPDATE custom_domain_config SET next_check_at = now()`)
-    await worker.reconcileDue()
-    expect(provider.reconcile.mock.calls.at(-1)[0].deleted_at).not.toBeNull()
+      provider.reconcile.mockClear()
+      dns.checkAll.mockClear()
+      dns.verifyTls.mockClear()
+      await workflow.advancePending()
+      expect(provider.reconcile).not.toHaveBeenCalled()
+      expect(dns.checkAll).not.toHaveBeenCalled()
+      expect(dns.verifyTls).not.toHaveBeenCalled()
+    },
+  )
+
+  it('limits each setup batch to three oldest due configurations without losing the remainder', async () => {
+    const drafts: { id: string }[] = []
+    for (let index = 0; index < 4; index++) {
+      const owner = randomUUID()
+      await db.query(`INSERT INTO organization (id) VALUES ($1)`, [owner])
+      const draft = await domains.create(owner, `app${index}.example.com`)
+      await domains.verify(owner, draft.id)
+      await db.query(
+        `UPDATE custom_domain_config SET next_check_at = now() - make_interval(secs => $2) WHERE id = $1`,
+        [draft.id, 100 - index],
+      )
+      drafts.push(draft)
+    }
+    provider.reconcile.mockClear()
+    await workflow.advancePending()
+    expect(provider.reconcile.mock.calls.map(([row]) => row.id).sort()).toEqual(
+      drafts
+        .slice(0, 3)
+        .map(({ id }) => id)
+        .sort(),
+    )
+    await workflow.advancePending()
+    expect(provider.reconcile).toHaveBeenCalledTimes(4)
+    expect(
+      (await db.query(`SELECT count(*)::int AS count FROM custom_domain_config WHERE phase = 'ready'`))[0].count,
+    ).toBe(4)
   })
 
-  it('does not apply old DNS proof after an expired draft rotates its challenge', async () => {
+  it('shares execution leases between scheduled replicas and a simultaneous explicit request', async () => {
     const draft = await domains.create(org, 'app.example.com')
-    let finish!: () => void
-    let started!: () => void
-    const began = new Promise<void>((resolve) => {
-      started = resolve
+    await domains.verify(org, draft.id)
+    await due(draft.id)
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
     })
-    dns.verify
-      .mockRejectedValue(new DomainSetupError('ownership_txt_mismatch', true))
-      .mockImplementationOnce(async () => {
-        started()
-        await new Promise<void>((resolve) => {
-          finish = resolve
-        })
-      })
-    const pending = worker.reconcileDue()
-    await began
-    await db.query(`UPDATE custom_domain_config SET challenge_expires_at = now() - interval '1 second'`)
-    const renewed = await domains.create(org, 'app.example.com')
-    expect(renewed.dnsRecords[1]).not.toEqual(draft.dnsRecords[1])
-    finish()
-    await pending
-    expect(provider.reconcile).not.toHaveBeenCalled()
-    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
+    dns.verifyTls.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve('2030-01-01T00:00:00Z')
+          entered()
+        }),
+    )
+    provider.reconcile.mockClear()
+    const pending = workflow.advancePending()
+    await started
+    try {
+      const replica = new CustomDomainWorkflowService(
+        db,
+        config as never,
+        subscription as never,
+        dns as never,
+        provider as never,
+      )
+      await Promise.all([replica.advancePending(), domains.advance(org, draft.id)])
+      expect(provider.reconcile).toHaveBeenCalledTimes(1)
+    } finally {
+      release()
+      await pending
+    }
+    expect((await domains.get(org, draft.id)).ready).toBe(true)
+  })
+
+  it('does not scan or expire drafts while the feature is disabled', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    await db.query(`UPDATE custom_domain_config SET last_action_at = now() - interval '31 days'`)
+    settings.enabled = false
+    const query = jest.spyOn(db, 'transaction')
+    try {
+      await Promise.all([workflow.advancePending(), workflow.maintain()])
+      expect(query).not.toHaveBeenCalled()
+      expect(
+        (await db.query(`SELECT deleted_at FROM custom_domain_config WHERE id = $1`, [draft.id]))[0].deleted_at,
+      ).toBeNull()
+    } finally {
+      query.mockRestore()
+    }
+  })
+
+  it('expires abandoned drafts through maintenance without querying DNS', async () => {
+    const draft = await domains.create(org, 'app.example.com')
+    await db.query(`UPDATE custom_domain_config SET last_action_at = now() - interval '31 days'`)
+    await workflow.maintain()
+    expect(dns.checkAll).not.toHaveBeenCalled()
+    const [row] = await db.query(`SELECT deleted_at, cleaned_at FROM custom_domain_config WHERE id = $1`, [draft.id])
+    expect(row.deleted_at).not.toBeNull()
+    expect(row.cleaned_at).not.toBeNull()
   })
 })

@@ -10,9 +10,9 @@ import { TypedConfigService } from '../../config/typed-config.service'
 export type DomainSubscription = 'active' | 'required' | 'unavailable'
 export type DomainSubscriptionGrant = { status: DomainSubscription; expiresAt: number }
 
-const CACHE_TTL_MS = 86_400_000
+const CACHE_TTL_MS = 60_000
 const RETRY_TTL_MS = 30_000
-const CACHE_PREFIX = 'commerce:custom-domain-subscription:v1:'
+const CACHE_PREFIX = 'commerce:custom-domain-subscription:v2:'
 
 // Compare and publish together: a timed-out refresher cannot overwrite a newer
 // result. Redis time also bounds lifetime when the API clock runs ahead.

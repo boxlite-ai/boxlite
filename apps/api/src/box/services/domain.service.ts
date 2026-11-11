@@ -167,6 +167,12 @@ export class DomainService {
   /** Route an already owned full hostname to a Box port; never allocate a name. */
   async bind(box: Box, port: number, rawDomain: string): Promise<HeldDomain> {
     const hostname = this.fullHostname(rawDomain, 'Bind')
+    const [candidate] = await this.dataSource.query(
+      `SELECT kind FROM domain WHERE hostname = $1 AND organization_id = $2`,
+      [hostname, box.organizationId],
+    )
+    const grant = candidate?.kind === 'custom' ? await this.subscriptions.refresh(box.organizationId) : null
+    if (grant) requireDomainSubscription(grant.status)
     return this.dataSource.transaction(async (manager) => {
       await this.lockOrganizationLimit(manager, box.organizationId)
       // Serialize target admission with destroy requests and physical deletion;
@@ -182,8 +188,15 @@ export class DomainService {
       const [, bound]: [unknown[], number] = await manager.query(
         `UPDATE "domain" AS d SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
          WHERE "hostname" = $1 AND "organization_id" = $2
-           AND (d.kind = 'platform' OR ($5 AND ${CUSTOM_DOMAIN_READY_SQL}))`,
-        [hostname, current.organizationId, current.id, port, !!this.configService.get('customDomains.enabled')],
+           AND (d.kind = 'platform' OR ($5 AND $6::timestamptz > clock_timestamp() AND ${CUSTOM_DOMAIN_READY_SQL}))`,
+        [
+          hostname,
+          current.organizationId,
+          current.id,
+          port,
+          !!this.configService.get('customDomains.enabled'),
+          grant ? new Date(grant.expiresAt) : null,
+        ],
       )
       if (bound === 0) {
         const [held] = await manager.query(
@@ -231,10 +244,23 @@ export class DomainService {
    */
   async resolve(rawHostname: string): Promise<DomainTarget | null> {
     const hostname = rawHostname.trim().toLowerCase()
+    const [candidate] = await this.dataSource.query(`SELECT kind, organization_id FROM domain WHERE hostname = $1`, [
+      hostname,
+    ])
+    if (!candidate) return null
+    const grant = candidate.kind === 'custom' ? await this.subscriptions.refresh(candidate.organization_id) : null
+    if (grant && grant.status !== 'active') return null
+    // Authorization may await Commerce. Re-read the target and organization afterwards.
     const rows: StoredTarget[] = await this.dataSource.query(
-      `SELECT "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port"
-       FROM "domain" d WHERE "hostname" = $1 AND (d.kind = 'platform' OR ($2 AND ${CUSTOM_DOMAIN_READY_SQL}))`,
-      [hostname, !!this.configService.get('customDomains.enabled')],
+      `SELECT target_type AS "targetType", box_id AS "boxId", app_id AS "appId", port
+       FROM domain d WHERE hostname = $1 AND organization_id = $3
+         AND (d.kind = 'platform' OR ($2 AND $4::timestamptz > clock_timestamp() AND ${CUSTOM_DOMAIN_READY_SQL}))`,
+      [
+        hostname,
+        !!this.configService.get('customDomains.enabled'),
+        candidate.organization_id,
+        grant ? new Date(grant.expiresAt) : null,
+      ],
     )
     if (rows.length === 0) {
       return null

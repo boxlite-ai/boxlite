@@ -511,6 +511,26 @@ export class ApiClient {
     ).data
   }
 
+  public async prepareCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/prepare`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async advanceCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/advance`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
   public async deleteCustomDomain(org: string, id: string): Promise<void> {
     await this.http.delete(
       `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}`,

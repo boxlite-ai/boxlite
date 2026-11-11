@@ -33,9 +33,11 @@ export class CustomDomainGcpService {
   ) {}
 
   /** One bounded reconciliation step. IDs are stable even if a create response is lost. */
-  async reconcile(row: CustomDomainRow) {
+  async reconcile(row: CustomDomainRow, mode: 'prepare' | 'advance' | 'observe' = 'advance', signal?: AbortSignal) {
     const { project, certificateMap } = this.config.getOrThrow('customDomains')
-    const projectNumber = await this.projectNumber(project)
+    const request = (method: 'GET' | 'POST' | 'DELETE', path: string, data?: object) =>
+      this.request(method, path, data, 'certificatemanager', signal)
+    const projectNumber = await this.projectNumber(project, signal)
     const parent = `projects/${project}/locations/global`
     const id = `byo-${row.id}-g${row.generation}`
     const state: DomainProviderState = {
@@ -53,13 +55,13 @@ export class CustomDomainGcpService {
       )
       if (!operationName || !projectAlias(operationName[1])) throw new DomainSetupError('provider_resource_conflict')
       // Always address the configured project, including when Google returns its number.
-      const operation = await this.request('GET', `${parent}/operations/${operationName[2]}`)
+      const operation = await request('GET', `${parent}/operations/${operationName[2]}`)
       if (operation && !operation.done) return pending()
       delete state.operation
       // Re-read deterministic resource IDs after failed/lost operations; never assume a 409 is success.
     }
     const owned = async (path: string, matches: (value: CloudResource) => boolean) => {
-      const resource = await this.request('GET', path)
+      const resource = await request('GET', path)
       const name = resource?.name?.match(/^projects\/([^/]+)(\/locations\/global\/.+)$/)
       if (
         resource &&
@@ -88,6 +90,12 @@ export class CustomDomainGcpService {
       value.certificates?.length === 1 &&
       matchesReference(value.certificates[0], state.certificate)
 
+    if (mode === 'observe') {
+      const certificate = await owned(state.certificate, matchesCertificate)
+      if (!certificate) throw new DomainSetupError('provider_resource_missing')
+      state.certificateState = certificate.managed.state
+      return { ...pending(), expires: certificate.expireTime ?? null }
+    }
     if (row.deleted_at) {
       for (const [path, matches] of [
         [state.entry, matchesEntry],
@@ -95,7 +103,7 @@ export class CustomDomainGcpService {
         [state.authorization, (value: CloudResource) => value.domain === row.hostname],
       ] as const) {
         if (await owned(path, matches)) {
-          state.operation = (await this.request('DELETE', path))?.name
+          state.operation = (await request('DELETE', path))?.name
           return pending()
         }
       }
@@ -104,16 +112,23 @@ export class CustomDomainGcpService {
     }
     const create = async (path: string, parameter: string, data: object) => {
       const collection = path.slice(0, path.lastIndexOf('/'))
-      state.operation = (await this.request('POST', `${collection}?${parameter}=${id}`, { ...data, labels }))?.name
+      const operation = await request('POST', `${collection}?${parameter}=${id}`, { ...data, labels })
+      const match = /^projects\/([a-z0-9-]+)\/locations\/global\/operations\/([a-zA-Z0-9_-]+)$/.exec(
+        operation?.name ?? '',
+      )
+      if (!match || !projectAlias(match[1])) throw new DomainSetupError('provider_invalid_response')
+      state.operation = operation.name
     }
     const authorization = await owned(state.authorization, (value) => value.domain === row.hostname)
     if (!authorization) {
+      state.progress = 'preparing_dns'
       await create(state.authorization, 'dnsAuthorizationId', { domain: row.hostname, type: 'PER_PROJECT_RECORD' })
       return pending()
     }
     const record = authorization.dnsResourceRecord
     if (record?.type !== 'CNAME' || !record.name || !record.data)
       throw new DomainSetupError('provider_invalid_response')
+    state.progress = 'awaiting_dns'
     state.authorizationRecord = { name: record.name, type: 'CNAME', value: record.data }
     const previousRecord = row.provider_state.authorizationRecord
     if (
@@ -122,14 +137,21 @@ export class CustomDomainGcpService {
       previousRecord?.value !== record.data
     )
       return { ...pending(), phase: 'pending_certificate_dns' as const }
-    await this.dns.verifyCertificate(state.authorizationRecord)
+    if (mode === 'prepare') return { ...pending(), phase: 'pending_certificate_dns' as const }
     const certificate = await owned(state.certificate, matchesCertificate)
     if (!certificate) {
+      await this.dns.verify(row.hostname, row.challenge, signal)
+      await this.dns.verifyCertificate(state.authorizationRecord, signal)
       await create(state.certificate, 'certificateId', {
         managed: { domains: [row.hostname], dnsAuthorizations: [state.authorization] },
       })
+      state.certificateSubmitted = true
+      state.progress = 'certificate_pending'
       return { ...pending(), phase: 'provisioning' as const }
     }
+    state.certificateSubmitted = true
+    state.certificateState = certificate.managed.state
+    state.progress = 'certificate_pending'
     if (certificate.managed.state === 'FAILED') {
       const created = Date.parse(certificate.createTime)
       if (!Number.isFinite(created)) throw new DomainSetupError('provider_invalid_response')
@@ -137,12 +159,15 @@ export class CustomDomainGcpService {
       // even when a user repeatedly schedules checks or a replacement fails quickly.
       if (Date.now() - created < 3_600_000 || Date.parse(certificate.expireTime) > Date.now())
         throw new DomainSetupError('certificate_provisioning_failed')
+      await this.dns.verify(row.hostname, row.challenge, signal)
+      await this.dns.verifyCertificate(state.authorizationRecord, signal)
       const entry = await owned(state.entry, matchesEntry)
-      state.operation = (await this.request('DELETE', entry ? state.entry : state.certificate))?.name
+      state.operation = (await request('DELETE', entry ? state.entry : state.certificate))?.name
       return { ...pending(), phase: 'provisioning' as const }
     }
     if (certificate.managed.state === 'PROVISIONING') return { ...pending(), phase: 'provisioning' as const }
     if (certificate.managed.state !== 'ACTIVE') throw new DomainSetupError('provider_invalid_response')
+    state.progress = 'mapping_pending'
     const entry = await owned(state.entry, matchesEntry)
     if (!entry) {
       await create(state.entry, 'certificateMapEntryId', { hostname: row.hostname, certificates: [state.certificate] })
@@ -151,13 +176,14 @@ export class CustomDomainGcpService {
     if (entry.state !== 'ACTIVE') return { ...pending(), phase: 'provisioning' as const }
     if (!certificate.expireTime || !Number.isFinite(Date.parse(certificate.expireTime)))
       throw new DomainSetupError('provider_invalid_response')
+    state.progress = 'tls_pending'
     return { ...pending(), phase: 'ready' as const, expires: certificate.expireTime }
   }
 
-  private async projectNumber(project: string): Promise<string> {
+  private async projectNumber(project: string, signal?: AbortSignal): Promise<string> {
     const cached = this.projectNumbers.get(project)
     if (cached) return cached
-    const value = await this.request('GET', `projects/${project}`, undefined, 'cloudresourcemanager')
+    const value = await this.request('GET', `projects/${project}`, undefined, 'cloudresourcemanager', signal)
     if (
       value?.projectId !== project ||
       typeof value.projectNumber !== 'string' ||
@@ -173,25 +199,38 @@ export class CustomDomainGcpService {
     path: string,
     data?: object,
     service: 'certificatemanager' | 'cloudresourcemanager' = 'certificatemanager',
+    signal?: AbortSignal,
   ): Promise<CloudResource | null> {
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout>
+    let rejectCancelled: ((error: Error) => void) | undefined
+    const cancel = () => {
+      abort.abort()
+      rejectCancelled?.(new Error('Certificate request cancelled'))
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
     try {
+      signal?.throwIfAborted()
       return await Promise.race([
-        this.auth.getClient().then(
-          async (client) =>
-            (
-              await client.request<CloudResource>({
-                url: `https://${service}.googleapis.com/v1/${path}`,
-                method,
-                data,
-                timeout: 10_000,
-                retry: false,
-                signal: abort.signal,
-              })
-            ).data,
-        ),
+        this.auth.getClient().then(async (client) => {
+          abort.signal.throwIfAborted()
+          return (
+            await client.request<CloudResource>({
+              url: `https://${service}.googleapis.com/v1/${path}`,
+              method,
+              data,
+              timeout: 10_000,
+              retry: false,
+              signal: abort.signal,
+            })
+          ).data
+        }),
         new Promise<never>((_, reject) => {
+          rejectCancelled = reject
+          if (signal?.aborted) {
+            cancel()
+            return
+          }
           timer = setTimeout(() => {
             abort.abort()
             reject(new Error('Certificate request timed out'))
@@ -206,10 +245,15 @@ export class CustomDomainGcpService {
           ? 'provider_capacity_exhausted'
           : status === 403
             ? 'provider_permission_denied'
-            : 'provider_unavailable',
+            : status === 400
+              ? 'provider_request_rejected'
+              : 'provider_unavailable',
+        false,
+        method === 'POST' && path.includes('/certificates?') && [400, 403, 429].includes(status),
       )
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', cancel)
     }
   }
 }

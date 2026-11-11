@@ -531,7 +531,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
         }
       }
       // Keep exact cloud resource ownership after the organization disappears;
-      // the domain worker completes cleanup without needing a live subscription.
+      // explicit domain maintenance completes cleanup without needing a live subscription.
       await manager.query(
         `UPDATE custom_domain_config SET deleted_at = now(), phase = 'deleting',
         dns_valid_until = '-infinity', next_check_at = now(), updated_at = now()

@@ -26,7 +26,7 @@ describe('GCP custom domain reconciliation', () => {
       {
         getOrThrow: () => ({ project: 'test-project', certificateMap: 'proxy' }),
       } as never,
-      { verifyCertificate } as never,
+      { verifyCertificate, verify: jest.fn().mockResolvedValue(undefined) } as never,
     )
     verifyCertificate.mockReset().mockResolvedValue(undefined)
     resources = new Map()
@@ -79,6 +79,43 @@ describe('GCP custom domain reconciliation', () => {
     })
   }
 
+  it('prepares authorization records repeatedly without DNS checks or certificate creation', async () => {
+    for (let i = 0; i < 4; i++) {
+      const result = await provider.reconcile(row, 'prepare')
+      row.provider_state = result.state
+    }
+    expect(row.provider_state.authorizationRecord?.type).toBe('CNAME')
+    expect(resources.size).toBe(1)
+    expect(verifyCertificate).not.toHaveBeenCalled()
+    expect(request.mock.calls.filter(([call]) => call.method === 'POST')).toHaveLength(1)
+  })
+
+  it.each([400, 403, 429])(
+    'marks a definite certificate POST rejection (%s) separately from an unknown result',
+    async (status) => {
+      await step()
+      await step()
+      const cloud = request.getMockImplementation()!
+      request.mockImplementation((call) => {
+        if (call.method === 'POST' && call.url.includes('/certificates?')) throw { response: { status } }
+        return cloud(call)
+      })
+      await expect(step()).rejects.toMatchObject({ submissionRejected: true })
+      expect(resources.size).toBe(1)
+    },
+  )
+
+  it('does not create or replace resources while observing an already-issued certificate', async () => {
+    for (let i = 0; i < 5; i++) await step()
+    resources.get(row.provider_state.certificate).managed.state = 'FAILED'
+    request.mockClear()
+    verifyCertificate.mockClear()
+    const observed = await provider.reconcile(row, 'observe')
+    expect(observed.state.certificateState).toBe('FAILED')
+    expect(request.mock.calls.every(([call]) => call.method === 'GET')).toBe(true)
+    expect(verifyCertificate).not.toHaveBeenCalled()
+  })
+
   it('accepts canonical numeric project references without changing the configured request project', async () => {
     canonicalResponses()
     for (let index = 0; index < 5; index++) await step()
@@ -121,7 +158,7 @@ describe('GCP custom domain reconciliation', () => {
     const record = row.provider_state.authorizationRecord
     verifyCertificate.mockRejectedValue(Object.assign(new Error('missing CNAME'), { code: 'certificate_dns_mismatch' }))
     await expect(step()).rejects.toMatchObject({ code: 'certificate_dns_mismatch' })
-    expect(verifyCertificate).toHaveBeenCalledWith(record)
+    expect(verifyCertificate).toHaveBeenCalledWith(record, undefined)
     expect(resources.size).toBe(1)
   })
 
@@ -138,7 +175,7 @@ describe('GCP custom domain reconciliation', () => {
     expect(resources.size).toBe(1)
     expect(verifyCertificate).not.toHaveBeenCalled()
     await step()
-    expect(verifyCertificate).toHaveBeenCalledWith(result.state.authorizationRecord)
+    expect(verifyCertificate).toHaveBeenCalledWith(result.state.authorizationRecord, undefined)
     expect(resources.size).toBe(2)
   })
 

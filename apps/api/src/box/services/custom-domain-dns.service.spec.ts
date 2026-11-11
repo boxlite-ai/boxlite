@@ -26,6 +26,36 @@ describe('public DNS proof', () => {
     resolver.resolve4.mockResolvedValue(['192.0.2.1'])
     resolver.resolve6.mockRejectedValue({ code: 'ENODATA' })
   })
+  it('reports all three record results from one confirmation, including independent failures', async () => {
+    const record = { name: '_acme.app.example.com.', type: 'CNAME' as const, value: 'auth.google.test.' }
+    resolver.resolveCname.mockImplementation(async (name) =>
+      name === record.name ? [record.value] : ['custom.platform.com.'],
+    )
+    expect(await dns.checkAll('app.example.com', 'proof', record)).toEqual([
+      { record: 'ownership', status: 'passed' },
+      { record: 'traffic', status: 'passed' },
+      { record: 'certificate', status: 'passed' },
+    ])
+    resolver.resolveTxt.mockResolvedValue([['wrong-proof']])
+    resolver.resolveCname.mockResolvedValue(['wrong.example.com'])
+    expect(await dns.checkAll('app.example.com', 'proof', record)).toEqual([
+      { record: 'ownership', status: 'failed', errorCode: 'ownership_txt_mismatch' },
+      { record: 'traffic', status: 'failed', errorCode: 'traffic_cname_mismatch' },
+      { record: 'certificate', status: 'failed', errorCode: 'certificate_dns_mismatch' },
+    ])
+  })
+
+  it('reports a DNS outage as unavailable rather than a configuration mismatch', async () => {
+    resolver.resolveTxt.mockRejectedValue({ code: 'ETIMEOUT' })
+    const checks = await dns.checkAll('app.example.com', 'proof', {
+      name: '_acme.app.example.com.',
+      type: 'CNAME',
+      value: 'custom.platform.com.',
+    })
+    expect(checks[0]).toEqual({ record: 'ownership', status: 'unavailable', errorCode: 'dns_unavailable' })
+    expect(checks.slice(1).every((check) => check.status === 'passed')).toBe(true)
+  })
+
   it('requires this configuration TXT and the fixed traffic endpoint', async () => {
     await expect(dns.verify('app.example.com', 'proof')).resolves.toBeUndefined()
     expect(resolver.resolveTxt).toHaveBeenCalledWith('_boxlite-verification.app.example.com')

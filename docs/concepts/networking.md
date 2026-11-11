@@ -159,60 +159,56 @@ Platform-domain allowance remains separate, even when it is zero or full.
 Pre-existing configurations are retained; an organization already above the allowance
 must delete all its configurations before adding a different hostname.
 
-1. Enter a public subdomain, such as `app.example.com`; use ASCII/Punycode, at most 220 bytes, with no wildcard or apex domain.
-2. At your DNS provider, add the traffic CNAME and configuration-specific TXT shown in the guide; turn off CDN proxying.
-3. Click **Check DNS / retry**, then add the separate **Certificate authorization** CNAME when it appears. Copy its full `_acme-challenge…` name and value; keep the traffic CNAME unchanged.
-4. Keep all records in place; BoxLite checks ownership, traffic DNS and the current certificate CNAME before requesting a Google-managed certificate, then checks HTTPS at the proxy entry.
-5. When the domain is **Ready**, bind a Box port in Dashboard or with the existing CLI/SDK bind operation; the public-tunnel and inbound rules above still apply.
+1. Enter a public subdomain, such as `app.example.com`, and click **Get DNS configuration**; apex domains and wildcards are unsupported.
+2. Wait for all three records: traffic CNAME, configuration-specific ownership TXT, and Google certificate authorization CNAME.
+3. Add all three at your DNS provider, then click **Configured, verify**; the page displays **Verifying DNS, please wait…**.
+4. Correct any identified record and retry; a DNS timeout means the check was unavailable, not that the record is necessarily wrong.
+5. After Google accepts the certificate request and BoxLite saves it, the page says HTTPS is being enabled and you can return later.
+6. Wait for issuance, map activation and actual TLS verification, then return to bind a Box port when **Ready**.
 
-In Cloudflare, use **DNS only** for both CNAME records. If the DNS editor automatically
-adds the zone suffix, enter the relative record name and verify that its resulting full
-name matches the displayed name. **Copy name** and **Copy value** are separate actions.
+Preparation creates a Google DNS authorization but does not query your DNS or request a certificate.
+The three records are displayed together; an interrupted preparation can be resumed without changing the TXT.
+In Cloudflare, use **DNS only** for both CNAME records; copy the full certificate authorization name, not the traffic name.
+If the DNS editor appends the zone suffix, enter the relative name and verify the resulting full name.
 
-**Check DNS / retry** requests a background check; its acknowledgment does not mean
-DNS or HTTPS has passed. Watch the status in the same dialog or the domain list,
-which refreshes every 10 seconds. Closing the dialog does not stop background checks.
+Only your confirmation starts DNS verification. Ordinary list/detail requests do not advance setup.
+While the dialog is visible, confirmed setup advances about every ten seconds, subject to provider backoff.
+Leaving stops page requests; Google continues issuance, and an API task advances confirmed setup at startup and every minute while execution is available.
+No new minimum instances or continuous CPU settings are required by this change; an absent or CPU-throttled API can delay progress until it resumes.
+Returning does not guarantee immediate readiness; map deployment can take additional time.
 
-| Status | What to do |
+| Status | Meaning |
 | --- | --- |
-| Waiting for DNS verification | Add the traffic CNAME and ownership TXT; allow public DNS to propagate |
-| Waiting for certificate DNS | Add the exact certificate authorization CNAME when it appears |
-| Waiting for HTTPS | Keep the DNS records; Google is issuing or deploying the certificate and BoxLite checks HTTPS |
-| Ready | Bind a Box port; retain all DNS records for verification and renewal |
+| Getting DNS configuration | Resume preparation until all three records are available |
+| Waiting for DNS | Configure all records and explicitly confirm; no background DNS polling occurs |
+| Submission unknown | The request may have reached Google; continue the same configuration to recover its result |
+| Waiting for HTTPS | Google accepted the request; the API task or open dialog continues mapping and TLS checks |
+| Ready | Setup completed; bind a port and keep DNS records for routing and managed renewal |
+| Replaced | Another application verified ownership later; this configuration cannot be reused |
 
-DNS propagation can take minutes to hours. Google documents [up to 60 minutes for
-issuance after DNS and load-balancer changes propagate](https://docs.cloud.google.com/certificate-manager/docs/troubleshooting#managed-certificate-state);
-HTTPS deployment can take additional time. If there is no progress after an hour
-with DNS fully propagated, verify the displayed records and that any CAA restrictions
-allow `pki.goog`, or contact support. An earlier failed authorization attempt can remain
-visible in Google while the overall certificate is still provisioning; BoxLite retains
-that certificate for Google's retries.
+Google documents [up to sixty minutes after DNS and load-balancer changes propagate](https://docs.cloud.google.com/certificate-manager/docs/troubleshooting#managed-certificate-state).
+DNS propagation and mapping can add time; this is not an end-to-end completion deadline.
+If Google stops issuance entirely (`FAILED`), continuing setup rechecks ownership and DNS before replacing an unissued or expired certificate.
+Replacements remain at least one hour apart; a still-valid certificate and the authorization record are retained.
+An individual failed authorization attempt on a `PROVISIONING` certificate does not trigger replacement.
 
-If Google stops issuance entirely (`FAILED`), BoxLite rechecks the current certificate
-CNAME and recreates the failed, unissued or expired certificate using the same resource
-ID and DNS authorization. Replacements are spaced at least one hour apart, and manual
-checks retain retry backoff. A still-valid certificate is retained; customers do not need
-to delete their domain configuration or change the ownership TXT to retry issuance.
+The latest application that successfully verifies DNS becomes the sole valid owner, scoped to its organization.
+Unverified or failed applications do not interrupt the current owner; successful transfer invalidates all older applications and clears the previous Box binding.
+The new owner must finish HTTPS setup and bind its own target, so a transfer can temporarily interrupt access.
+Repeated verification of the winning application does not clear its existing binding.
 
-Bind does not perform DNS challenges: it reads saved DNS and HTTPS readiness,
-whose deadline is also bounded by subscription eligibility. A known custom domain returns `403 subscription_required` when
-subscription is required, or `409 subscription_not_ready` / `domain_not_ready`
-when its eligibility or setup is not ready. Request and response fields are unchanged.
+Ready is persistent setup completion, not a five-minute DNS/TLS grant.
+Google manages certificate renewal; an old locally observed expiration does not disable a renewed certificate.
+Bind and proxy route requests independently check the organization's effective subscription, without requiring Dashboard activity.
+Active eligibility is cached for at most sixty seconds and never beyond the paid cycle; denials and lookup failures are cached for thirty seconds.
+Early suspension can therefore take up to sixty seconds to appear, while expired or unavailable authorization prevents new access without deleting the target.
+Existing connections are not forcibly disconnected; public-tunnel and inbound rules remain independently enforced.
 
-Actual subscription expiry suspends new binds and new requests while retaining
-the configuration, target and certificate. Cancelling renewal during a still-paid
-period does not suspend access. Eligibility is cached in Redis for at most one day,
-ending sooner at the paid-cycle deadline. Early suspension can therefore take up
-to one day to appear; known cycle expiry stops new access at that deadline.
-Denied eligibility and lookup failures are cached for 30 seconds so a purchase
-can be recognized without waiting a day. DNS/TLS readiness lasts at most five
-minutes and never beyond the eligibility deadline; an outage cannot extend it.
-Existing connections are not forcibly disconnected. Recovery requires fresh DNS/TLS checks.
-
-**Unbind** keeps the domain, HTTPS configuration and occupied allowance. **Delete configuration** in
-Dashboard immediately frees the allowance, releases ownership and stops new requests, then cleans up cloud resources
-asynchronously. Delete and unbind remain available after subscription expiry.
-After deletion, remove the DNS records; adding the hostname again creates a new TXT challenge.
+**Unbind** retains ownership and cloud resources. **Delete configuration** immediately releases ownership and stops new requests, then attempts a bounded cleanup step.
+Superseded/deleted records retain resource identities for recovery; the API task also performs bounded cleanup and hourly certificate/TLS observations.
+These tasks pause when API execution is unavailable; independent expiration alerts and guaranteed unattended monitoring remain operational work.
+Unconfirmed, unclaimed drafts with no action for thirty days become cleanup candidates; abandoned drafts are not repeatedly DNS-polled.
+After deleting a configuration, remove its DNS records; a new application uses a new ownership TXT.
 
 Domain responses expose `hostname`, `url` and `target`; there is no short `name`
 field. CLI lists use `HOSTNAME`, including full-hostname output with `ls -q`.

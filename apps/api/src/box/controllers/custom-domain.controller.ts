@@ -38,6 +38,18 @@ export class CustomDomainController {
     return this.domains.verify(org, id)
   }
 
+  @Post(':id/prepare')
+  @HttpCode(202)
+  prepare(@Param('organizationId', ParseUUIDPipe) org: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.domains.prepare(org, id)
+  }
+
+  @Post(':id/advance')
+  @HttpCode(202)
+  advance(@Param('organizationId', ParseUUIDPipe) org: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.domains.advance(org, id)
+  }
+
   @Delete(':id')
   @HttpCode(204)
   delete(@Param('organizationId', ParseUUIDPipe) org: string, @Param('id', ParseUUIDPipe) id: string) {

@@ -10,6 +10,8 @@ describe('ApiClient domains', () => {
     await api.listCustomDomains('org/one')
     await api.createCustomDomain('org/one', 'app.example.com')
     await api.verifyCustomDomain('org/one', 'config/id')
+    await api.prepareCustomDomain('org/one', 'config/id')
+    await api.advanceCustomDomain('org/one', 'config/id')
     await api.bindDomain('org/one', 'app.example.com', 'web', 3000)
     await api.unbindDomain('org/one', 'app.example.com')
     await api.deleteCustomDomain('org/one', 'config/id')
@@ -21,6 +23,8 @@ describe('ApiClient domains', () => {
         data: JSON.stringify({ hostname: 'app.example.com' }),
       },
       { method: 'post', url: '/organizations/org%2Fone/custom-domains/config%2Fid/verify', data: '{}' },
+      { method: 'post', url: '/organizations/org%2Fone/custom-domains/config%2Fid/prepare', data: '{}' },
+      { method: 'post', url: '/organizations/org%2Fone/custom-domains/config%2Fid/advance', data: '{}' },
       {
         method: 'put',
         url: '/v1/org%2Fone/domains/app.example.com/target',

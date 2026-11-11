@@ -22,6 +22,8 @@ describe('custom domain HTTP authorization', () => {
     create: jest.fn().mockResolvedValue({ id }),
     verify: jest.fn().mockResolvedValue({ id }),
     delete: jest.fn(),
+    prepare: jest.fn().mockResolvedValue({ id }),
+    advance: jest.fn().mockResolvedValue({ id }),
   }
   beforeAll(async () => {
     const guard = new OrganizationResourceActionGuard(
@@ -84,6 +86,8 @@ describe('custom domain HTTP authorization', () => {
     expect((await call('GET', `/${id}`)).status).toBe(200)
     expect((await call('POST')).status).toBe(201)
     expect((await call('POST', `/${id}/verify`)).status).toBe(202)
+    expect((await call('POST', `/${id}/prepare`)).status).toBe(202)
+    expect((await call('POST', `/${id}/advance`)).status).toBe(202)
     expect((await call('DELETE', `/${id}`)).status).toBe(204)
     expect(service.verify).toHaveBeenCalledWith(org, id)
     expect(service.delete).toHaveBeenCalledWith(org, id)

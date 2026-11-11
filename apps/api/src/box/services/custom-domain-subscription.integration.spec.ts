@@ -9,7 +9,7 @@ jest.mock('axios')
 const get = axios.get as jest.Mock
 const describeWithRedis = process.env.BOXLITE_TEST_REDIS_URL ? describe : describe.skip
 const org = randomUUID()
-const key = `commerce:custom-domain-subscription:v1:{${org}}`
+const key = `commerce:custom-domain-subscription:v2:{${org}}`
 const lock = `${key}:refresh`
 
 describeWithRedis('custom domain subscription (real Redis)', () => {
@@ -45,7 +45,20 @@ describeWithRedis('custom domain subscription (real Redis)', () => {
     await redis.quit()
   })
 
-  it('shares a one-day grant without sliding expiry or repeating the existing Commerce request', async () => {
+  it('ignores legacy one-day grants when the cache namespace changes', async () => {
+    const oldKey = key.replace(':v2:', ':v1:')
+    await redis.set(oldKey, JSON.stringify({ status: 'active', expiresAt: Date.now() + 86_400_000 }), 'EX', 86400)
+    try {
+      expect(await service.read(org)).toEqual({ status: 'unavailable', expiresAt: 0 })
+      get.mockResolvedValue({ data: {} })
+      expect((await service.refresh(org)).status).toBe('required')
+      expect(get).toHaveBeenCalledTimes(1)
+    } finally {
+      await redis.del(oldKey)
+    }
+  })
+
+  it('shares a one-minute grant without sliding expiry or repeating the existing Commerce request', async () => {
     get.mockResolvedValue(activePlan())
     const grant = await service.refresh(org)
     expect(grant.status).toBe('active')
@@ -58,19 +71,22 @@ describeWithRedis('custom domain subscription (real Redis)', () => {
       headers: { authorization: 'Bearer test-service-token' },
     })
     const ttl = await redis.pttl(key)
-    expect(ttl).toBeGreaterThan(86_395_000)
-    expect(ttl).toBeLessThanOrEqual(86_400_000)
+    expect(ttl).toBeGreaterThan(55_000)
+    expect(ttl).toBeLessThanOrEqual(60_000)
     expect(await redis.get(lock)).toBeNull()
   })
 
-  it('caps the Redis lifetime at one day when the API clock is ahead', async () => {
-    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
+  it.each([
+    { skew: 30_000, status: 'active' },
+    { skew: 120_000, status: 'unavailable' },
+  ])('bounds the grant against Redis time with API skew $skew', async ({ skew, status }) => {
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + skew)
     get.mockResolvedValue(activePlan())
-    expect((await service.refresh(org)).status).toBe('active')
-    expect(await redis.pttl(key)).toBeLessThanOrEqual(86_400_000)
+    expect((await service.refresh(org)).status).toBe(status)
+    expect(await redis.pttl(key)).toBeLessThanOrEqual(60_000)
   })
 
-  it('bounds the cache by the paid cycle even when it ends before one day', async () => {
+  it('bounds the cache by the paid cycle even when it ends before one minute', async () => {
     const end = Date.now() + 20_000
     get.mockResolvedValue(activePlan(end))
     expect(await service.refresh(org)).toEqual({ status: 'active', expiresAt: end })

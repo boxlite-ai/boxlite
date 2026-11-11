@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   listCustomDomains: vi.fn(),
   createCustomDomain: vi.fn(),
   verifyCustomDomain: vi.fn(),
+  prepareCustomDomain: vi.fn(),
+  advanceCustomDomain: vi.fn(),
   deleteCustomDomain: vi.fn(),
   bindDomain: vi.fn(),
   unbindDomain: vi.fn(),
@@ -21,6 +23,11 @@ const domain: CustomDomain = {
   hostname: 'app.example.com',
   phase: 'ready',
   ready: true,
+  confirmed: true,
+  submissionStatus: 'accepted',
+  progress: 'ready',
+  retryAfter: 10,
+  dnsChecks: [],
   errorCode: null,
   challengeExpiresAt: null,
   dnsRecords: [
@@ -87,25 +94,36 @@ describe('Custom domains setup', () => {
     response.subscription = 'required'
     await render()
     await click('Add custom domain')
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Add the traffic CNAME')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Get all three DNS records')
     input('Custom hostname', 'app.example.com')
-    expect(button('Get DNS records').disabled).toBe(true)
+    expect(button('Get DNS configuration').disabled).toBe(true)
     expect(api.createCustomDomain).not.toHaveBeenCalled()
   })
 
   it('creates a configuration then displays provider-issued DNS records and retries', async () => {
     response.domains = []
     api.createCustomDomain.mockImplementation(async () => {
-      response = { ...response, domains: [{ ...domain, phase: 'pending_certificate_dns', ready: false }] }
+      response = {
+        ...response,
+        domains: [
+          {
+            ...domain,
+            phase: 'pending_certificate_dns',
+            ready: false,
+            confirmed: false,
+            submissionStatus: 'not_submitted',
+          },
+        ],
+      }
       return response.domains[0]
     })
     await render()
     await click('Add custom domain')
     input('Custom hostname', 'app.example.com')
-    await click('Get DNS records')
+    await click('Get DNS configuration')
     expect(api.createCustomDomain).toHaveBeenCalledWith('org-1', 'app.example.com')
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('abc.authorize.certificatemanager.goog.')
-    await click('Check DNS / retry')
+    await click('Configured, verify')
     expect(api.verifyCustomDomain).toHaveBeenCalledWith('org-1', 'config-1')
     input('Box ID or name', 'box-1')
     expect(button('Bind').disabled).toBe(true)
@@ -120,29 +138,94 @@ describe('Custom domains setup', () => {
     expect(api.bindDomain).toHaveBeenCalledWith('org-1', 'app.example.com', 'my-box', 8080)
   })
 
-  it('acknowledges an asynchronous check while keeping an unready domain unbindable', async () => {
-    response.domains = [{ ...domain, phase: 'provisioning', ready: false }]
+  it('shows DNS verification progress and only acknowledges confirmed submission', async () => {
+    response.domains = [
+      {
+        ...domain,
+        phase: 'pending_certificate_dns',
+        confirmed: false,
+        submissionStatus: 'not_submitted',
+        ready: false,
+      },
+    ]
     let complete!: () => void
     api.verifyCustomDomain.mockImplementation(
       () =>
         new Promise<void>((resolve) => {
-          complete = resolve
+          complete = () => {
+            response.domains = [{ ...domain, phase: 'provisioning', ready: false }]
+            resolve()
+          }
         }),
     )
     await render()
     await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
-    await act(async () => button('Check DNS / retry').click())
+    await act(async () => button('Configured, verify').click())
     await settle()
     try {
-      expect(document.body.textContent).toContain('Requesting check…')
+      expect(document.body.textContent).toContain('Verifying DNS, please wait…')
     } finally {
       await act(async () => complete())
       await settle()
     }
-    expect(document.body.textContent).toContain('Check requested')
-    expect(document.body.textContent).toContain('not a confirmation that DNS or HTTPS is ready')
+    expect(document.body.textContent).toContain('DNS verification passed. HTTPS is being enabled.')
     input('Box ID or name', 'box-1')
     expect(button('Bind').disabled).toBe(true)
+  })
+
+  it('distinguishes an unknown submission from an accepted certificate request', async () => {
+    response.domains = [{ ...domain, phase: 'provisioning', ready: false, submissionStatus: 'unknown' }]
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    expect(document.body.textContent).toContain('Confirming whether the certificate request was accepted')
+    expect(document.body.textContent).not.toContain('HTTPS is being enabled')
+  })
+
+  it('does not advance or prepare a draft from ordinary browsing or input edits', async () => {
+    response.domains = [
+      { ...domain, ready: false, confirmed: false, submissionStatus: 'not_submitted', dnsRecords: [] },
+    ]
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    expect(button('Continue getting DNS configuration')).toBeDefined()
+    expect(api.prepareCustomDomain).not.toHaveBeenCalled()
+    expect(api.advanceCustomDomain).not.toHaveBeenCalled()
+    expect(api.verifyCustomDomain).not.toHaveBeenCalled()
+    expect(api.createCustomDomain).not.toHaveBeenCalled()
+  })
+
+  it('does not allow a superseded application to verify or bind again', async () => {
+    response.domains = [{ ...domain, ready: false, phase: 'superseded', errorCode: 'domain_superseded' }]
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    expect(button('Continue HTTPS setup').disabled).toBe(true)
+    input('Box ID or name', 'box-1')
+    expect(button('Bind').disabled).toBe(true)
+    expect(document.body.textContent).toContain('no longer valid')
+  })
+
+  it('polls explicit advance only while the confirmed dialog is visible', async () => {
+    response.domains = [{ ...domain, phase: 'provisioning', ready: false }]
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    await render()
+    vi.useFakeTimers()
+    try {
+      await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_050)
+      })
+      expect(api.advanceCustomDomain).toHaveBeenCalledTimes(1)
+      expect(api.verifyCustomDomain).not.toHaveBeenCalled()
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000)
+      })
+      expect(api.advanceCustomDomain).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    }
   })
 
   it('explains where to wait and distinguishes the certificate CNAME from traffic DNS', async () => {
@@ -152,7 +235,9 @@ describe('Custom domains setup', () => {
     const text = document.querySelector('[role="dialog"]')!.textContent
     expect(text).toContain('60 minutes')
     expect(text).toContain('10 seconds')
-    expect(text).toContain('close this dialog')
+    expect(text).toContain('After you leave')
+    expect(text).toContain('every minute while running')
+    expect(text).toContain('If the API is stopped or paused')
     expect(text).toContain('Certificate authorization')
     expect(text).toContain('Traffic routing')
     expect(text).toContain('Copy name')
@@ -176,7 +261,7 @@ describe('Custom domains setup', () => {
     ]
     await render()
     await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
-    expect(button('Check DNS / retry').disabled).toBe(true)
+    expect(button('Continue HTTPS setup').disabled).toBe(true)
     expect(button('Bind').disabled).toBe(true)
     await click('Unbind')
     expect(api.unbindDomain).toHaveBeenCalledWith('org-1', domain.hostname)

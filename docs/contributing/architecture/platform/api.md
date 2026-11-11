@@ -672,39 +672,46 @@ it performs no DNS challenge or Commerce lookup. Its fields are unchanged, with 
 `409 subscription_not_ready` and `409 domain_not_ready`. Unbind keeps ownership
 and remains available after subscription expiry; only platform names occupy quota.
 
-Dashboard setup is separate from the portable API. These authenticated routes
-require organization membership and Box write permission:
+Dashboard setup is separate from the portable API and requires organization membership plus Box write permission.
 
 | Method | Path | Result |
 | --- | --- | --- |
-| GET | `/organizations/{organizationId}/custom-domains` | `{enabled, subscription, domains}`; subscription is `active`, `required` or `unavailable` |
-| POST | same collection | `{hostname}` creates or returns a draft, `201`; requires an active subscription; one non-deleted configuration per organization |
-| GET | `…/custom-domains/{id}` | Configuration, phase, readiness, error code, challenge expiry and DNS records |
-| POST | `…/custom-domains/{id}/verify` | Schedules a check and returns configuration, `202`; provider backoff remains enforced |
-| DELETE | `…/custom-domains/{id}` | Stops access, releases ownership and schedules cloud cleanup, `204` |
+| GET | `/organizations/{organizationId}/custom-domains` | Read-only saved configurations and cached subscription status |
+| POST | same collection | Creates/reuses one live draft, checks subscription, and prepares all three records |
+| GET | `…/custom-domains/{id}` | Read-only progress, DNS records and observations |
+| POST | `…/custom-domains/{id}/prepare` | One bounded authorization preparation round; no DNS check or certificate request |
+| POST | `…/custom-domains/{id}/verify` | Checks all records, claims ownership and attempts certificate submission; returns progress with 202 |
+| POST | `…/custom-domains/{id}/advance` | Continues confirmed setup; never treats an unconfirmed draft as verified |
+| DELETE | `…/custom-domains/{id}` | Revokes routing immediately, then attempts a bounded cleanup round |
+| POST | `/admin/custom-domains/maintain` | Admin-only awaited maintenance round for one due tombstone or ready observation; also expires abandoned drafts |
 
-Each configuration has `id`, `hostname`, `phase`, `ready`, `errorCode`,
-`challengeExpiresAt` and `dnsRecords` (`name`, `type`, `value`). Challenges and
-certificate DNS records appear here, not in portable bind/list responses.
-`pending_certificate_dns` waits for the current authorization CNAME, while
-`provisioning` covers issuance, map activation and HTTPS verification. The
-`certificate_dns_mismatch` error identifies the separate certificate record rather
-than the traffic CNAME. A verify response acknowledges scheduling only; terminal
-certificate failures retain retry backoff. The worker can recreate an owned, unissued
-or expired `FAILED` certificate once it is at least one hour old and the current CNAME
-passes, preserving its DNS authorization. Individual failed authorization attempts
-on a `PROVISIONING` certificate do not trigger replacement.
-Pending, failed and expired drafts count toward the custom-domain allowance.
-Creating a different hostname while any non-deleted configuration exists returns
-`400 custom_domain_count_limit_reached`; retrying the same hostname remains idempotent.
-Delete frees the allowance immediately; unbind does not. Pre-existing configurations
-are retained, but block new hostnames until all are deleted. Platform quota is separate.
-Subscription checks reuse Commerce's existing `GET /organization/{organizationId}/plan`;
-no new subscription endpoint is introduced. Active eligibility is cached in Redis
-for at most one day, shortened to `cycleTo`; denied or unavailable results last
-30 seconds. Bind only reads Redis when classifying a readiness failure.
-Read, delete and unbind remain usable after subscription loss. See the
-[DNS setup guide](../../../concepts/networking.md#bring-your-own-domain).
+Responses retain `id`, `hostname`, `phase`, `ready`, `errorCode` and `dnsRecords` and add `confirmed`, `progress`,
+`submissionStatus`, per-record `dnsChecks`, `retryAfter`, `certificateExpiresAt`, `certificateObservedAt` and `tlsCheckedAt`.
+`challengeExpiresAt` is null: retrying a live draft does not rotate its ownership challenge.
+`dnsRecords` is empty until all three records can be shown together.
+A 202 response is not evidence of accepted issuance; only persisted `submissionStatus: accepted` permits that message.
+`unknown` preserves ambiguity after timeouts or failed result saves; recovery reads fixed resource IDs before creating anything.
+Explicit provider rejection remains separate from an unknown outcome.
+
+`progress` distinguishes preparing DNS, awaiting DNS, certificate issuance, mapping activation, TLS checks and completion.
+Preparation and provider calls share a 25-second external-work budget; workflow SQL statements use two-second timeouts and leases last 45 seconds.
+Each request round is awaited and persisted; no response relies on unfinished work continuing after it returns.
+An API task also runs at startup and every 60 seconds, advancing up to three due, confirmed, live, incomplete configurations per round.
+It separately invokes one maintenance round; hostname leases coordinate replicas and requests, and a local guard prevents overlapping task rounds.
+No new minimum-instance or continuous-CPU configuration is added; progress can pause when API execution is unavailable.
+The UI invokes advance only for confirmed, incomplete work while its dialog is visible, normally every ten seconds with server backoff.
+`GET` does not refresh Commerce or create cloud resources; an explicit setup or actual routing request refreshes eligibility when needed.
+
+A successful new verification atomically transfers hostname ownership to its organization, clears the old target and supersedes all other live applications.
+Superseded applications are viewable but cannot be verified or advanced again; cloud cleanup retains their original IDs and labels.
+The current winner's repeated verify is idempotent and does not clear its target.
+Ready publication requires an unexpired execution lease, matching generation, a live configuration and current domain ownership.
+
+Subscriptions reuse Commerce's existing plan endpoint; active Redis grants use a new v2 namespace and last at most sixty seconds or `cycleTo`, whichever is earlier.
+Denied/unavailable results last thirty seconds, cache reads never extend expiry, and binding rechecks the deadline after lock waits.
+Routing rereads ownership and target after subscription refresh, so deletion, transfer or unbinding during the call cannot return a stale target.
+Ready no longer expires after five minutes and observed certificate expiration is not a route gate.
+See the [DNS guide](../../../concepts/networking.md#bring-your-own-domain) and [maintenance/cutover requirements](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are

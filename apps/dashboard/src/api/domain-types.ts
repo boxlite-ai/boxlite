@@ -19,7 +19,20 @@ export interface DomainList {
 export interface CustomDomain {
   id: string
   hostname: string
-  phase: 'pending_verification' | 'pending_certificate_dns' | 'provisioning' | 'ready'
+  phase: 'pending_verification' | 'pending_certificate_dns' | 'provisioning' | 'ready' | 'superseded'
+  confirmed: boolean
+  submissionStatus: 'not_submitted' | 'unknown' | 'accepted'
+  progress: 'preparing_dns' | 'awaiting_dns' | 'certificate_pending' | 'mapping_pending' | 'tls_pending' | 'ready'
+  retryAfter: number
+  dnsChecks: {
+    record: 'ownership' | 'traffic' | 'certificate'
+    status: 'passed' | 'failed' | 'unavailable'
+    errorCode?: string
+  }[]
+  certificateState?: string
+  certificateExpiresAt?: string | null
+  certificateObservedAt?: string | null
+  tlsCheckedAt?: string | null
   ready: boolean
   errorCode: string | null
   challengeExpiresAt: string | null

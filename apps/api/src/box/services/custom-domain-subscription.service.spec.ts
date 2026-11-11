@@ -10,8 +10,8 @@ describe('custom domain subscription policy', () => {
     { status: 'active' },
     { status: 'active', entitlements: 'active', cancelAtPeriodEnd: true },
     { status: 'past_due', entitlements: 'active' },
-  ])('grants effective paid access for %j for at most one day', (plan) => {
-    expect(subscriptionExpiry({ plan: { ...plan, cycleTo: future } }, now)).toBe(now + 86_400_000)
+  ])('grants effective paid access for %j for at most one minute', (plan) => {
+    expect(subscriptionExpiry({ plan: { ...plan, cycleTo: future } }, now)).toBe(now + 60_000)
   })
 
   it('clips access to the paid cycle and rejects an expired cycle', () => {

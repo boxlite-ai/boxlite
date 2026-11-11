@@ -22,8 +22,9 @@ import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
 import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
 import { DomainService } from './domain.service'
+import { RequestDrivenCustomDomains1794398400000 } from '../../migrations/pre-deploy/1794398400000-request-driven-custom-domains-migration'
 import { CustomDomainService } from './custom-domain.service'
-import { CustomDomainWorkerService } from './custom-domain-worker.service'
+import { CustomDomainWorkflowService } from './custom-domain-workflow.service'
 import { TunnelService } from './tunnel.service'
 import { PreviewController } from '../controllers/preview.controller'
 
@@ -51,7 +52,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   let ownsSchema = false
   let minLength = 5
   let customEnabled = false
-  const subscriptions = { read: jest.fn() }
+  const subscriptions = { read: jest.fn(), refresh: jest.fn() }
 
   const configService = {
     get: (key: string) =>
@@ -103,6 +104,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     try {
       await new AddDomain1792972800000().up(runner)
       await new AddCustomDomainConfig1793764800000().up(runner)
+      await new RequestDrivenCustomDomains1794398400000().up(runner)
     } finally {
       await runner.release()
     }
@@ -133,6 +135,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await dataSource.query(`INSERT INTO "${schemaName}"."organization" ("id") VALUES ($1), ($2)`, [ORG, OTHER_ORG])
     tunnels = new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never)
     subscriptions.read.mockReset().mockResolvedValue({ status: 'unavailable', expiresAt: 0 })
+    subscriptions.refresh.mockReset().mockImplementation(() => subscriptions.read())
     service = new DomainService(dataSource, regionService as never, configService as never, subscriptions as never)
     preview = createPreview(tunnels)
   })
@@ -155,10 +158,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
       status: 409,
       response: { code: 'domain_not_ready' },
     })
-    await dataSource.query(`INSERT INTO custom_domain_config (organization_id, hostname, domain_id, challenge,
-      challenge_expires_at, phase, dns_valid_until, certificate_valid_until)
-      SELECT organization_id, hostname, id, 'verified', now() + interval '1 day', 'ready', now() + interval '5 minutes', now() + interval '5 minutes'
-      FROM domain WHERE hostname = 'app.customer.com'`)
+    await prepareReady('app.customer.com')
     await setLimit(ORG, 0)
     const target = { type: 'box', box: box.id, port: 3000 }
     await expect(service.bind(box, 3000, 'app.customer.com')).resolves.toEqual({
@@ -168,104 +168,121 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     })
     expect(await service.resolve('app.customer.com')).toEqual(target)
     await dataSource.query(`UPDATE custom_domain_config SET dns_valid_until = now() - interval '1 second'`)
-    expect(await service.resolve('app.customer.com')).toBeNull()
-    await expect(service.bind(box, 4000, 'app.customer.com')).rejects.toMatchObject({ status: 409 })
+    await dataSource.query(
+      `UPDATE custom_domain_config SET certificate_valid_until = now() - interval '1 day', certificate_expires_at = now() - interval '1 day'`,
+    )
+    expect(await service.resolve('app.customer.com')).toEqual(target)
+    await expect(service.bind(box, 3000, 'app.customer.com')).resolves.toMatchObject({ target })
     expect((await service.listHeld(ORG)).domains[0].target).toEqual(target)
     expect((await service.listHeld(ORG)).used).toBe(0)
     await service.unbind(ORG, 'app.customer.com')
     expect((await service.listHeld(ORG)).domains[0].target).toBeNull()
   })
 
-  it('stops bind and resolve at the worker grant deadline, then restores the retained target after renewal', async () => {
-    customEnabled = true
-    const box = await makeBox()
-    const paidUntil = Date.now() + 5_000
-    const grants = { refresh: jest.fn().mockResolvedValue({ status: 'active', expiresAt: paidUntil }) }
+  async function prepareReady(hostname: string) {
     const settings = { enabled: true, trafficHost: 'custom.platform.com', reservedSuffixes: [], edgeIps: ['192.0.2.1'] }
-    const workerConfig = {
+    const flowConfig = {
       get: (key: string) => (key === 'customDomains' ? settings : configService.get(key)),
       getOrThrow: (key: string) => (key === 'customDomains' ? settings : configService.getOrThrow(key)),
     }
-    const dns = {
-      verify: jest.fn().mockResolvedValue(undefined),
-      verifyTls: jest.fn().mockResolvedValue(new Date(Date.now() + 3_600_000).toISOString()),
-    }
     const provider = {
-      reconcile: jest.fn().mockResolvedValue({
-        state: {},
-        phase: 'ready',
-        expires: new Date(Date.now() + 3_600_000).toISOString(),
+      reconcile: async (row, mode) => ({
+        state: {
+          ...row.provider_state,
+          authorizationRecord: { name: `_acme.${hostname}`, type: 'CNAME', value: 'auth.test' },
+          certificateSubmitted: mode !== 'prepare',
+        },
+        phase: mode === 'prepare' ? 'pending_certificate_dns' : 'ready',
+        expires: '2030-01-01T00:00:00Z',
         cleaned: false,
       }),
     }
-    const custom = new CustomDomainService(dataSource, workerConfig as never, grants as never)
-    const worker = new CustomDomainWorkerService(
+    const dns = {
+      checkAll: async () => [{ record: 'ownership', status: 'passed' }],
+      verifyTls: async () => '2030-01-01T00:00:00Z',
+    }
+    const flow = new CustomDomainWorkflowService(
       dataSource,
-      workerConfig as never,
-      grants as never,
+      flowConfig as never,
+      subscriptions as never,
       dns as never,
       provider as never,
     )
-    await custom.create(ORG, 'expiry.customer.com')
-    await worker.reconcileDue()
-    const [ready] = await dataSource.query(`SELECT dns_valid_until FROM custom_domain_config`)
-    expect(ready.dns_valid_until.getTime()).toBe(paidUntil)
-    const bound = await service.bind(box, 3000, 'expiry.customer.com')
-    expect(await service.resolve('expiry.customer.com')).toEqual(bound.target)
-    expect(subscriptions.read).not.toHaveBeenCalled()
+    const custom = new CustomDomainService(dataSource, flowConfig as never, subscriptions as never, flow)
+    const row = await custom.create(ORG, hostname)
+    await custom.verify(ORG, row.id)
+    return custom
+  }
 
+  it('refreshes subscription on traffic without Dashboard activity and keeps the target across suspension', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    await prepareReady('expiry.customer.com')
+    const bound = await service.bind(box, 3000, 'expiry.customer.com')
     subscriptions.read.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
+    expect(await service.resolve('expiry.customer.com')).toBeNull()
+    await expect(service.bind(box, 4000, 'expiry.customer.com')).rejects.toMatchObject({ status: 403 })
+    expect((await service.listHeld(ORG)).domains[0].target).toEqual(bound.target)
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    expect(await service.resolve('expiry.customer.com')).toEqual(bound.target)
+  })
+
+  it('checks the authorization deadline after a binding waits for the organization lock', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    await prepareReady('expiry.customer.com')
+    const bound = await service.bind(box, 3000, 'expiry.customer.com')
     const blocker = dataSource.createQueryRunner()
     await blocker.connect()
     await blocker.startTransaction()
     const [{ pid }] = await blocker.query(`SELECT pg_backend_pid() AS pid`)
     await blocker.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [ORG])
-    const pendingBind = service.bind(box, 4000, 'expiry.customer.com').then(
-      (target) => ({ target }),
-      (error: unknown) => ({ error }),
+    const expires = Date.now() + 1000
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: expires })
+    const pending = service.bind(box, 4000, 'expiry.customer.com').then(
+      () => null,
+      (error) => error,
     )
     try {
-      const waitUntil = Date.now() + 1_500
       let waiting = false
-      while (Date.now() < waitUntil) {
+      for (let i = 0; i < 100; i++) {
         const [row] = await dataSource.query(
-          `SELECT EXISTS (
-            SELECT 1 FROM pg_stat_activity
-            WHERE $1::int = ANY(pg_blocking_pids(pid)) AND xact_start < $2::timestamptz
-          ) AS waiting`,
-          [pid, new Date(paidUntil)],
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))) AS waiting`,
+          [pid],
         )
         if (row.waiting) {
           waiting = true
           break
         }
-        await new Promise((resolve) => setTimeout(resolve, 10))
+        await new Promise((resolve) => setTimeout(resolve, 5))
       }
       expect(waiting).toBe(true)
       await blocker.query(`SELECT pg_sleep(GREATEST(0, extract(epoch FROM ($1::timestamptz - clock_timestamp()))))`, [
-        new Date(paidUntil),
+        new Date(expires),
       ])
     } finally {
       await blocker.commitTransaction()
       await blocker.release()
-      await pendingBind
     }
-    expect(await pendingBind).toMatchObject({ error: { status: 403, response: { code: 'subscription_required' } } })
+    expect(await pending).toMatchObject({ status: 409 })
     expect(await service.resolve('expiry.customer.com')).toBeNull()
-    await expect(service.bind(box, 4000, 'expiry.customer.com')).rejects.toMatchObject({
-      status: 403,
-      response: { code: 'subscription_required' },
-    })
     expect((await service.listHeld(ORG)).domains[0].target).toEqual(bound.target)
-    expect(grants.refresh).toHaveBeenCalledTimes(2) // create and reconcile, never bind or resolve
+  })
 
-    grants.refresh.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 86_400_000 })
-    await dataSource.query(`UPDATE custom_domain_config SET next_check_at = now()`)
-    await worker.reconcileDue()
-    expect(dns.verify).toHaveBeenCalledTimes(2)
-    expect(dns.verifyTls).toHaveBeenCalledTimes(2)
-    expect(await service.resolve('expiry.customer.com')).toEqual(bound.target)
-  }, 15_000)
+  it('does not return a stale target when unbound during subscription refresh', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    await prepareReady('expiry.customer.com')
+    await service.bind(box, 3000, 'expiry.customer.com')
+    subscriptions.refresh.mockImplementationOnce(async () => {
+      await service.unbind(ORG, 'expiry.customer.com')
+      return { status: 'active', expiresAt: Date.now() + 60_000 }
+    })
+    expect(await service.resolve('expiry.customer.com')).toBeNull()
+  })
 
   it('keeps legacy custom rows closed when provider configuration is disabled', async () => {
     const box = await makeBox()

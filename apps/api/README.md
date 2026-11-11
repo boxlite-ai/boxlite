@@ -627,30 +627,22 @@ them skipped. Use `NX_SKIP_NX_CACHE=true NX_DAEMON=false NX_ISOLATE_PLUGINS=fals
 to execute the tests rather than replay Nx output, and clear the local
 `BOXLITE_IMAGE_REGISTRY_ALLOWLIST` override when checking the suite's default policy.
 
-`TEST_FILES=custom-domain.integration.spec.ts` selects the custom-domain lifecycle
-checks. They use actual service-created records and PostgreSQL transactions to
-exercise the one-custom-domain allowance (including drafts), concurrent creation,
-replacement after deletion, retained legacy configurations, competing organizations,
-expired worker leases, deletion during cloud work, two concurrent worker instances
-and 1000 ready domains across 1000 organizations. The concurrency case holds
-DNS work at a barrier to check the active and per-tick limits. The scale case drives
-ticks directly and checks that ready-domain maintenance makes no provider calls.
-DNS, TLS and Certificate Manager use controlled test doubles here, so these checks
-do not establish cloud issuance, natural renewal or production throughput. Follow
-the [GCP acceptance procedure](../infra/docs/gcp/deployment.md#customer-domain-https)
-for those boundaries.
+`TEST_FILES='custom-domain|domain.service'` selects explicit admission, scheduled advancement and routing checks.
+Real PostgreSQL tests cover stable drafts, one-shot record preparation, explicit confirmation, unknown submission recovery,
+latest-verified ownership transfer, invalidated executions, target preservation, deletion and subscription-gated routing.
+Controlled DNS/GCP boundaries allow deterministic interruption and concurrency tests; they do not establish real issuance, renewal or propagation.
 
-`TEST_FILES=custom-domain-subscription.integration.spec.ts` exercises the real Redis
-eligibility cache with controlled Commerce responses: one-day maximum lifetime,
-paid-cycle expiry, non-sliding reads, short denial/error retries, API clock skew,
-bounded cache failures, and stale refresh owners. Set `BOXLITE_TEST_REDIS_URL`
-explicitly. Subscription state has no dedicated SQL table. The domain lifecycle
-tests cover expiry while waiting for an organization lock; domain routing tests
-use worker-produced readiness to check expiry and renewal without losing the target.
-Bind checks readiness against the current database clock after waiting for row locks,
-so a transaction started before expiry cannot use its earlier timestamp to rebind.
-The routing regression holds the organization lock across the worker grant's deadline
-and verifies that the waiting bind is refused and the original target survives renewal.
+`custom-domain-subscription.integration.spec.ts` uses real Redis and controlled Commerce responses.
+Set `BOXLITE_TEST_REDIS_URL` explicitly to exercise sixty-second maximum authorization, paid-cycle bounds, non-sliding expiry,
+cache migration, outages and stale refresh owners; no production store is safe for these tests.
+Bind and route refresh authorization independently of Dashboard visits; DNS/TLS observations no longer expire routing after five minutes.
+
+The domain task runs once at API startup and every 60 seconds, advancing up to three due confirmed setups alongside one maintenance round.
+It skips overlapping rounds, disabled custom domains and `skipConnections`; unconfirmed drafts are never automatically DNS-verified.
+Nest lifecycle tests cover startup, interval, failures and shutdown; PostgreSQL tests cover selection, backoff, batch limits and shared request/replica leases.
+`POST /admin/custom-domains/maintain` remains a bounded, admin-only trigger for cleanup and observations.
+No new minimum-instance or continuous-CPU configuration is added; inactive APIs pause scheduled work, and independent alerts remain unconfigured.
+See [deployment acceptance](../infra/docs/gcp/deployment.md#customer-domain-https).
 
 ## Admin Box image
 

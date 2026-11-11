@@ -992,8 +992,8 @@ Revoking the tunnel also preserves the target: the name answers 404 until the po
 is declared again. Held names, including unbound names and bindings to deleted
 Boxes, count against the limit only when their persisted kind is platform, and
 can be rebound only by their organization. Custom rows require a matching ready
-configuration with current DNS and certificate leases for bind/resolve. The worker
-caps DNS readiness at the subscription cache's absolute deadline.
+configuration with completed setup; bind/resolve independently enforce the current subscription grant.
+The latest verified application may transfer custom ownership, clearing the old target and invalidating older applications.
 Legacy custom rows without a configuration fail closed. New custom ownership is
 inserted only after configuration-specific DNS proof; historical kinds are not reclassified.
 
@@ -1015,40 +1015,33 @@ App deletion policy before enabling writes.
 
 ### `custom_domain_config`
 
-The Dashboard creates per-organization drafts without reserving a global hostname.
-After DNS proof, the worker inserts `domain.kind='custom'` and saves its ID;
-`domain.hostname` uniqueness decides competing claims across organizations.
+Durable custom-domain setup, ownership evidence, provider progress and cleanup tombstones; organization subscription grants live separately in Redis.
 
-| Table / fields | Purpose |
+| Fields | Contract |
 | --- | --- |
-| config: `id`, `organization_id`, `hostname`, `domain_id` | Draft identity and eventual globally owned hostname; live `(organization_id, hostname)` is unique |
-| config: `challenge`, `challenge_expires_at`, `generation` | Random TXT proof; expired unverified drafts rotate it and advance generation |
-| config: `phase`, `dns_valid_until`, `certificate_valid_until`, `error_code` | Setup status and at-most-five-minute routing grants |
-| config: `provider_state`, `next_check_at`, `attempts`, `lease_owner`, `lease_until`, `deleted_at` | Durable cloud operations, backoff, fenced worker lease and cleanup tombstone |
+| `organization_id`, `hostname`, `domain_id` | Draft organization and, after verification, the unique held domain |
+| `challenge`, `generation`, `provider_state` | Stable TXT challenge and exact cloud resource/operation identities |
+| `phase`, `confirmed_at`, `submission_status` | Setup completion and distinct not-submitted/unknown/accepted submission outcomes |
+| `dns_checks`, `dns_checked_at`, `tls_checked_at` | Per-record results and actual observation times |
+| `certificate_expires_at`, `certificate_observed_at` | Observed certificate lifetime; never a permanent route deadline |
+| `lease_owner`, `lease_until`, `next_check_at` | Hostname-wide execution exclusion, fenced publication and retry timing |
+| `superseded_by`, `deleted_at`, `cleaned_at`, `last_action_at` | Invalidation, recoverable cleanup and abandoned draft age |
 
-Config phase is `pending_verification`, `pending_certificate_dns`, `provisioning`,
-`ready` or `deleting`. A cloud response alone cannot publish ready: the worker
-also probes the certificate through the fixed edge IPs with the customer hostname as SNI.
-Transient failures cannot extend old grants; confirmed DNS mismatches invalidate them.
-When the worker observes a denied subscription, it invalidates that configuration's
-DNS readiness. Its publication also caps readiness at the subscription deadline.
+Database phases remain `pending_verification`, `pending_certificate_dns`, `provisioning`, `ready` and `deleting`.
+The response presents a superseded tombstone as `superseded`; `provider_state.progress` describes the finer issuance/map/TLS stage.
+A winner transaction clears other configs' unique `domain_id`, supersedes them and transfers the held domain while clearing its binding.
+Every execution claim considers all configurations for the hostname, including tombstones; a stale lease cannot publish Ready.
 
-Subscription status is not stored in SQL. The existing Commerce
-`GET /organization/{organizationId}/plan` supplies effective eligibility and
-`cycleTo`. Redis caches an active grant for at most one day, shortened to the paid
-cycle's end; denied or unavailable results are cached for 30 seconds. Cache reads
-never extend absolute expiry. A fenced Redis refresh lease prevents an older
-response from overwriting a newer one. Missing Redis or Commerce data cannot
-extend a grant. Early suspension can take up to the one-day cache lifetime to
-appear; known paid-cycle expiry bounds the SQL readiness even before the worker runs.
+Legacy `dns_valid_until`, `certificate_valid_until` and `challenge_expires_at` remain for additive migration compatibility but no longer authorize new routing.
+Capped legacy certificate deadlines cannot be converted to actual certificate expiration; that observation starts unknown.
+Previously completed rows retain confirmation unless their prior error requires review; unfinished legacy rows require explicit verification before new issuance.
+Drain old API revisions before migration/new writes, because old workers do not understand these contracts and can reintroduce short deadlines.
+The migration intentionally refuses automatic downgrade after ownership transfers.
 
-Unbind retains configuration and cloud resources. Dashboard or organization deletion
-tombstones configurations and deletes ownership in one transaction. Tombstones have
-no organization FK so cleanup survives organization deletion; cleanup deletes map
-entry, certificate and authorization in that order. Deterministic generation IDs
-and ownership labels fence cloud operations; retained tombstones are swept daily
-to catch creates whose responses were lost. Cloud resources remain allocated until
-cleanup succeeds. The migration creates the configuration table without rewriting existing domains.
+Unbind retains resources. Delete and supersession revoke routing before cloud cleanup, retaining resource labels and deterministic IDs without organization foreign keys.
+The API startup/minute task resumes at most three due, confirmed, live, incomplete configurations using the persisted next-check time and hostname leases.
+Maintenance runs alongside setup or through its admin endpoint: it expires unclaimed drafts after thirty idle days, observes ready TLS/certificate status hourly, and revisits cleaned tombstones after a day.
+Execution pauses if the API stops or lacks CPU; independent alerting and guaranteed monitoring during that pause are not installed by this change.
 
 ### `box_last_activity`
 

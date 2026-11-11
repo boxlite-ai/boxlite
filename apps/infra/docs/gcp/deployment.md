@@ -121,8 +121,9 @@ API in that project; the GCP bootstrap already enables it. Failed lookups are re
 including during IAM propagation, rather than cached as a permanent failure.
 
 With the feature enabled, Cloud Run keeps at least one instance
-and allocates CPU outside requests so the reconciliation worker continues at idle.
-This changes idle cost. Every proxy receives the required `PROXY_DOMAIN` namespace;
+and allocates CPU outside requests. Request-driven domain setup no longer requires this,
+but other API periodic work (including Box autostop and usage handling) still needs assessment before reducing these settings.
+This change preserves them and does not establish that the whole API can safely scale to zero. Every proxy receives the required `PROXY_DOMAIN` namespace;
 other valid customer hosts always use exact domain lookup.
 API onboarding still requires all three operator-supplied GCP settings above.
 IP-host `GET /health` remains available to GKE and load-balancer probes, while
@@ -149,9 +150,30 @@ authorization attempt failed. See the [customer waiting and retry guide](../../.
 
 Resource/rate failures persist with backoff; manual retry cannot bypass provider
 capacity errors. Unbind and subscription suspension retain certificates and their
-cloud allocation; deletion frees it only after asynchronous cleanup. Keep the worker
-enabled until pending deletions drain. Roll back only to a version that preserves
-exact-host routing, custom-domain eligibility checks and platform-only quota;
-do not remove the state tables before cloud cleanup.
+cloud allocation; deletion frees it only after recoverable cleanup completes.
+
+Request-driven cutover requires draining every old API revision and its in-flight domain leases before applying the new migration and enabling new writers.
+The migration disables old due scanning, but an old verify request can reschedule it; mixed old/new writers are unsupported.
+Retain the data tables and resource identities; rollback must use a compatible forward fix, not the legacy worker.
+Legacy unconfirmed setups preserve their records and resources but require confirmation; old capped certificate deadlines are not actual expiration dates.
+
+The API task starts once during application bootstrap, then checks every 60 seconds while the process receives CPU.
+Each round advances at most three due confirmed setups and performs one maintenance round; existing leases prevent conflicting hostname work.
+Startup awaits that round, and shutdown stops new rounds and awaits active work; cold starts can therefore include setup-check latency.
+No Cloud Scheduler, new minimum instances or continuous CPU settings are added; existing capacity settings are retained.
+A stopped or CPU-throttled API cannot guarantee minute-by-minute execution; restart or resumed execution continues from saved progress.
+
+Maintenance observes ready certificate/TLS state without revoking setup on a single timeout, expires unconfirmed/unclaimed drafts after thirty days,
+and revisits cleaned tombstones daily to catch late cloud creates. It does not poll drafts for DNS readiness.
+Authenticated admin `POST /admin/custom-domains/maintain` remains available for manual recovery, processing at most one due resource round.
+
+Operational acceptance still requires:
+
+- Verify deployed startup recovery, shared leases and minute checks under the actual Cloud Run CPU allocation.
+- Monitor due-work age and cleanup backlog; the fixed per-instance batch is not a completion-time guarantee.
+- Configure Certificate Manager expiration log alerts and an actual notification channel, independently of API/UI activity.
+
+No cloud task execution, log alert or notification channel is deployed or validated here.
+Guaranteed cleanup and monitoring during API inactivity require an independent trigger; that infrastructure remains outside this change.
 
 Sources: [bootstrap](../../bootstrap/gcp.ts), [Pulumi entrypoint](../../mdeploy/pulumi/program.ts).
