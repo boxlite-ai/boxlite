@@ -31,6 +31,8 @@ const worker = await runtime.create({ checkpoint: checkpoint.id }, "worker");
 A box created from a checkpoint inherits its saved execution settings. Setting any
 other option, including `image` or `rootfsPath`, rejects with an invalid-argument
 error before a request is sent.
+This includes explicit defaults such as `detach: false` or
+`advanced: { privileged: false }`, and empty lists such as `env: []`.
 Cloud capture may initially report `creating`; query until `ready` before use.
 `remove(key, true)` ignores absence only. Storage belongs to the server.
 Local runtime checkpoint operations, including `create` with a checkpoint, reject

@@ -40,6 +40,7 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
+import { recordBoxRequested } from '../box/utils/box-business-event.util'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
@@ -132,7 +133,7 @@ export class BoxliteBoxController {
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
     if (dto.checkpoint_id !== undefined) {
-      return this.createBoxFromCheckpoint(authContext, dto, request)
+      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
     }
 
     // Attaching a managed volume grants the box read/write access to its data,
@@ -152,12 +153,11 @@ export class BoxliteBoxController {
     return boxToBoxResponse(box)
   }
 
-  // A checkpoint already holds the image, resources and command the box was
-  // captured with. Accepting an override here would return a 201 for a box
-  // that silently kept the saved value, so everything except `name` is refused.
+  /** Admit an inherited configuration, record its request, then wait without losing its identity. */
   private async createBoxFromCheckpoint(
     authContext: OrganizationAuthContext,
     dto: CreateBoxDto,
+    ctx: Context,
     request?: Request,
   ): Promise<BoxResponseDto> {
     const overrides = Object.entries(dto)
@@ -182,6 +182,7 @@ export class BoxliteBoxController {
       dto.name,
       maxCreatedBoxes,
     )
+    recordBoxRequested('box.create', box, ctx)
     if (request) request[AUDIT_TARGET_ID] = box.id
     try {
       return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))

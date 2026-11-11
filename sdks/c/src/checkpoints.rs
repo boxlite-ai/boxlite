@@ -694,6 +694,8 @@ mod tests {
                 let options = Box::into_raw(Box::new(crate::options::OptionsHandle {
                     options: boxlite::BoxOptions::default(),
                     name: None,
+                    checkpoint_override: false,
+                    checkpoint_selected: false,
                 }));
                 crate::options::boxlite_options_set_checkpoint(options, key.as_ptr());
                 crate::options::boxlite_options_set_name(options, name.as_ptr());

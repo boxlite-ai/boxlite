@@ -18,6 +18,10 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ### Managed checkpoints
 
+Only `WithName` may accompany `WithCheckpoint`, including when another option
+has its default value: `WithDetach(false)` and `WithMemory(0)` reject before
+creating native options. An explicitly empty checkpoint selector also rejects.
+
 A checkpoint is a source for a new box, like an image: pass it to the ordinary
 create call. The checkpoint handle only manages checkpoints. Archive import is a
 separate operation for local `.boxlite` files and is unchanged. The CLI form is

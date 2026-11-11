@@ -21,6 +21,7 @@ import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
+import { recordBoxJobOutcome } from '../utils/box-business-event.util'
 
 export function isCheckpointJobType(type: JobType): boolean {
   return type === JobType.EXPORT_CHECKPOINT || type === JobType.UPLOAD_CHECKPOINT || type === JobType.IMPORT_CHECKPOINT
@@ -128,6 +129,7 @@ export class CheckpointJobReceiver {
     if (source) this.cache.invalidate(source)
   }
 
+  /** Commit only the owned import receipt; report its logical outcome after commit. */
   private async handleImportCompletion(jobId: string): Promise<void> {
     const changed = await this.dataSource.transaction(async (manager) => {
       const job = await manager.findOneBy(Job, { id: jobId, type: JobType.IMPORT_CHECKPOINT })
@@ -201,9 +203,10 @@ export class CheckpointJobReceiver {
       }
       await manager.save(Box, box)
       await manager.save(CheckpointOperation, operation)
-      return { box, previousState }
+      return { box, previousState, outcome: accepted ? JobStatus.COMPLETED : JobStatus.FAILED }
     })
     if (changed) {
+      recordBoxJobOutcome('box.create', changed.outcome, changed.box)
       this.cache.invalidate(changed.box)
       if (changed.previousState !== changed.box.state)
         this.events?.emit(

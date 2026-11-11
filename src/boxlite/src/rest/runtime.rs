@@ -884,6 +884,30 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn checkpoint_create_failure_preserves_admitted_identity() {
+        for (status, code) in [(408, "timeout"), (400, "invalid_argument")] {
+            let body = if status == 408 {
+                r#"{"message":"Still importing","code":"timeout","boxId":"admitted-box"}"#
+            } else {
+                r#"{"message":"Import failed","code":"invalid_argument","boxId":"admitted-box"}"#
+            };
+            let (port, server) = exchange_server(vec![(status, body)]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let error = RuntimeBackend::create(&runtime, checkpoint_options("base"), None)
+                .await
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("admitted-box"), "{error}");
+            if code == "invalid_argument" {
+                assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+            }
+            assert_eq!(server.await.unwrap().len(), 1);
+        }
+    }
+
     fn json_body(body: &str) -> serde_json::Value {
         serde_json::from_str(body).unwrap()
     }

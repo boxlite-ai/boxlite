@@ -7,6 +7,12 @@ and `SimpleBox.agents`, including synchronous wrappers, grouped options and erro
 
 ## Managed checkpoints
 
+Checkpoint settings must be omitted, including explicit defaults such as
+`detach=False`, `tty=False`, or `advanced=AdvancedBoxOptions(privileged=False)`.
+Explicit empty `env`, `volumes`, `ports`, or `secrets` lists also reject.
+Omitted collection arguments default to `None` and normalize to empty lists;
+ordinary image creation continues accepting empty lists.
+
 A checkpoint is a source for a new box, like an image: pass it to the ordinary
 create call. The checkpoint handle only manages checkpoints. Archive import is a
 separate operation for local `.boxlite` files and is unchanged. The CLI form is
