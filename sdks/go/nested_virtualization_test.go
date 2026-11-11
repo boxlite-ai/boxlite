@@ -2,6 +2,8 @@ package boxlite
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -17,10 +19,7 @@ func TestNestedVirtualizationCreateAuthorization(t *testing.T) {
 			if err := advanced.SetNestedVirtualization(enabled); err != nil {
 				t.Fatal(err)
 			}
-			runtime, err := NewRuntime(WithHomeDir(t.TempDir()))
-			if err != nil {
-				t.Fatal(err)
-			}
+			runtime := newNestedVirtualizationTestRuntime(t, WithHomeDir(t.TempDir()))
 			defer runtime.Close()
 			box, err := runtime.Create(context.Background(), "alpine:latest", WithName("authorization"), WithDetach(true), WithAutoRemove(false), WithAdvancedOptions(advanced))
 			if enabled {
@@ -54,10 +53,7 @@ func TestNestedVirtualizationCreatePersistsAcrossRuntimeReopen(t *testing.T) {
 	}
 	var id string
 	for attempt := 0; attempt < 3; attempt++ {
-		runtime, err := NewRuntime(WithHomeDir(home), WithExperimentalFeatures("nested-virtualization"))
-		if err != nil {
-			t.Fatal(err)
-		}
+		runtime := newNestedVirtualizationTestRuntime(t, WithHomeDir(home), WithExperimentalFeatures("nested-virtualization"))
 		options := []BoxOption{WithName("saved-nesting"), WithAutoRemove(false), WithDetach(true)}
 		// An ordinary replay must not overwrite the original nested configuration.
 		if attempt != 1 {
@@ -85,4 +81,20 @@ func TestNestedVirtualizationCreatePersistsAcrossRuntimeReopen(t *testing.T) {
 	if err := advanced.SetNestedVirtualization(false); err == nil {
 		t.Fatal("setter accepted closed handle")
 	}
+}
+
+// Runtime construction needs host virtualization even for metadata-only tests.
+// The dedicated x64 qualification job must execute these assertions, so missing
+// host support is fatal there rather than being silently treated as coverage.
+func newNestedVirtualizationTestRuntime(t *testing.T, options ...RuntimeOption) *Runtime {
+	t.Helper()
+	instance, err := NewRuntime(options...)
+	if err != nil {
+		var runtimeError *Error
+		if errors.As(err, &runtimeError) && runtimeError.Code == ErrUnsupported && os.Getenv("BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS") != "1" {
+			t.Skipf("host virtualization unavailable: %v", err)
+		}
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	return instance
 }
