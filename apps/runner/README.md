@@ -557,8 +557,10 @@ refuses to start the runner.
   destroyed box's data stays reachable by mounting the volume into a new box.
 - Destroy unbinds only: the data directory and its data survive, exactly as a
   bucket survives a destroy — reachable again through the volume id.
-- Volume removal tombstones the Volume row once no live box mounts it; the
-  NFS data directory itself is left in place for ops cleanup.
+- Volume removal follows the same async path as bucket volumes — in-use
+  refusal, then PENDING_DELETE until the manager lands the row DELETED (the
+  name is released by the same `name-deleted` rename). The NFS data
+  directory itself is left in place for ops cleanup.
 
 ### Troubleshooting: box started but its filestore mountpoint is empty
 

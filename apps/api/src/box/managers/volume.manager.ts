@@ -61,10 +61,9 @@ export class VolumeManager
   }
 
   onApplicationBootstrap() {
-    if (!this.bucketStore) {
-      return
-    }
-
+    // The cron runs even without a bucket store: filestore volumes ride the
+    // same state machine and have no object storage to connect to, so an API
+    // serving filestore-only orgs must still process their pending states.
     this.schedulerRegistry.getCronJob('process-pending-volumes').start()
   }
 
@@ -91,10 +90,6 @@ export class VolumeManager
   @LogExecution('process-pending-volumes')
   @WithInstrumentation()
   async processPendingVolumes() {
-    if (!this.bucketStore) {
-      return
-    }
-
     try {
       // Lock the entire process
       const lockKey = 'process-pending-volumes'
@@ -211,14 +206,22 @@ export class VolumeManager
       // Refresh lock before the object-store operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // A bucket that is already gone is absorbed by the store as success.
-      try {
-        await this.bucketStore.destroy(volume.getBucketName())
-      } catch (error) {
-        if (error instanceof VolumeBucketNotEmptyError) {
-          throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
+      // TODO: real deletion dispatches a runner-side delete — the NFS data
+      // directory is only reachable on runner hosts. Until that lands, a
+      // filestore volume has no storage operation here: the data directory is
+      // left in place for ops cleanup, and only the row lands DELETED below.
+      // The landing is shared with the bucket path, including the
+      // `name-deleted` rename that frees the name for reuse.
+      if (!volume.instance) {
+        // A bucket that is already gone is absorbed by the store as success.
+        try {
+          await this.bucketStore.destroy(volume.getBucketName())
+        } catch (error) {
+          if (error instanceof VolumeBucketNotEmptyError) {
+            throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
+          }
+          throw error
         }
-        throw error
       }
 
       // Refresh lock before final state update

@@ -189,19 +189,6 @@ export class VolumeService {
       )
     }
 
-    // A filestore volume has no API-managed storage to tear down: the NFS data
-    // directory is left in place for ops cleanup, so there is nothing for the
-    // async state machine to do. Tombstone the row directly — and without the
-    // state machine, because the volume manager is dormant on APIs without
-    // object storage configured, which is exactly where filestore-only orgs
-    // live. Object-storage volumes keep the PENDING_DELETE path below.
-    if (volume.instance) {
-      volume.state = VolumeState.DELETED
-      await this.volumeRepository.save(volume)
-      this.logger.debug(`Marked filestore volume ${volumeId} deleted`)
-      return
-    }
-
     // Update state to mark as deleting
     volume.state = VolumeState.PENDING_DELETE
     await this.volumeRepository.save(volume)

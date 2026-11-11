@@ -241,13 +241,13 @@ describe('VolumeService filestore volumes', () => {
     )
   })
 
-  it('tombstones a filestore volume directly instead of entering the async delete path', async () => {
+  it('sends a filestore volume through the same async delete path as buckets', async () => {
     const { service, volumeRepository } = createService({ id: 'volume-1', name: 'nfs-data', state: VolumeState.READY, instance: 'ml-scratch' })
 
     await service.delete('volume-1')
 
     expect(volumeRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'volume-1', state: VolumeState.DELETED }),
+      expect.objectContaining({ id: 'volume-1', state: VolumeState.PENDING_DELETE }),
     )
   })
 
