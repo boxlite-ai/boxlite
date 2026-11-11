@@ -445,6 +445,7 @@ jobs:
           set -o pipefail
           export PYTHONPATH="${PWD}/scripts/ci${PYTHONPATH:+:${PYTHONPATH}}"
           export PYTEST_ADDOPTS="-p pr2524_network_probe"
+          export RUST_LOG=info
           {
             make runtime:debug
             mkdir -p /tmp/pr2524-rpc-observed
