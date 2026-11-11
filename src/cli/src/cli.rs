@@ -364,6 +364,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "rmi",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "start",
         globals: BOX_GLOBALS,
         children: &[],
@@ -782,6 +787,9 @@ pub enum Commands {
 
     /// List images
     Images(crate::commands::images::ImagesArgs),
+
+    /// Remove untagged local images and reclaim unused cache data
+    Rmi(crate::commands::rmi::RmiArgs),
 
     /// Display detailed information on a box
     Inspect(crate::commands::inspect::InspectArgs),
