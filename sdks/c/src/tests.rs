@@ -57,6 +57,10 @@ unsafe fn new_test_runtime_handle(prefix: &str) -> (*mut crate::runtime::Runtime
         panic!("runtime_new failed with {code:?}: {err_msg}");
     }
 
+    assert!(
+        !runtime.is_null(),
+        "boxlite_runtime_new returned null runtime pointer"
+    );
     (runtime, home_dir)
 }
 
