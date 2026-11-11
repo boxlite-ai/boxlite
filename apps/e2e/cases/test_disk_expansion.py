@@ -43,9 +43,12 @@ Keys and gates
 - Credentials: the admin runner endpoint requires an ADMIN-role API key
   (@RequiredApiRole([SystemRole.ADMIN]) + SystemActionGuard); a non-admin key
   fails loudly on the first GET with a 403.
-- The target must be strictly larger than the pre-resize size: the assertion
-  is `disk >= target`, so a target at or below the current size trivially
-  passes without proving anything.
+- The target is the block-device size the operator resized to. The reported
+  `disk` is the filesystem total, ~2% below the device (ext4 metadata), so
+  the assertion is `disk >= 0.975 × target` — the API's own confirm
+  tolerance. That threshold stays above the pre-resize filesystem total once
+  the target exceeds the pre-resize device size by more than ~0.5%; pick a
+  meaningfully larger target, or the test can pass before anything grew.
 - Timeout: diskresize ticks every 10s (DefaultInterval), resize2fs of tens of
   GiB takes seconds-to-minutes, healthcheck cadence adds another minutes-scale
   lag — the poll budget is 10 minutes, generous but finite. Note the CI legs
@@ -83,6 +86,14 @@ EXPANSION_PROPAGATION_BUDGET_SECONDS = 600
 # cannot miss the settled state.
 POLL_INTERVAL_SECONDS = 15
 
+# Mirror of the API's CONFIRM_TOLERANCE_RATIO (apps/api/src/box/services/
+# runner-disk-expansion.service.ts): ext4 metadata keeps the filesystem total
+# ~2% below the block device, so the healthcheck-reported `disk` never
+# reaches the device size the operator set as the target. The API confirms a
+# resize at 0.975 × the requested size; this test asserts on the same line,
+# and the two constants must move together.
+DISK_TOLERANCE = 0.975
+
 
 def _expansion_target() -> tuple[str, int]:
     """Return the (runner_id, target_gib) gate pair, or skip with the hint."""
@@ -104,20 +115,26 @@ def test_data_disk_growth_reaches_the_healthcheck():
     runner_id, target_gib = _expansion_target()
 
     deadline = time.monotonic() + EXPANSION_PROPAGATION_BUDGET_SECONDS
-    last_seen: int | None = None
+    last_seen: float | None = None
     while time.monotonic() < deadline:
         status, body = request_json("GET", f"/admin/runners/{runner_id}")
         assert status == 200, f"GET /admin/runners/{runner_id} returned {status}: {body}"
         disk = (body or {}).get("disk")
-        assert isinstance(disk, int), f"admin runner payload lacks an integer disk field: {body}"
-        last_seen = disk
-        if disk >= target_gib:
+        assert isinstance(disk, (int, float)) and not isinstance(disk, bool), (
+            f"admin runner payload lacks a numeric disk field: {body}"
+        )
+        last_seen = float(disk)
+        # The filesystem total trails the device by ~2% (ext4 metadata); the
+        # tolerance-adjusted line mirrors the API's own confirm gate.
+        if last_seen >= target_gib * DISK_TOLERANCE:
             return
         time.sleep(POLL_INTERVAL_SECONDS)
 
     pytest.fail(
-        f"diskGiB never reached {target_gib} within "
-        f"{EXPANSION_PROPAGATION_BUDGET_SECONDS}s (last seen: {last_seen}). "
+        f"diskGiB never reached {target_gib * DISK_TOLERANCE} "
+        f"({DISK_TOLERANCE} × target {target_gib}) within "
+        f"{EXPANSION_PROPAGATION_BUDGET_SECONDS}s "
+        f"(last seen: {last_seen}). "
         "Check: did the host NVMe device follow the resize? did the diskresize "
         "ticker log 'Data disk filesystem resized'? did healthcheck report it?"
     )
