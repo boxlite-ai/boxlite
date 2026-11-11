@@ -581,7 +581,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
         >
           <Link
             to={RoutePath.BOXES}
-            className="flex h-full shrink-0 items-center md:hidden px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+            className="flex h-full shrink-0 items-center md:hidden px-2 xs:px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
             aria-label="BoxLite home"
           >
             <LogoText className="h-9 w-auto" />
@@ -608,7 +608,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             <DropdownMenuTrigger
               aria-label="Open profile menu"
               title="Profile"
-              className="mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              className="mr-0 xs:mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
             >
               <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-meta font-bold text-brand-foreground">
                 {user?.profile.picture ? (
@@ -620,7 +620,13 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               <span className="hidden min-w-0 truncate md:inline">{userName}</span>
               <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="bottom" align="end" sideOffset={8} className="min-w-[18rem]">
+            <DropdownMenuContent
+              side="bottom"
+              align="end"
+              sideOffset={8}
+              collisionPadding={8}
+              className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[min(18rem,calc(100vw_-_1rem))] max-w-[calc(100vw_-_1rem)] overflow-y-auto"
+            >
               <DropdownMenuLabel className="flex flex-col gap-0.5">
                 <span className="truncate text-body font-semibold text-foreground">{userName}</span>
                 {user?.profile.email && user.profile.email !== userName && (
@@ -687,7 +693,11 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             >
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[14rem]">
+            <DropdownMenuContent
+              align="end"
+              collisionPadding={8}
+              className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[14rem] overflow-y-auto"
+            >
               {NAV_SECTIONS.map((section) => (
                 <div key={section.label}>
                   <DropdownMenuLabel>{section.label}</DropdownMenuLabel>

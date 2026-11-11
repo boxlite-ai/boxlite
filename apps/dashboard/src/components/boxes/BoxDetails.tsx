@@ -49,9 +49,9 @@ import { usePageTitle } from '@/hooks/usePageTitle'
 import { copyToClipboard } from '@/lib/copy-text'
 import { toast } from 'sonner'
 import { BoxNetworkSection } from './BoxNetworkSection'
-import { BoxTerminalTab } from './BoxTerminalTab'
+import { BoxPageNavigation } from './BoxPageNavigation'
 import { BoxSshTab } from './BoxSshTab'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { BoxSectionHeader } from './BoxSectionHeader'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
 
@@ -76,37 +76,16 @@ function statusOf(box: Box): { label: string; color: string } {
   }
 }
 
-function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
+function SpecRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
-      <span className="text-label leading-none text-brand">▸</span>
-      <span className="text-meta uppercase tracking-[2px]">{title}</span>
-      <span className="flex-1" />
-      {right}
+    <div className="grid grid-cols-[80px_minmax(0,1fr)] items-start gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
+      <dt className="text-meta text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 [overflow-wrap:anywhere]">{children}</dd>
     </div>
   )
 }
 
-function SpecRow({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
-  return (
-    <div className="mb-[6px] flex items-baseline gap-2">
-      <span className="whitespace-nowrap text-muted-foreground">{label}</span>
-      <span className="flex-1" />
-      {title ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="min-w-0 max-w-[66%] cursor-default truncate text-right">{children}</span>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-[min(90vw,480px)] break-all font-mono">{title}</TooltipContent>
-        </Tooltip>
-      ) : (
-        <span className="min-w-0 max-w-[66%] truncate text-right">{children}</span>
-      )}
-    </div>
-  )
-}
-
-/** Composes box metadata, connection controls and tab content within the shared application height. */
+/** Box overview and management; the terminal has its own route and shell lifetime. */
 export default function BoxDetails() {
   const { boxId } = useParams<{ boxId: string }>()
   const navigate = useNavigate()
@@ -122,7 +101,7 @@ export default function BoxDetails() {
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [copied, setCopied] = useState(false)
   const [copiedName, setCopiedName] = useState(false)
-  const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
+  const [sshRefreshSignal, setSshRefreshSignal] = useState(0)
   const [sshStatusContainer, setSshStatusContainer] = useState<HTMLDivElement | null>(null)
   const refreshRef = useRef<HTMLSpanElement>(null)
 
@@ -246,7 +225,7 @@ export default function BoxDetails() {
 
   const handleRefresh = () => {
     refetch()
-    setTerminalRefreshSignal((signal) => signal + 1)
+    setSshRefreshSignal((signal) => signal + 1)
     const el = refreshRef.current
     if (el) {
       el.style.animation = 'none'
@@ -277,7 +256,7 @@ export default function BoxDetails() {
   }
 
   return (
-    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-body">
+    <div className="page-container flex min-h-[var(--app-content-height,calc(100svh_-_60px))] min-w-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-body">
       {/* breadcrumb */}
       <div className="flex flex-none items-center gap-[9px] text-meta text-muted-foreground">
         <button
@@ -325,7 +304,7 @@ export default function BoxDetails() {
       ) : (
         <>
           {/* identity strip */}
-          <div className="flex flex-none flex-col gap-4 border-b border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
+          <div className="flex flex-none flex-col gap-4 lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
               <span className="flex min-w-0 items-center gap-[12px]">
                 <Container className="size-6 shrink-0 text-muted-foreground" />
@@ -360,7 +339,7 @@ export default function BoxDetails() {
 
             <div className="flex flex-none flex-wrap items-center gap-2 sm:gap-[10px]">
               {/* SSH comes first in every state, then the state action, then the menu and refresh. */}
-              <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} statusContainer={sshStatusContainer} />
+              <BoxSshTab box={box} refreshSignal={sshRefreshSignal} statusContainer={sshStatusContainer} />
               {writePermitted && isRecoverable(box) && (
                 <button
                   type="button"
@@ -436,106 +415,143 @@ export default function BoxDetails() {
             </div>
           </div>
 
-          {/* body */}
-          <div className="flex min-h-0 flex-1 flex-col gap-[14px] overflow-y-auto pb-2 lg:flex-row lg:overflow-hidden lg:pb-0">
-            {/* spec readout */}
-            <div className="w-full min-w-0 lg:w-[340px] lg:flex-none lg:overflow-y-auto lg:pr-6">
-              <SectionHeader title="general" />
-              <SpecRow label="box id">
-                <span className="flex items-center gap-[7px]">
-                  {getBoxPublicIdLabel(box)}
-                  <button
-                    type="button"
-                    onClick={copyId}
-                    title="Copy Box ID"
-                    aria-label="Copy Box ID"
-                    className="inline-flex size-6 items-center justify-center text-muted-foreground hover:text-foreground"
-                  >
-                    {copied ? (
-                      <Check className="size-[14px]" style={{ color: STATUS.running }} />
-                    ) : (
-                      <Copy className="size-[14px]" />
-                    )}
-                  </button>
-                </span>
-              </SpecRow>
-              <SpecRow label="image" title={box.image ?? undefined}>
-                {box.image ? (
-                  catalogImage ? (
-                    <Link
-                      to={generatePath(RoutePath.IMAGE_DETAILS, { idOrRef: catalogImage.id ?? catalogImage.name })}
-                      className="underline-offset-4 hover:underline"
-                    >
-                      {box.image}
-                    </Link>
-                  ) : (
-                    box.image
-                  )
-                ) : (
-                  '—'
-                )}
-              </SpecRow>
-              <SpecRow label="region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
+          <BoxPageNavigation boxId={boxId ?? box.id} current="overview" />
 
-              <SpecRow label="cpu">{box.cpu} vCPU</SpecRow>
-              <SpecRow label="memory">{box.memory} GiB</SpecRow>
-              <SpecRow label="disk">{box.disk} GiB</SpecRow>
+          <div className="min-w-0 pb-2">
+            <div className="w-full max-w-6xl space-y-5">
+              <section aria-label="Box resources" className="border border-border bg-card/40">
+                <dl className="grid grid-cols-3 divide-x divide-border">
+                  {[
+                    { label: 'CPU', value: box.cpu, unit: 'vCPU' },
+                    { label: 'Memory', value: box.memory, unit: 'GiB' },
+                    { label: 'Disk', value: box.disk, unit: 'GiB' },
+                  ].map(({ label, value, unit }) => (
+                    <div key={label} className="min-w-0 px-3 py-4 sm:px-5">
+                      <dt className="text-meta text-muted-foreground">{label}</dt>
+                      <dd className="mt-1.5 flex flex-wrap items-baseline gap-x-2">
+                        <span className="font-display text-section font-semibold">{value ?? '—'}</span>
+                        <span className="text-meta text-muted-foreground">{unit}</span>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+              <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+                <section aria-label="Box configuration" className="min-w-0 border border-border p-4 sm:p-5">
+                  <BoxSectionHeader title="Configuration" />
+                  <dl className="space-y-4">
+                    <SpecRow label="Box ID">
+                      <span className="flex min-w-0 items-start gap-2">
+                        <span className="min-w-0 break-all">{getBoxPublicIdLabel(box)}</span>
+                        <button
+                          type="button"
+                          onClick={copyId}
+                          title="Copy Box ID"
+                          aria-label="Copy Box ID"
+                          className="inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+                        >
+                          {copied ? (
+                            <Check className="size-[14px]" style={{ color: STATUS.running }} />
+                          ) : (
+                            <Copy className="size-[14px]" />
+                          )}
+                        </button>
+                      </span>
+                    </SpecRow>
+                    <SpecRow label="Image">
+                      {box.image ? (
+                        catalogImage ? (
+                          <Link
+                            to={generatePath(RoutePath.IMAGE_DETAILS, {
+                              idOrRef: catalogImage.id ?? catalogImage.name,
+                            })}
+                            className="underline-offset-4 hover:underline"
+                          >
+                            {box.image}
+                          </Link>
+                        ) : (
+                          box.image
+                        )
+                      ) : (
+                        '—'
+                      )}
+                    </SpecRow>
+                    <SpecRow label="Region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
+                  </dl>
 
-              {/* Read-only by construction: mounts are fixed when the box is
+                  {/* Read-only by construction: mounts are fixed when the box is
                   created and there is no attach/detach endpoint, so this
                   answers "where is my data" and nothing more. Stored volumeId
                   may be a name or an id — the API accepts either — so resolve
                   it back to the readable name when we know it. */}
-              {mountedVolumes.length > 0 && (
-                <>
-                  <SectionHeader title="volumes" />
-                  {mountedVolumes.map((mount) => (
-                    <SpecRow key={`${mount.volumeId}:${mount.mountPath}`} label={mount.displayName}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(RoutePath.VOLUMES)}
-                        className="transition-colors hover:text-brand"
-                        title="Go to volumes"
-                      >
-                        {mount.mountPath}
-                        {mount.subpath ? ` (${mount.subpath})` : ''}
-                      </button>
-                    </SpecRow>
-                  ))}
-                </>
-              )}
-
-              <BoxNetworkSection box={box} canManage={writePermitted} />
-              <div ref={setSshStatusContainer} />
-
-              {/* `activity` names the subject, not the value type — and it is
-                  the platform's own term for it (POST /:boxId/last-activity),
-                  which is also what auto-stop is measured against. */}
-              <SectionHeader title="activity" />
-              <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
-              <SpecRow label="last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
-
-              {box.errorReason && (
-                <>
-                  <SectionHeader title="error" />
-                  <p className="text-meta leading-relaxed text-destructive-foreground">{box.errorReason}</p>
-                  {/* The API's wording for a private pull with no credential.
-                      The fix is on the registries page, so the error carries the way there. */}
-                  {box.image && /no registry login/.test(box.errorReason) && (
-                    <Link
-                      to={`${RoutePath.IMAGE_REGISTRIES}?connect=${encodeURIComponent(registryHostOf(box.image))}`}
-                      className="mt-2 inline-block border border-border px-3 py-[6px] text-label uppercase text-foreground transition-colors hover:border-brand"
-                    >
-                      Connect a registry for {registryHostOf(box.image)} →
-                    </Link>
+                  {mountedVolumes.length > 0 && (
+                    <div className="mt-5 border-t border-border pt-5">
+                      <BoxSectionHeader title="Volumes" />
+                      <table className="w-full table-fixed text-left text-meta">
+                        <caption className="sr-only">Mounted volumes</caption>
+                        <thead>
+                          <tr className="border-b border-border text-muted-foreground">
+                            <th scope="col" className="pb-2 pr-4 font-normal">
+                              Volume
+                            </th>
+                            <th scope="col" className="pb-2 font-normal">
+                              Mount path
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {mountedVolumes.map((mount) => (
+                            <tr key={`${mount.volumeId}:${mount.mountPath}`}>
+                              <td className="py-3 pr-4 align-top [overflow-wrap:anywhere]">
+                                <Link
+                                  to={RoutePath.VOLUMES}
+                                  className="underline-offset-4 hover:text-brand hover:underline"
+                                >
+                                  {mount.displayName}
+                                </Link>
+                              </td>
+                              <td className="py-3 align-top [overflow-wrap:anywhere]">
+                                <code>
+                                  {mount.mountPath}
+                                  {mount.subpath ? ` (${mount.subpath})` : ''}
+                                </code>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
-                </>
-              )}
-            </div>
 
-            {/* shell / terminal */}
-            <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
-              <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
+                  {box.errorReason && (
+                    <div className="mt-5 border-t border-border pt-5">
+                      <BoxSectionHeader title="Error" />
+                      <p className="text-meta leading-relaxed text-destructive-foreground">{box.errorReason}</p>
+                      {/* The API's wording for a private pull with no credential.
+                      The fix is on the registries page, so the error carries the way there. */}
+                      {box.image && /no registry login/.test(box.errorReason) && (
+                        <Link
+                          to={`${RoutePath.IMAGE_REGISTRIES}?connect=${encodeURIComponent(registryHostOf(box.image))}`}
+                          className="mt-2 inline-block border border-border px-3 py-[6px] text-label uppercase text-foreground transition-colors hover:border-brand"
+                        >
+                          Connect a registry for {registryHostOf(box.image)} →
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                </section>
+                <section aria-label="Box network and activity" className="min-w-0 border border-border p-4 sm:p-5">
+                  <BoxNetworkSection box={box} canManage={writePermitted} />
+                  <div ref={setSshStatusContainer} />
+                  <div className="mt-5 border-t border-border pt-5">
+                    <BoxSectionHeader title="Activity" />
+                    <dl className="space-y-4">
+                      <SpecRow label="Created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
+                      <SpecRow label="Last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
+                    </dl>
+                  </div>
+                </section>
+              </div>
             </div>
           </div>
         </>

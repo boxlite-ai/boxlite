@@ -22,8 +22,17 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('react-router-dom', () => ({
-  Link: ({ to, children, className }: { to: string; children: unknown; className?: string }) => (
-    <a href={to} className={className}>
+  Link: ({
+    to,
+    children,
+    ...props
+  }: {
+    to: string
+    children: unknown
+    className?: string
+    'aria-current'?: 'page'
+  }) => (
+    <a href={to} {...props}>
       {children as never}
     </a>
   ),
@@ -165,7 +174,7 @@ async function flushReactWork() {
   })
 }
 
-describe('BoxDetails refresh', () => {
+describe('BoxDetails overview', () => {
   let root: Root | null = null
 
   beforeAll(() => {
@@ -200,7 +209,7 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
   }
 
-  it('opens SSH before the lifecycle action without tabs or remounting the shell', async () => {
+  it('opens SSH before the lifecycle action without starting a shell', async () => {
     await renderBoxDetails()
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
     const ssh = buttons.find((button) => button.textContent === 'Connect via SSH')!
@@ -215,14 +224,13 @@ describe('BoxDetails refresh', () => {
     expect(document.body.textContent).toContain('SSH controls')
     await act(async () => ssh.click())
     expect(document.body.textContent).not.toContain('SSH controls')
-    expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
+    expect(mocks.terminalMounts).not.toHaveBeenCalled()
   })
 
-  it('reconnects an active terminal when the detail refresh button is clicked', async () => {
+  it('refreshes box data without mounting a terminal', async () => {
     await renderBoxDetails()
 
-    expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
-    expect(document.querySelector('[data-testid="terminal"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="terminal"]')).toBeNull()
 
     const refreshButton = document.querySelector<HTMLButtonElement>('button[title="Refresh"]')
     expect(refreshButton).not.toBeNull()
@@ -233,8 +241,38 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
 
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
-    // A fresh mount is a fresh shell: the refresh reconnects.
-    expect(mocks.terminalMounts).toHaveBeenCalledTimes(2)
+    expect(mocks.terminalMounts).not.toHaveBeenCalled()
+  })
+
+  it('links the separate pages and marks Overview as current', async () => {
+    await renderBoxDetails()
+    const links = [...document.querySelectorAll('nav[aria-label="Box pages"] a')]
+    expect(
+      links.map((link) => [link.textContent, link.getAttribute('href'), link.getAttribute('aria-current')]),
+    ).toEqual([
+      ['Overview', '/dashboard/boxes/box-1', 'page'],
+      ['Terminal', '/dashboard/boxes/box-1/terminal', null],
+    ])
+    expect(document.querySelector('[aria-label="Box configuration"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Box network and activity"]')).not.toBeNull()
+  })
+
+  it('groups resource values with their units and preserves the full image reference', async () => {
+    const image = `registry.example.com/team/${'agent'.repeat(20)}@sha256:${'a'.repeat(64)}`
+    mocks.box = { ...makeRunningBox(), image }
+    await renderBoxDetails()
+    const resources = [...document.querySelectorAll('[aria-label="Box resources"] dl > div')]
+    expect(
+      resources.map((field) => [field.querySelector('dt')?.textContent, field.querySelector('dd')?.textContent]),
+    ).toEqual([
+      ['CPU', '1vCPU'],
+      ['Memory', '2GiB'],
+      ['Disk', '10GiB'],
+    ])
+    const fields = [...document.querySelectorAll('[aria-label="Box configuration"] dl > div')]
+    expect(
+      fields.find((field) => field.querySelector('dt')?.textContent === 'Image')?.querySelector('dd')?.textContent,
+    ).toBe(image)
   })
 
   // The list page navigates here by id, so the name the user gave the box must
@@ -267,6 +305,8 @@ describe('BoxDetails refresh', () => {
     // Unresolvable handle degrades to the handle itself, not a blank label.
     expect(text).toContain('vol-deleted')
     expect(text).toContain('/data (acme)')
+    const headers = [...document.querySelectorAll('table th')].map((header) => header.textContent)
+    expect(headers).toEqual(['Volume', 'Mount path'])
   })
   // A box stores the reference it was created with. Once a start has put that
   // image in the catalog, the reference is how a reader gets to its versions.

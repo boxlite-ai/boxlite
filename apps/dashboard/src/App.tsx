@@ -233,11 +233,8 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BILLING_WALLET)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.LIMITS)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
-        {/* Pathless layout route: a single BoxSessionProvider fiber
-            persists across the three box routes, so activation state
-            (e.g. "terminal connected") survives navigation between the
-            details view and its fullscreen siblings. Per-route providers
-            held state in a useRef that died with each unmount. */}
+        {/* Keep box-scoped activation state across Overview and Terminal.
+            Shell lifetime belongs to the Terminal page and ends when it unmounts. */}
         <Route
           element={
             <BoxSessionProvider>

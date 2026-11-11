@@ -362,38 +362,39 @@ function SshControls({
 
   const needsInbound = box.network?.inbound.mode === NetworkMode.DISABLED
   const statusRow = (
-    <div className="mb-[6px]">
-      <div className="flex items-baseline gap-2">
-        <span className="text-muted-foreground">ssh</span>
-        <span className="min-w-[8px] flex-1" />
-        <button
-          type="button"
-          title="Refresh SSH status"
-          disabled={loading || !!pending}
-          onClick={() => setStatusRefresh((value) => value + 1)}
-          className="whitespace-nowrap text-muted-foreground hover:text-foreground"
-        >
-          {pending
-            ? 'updating…'
-            : loading
-              ? 'loading…'
-              : !running
-                ? 'not running'
-                : status
-                  ? status.enabled
-                    ? 'enabled'
-                    : 'disabled'
-                  : 'unavailable · retry'}
-        </button>
-        {canManage && (
-          <Switch
-            aria-label="SSH access"
-            checked={status?.enabled ?? false}
-            disabled={disabled || !status}
-            className="ml-1 mr-3 shrink-0 scale-90 self-center"
-            onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
-          />
-        )}
+    <div>
+      <div className="grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
+        <span className="text-meta text-muted-foreground">SSH</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            title="Refresh SSH status"
+            disabled={loading || !!pending}
+            onClick={() => setStatusRefresh((value) => value + 1)}
+            className="whitespace-nowrap text-muted-foreground hover:text-foreground"
+          >
+            {pending
+              ? 'updating…'
+              : loading
+                ? 'loading…'
+                : !running
+                  ? 'not running'
+                  : status
+                    ? status.enabled
+                      ? 'enabled'
+                      : 'disabled'
+                    : 'unavailable · retry'}
+          </button>
+          {canManage && (
+            <Switch
+              aria-label="SSH access"
+              checked={status?.enabled ?? false}
+              disabled={disabled || !status}
+              className="shrink-0"
+              onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
+            />
+          )}
+        </div>
       </div>
       {error && !open && (
         <p role="alert" className="mt-2 text-meta text-destructive">
