@@ -108,11 +108,12 @@ exclusion before releasing the owner. Reexecuted child processes independently
 open the manager and verify shared readers, writer exclusion, and exit release;
 control messages and deadlines bound the scenario, and cleanup kills/reaps children.
 
-The errno tests exercise real fatal kernel errors, **not EINTR retry coverage**.
-The retry path uses `LOCK_NB`; interrupting a blocking `flock` exercises a different
-path.
-No deterministic local-filesystem trigger for nonblocking EINTR is established on
-macOS or Linux; signal timing alone is not evidence of reaching that branch.
+The errno fixtures exercise real fatal kernel errors. Separate child-process tests
+interrupt blocking read/write acquisition with handled signals without `SA_RESTART`,
+verify that waiters remain excluded, then release the owner and verify acquisition.
+This covers blocking `EINTR` retries, not nonblocking `EINTR` injection: no
+deterministic local-filesystem trigger for the latter is established on macOS or
+Linux.
 See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)
 and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/flock.2).
 
@@ -444,10 +445,11 @@ then leaves the other reader protected. Nested acquisition and read-to-write
 upgrades are unsupported. Blocking acquisition is synchronous; fairness is not
 guaranteed.
 
-Nonblocking file-lock acquisition returns `false` only for contention
-(`EWOULDBLOCK`/`EAGAIN`). Interrupted calls (`EINTR`) are retried; other OS errors
-panic with their details, matching blocking acquisition. Async guards propagate
-those failures instead of treating them as a reason to keep polling.
+Blocking and nonblocking file-lock acquisition retry interrupted calls (`EINTR`)
+without changing the requested mode. Nonblocking acquisition returns `false` only
+for contention (`EWOULDBLOCK`/`EAGAIN`); other OS errors panic with their details.
+Async guards propagate those failures instead of treating them as a reason to keep
+polling.
 
 Existing boot and outbound-policy changes still acquire exclusive guards. Shared
 read support alone does not coordinate lifecycle and disk operations that use

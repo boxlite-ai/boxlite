@@ -1,6 +1,5 @@
-// These fixtures cover real fatal kernel errors, not EINTR retries. The retry
-// branch uses LOCK_NB; signalling a blocked flock exercises a different path,
-// and signal timing cannot deterministically interrupt a nonblocking attempt.
+// These fixtures cover real fatal kernel errors. The child-process signal tests
+// cover blocking EINTR retries; nonblocking EINTR injection remains unverified.
 
 use super::*;
 use crate::lock::{LockGuard, ReadLockGuard};
