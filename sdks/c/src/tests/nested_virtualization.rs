@@ -9,7 +9,9 @@ fn nested_create_setter_reaches_existing_runtime_authorization() {
         );
         let advanced = new_test_advanced_options();
         let (runtime, home) = new_test_runtime_handle("nested-create");
-        let owner = &*runtime;
+        let owner = runtime
+            .as_ref()
+            .expect("runtime_new returned null runtime pointer");
         for enabled in [true, false] {
             assert_eq!(
                 boxlite_advanced_options_set_nested_virtualization(advanced, i32::from(enabled)),
