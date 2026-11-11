@@ -6,6 +6,7 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from '../box/entities/box.entity'
+import { Checkpoint } from '../box/entities/checkpoint.entity'
 import { TypedConfigService } from '../config/typed-config.service'
 import { OrganizationModule } from '../organization/organization.module'
 import { RunnerRegistryCredentialController } from './controllers/runner-registry-credential.controller'
@@ -23,7 +24,7 @@ import { createSecretStore } from './stores/secret.store'
 // imported for the permission guard the tenant routes run. `RegistriesService`
 // is exported for the box API's routes to the same logins.
 @Module({
-  imports: [OrganizationModule, TypeOrmModule.forFeature([RegistryCredential, Box])],
+  imports: [OrganizationModule, TypeOrmModule.forFeature([RegistryCredential, Box, Checkpoint])],
   controllers: [RunnerRegistryCredentialController],
   providers: [
     RegistryCredentialService,

@@ -6,7 +6,9 @@
 
 import { onboardingHandlers } from './onboarding-handlers'
 import { domainHandlers } from './domain-handlers'
+import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handlers'
 import { sshHandlers } from './ssh-handlers'
+import { ciHandlers } from './ci-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -35,6 +37,7 @@ import {
   MOCK_IMAGE_LIMIT,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
+  MOCK_USER,
   MOCK_PAGINATED_BOXES,
   MOCK_REGISTRY_CREDENTIALS,
   buildBox,
@@ -87,12 +90,23 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...ciHandlers(),
   ...sshHandlers,
   ...domainHandlers(),
+  ...checkpointHandlers,
   ...onboardingHandlers(API_URL),
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
+  http.get(`${API_URL}/users/me`, () =>
+    HttpResponse.json({
+      id: MOCK_USER.sub,
+      name: MOCK_USER.name,
+      email: MOCK_USER.email,
+      publicKeys: [],
+      createdAt: new Date(0).toISOString(),
+    }),
+  ),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
   http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
     params.organizationId === MOCK_ORGANIZATION.id
@@ -156,8 +170,22 @@ export const handlers = [
   // The Box API's create, which the New Box dialog calls on the page's own
   // origin. The box pulls for a moment, then starts; reaching STARTED is what
   // puts its image in the catalog, as the API's registrar does.
-  http.post('*/v1/:organizationId/boxes', async ({ request }) => {
-    const body = (await request.json()) as { name?: string; image?: string; cpus?: number; memory_mib?: number }
+  http.post('*/v1/:organizationId/boxes/import', async ({ params, request }) => {
+    const body = (await request.json()) as { checkpoint_id?: string; name?: string }
+    if (!body.checkpoint_id || Object.keys(body).some((key) => key !== 'checkpoint_id' && key !== 'name'))
+      return HttpResponse.json({ message: 'Expected a checkpoint selector and optional name' }, { status: 400 })
+    return createMockCheckpointBox(String(params.organizationId), body.checkpoint_id, body.name)
+  }),
+  http.post('*/v1/:organizationId/boxes', async ({ params, request }) => {
+    const body = (await request.json()) as {
+      checkpoint_id?: string
+      name?: string
+      image?: string
+      cpus?: number
+      memory_mib?: number
+    }
+    if (body.checkpoint_id !== undefined)
+      return HttpResponse.json({ message: 'Use /boxes/import for checkpoints' }, { status: 400 })
     const image = body.image || 'ghcr.io/boxlite-ai/boxlite-agent-base:mock'
     const id = `mock-box-${Math.abs(Date.now() % 100000000)}`
     const box = buildBox({

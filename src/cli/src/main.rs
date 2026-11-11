@@ -109,6 +109,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
     // Keeping the adapter at the call site (rather than pushing `i32` into
     // 15 commands that have no exit-code concept) preserves type honesty.
     let result: anyhow::Result<i32> = match cli.command {
+        cli::Commands::Ci(args) => commands::ci::execute(args, &global).await.map(|_| 0),
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
         cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
         cli::Commands::Top(args) => commands::top::execute(args, &global).await.map(|_| 0),
@@ -116,6 +117,10 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Kill(args) => commands::kill::execute(args, &global).await.map(|_| 0),
         cli::Commands::Signal(args) => commands::signal::execute(args, &global).await.map(|_| 0),
         cli::Commands::Create(args) => commands::create::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Checkpoint(args) => commands::checkpoint::execute(args, &global)
+            .await
+            .map(|_| 0),
+        cli::Commands::Import(args) => commands::import::execute(args, &global).await.map(|_| 0),
         cli::Commands::List(args) => commands::list::execute(args, &global).await.map(|_| 0),
         cli::Commands::Rm(args) => commands::rm::execute(args, &global).await.map(|_| 0),
         cli::Commands::Start(args) => commands::start::execute(args, &global).await.map(|_| 0),

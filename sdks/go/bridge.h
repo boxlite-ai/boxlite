@@ -16,6 +16,8 @@ extern CBoxExitCb cbExit(void);
 extern CBoxCreateBoxCb cbCreateBox(void);
 extern CBoxExportCb cbBoxExport(void);
 extern CRuntimeImportCb cbRuntimeImport(void);
+extern CCheckpointInfoCb cbCheckpointInfo(void);
+extern CCheckpointListCb cbCheckpointList(void);
 extern CBoxGetOrCreateBoxCb cbGetOrCreateBox(void);
 extern CBoxGetBoxCb cbGetBox(void);
 extern CBoxStartBoxCb cbStartBox(void);

@@ -81,6 +81,7 @@ export async function deployStack() {
   // in app() before run() exists); deployment/sst.ts injects them
   // from SSM instead.
   const oidcClientId = new sst.Secret('OIDC_CLIENT_ID')
+  const turnstileSecretKey = process.env.TURNSTILE_SITEKEY?.trim() ? new sst.Secret('TURNSTILE_SECRET_KEY') : undefined
   const oidcMgmtClientId = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_ID')
   const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
   // The HS256 key the Post-Login Action signs its account-link adopt and
@@ -268,6 +269,7 @@ export async function deployStack() {
     defaultRunnerApiKey,
     defaultRunnerName,
     oidcClientId,
+    turnstileSecretKey,
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,

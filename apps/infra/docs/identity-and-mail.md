@@ -25,6 +25,13 @@ branding migration cannot silently leave emails pointing to a deleted asset.
 
 ## Auth0 Bot Detection
 
+Dashboard first checks the local account through `/api/users/me`. An unknown
+identity completes Turnstile verification through `/api/auth/register` before
+the API creates its user and default organization. Database-email verification
+remains in the login Action; API token verification does not require profile claims.
+Already registered MCP users keep the existing audience and permission checks.
+
+
 The [stage policy](../auth0/bot-detection.json) sets dev and prod to `when_risky`. Auth0 can challenge
 risky email/password signup and login requests. Social connections are outside
 [Bot Detection coverage](https://auth0.com/docs/secure/attack-protection/bot-detection#limitations).

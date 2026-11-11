@@ -97,6 +97,11 @@ describe('Organization settings tabs', () => {
     expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('General')
   })
 
+  it('redirects the former CI tab to the top-level Connects page', async () => {
+    await renderPage('/dashboard/settings?tab=ci')
+    expect(document.querySelector('output')?.textContent).toBe('/dashboard/ci/connects')
+  })
+
   it('opens Member directly from a bookmarked tab URL', async () => {
     await renderPage('/dashboard/settings?tab=member')
     expect(document.querySelector('h1 + p')?.textContent).toBe('Manage settings and members for Acme.')

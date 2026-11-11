@@ -5,6 +5,7 @@
  */
 
 import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { isCheckpointBoxIdle } from '@/lib/checkpoints'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel, getBoxRouteId } from '@/lib/box-identity'
@@ -12,7 +13,18 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
-import { Check, Container, Copy, Loader2, MoreHorizontal, Square, Play, RotateCcw, Trash2 } from '@/components/ui/icon'
+import {
+  Check,
+  Container,
+  Copy,
+  Loader2,
+  MoreHorizontal,
+  Square,
+  Plus,
+  Play,
+  RotateCcw,
+  Trash2,
+} from '@/components/ui/icon'
 import { useState } from 'react'
 import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
@@ -117,6 +129,7 @@ export function BoxTable({
   handleStart,
   handleStop,
   handleDelete,
+  onCreateCheckpoint,
   onRowClick,
   pagination,
   pageCount,
@@ -149,6 +162,12 @@ export function BoxTable({
     const stoppable = isStoppable(box)
     const recoverable = isRecoverable(box)
     const transitioning = isTransitioning(box)
+    const canCheckpoint =
+      writePermitted &&
+      onCreateCheckpoint &&
+      isCheckpointBoxIdle(box) &&
+      !boxIsLoading[box.id] &&
+      !boxStateIsTransitioning[box.id]
 
     return (
       <>
@@ -197,7 +216,7 @@ export function BoxTable({
             <Loader2 className={`${iconClassName} animate-spin`} strokeWidth={1.3} />
           </AsciiButton>
         )}
-        {deletePermitted && (
+        {(deletePermitted || canCheckpoint) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <AsciiButton size="icon" aria-label="More" className={buttonClassName} type="button" title="More">
@@ -205,13 +224,20 @@ export function BoxTable({
               </AsciiButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">
-              <DropdownMenuItem
-                className="cursor-pointer text-destructive focus:text-destructive"
-                onClick={() => handleDelete(box.id)}
-              >
-                <Trash2 className="size-4" />
-                Delete
-              </DropdownMenuItem>
+              {canCheckpoint && (
+                <DropdownMenuItem onClick={() => onCreateCheckpoint?.(box)}>
+                  <Plus className="size-4" /> Checkpoint
+                </DropdownMenuItem>
+              )}
+              {deletePermitted && (
+                <DropdownMenuItem
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                  onClick={() => handleDelete(box.id)}
+                >
+                  <Trash2 className="size-4" />
+                  Delete
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

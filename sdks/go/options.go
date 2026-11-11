@@ -410,7 +410,7 @@ func WithAutoStopInterval(seconds uint32) BoxOption {
 }
 
 // WithAutoDeleteInterval configures the cloud AutoDelete TTL in seconds.
-// A value of 0 disables AutoDelete. Local runtimes return Unsupported.
+// Zero disables AutoDelete. Locally, a positive value means remove on stop.
 func WithAutoDeleteInterval(seconds uint32) BoxOption {
 	return func(c *boxConfig) { c.autoDelete = &seconds }
 }
