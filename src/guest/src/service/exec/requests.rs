@@ -42,22 +42,6 @@ impl ExecutionRequests {
         request: ExecRequest,
         now: u64,
     ) -> Result<ExecResponse, Status> {
-        // Wall time supplies the shared deadline domain; monotonic elapsed time
-        // prevents rollback from making any reclaimed token valid again.
-        let now = {
-            let mut clock = self.clock.lock().unwrap();
-            let tick = Instant::now();
-            let floor = clock
-                .as_ref()
-                .map(|(wall, anchor)| {
-                    wall.saturating_add(tick.duration_since(*anchor).as_millis() as u64)
-                })
-                .unwrap_or(now);
-            let current = now.max(floor);
-            *clock = Some((current, tick));
-            current
-        };
-        let deadline = request_deadline(key, now)?;
         let hash: [u8; 32] = Sha256::digest(
             serde_json::to_vec(&(
                 &request.execution_id,
@@ -76,6 +60,10 @@ impl ExecutionRequests {
         )
         .into();
         let mut entries = self.entries.lock().await;
+        // Validate time and reserve under one lock: a queued caller must not
+        // reuse a timestamp from before another caller reclaimed its token.
+        let now = self.effective_now(now);
+        let deadline = request_deadline(key, now)?;
         // Unresolved startup tasks remain counted past expiry, including stuck
         // spawns. Capacity exhaustion rejects new starts instead of hiding use.
         entries.retain(|_, entry| entry.deadline > now || entry.result.borrow().is_none());
@@ -106,8 +94,9 @@ impl ExecutionRequests {
             // Own startup independently of the RPC future: disconnecting a
             // caller must not cancel a spawn after its side effects begin.
             let guest = server.clone();
+            let requests = Arc::clone(self);
             tokio::spawn(async move {
-                let response = if deadline <= super::now_ms() {
+                let response = if deadline <= requests.effective_now(super::now_ms()) {
                     error_response(
                         String::new(),
                         "request_expired",
@@ -130,6 +119,23 @@ impl ExecutionRequests {
                 .await
                 .map_err(|_| Status::internal("execution startup task failed"))?;
         }
+    }
+
+    fn effective_now(&self, observed: u64) -> u64 {
+        let mut clock = self.clock.lock().unwrap();
+        let tick = Instant::now();
+        let floor = clock
+            .as_ref()
+            .map(|(wall, anchor)| {
+                wall.saturating_add(tick.duration_since(*anchor).as_millis() as u64)
+            })
+            .unwrap_or(observed);
+        // Keep the anchor across reads so sub-millisecond elapsed time is not
+        // discarded by frequent requests while wall time remains behind.
+        if clock.is_none() || observed > floor {
+            *clock = Some((observed, tick));
+        }
+        observed.max(floor)
     }
 }
 
@@ -221,6 +227,34 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn queued_request_rechecks_the_clock_after_registry_contention() {
+        let server = GuestServer::new(GuestLayout::new());
+        let requests = Arc::new(ExecutionRequests::default());
+        let now = super::super::now_ms();
+        let key = format!("queued.{}", now + 1000);
+        let payload = ExecRequest {
+            execution_id: Some("forbidden".into()),
+            ..Default::default()
+        };
+        let entries = requests.entries.lock().await;
+        let retry = requests.execute_at(&server, &key, payload, now);
+        tokio::pin!(retry);
+        // Poll until the production request waits for the registry lock.
+        assert!(std::future::Future::poll(
+            retry.as_mut(),
+            &mut std::task::Context::from_waker(std::task::Waker::noop()),
+        )
+        .is_pending());
+        // Model another caller advancing the shared clock while this request
+        // is queued; the injected wall time for the retry remains rolled back.
+        *requests.clock.lock().unwrap() = Some((now + 2000, Instant::now()));
+        drop(entries);
+        let error = retry.await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        assert!(requests.entries.lock().await.is_empty());
     }
 
     #[tokio::test]
