@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=7436278863b5 sha256=d462f2c398a0 -->
+<!-- agent-tooling:guidance:begin rev=dfe598f1ba30 sha256=8b2d7995a3f8 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -139,7 +139,7 @@ For each test added with a fix, run these steps manually, in order:
 - Verify external findings against the working tree with `git grep` and `git diff` before acting; reviews, lint, and PR comments may reference stale code.
 - Fix every evidenced site of the same defect in one pass; do not speculate.
 - Different nearby defects are adjacent work; one site does not resolve a systemic bug.
-- When behavior changes, remove superseded code, comments, prose, old-contract tests, and broken references in the same change.
+- When behavior changes, remove superseded code, comments, prose, old-contract tests, and broken references in the same change. Comments describe the current contract for a reader at HEAD: no legacy comments or removal narration ("no longer", "was removed", "now requires"). "Deprecated", "legacy" or a compatibility reason may explain a current API, state or behavior.
 - Search all replaced terms, not just edited files; contradictory prose misleads readers.
 
 Scope:
