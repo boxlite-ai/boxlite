@@ -1905,6 +1905,18 @@ impl super::images::ImageBackend for LocalRuntime {
         self.0.image_manager.resolve_ids(ids).await
     }
 
+    async fn remove_image_by_id(&self, id: &str) -> BoxliteResult<super::ImageRemovalResult> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot remove images: runtime has been shut down".into(),
+            ));
+        }
+        let runtime = Arc::clone(&self.0);
+        self.0
+            .image_manager
+            .remove_by_id(id.to_string(), move || runtime.box_manager.all_boxes(true))
+            .await
+    }
     async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
         if self.0.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(

@@ -39,6 +39,13 @@ impl std::fmt::Debug for ImageStorage {
 }
 
 impl ImageStorage {
+    pub(super) fn root(&self) -> &Path {
+        self.layout.root()
+    }
+
+    pub(super) fn disk_images_dir(&self) -> PathBuf {
+        self.layout.disk_images_dir()
+    }
     /// Create new images store for the given images directory
     pub fn new(images_dir: PathBuf) -> BoxliteResult<Self> {
         let layout = ImageFilesystemLayout::new(images_dir);

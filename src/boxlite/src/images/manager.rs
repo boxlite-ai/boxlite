@@ -21,9 +21,11 @@ use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::{CachedImage, Database};
 use crate::images::store::{ImageStore, SharedImageStore};
+use crate::litebox::config::BoxConfig;
+use crate::runtime::ImageRemovalResult;
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{ImageRegistry, ImageRegistryProxy};
-use crate::runtime::types::{ImageDetail, ImageInfo, ImageVersion};
+use crate::runtime::types::{BoxState, ImageDetail, ImageInfo, ImageVersion};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use std::str::FromStr;
@@ -143,6 +145,25 @@ impl ImageManager {
             .iter()
             .map(|id| super::id::resolve_id(id, &entries))
             .collect())
+    }
+
+    pub(crate) async fn remove_by_id(
+        &self,
+        id: String,
+        boxes: impl FnOnce() -> BoxliteResult<Vec<(BoxConfig, BoxState)>> + Send + 'static,
+    ) -> BoxliteResult<ImageRemovalResult> {
+        // Never queue a writer: callers may hold nested read leases, or a
+        // pulled ImageObject in the same task that requests removal.
+        let exclusive = Arc::clone(&self.cache_access).try_write_owned().map_err(|_| {
+            BoxliteError::InvalidState("image cache is busy; finish active pulls, box initialization, or release image handles and retry".into())
+        })?;
+        let cache = self.store.removal_cache().await;
+        tokio::task::spawn_blocking(move || {
+            let _exclusive = exclusive;
+            cache.remove(&id, &boxes()?)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("image removal task failed: {e}")))?
     }
 
     /// Pull an OCI image from a registry.
