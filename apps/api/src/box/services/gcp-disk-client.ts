@@ -33,7 +33,7 @@ interface DisksLike {
     project: string
     zone: string
     disk: string
-    diskResource: { sizeGb: string }
+    diskResource: { name: string; sizeGb: string }
     paths: string[]
   }): Promise<{ name: string }[]>
 }
@@ -48,11 +48,14 @@ interface ZoneOperationsLike {
  * Thin wrapper over the two GCP Compute calls the expansion controller makes:
  * growing a disk (`disks.update`) and polling the zone operation it returns.
  *
- * Two invariants live here and are pinned by tests:
+ * Three invariants live here and are pinned by tests:
  * - `paths` is exactly `['sizeGb']`. The v1 client also accepts `updateMask`,
  *   but it is silently ignored there — the request then goes out without
  *   `paths` as a full PATCH, which would reset provisionedIops/Throughput to
  *   defaults. Only `paths` reaches GCP as the field mask.
+ * - the resource body carries the disk name. `disks.update` requires
+ *   `resource.name` even though the mask only names `sizeGb`; without it GCP
+ *   rejects the request outright (`Invalid value for field 'resource.name': ''`).
  * - authentication is Application Default Credentials only, like every other
  *   `@google-cloud/*` client in this API (the Cloud Run service account).
  */
@@ -74,7 +77,7 @@ export class GcpDiskClient implements GcpDiskClientLike {
         project: ref.project,
         zone: ref.zone,
         disk: ref.diskName,
-        diskResource: { sizeGb: String(sizeGb) },
+        diskResource: { name: ref.diskName, sizeGb: String(sizeGb) },
         paths: ['sizeGb'],
       })
     } catch (e) {

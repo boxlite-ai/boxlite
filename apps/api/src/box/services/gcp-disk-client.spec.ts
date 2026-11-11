@@ -24,12 +24,14 @@ describe('GcpDiskClient', () => {
       expect(result).toEqual({ operation: 'operation-123' })
       // paths must be exactly ["sizeGb"]: the v1 client ignores updateMask,
       // and a request without paths is a full PATCH that would reset
-      // provisioned IOPS/throughput to defaults.
+      // provisioned IOPS/throughput to defaults. The body must also carry
+      // the disk name: disks.update requires resource.name even though the
+      // mask only names sizeGb.
       expect(disks.update).toHaveBeenCalledWith({
         project: 'proj',
         zone: 'z1',
         disk: 'disk-1',
-        diskResource: { sizeGb: '4096' },
+        diskResource: { name: 'disk-1', sizeGb: '4096' },
         paths: ['sizeGb'],
       })
     })
