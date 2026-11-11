@@ -5,6 +5,19 @@
  */
 
 import { Module } from '@nestjs/common'
+import { CiWebhookController } from '../ci/ci-webhook.controller'
+import { CiWebhookService } from '../ci/ci-webhook.service'
+import { CiConnectController } from '../ci/ci-connect.controller'
+import { CiSettingsController } from '../ci/ci-settings.controller'
+import { CiManagementController } from '../ci/ci-management.controller'
+import { CiSettingsService } from '../ci/ci-settings.service'
+import { CiConnectService } from '../ci/ci-connect.service'
+import { CiListenerService } from '../ci/ci-listener.service'
+import { CiNativeState } from '../ci/ci-native-state'
+import { CiNativeHost } from '../ci/ci-native-host'
+import { CiNativeWorkers } from '../ci/ci-native-workers'
+import { CiGitHubService } from '../ci/ci-github.service'
+import { CiSecretsService } from '../ci/ci-secrets.service'
 import { BoxModule } from '../box/box.module'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
@@ -26,6 +39,8 @@ import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
 import { BoxRequestService } from './box-request.service'
+import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { BoxliteCheckpointImportController } from './boxlite-checkpoint-import.controller'
 
 @Module({
   imports: [
@@ -39,8 +54,14 @@ import { BoxRequestService } from './box-request.service'
     AuditModule,
   ],
   controllers: [
+    BoxliteCheckpointController,
+    BoxliteCheckpointImportController,
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
+    CiConnectController,
+    CiSettingsController,
+    CiManagementController,
+    CiWebhookController,
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
@@ -51,7 +72,20 @@ import { BoxRequestService } from './box-request.service'
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService, BoxRequestService],
+  providers: [
+    BoxRequestService,
+    BoxliteWsProxyService,
+    CommerceBoxLimitService,
+    CiConnectService,
+    CiSettingsService,
+    CiNativeState,
+    CiNativeHost,
+    CiNativeWorkers,
+    CiListenerService,
+    CiGitHubService,
+    CiSecretsService,
+    CiWebhookService,
+  ],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

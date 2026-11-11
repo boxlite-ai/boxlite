@@ -71,6 +71,24 @@ function expectAdmissionLock(entityManager: ReturnType<typeof makeEntityManager>
 }
 
 describe('BoxRepository creation admission', () => {
+  it('keeps checkpoint initialization before insertion and CI ownership after insertion', async () => {
+    const { boxRepository, entityManager } = makeRepository(1)
+    const entity = box()
+    const initialize = jest.fn().mockResolvedValue(undefined)
+    const onPersist = jest.fn().mockResolvedValue(undefined)
+    const afterInsert = jest.fn().mockResolvedValue(undefined)
+
+    await boxRepository.insert(entity, 2, onPersist, initialize, afterInsert)
+
+    expect(initialize).toHaveBeenCalledWith(entityManager)
+    expect(onPersist).toHaveBeenCalledWith(entityManager, entity)
+    expect(afterInsert).toHaveBeenCalledWith(entityManager)
+    expect(initialize.mock.invocationCallOrder[0]).toBeLessThan(entityManager.insert.mock.invocationCallOrder[0])
+    expect(entityManager.insert.mock.invocationCallOrder[0]).toBeLessThan(onPersist.mock.invocationCallOrder[0])
+    expect(onPersist.mock.invocationCallOrder[0]).toBeLessThan(afterInsert.mock.invocationCallOrder[0])
+    expect(afterInsert.mock.invocationCallOrder[0]).toBeLessThan(entityManager.upsert.mock.invocationCallOrder[0])
+  })
+
   it('counts and inserts under the organization advisory lock in one READ COMMITTED transaction', async () => {
     const { boxRepository, entityManager, transaction, cacheInvalidation } = makeRepository(1)
     const entity = box()

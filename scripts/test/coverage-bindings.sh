@@ -20,11 +20,22 @@ cargo llvm-cov clean --workspace
 
 make dev:python dev:node
 make test:unit:c
+make test:unit:ffi
+# The Go development bridge names target/debug/libboxlite.a explicitly. Link
+# the instrumented archive first so its native calls contribute Rust profiles.
+# CGO also needs the profile runtime from the matching Rust LLVM toolchain.
+rust_libdir="$(rustc --print target-libdir)"
+profile_runtime=("$rust_libdir"/libprofiler_builtins-*.rlib)
+if [[ ${#profile_runtime[@]} != 1 || ! -f "${profile_runtime[0]}" ]]; then
+    echo "Rust coverage profile runtime not found" >&2
+    exit 1
+fi
+CGO_LDFLAGS="\"$CARGO_TARGET_DIR/debug/libboxlite.a\" \"${profile_runtime[0]}\"${CGO_LDFLAGS:+ $CGO_LDFLAGS}" make coverage:go:checkpoint
 # The suite must exercise the extension just built: the gate turns an
 # absent or broken module into a collection failure, not a silent skip.
 BOXLITE_REQUIRE_NATIVE=1 make coverage:python
 # These suites use loopback HTTP and an empty local cache; they never boot a VM.
-make test:integration:node FILTER='image catalog|registry logins|ssh over a REST transport|native box privilege metadata'
+make test:integration:node FILTER='image catalog|registry logins|ssh over a REST transport|native box privilege metadata|checkpoint native'
 
 mkdir -p "$root/target/coverage/native-sdk"
 # napi builds under the explicit host triple; also scan it alongside debug/.
@@ -32,3 +43,14 @@ host="$(rustc -vV | sed -n 's/^host: //p')"
 cargo llvm-cov report --lcov --target "$host" \
     --ignore-filename-regex '(^|/)(src/deps/[^/]+/vendor|src/test-utils|tests)/' \
     --output-path "$root/target/coverage/native-sdk/lcov.info"
+
+# Export Go's executable separately: Cargo's test/library mappings can carry
+# different hashes for the same exported C symbols and hide its native hits.
+profiles=("$CARGO_LLVM_COV_TARGET_DIR"/*.profdata)
+if [[ ${#profiles[@]} != 1 || ! -f "${profiles[0]}" ]]; then
+    echo "Expected one merged native coverage profile" >&2
+    exit 1
+fi
+"${LLVM_COV:-$(dirname "$rust_libdir")/bin/llvm-cov}" export -format=lcov \
+    -instr-profile="${profiles[0]}" "$root/target/coverage/checkpoint-native.test" \
+    > "$root/target/coverage/native-sdk/go-lcov.info"

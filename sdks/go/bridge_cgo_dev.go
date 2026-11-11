@@ -1,4 +1,4 @@
-//go:build boxlite_dev
+//go:build boxlite_dev && !boxlite_coverage
 
 package boxlite
 

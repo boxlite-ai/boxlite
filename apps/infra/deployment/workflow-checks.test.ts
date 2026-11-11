@@ -52,7 +52,8 @@ test('script test documentation selects only the infra suite: tests/scripts/READ
 })
 
 for (const [path, expected] of [
-  ['sdks/go/options.go', ['go']],
+  ['sdks/go/options.go', ['rust', 'go']],
+  ['sdks/go/integration/archive/checkpoint_test.go', ['rust', 'go']],
   ['apps/runner/cmd/runner/main.go', ['go']],
   ['sdks/python/boxlite/options.py', ['rust', 'python']],
   ['sdks/python/boxlite/sync_api/_ssh.py', ['rust', 'python']],
@@ -63,7 +64,7 @@ for (const [path, expected] of [
   ['src/cli/src/main.rs', ['rust']],
   ['src/vmm/src/vm.rs', ['rust', 'vmm']],
   ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
-  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'infra']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'api', 'infra']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
   ['openapi/box.openapi.yaml', ['rust', 'api']],
@@ -307,6 +308,21 @@ test('patch coverage requires 90 percent and a report while total stays informat
   assert.equal(config.coverage.status.patch.default.threshold, '0%')
   assert.equal(config.coverage.status.patch.default.if_not_found, 'failure')
   assert.equal(config.coverage.status.project.default.informational, true)
+})
+
+test('Linux x64 native SDK coverage installs Go and uploads its archive profile', () => {
+  const steps = workflow('test.yml').jobs.rust.steps
+  const goAt = steps.findIndex((step: any) => step.uses === './.github/actions/setup-go')
+  const nativeAt = steps.findIndex((step: any) => step.run === 'make coverage:bindings:external')
+  const uploadAt = steps.findIndex((step: any) => step.with?.files?.split(',').includes('target/coverage/go-checkpoint-native.out'))
+  assert.ok(goAt >= 0 && goAt < nativeAt && nativeAt < uploadAt)
+  for (const at of [goAt, nativeAt, uploadAt]) {
+    for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+      const expression = steps[at].if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+      assert.equal(runInNewContext(expression, { matrix: { platform: { target } } }), target === 'linux-x64-gnu')
+    }
+    assert.equal(steps[at]['continue-on-error'], undefined)
+  }
 })
 
 test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => {

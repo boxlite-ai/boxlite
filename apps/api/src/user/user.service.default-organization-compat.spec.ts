@@ -7,6 +7,7 @@
 import { UserService } from './user.service'
 import { UserCreatedEvent } from './events/user-created.event'
 import { Context } from '../common/context/context'
+import { User } from './user.entity'
 
 describe('UserService default organization compatibility', () => {
   it('accepts deprecated personal organization create-user fields as aliases for default organization fields', async () => {
@@ -14,8 +15,12 @@ describe('UserService default organization compatibility', () => {
       // EventEmitter2.emitAsync resolves to one result per listener.
       emitAsync: jest.fn().mockResolvedValue([]),
     }
+    let insertedUser: User
     const entityManager = {
-      save: jest.fn(async (entity) => entity),
+      insert: jest.fn(async (_entity, user: User) => {
+        insertedUser = user
+      }),
+      findOneByOrFail: jest.fn(async () => insertedUser),
     }
     const dataSource = {
       transaction: jest.fn(async (callback) => callback(entityManager)),

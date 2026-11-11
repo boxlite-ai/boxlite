@@ -8,6 +8,7 @@ import { PATH_METADATA } from '@nestjs/common/constants'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Reflector } from '@nestjs/core'
+import { ConfigService } from '@nestjs/config'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
@@ -57,6 +58,10 @@ describe('BoxLite REST routing', () => {
       // present, so one that shadowed PUT network/inbound would fail below.
       [BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
       [
+        {
+          provide: ConfigService,
+          useValue: new ConfigService({ checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true } }),
+        },
         {
           provide: BoxService,
           useValue: {
@@ -288,6 +293,7 @@ describe('BoxLite REST routing', () => {
     const body = await response.json()
 
     expect(body.capabilities.inbound_update_enabled).toBe(true)
+    expect(body.capabilities.checkpoints_enabled).toBe(true)
     expect(body.capabilities.exec_user_enabled).toBe(true)
   })
 

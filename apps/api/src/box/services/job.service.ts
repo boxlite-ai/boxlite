@@ -17,6 +17,7 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
+import { runnerJobQueueKey } from '../constants/runner-job-queue'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -25,7 +26,6 @@ const DEFAULT_STALE_TIMEOUT_MINUTES = 10
 @Injectable()
 export class JobService {
   private readonly logger = new Logger(JobService.name)
-  private readonly REDIS_JOB_QUEUE_PREFIX = 'runner:jobs:'
 
   constructor(
     @InjectRepository(Job)
@@ -95,7 +95,7 @@ export class JobService {
 
   private async notifyRunner(runnerId: string, jobId: string): Promise<void> {
     try {
-      await this.redis.lpush(this.getRunnerQueueKey(runnerId), jobId)
+      await this.redis.lpush(runnerJobQueueKey(runnerId), jobId)
       this.logger.debug(`Notified runner ${runnerId} about job ${jobId} via Redis`)
     } catch (error) {
       this.logger.warn(`Failed to notify runner ${runnerId} via Redis: ${error.message}`)
@@ -108,7 +108,7 @@ export class JobService {
   }
 
   async pollJobs(runnerId: string, limit = 10, timeoutSeconds = 30, abortSignal?: AbortSignal): Promise<JobDto[]> {
-    const queueKey = this.getRunnerQueueKey(runnerId)
+    const queueKey = runnerJobQueueKey(runnerId)
     const maxTimeout = Math.min(timeoutSeconds, 60) // Max 60 seconds
 
     // Check if already aborted
@@ -382,10 +382,6 @@ export class JobService {
     }
 
     return allowedTransitions[currentStatus]?.includes(newStatus) ?? false
-  }
-
-  private getRunnerQueueKey(runnerId: string): string {
-    return `${this.REDIS_JOB_QUEUE_PREFIX}${runnerId}`
   }
 
   /**
