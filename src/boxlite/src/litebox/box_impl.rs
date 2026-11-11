@@ -483,18 +483,17 @@ impl BoxImpl {
             self.live_state().await?
         };
 
-        if let Some(expected) = command.expected_started_at {
-            if self
+        if let Some(expected) = command.expected_started_at
+            && self
                 .state
                 .read()
                 .started_at
                 .map(|time| time.timestamp_millis())
                 != Some(expected)
-            {
-                return Err(BoxliteError::InvalidState(
-                    "execution VM generation changed".into(),
-                ));
-            }
+        {
+            return Err(BoxliteError::InvalidState(
+                "execution VM generation changed".into(),
+            ));
         }
 
         // Inject container ID into environment if not already set

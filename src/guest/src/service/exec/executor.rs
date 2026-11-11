@@ -478,10 +478,7 @@ mod tests {
         let result = GuestExecutor.spawn_attempt(&req).await;
 
         assert!(
-            matches!(
-                result,
-                Err(SpawnFailure::BeforeSpawn(_))
-            ),
+            matches!(result, Err(SpawnFailure::BeforeSpawn(_))),
             "a missing workdir must stay a spawn failure"
         );
     }
@@ -510,10 +507,7 @@ mod tests {
                 std::io::Error::from_raw_os_error(errno),
             );
             assert!(
-                matches!(
-                    failure,
-                    SpawnFailure::BeforeSpawn(_)
-                ),
+                matches!(failure, SpawnFailure::BeforeSpawn(_)),
                 "errno {errno} from a bad workdir must stay a spawn failure"
             );
         }
@@ -539,10 +533,7 @@ mod tests {
 
         std::fs::set_permissions(&workdir, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(
-            matches!(
-                result,
-                Err(SpawnFailure::BeforeSpawn(_))
-            ),
+            matches!(result, Err(SpawnFailure::BeforeSpawn(_))),
             "a workdir failure must not become an exit status"
         );
     }
