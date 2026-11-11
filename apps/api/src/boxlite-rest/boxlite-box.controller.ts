@@ -148,9 +148,6 @@ export class BoxliteBoxController {
         })
       }
       if (request) request[AUDIT_TARGET_ID] = box.id
-      if (box.state !== BoxState.STARTED) {
-        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
-      }
       return boxToBoxResponse(box)
     }
     const key = request?.headers['idempotency-key']
