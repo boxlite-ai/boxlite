@@ -1638,6 +1638,40 @@ mod tests {
         assert_eq!(std::fs::read(dest).unwrap(), b"original");
     }
 
+    #[tokio::test]
+    async fn partial_report_retains_progress_and_error() {
+        for streamed in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let archive = tmp.path().join("partial.tar");
+            create_leaf_only_tar(&archive, &["new.txt", "blocked/child"]);
+            let destination = tmp.path().join("output");
+            std::fs::create_dir(&destination).unwrap();
+            std::fs::write(destination.join("blocked"), b"original").unwrap();
+            let (report, result) = if streamed {
+                unpack_stream_with_report(
+                    Box::pin(futures::stream::iter([
+                        Ok(std::fs::read(&archive).unwrap()),
+                    ])),
+                    destination.clone(),
+                    uc(true, true, true),
+                )
+                .await
+            } else {
+                unpack_with_report(archive, destination.clone(), uc(true, true, true)).await
+            };
+            assert!(result.is_err(), "incompatible parent must fail");
+            assert!(report.entry_paths.contains(&PathBuf::from("new.txt")));
+            assert_eq!(
+                std::fs::read(destination.join("new.txt")).unwrap(),
+                b"new.txt"
+            );
+            assert_eq!(
+                std::fs::read(destination.join("blocked")).unwrap(),
+                b"original"
+            );
+        }
+    }
+
     // ── unpack: mkdir_parents ────────────────────────────────────
 
     #[tokio::test]
