@@ -16,6 +16,7 @@ Name | Type | Description | Notes
 **image** | **string** |  | [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
 **metadata** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
+**nestedVirtualization** | **boolean** | Requires explicit authorization on the Runner process; omitted means off. | [optional] [default to undefined]
 **organizationId** | **string** | Nullable for backward compatibility | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
 **otelEndpoint** | **string** |  | [optional] [default to undefined]
@@ -48,6 +49,7 @@ const instance: CreateBoxDTO = {
     image,
     memoryQuota,
     metadata,
+    nestedVirtualization,
     organizationId,
     osUser,
     otelEndpoint,

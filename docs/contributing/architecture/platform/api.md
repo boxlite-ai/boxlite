@@ -1,5 +1,53 @@
 # BoxLite application API catalog
 
+## Organization nested virtualization allowlist (RC)
+
+System administrators control this Cloud creation rollout through the organization
+allowlist. Runner captures `BOXLITE_EXPERIMENTAL` at startup and reports nesting
+only when authorized and supported by the host. Local runtime and start behavior
+retain main's contract.
+
+| Current organization policy | Current Runner capability | New Box |
+| --- | --- | --- |
+| Disabled | Any | Ordinary; no capability request |
+| Enabled | Confirmed true | Configure nested virtualization at creation |
+| Enabled | False, missing, stale, invalid, failed or timed out | Ordinary |
+
+`GET` and `PUT /api/admin/organizations/{organizationId}/nested-virtualization`
+read or replace `{ "enabled": true }`. Both require a system administrator JWT
+or Admin API key. Organization owners and ordinary organization keys cannot grant
+permission. PUT requires a strict boolean and rejects unknown properties.
+Unknown organizations return 404; audit records identify the target organization
+and administrator. Other organization writers update only their owned fields.
+
+At actual create dispatch, including UNKNOWN-state creation replay, the API reads
+current uncached organization policy and checks the selected Runner under the
+health deadline. Failed organization reads remain errors; capability discovery
+failures choose an ordinary creation. Allowlisted creates bypass ordinary warm VMs.
+
+V0 reads live `/info`; V2 reads the uncached authenticated heartbeat and requires
+READY state with a report at most 60 seconds old. Runner rechecks authorization
+and Linux KVM support before selecting new-box options. Guest privilege is independent.
+
+The standard C/Go AdvancedBoxOptions setter configures the existing runtime
+`advanced.nested_virtualization` option. Runtime create already persists BoxConfig;
+no new persistence interface or Cloud Box column is added. Creation replay adopts
+saved configuration without requesting a nesting upgrade; runtime's general reuse
+compatibility rules remain unchanged.
+
+Start takes no new options or nesting parameter. It uses the saved Box configuration
+without querying organization policy. For example, enabling the organization does
+not upgrade an existing ordinary Box on stop/start; disabling it does not downgrade
+an existing nested Box. Future creates use the new policy. A previously nested Box
+may fail to start if its assigned host later cannot provide the saved capability.
+
+The C start ABI, Rust default start, Go Start(ctx), CLI and other SDKs retain their
+original behavior. Recovery and migration gain no new nesting guarantee; archive
+migration remains incomplete. Deploy organization and Runner capability migrations
+before the compatible API and workers, then enable selected organizations.
+
+## Interface inventory
+
 This catalog lists the interfaces registered by the applications in this
 directory. It covers HTTP, WebSocket, CONNECT, OTLP, health, static-asset, and
 outbound event interfaces; each entry names the owning service and what the

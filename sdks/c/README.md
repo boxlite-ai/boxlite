@@ -13,6 +13,11 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 ## Managed checkpoints
 
+Checkpoint import belongs to the checkpoint handle, separate from archive import.
+The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
+checkpoint import requests through REST. The runtime facade owns the shared
+checkpoint backend; native archive import and provision remain unchanged.
+
 The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
@@ -505,6 +510,12 @@ void boxlite_runtime_free(CBoxliteRuntime* runtime);
 ```
 
 #### Box Lifecycle
+
+Nested virtualization is a creation option:
+`boxlite_advanced_options_set_nested_virtualization(advanced, 1)` requires runtime
+experimental authorization. Attach the advanced options before create; runtime
+saves the existing BoxConfig. `boxlite_start_box` retains its original signature
+and uses saved configuration. Passing `0` selects an ordinary new Box.
 
 ```c
 // Create box (auto-started)
@@ -1421,6 +1432,7 @@ cargo build -p boxlite-c
 See `sdks/c/tests/` for the test suite.
 
 - `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- Rust FFI tests borrowing runtime out-pointers should use `runtime.as_ref().expect(...)` at the borrow site, making the non-null precondition explicit to static analysis. Keep the allocation alive through the reference's last use, then free the runtime; a null check alone does not establish pointer validity.
 - `make test:unit:ffi FILTER=checkpoint` exercises checkpoint create/list/get/import/remove through loopback HTTP and the real post-and-drain queue, including callback-owned metadata, Box handles and errors. Native binding coverage runs these Rust FFI tests alongside the C executable tests; no VM is needed.
 - `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.

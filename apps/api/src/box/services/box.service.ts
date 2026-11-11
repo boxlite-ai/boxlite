@@ -240,13 +240,13 @@ export class BoxService {
   private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
-    persist: () => Promise<Box>,
+    persist: (runner: Runner) => Promise<Box>,
   ): Promise<Box> {
     const runner = await this.runnerService.getRandomAvailableRunner(
       box.privileged ? { ...runnerParams, requiresPrivileged: true } : runnerParams,
     )
     box.runnerId = runner.id
-    return persist()
+    return persist(runner)
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -300,6 +300,11 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    // Authentication caches organizations; admission must use the current policy.
+    const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
+    organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
+      nestedVirtualizationEnabled,
+    })
     validateSecrets(createBoxDto.secrets)
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {

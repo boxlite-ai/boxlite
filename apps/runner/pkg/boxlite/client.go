@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,8 @@ type Client struct {
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
 
+	nestedVirtualizationAllowed bool
+
 	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
 	// check, before it fetches a handle. Tests use it to land a stop in that
 	// window; nil in production.
@@ -68,6 +71,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	KernelPath                   string
+	ExperimentalFeatures         string
 	InsecureRegistries           []string
 	RegistryProxy                RegistryProxy
 	AWSRegion                    string
@@ -325,10 +329,17 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
-	if config.KernelPath != "" {
-		opts = append(opts, boxlite.WithExperimentalFeatures("custom-kernel"))
+	var features []string
+	if raw := strings.TrimSpace(config.ExperimentalFeatures); raw != "" {
+		features = strings.Split(raw, ",")
+		for i := range features {
+			features[i] = strings.TrimSpace(features[i])
+		}
 	}
+	if config.KernelPath != "" && !slices.Contains(features, "custom-kernel") {
+		features = append(features, "custom-kernel")
+	}
+	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir), boxlite.WithExperimentalFeatures(features...)}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -347,6 +358,8 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
+		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+
 		runtime:             rt,
 		logger:              logger,
 		homeDir:             homeDir,
@@ -415,6 +428,11 @@ func (c *Client) Close() error {
 		delete(c.boxes, id)
 	}
 	return c.runtime.Close()
+}
+
+// NestedVirtualizationEnabled combines startup ENV authorization and current host support.
+func (c *Client) NestedVirtualizationEnabled() bool {
+	return c.nestedVirtualizationAllowed && nestedVirtualizationAvailable()
 }
 
 // Create creates a new box (VM) from the given image and configuration.
@@ -499,12 +517,24 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
-	if boxDto.Privileged || c.kernelPath != "" {
+	nested := boxDto.NestedVirtualization && c.NestedVirtualizationEnabled()
+	if nested {
+		// Replay must adopt the saved choice rather than request an upgrade.
+		if _, lookupErr := c.runtime.GetInfo(ctx, boxDto.Id); lookupErr == nil {
+			nested = false
+		} else if !boxlite.IsNotFound(lookupErr) {
+			return "", "", lookupErr
+		}
+	}
+	if nested || boxDto.Privileged || c.kernelPath != "" {
 		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
 		if advancedErr != nil {
 			return "", "", advancedErr
 		}
 		defer advanced.Close()
+		if advancedErr = advanced.SetNestedVirtualization(nested); advancedErr != nil {
+			return "", "", advancedErr
+		}
 		if advancedErr = advanced.SetPrivileged(boxDto.Privileged); advancedErr != nil {
 			return "", "", advancedErr
 		}

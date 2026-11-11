@@ -59,6 +59,7 @@ databaseSuite('Toolbox column during rolling API deployment', () => {
     // Pending startup migrations also require the existing integer CPU columns.
     await db.query('CREATE TABLE box (cpu integer NOT NULL DEFAULT 2)')
     await db.query('CREATE TABLE warm_pool (cpu integer NOT NULL)')
+    await db.query('CREATE TABLE runner (id uuid PRIMARY KEY)')
     await db.query("INSERT INTO region VALUES ('us', 'https://proxy.test', 'https://legacy.test')")
     await db.query('CREATE TABLE migrations (id serial PRIMARY KEY, timestamp bigint NOT NULL, name varchar NOT NULL)')
     // Model an existing installation: earlier migrations ran before this release.

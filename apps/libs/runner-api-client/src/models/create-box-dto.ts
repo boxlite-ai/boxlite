@@ -39,6 +39,10 @@ export interface CreateBoxDTO {
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     /**
+     * Requires explicit authorization on the Runner process; omitted means off.
+     */
+    'nestedVirtualization'?: boolean;
+    /**
      * Nullable for backward compatibility
      */
     'organizationId'?: string;

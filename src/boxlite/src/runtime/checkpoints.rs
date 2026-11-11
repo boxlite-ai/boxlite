@@ -42,8 +42,12 @@ pub(crate) trait CheckpointBackend: Send + Sync {
     async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>>;
     async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo>;
     async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()>;
-    async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox>;
-    async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox>;
+    async fn import_box(
+        &self,
+        key: &str,
+        name: Option<String>,
+        box_id: Option<&str>,
+    ) -> BoxliteResult<LiteBox>;
 }
 
 /// Checkpoint management through a REST server; local runtimes return Unsupported.
@@ -116,12 +120,12 @@ impl CheckpointHandle {
                     "import target must be a box ID or name".into(),
                 ));
             }
-            self.backend()?.recover_box(key, target).await
+            self.backend()?.import_box(key, None, Some(target)).await
         } else {
             if let Some(name) = &name {
                 checked_name(name)?;
             }
-            self.backend()?.create_box(key, name).await
+            self.backend()?.import_box(key, name, None).await
         }
     }
 

@@ -1,5 +1,11 @@
 # BoxLite application data model
 
+The allowlist adds `organization.nestedVirtualizationEnabled`, an Admin-controlled
+boolean defaulting to false, and a Runner capability report defaulting to false.
+There is no Cloud per-box nested virtualization column. The owner-writable
+`experimentalConfig` cannot grant permission; each new Box resolves current policy and capability, then the local runtime
+saves its existing creation options for subsequent starts. See [rollout and API](api.md#organization-nested-virtualization-allowlist-rc).
+
 This catalog describes the durable state owned by the applications in this
 directory: the control-plane Postgres schema, and the satellite stores that
 sit beside it. Each table entry names its columns, its keys, and the
