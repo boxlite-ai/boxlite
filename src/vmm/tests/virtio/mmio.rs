@@ -884,14 +884,14 @@ fn the_transport_claims_a_four_kib_window() {
 }
 
 #[test]
-fn slots_hand_out_consecutive_windows_and_lines_until_exhausted() {
+fn slots_hand_out_consecutive_windows_and_skip_the_rtc_line_until_exhausted() {
     let mut slots = Slots::new();
     for index in 0..Slots::CAPACITY {
         let slot = slots.take().unwrap();
         assert_eq!(slot.base, 0xd000_0000 + u64::from(index) * MMIO_WINDOW_LEN);
-        assert_eq!(slot.gsi, 5 + index);
+        assert_eq!(slot.gsi, if index < 3 { 5 + index } else { 6 + index });
     }
-    assert_eq!(Slots::CAPACITY, 19);
+    assert_eq!(Slots::CAPACITY, 18);
     assert!(matches!(slots.take(), Err(Error::VirtioSlotsExhausted)));
     assert_eq!(
         Error::VirtioSlotsExhausted.to_string(),
@@ -995,4 +995,31 @@ fn add_device_puts_each_device_in_its_own_slot() {
         assert_eq!(u32::from_le_bytes(magic), 0x7472_6976);
     }
     workers.shutdown().unwrap();
+}
+
+#[test]
+fn virtio_slots_do_not_conflict_with_the_pc_rtc_interrupt() {
+    let vm = Arc::new(MockVm::new());
+    let events = crate::events::EventLoop::new().unwrap();
+    let mut builder = crate::chipset::ChipsetBuilder::new(vm, events.sender());
+    builder
+        .add("rtc", |r| {
+            r.line(8);
+            Ok(crate::devices::i8042::I8042::new(r.event_sender()))
+        })
+        .unwrap();
+    let mut slots = Slots::new();
+    for _ in 0..Slots::CAPACITY {
+        let slot = slots.take().unwrap();
+        builder
+            .add("virtio", |r| {
+                r.mmio(slot.base, MMIO_WINDOW_LEN);
+                r.line(slot.gsi);
+                Ok(crate::devices::i8042::I8042::new(r.event_sender()))
+            })
+            .unwrap();
+    }
+    builder
+        .build()
+        .expect("virtio devices must leave GSI 8 for the PC RTC");
 }
