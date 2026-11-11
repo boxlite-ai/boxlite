@@ -562,7 +562,9 @@ See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-siz
 **Domains** is a primary navigation page alongside Images and Volumes. It lists
 the selected organization's full hostnames and Box/port, App, or unbound targets.
 The filter matches hostnames and target names/IDs. Request domain lives in the
-resource toolbar; each row can copy its full hostname with explicit clipboard
+resource toolbar, aligned with the filter on desktop. Quota usage and availability
+guidance occupy a separate row so long notices cannot push the request button
+below the filter. Each row can copy its full hostname with explicit clipboard
 feedback. Empty, filtered-empty, permission and load-error states are distinct.
 Associated with links Box targets to their existing details page. App targets
 remain text because the console has no App details route; unbound targets show —.
