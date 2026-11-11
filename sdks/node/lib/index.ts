@@ -42,6 +42,7 @@ export type {
   ImageHandle,
   ImageInfo,
   ImagePullResult,
+  ImageRemovalResult,
   ImageAliasEvent,
   ImageUsage,
   ImageVersion,

@@ -346,6 +346,19 @@ const pulled = await runtime.images.pull("alpine:latest");
 console.log(pulled.reference, pulled.configDigest, pulled.layerCount);
 ```
 
+To reclaim an untagged local image, use its manifest ID:
+
+```typescript
+const removed = await runtime.images.removeById("1f8c03c8f5e5");
+console.log(removed.imageId, removed.removedReferences, removed.reclaimedBytes);
+```
+
+The `ImageRemovalResult` fields are a string, string array and number respectively.
+Use `errorCode(error)` to distinguish `ambiguous_image_id`, `image_has_tags`,
+`image_used_by_boxes`, `not_found`, `invalid_state` (busy) and `unsupported` (REST).
+The existing name-based `remove()` keeps its behavior.
+See [local removal semantics and limits](../../docs/concepts/images.md#removing-local-images).
+
 See [the Node.js reference](../../docs/reference/nodejs/README.md#imagehandle)
 for each method on each runtime.
 
