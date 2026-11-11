@@ -60,7 +60,7 @@ describe('BoxLite REST routing', () => {
         {
           provide: BoxService,
           useValue: {
-            findAllDeprecated: jest.fn().mockResolvedValue([]),
+            findInventory: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
             updateInboundEnabled,
             setOutboundNetwork,

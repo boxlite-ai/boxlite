@@ -5,7 +5,7 @@
  */
 
 import { BoxDto } from '../../box/dto/box.dto'
-import { BoxState } from '../../box/enums/box-state.enum'
+import { publicBoxStatus } from '../../box/utils/box-public-status'
 import {
   AUTO_DELETE_DISABLED,
   DEFAULT_AUTO_STOP_SECONDS,
@@ -19,7 +19,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
     box_id: box.id,
     name: box.name,
-    status: mapState(box.state),
+    status: publicBoxStatus(box.state),
     created_at: box.createdAt || new Date().toISOString(),
     updated_at: box.updatedAt || new Date().toISOString(),
     last_activity_at: box.lastActivityAt,
@@ -83,26 +83,4 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     createDto.outboundAllowNet = allowNet?.length ? allowNet : undefined
   }
   return createDto
-}
-
-function mapState(state: string | BoxState | undefined): string {
-  switch (state) {
-    case BoxState.STARTED:
-      return 'running'
-    case BoxState.STOPPED:
-    case BoxState.ARCHIVED:
-      return 'stopped'
-    case BoxState.CREATING:
-    case BoxState.STARTING:
-    case BoxState.RESTORING:
-      return 'configured'
-    case BoxState.STOPPING:
-    case BoxState.DESTROYING:
-    case BoxState.ARCHIVING:
-      return 'stopping'
-    case BoxState.ERROR:
-    case BoxState.UNKNOWN:
-    default:
-      return 'unknown'
-  }
 }
