@@ -18,7 +18,9 @@ do not remove this association.
 
 Expired tokens fail before lookup. A monotonic elapsed-time floor preserves the
 highest observed wall time, so forward jumps followed by clock rollback cannot
-make reclaimed tokens valid again. New requests reclaim expired entries only
+make reclaimed tokens valid again. Time validation, cleanup and reservation share
+one registry lock, so queued retries recheck expiry after contention. The startup
+task uses the same effective clock before starting effects. New requests reclaim expired entries only
 after startup has published its result, so a delayed old RPC cannot repeat the
 command and unfinished tasks remain counted. The registry admits up to 4096
 unexpired or unfinished requests and returns resource exhaustion at capacity.
