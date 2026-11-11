@@ -81,6 +81,8 @@ For locks, refresh or removal, follow [shared recovery](../deployment.md#recover
 API domain onboarding requires all four settings below. Supply them as
 plain values in the stage's API environment group; do not put them only in a local
 shell or the secrets-reference channel.
+The manifest declares these as optional API values: an unconfigured environment
+stays disabled, while an enabled environment must supply all four together.
 
 | Setting | Required value |
 | --- | --- |
@@ -89,6 +91,13 @@ shell or the secrets-reference channel.
 | `CUSTOM_DOMAIN_TRAFFIC_HOST` | Stable public hostname resolving to the proxy's reserved entry IPs, e.g. the existing proxy root |
 | `CUSTOM_DOMAIN_EDGE_IPS` | Comma-separated fixed entry IPs, at most four; used for DNS comparison and TLS probes |
 | `CUSTOM_DOMAIN_RESERVED_SUFFIXES` | Optional comma-separated additional platform namespaces, including retired platform suffixes |
+
+Choose the workflow branch containing both the environment declarations and the
+custom-domain GCP provider. The workflow's `ref` input chooses application artifacts;
+it does not switch the infrastructure checkout. For a stage deployment from a
+branch containing both changes, leave `ref` empty to use that dispatch's commit
+for the artifacts too. Preview first and inspect the full resource diff:
+`components=api` narrows artifact preparation, not the infrastructure update.
 
 The API also needs its existing Commerce connection to determine subscription
 eligibility. Missing billing connectivity cannot authorize custom-domain access.
