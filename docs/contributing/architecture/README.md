@@ -95,11 +95,6 @@ to the OCI workload.
 
 ### Reader/writer locks
 
-`Locker` provides shared reads and exclusive writes. `InMemoryLockManager` is
-single-process; `FileLockManager` uses `flock` across processes. Retrieve a separate
-handle for every concurrent acquisition: cloning an `Arc` shares ownership, not
-an independent lock. Nested acquisition and read-to-write upgrades are unsupported.
-
 `LockGuard::new_async` and `ReadLockGuard::new_async` retry nonblocking acquisition
 every 10ms with Tokio sleep. Cancelling a pending waiter must not release the
 current owner's lock. Dropping an acquired guard releases its lock; process exit
@@ -113,10 +108,9 @@ exclusion before releasing the owner. Reexecuted child processes independently
 open the manager and verify shared readers, writer exclusion, and exit release;
 control messages and deadlines bound the scenario, and cleanup kills/reaps children.
 
-Try-acquisition treats `WouldBlock` as contention, retries `Interrupted`, and
-panics on other OS errors rather than hiding them as contention. The errno tests
-exercise real fatal kernel errors, **not EINTR retry coverage**. The retry path
-uses `LOCK_NB`; interrupting a blocking `flock` exercises a different path.
+The errno tests exercise real fatal kernel errors, **not EINTR retry coverage**.
+The retry path uses `LOCK_NB`; interrupting a blocking `flock` exercises a different
+path.
 No deterministic local-filesystem trigger for nonblocking EINTR is established on
 macOS or Linux; signal timing alone is not evidence of reaching that branch.
 See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)

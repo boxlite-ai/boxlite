@@ -418,7 +418,12 @@ mod tests {
         let shared = tokio::time::timeout(Duration::from_secs(1), waiting_reader)
             .await
             .expect("reader did not acquire after writer released");
-        let shared_peer = ReadLockGuard::new_async(peer.as_ref()).await;
+        let shared_peer = tokio::time::timeout(
+            Duration::from_secs(1),
+            ReadLockGuard::new_async(peer.as_ref()),
+        )
+        .await
+        .expect("second reader did not acquire while first reader held the lock");
         let mut waiting_writer = Box::pin(LockGuard::new_async(writer.as_ref()));
         assert!(futures::poll!(&mut waiting_writer).is_pending());
         drop(shared);
