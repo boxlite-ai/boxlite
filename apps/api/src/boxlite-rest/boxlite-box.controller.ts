@@ -228,6 +228,9 @@ export class BoxliteBoxController {
     @Query() page: BoxPageQuery,
   ): Promise<ListBoxesResponseDto> {
     const organizationId = authContext.organizationId
+    if (!organizationId) {
+      throw new BadRequestException('A resolved organization is required to list boxes')
+    }
     const boxes = await this.boxService.findInventory(organizationId, {
       pageSize: page.pageSize,
       status: page.status,

@@ -85,7 +85,11 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
       .useValue({
         canActivate(context: any) {
           const request = context.switchToHttp().getRequest()
-          request.user = request.headers['x-test-other-org'] ? { organizationId: otherOrg } : caller
+          request.user = request.headers['x-test-unscoped-admin']
+            ? { role: 'admin' }
+            : request.headers['x-test-other-org']
+              ? { organizationId: otherOrg }
+              : caller
           return true
         },
       })
@@ -140,6 +144,11 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
     const next = await get(`status=stopped&pageSize=1&pageToken=${first.body.next_page_token}`, 'tenant/')
     expect(next.body.boxes.map((b: any) => b.box_id)).toEqual(['000000000006'])
     expect(next.body).not.toHaveProperty('next_page_token')
+  })
+  it('requires a resolved organization even for an admin admitted by the resource guard', async () => {
+    const result = await get('pageSize=2', '', { 'x-test-unscoped-admin': 'true' })
+    expect(result.status).toBe(400)
+    expect(result.body).not.toHaveProperty('boxes')
   })
   it('bounds unfiltered REST inventory', async () => {
     const result = await get('pageSize=2')

@@ -99,6 +99,8 @@ ordered by immutable Box ID ascending. `pageSize` defaults to 100 and accepts
 integers from 1 through 1000. Follow `next_page_token` as `pageToken` until the
 response omits it; repeat the same `status` selection. Page size may change.
 MCP `listBoxes` delegates to this REST operation and uses the same continuation.
+A resolved organization is required, including for system administrators; requests
+without one return 400 before querying inventory.
 
 Filtering occurs before the database limit and matches the response's public
 `status`, including desired-state transitions. For example, a stored started Box
