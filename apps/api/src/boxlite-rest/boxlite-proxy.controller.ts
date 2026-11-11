@@ -1,4 +1,3 @@
-import { Agent } from 'node:https'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -151,12 +150,9 @@ export class BoxliteProxyController {
         if (!runner) throw new NotFoundException(`Runner for box ${boxId} not found`)
         const base = runner.apiUrl || runner.proxyUrl
         if (!base) throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
-        // Match proxyToRunner's secure:false policy only for the resolved runner.
-        const httpsAgent = new Agent({ rejectUnauthorized: false })
         const headers = { Authorization: `Bearer ${runner.apiKey}` }
         const info = await axios.get(`${base}/v1/boxes/${encodeURIComponent(box.id)}/exec-generation`, {
           headers,
-          httpsAgent,
           maxRedirects: 0,
           timeout: 10000,
           validateStatus: () => true,
@@ -168,7 +164,6 @@ export class BoxliteProxyController {
         const token = await associate(info.data.generation)
         const response = await axios.post(`${base}/v1/boxes/${encodeURIComponent(box.id)}/exec`, req.body, {
           headers: { ...headers, 'Idempotency-Key': token, 'X-Boxlite-Exec-Generation': info.data.generation },
-          httpsAgent,
           maxRedirects: 0,
           timeout: 300000,
           validateStatus: () => true,

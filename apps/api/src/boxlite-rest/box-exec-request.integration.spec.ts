@@ -1,7 +1,7 @@
 jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn(), fixRequestBody: jest.fn() }))
 
 import { createServer, Server } from 'node:http'
-import { createServer as createHttpsServer } from 'node:https'
+import { createServer as createHttpsServer, globalAgent } from 'node:https'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -107,7 +107,7 @@ describeDatabase('keyed execution proxy with PostgreSQL and HTTP boundary', () =
     return res
   }
 
-  it('uses the existing runner proxy TLS policy for keyed HTTPS calls', async () => {
+  it('requires a trusted runner certificate for keyed HTTPS calls', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'runner-tls-'))
     const key = join(directory, 'key.pem')
     const cert = join(directory, 'cert.pem')
@@ -127,22 +127,48 @@ describeDatabase('keyed execution proxy with PostgreSQL and HTTP boundary', () =
         '1',
         '-subj',
         '/CN=localhost',
+        '-addext',
+        'subjectAltName=IP:127.0.0.1',
       ],
       { stdio: 'ignore' },
     )
     const secure = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) })
     secure.on('request', (...args) => server.emit('request', ...args))
     const original = base
+    const originalCa = globalAgent.options.ca
     try {
       await new Promise<void>((resolve) => secure.listen(0, '127.0.0.1', resolve))
       base = `https://127.0.0.1:${(secure.address() as AddressInfo).port}`
+      delete globalAgent.options.ca
+      await expect(call(randomUUID())).rejects.toThrow('self-signed certificate')
+      expect(starts).toBe(0)
+      globalAgent.options.ca = readFileSync(cert)
       const result = await call(randomUUID())
       expect(result.json).toHaveBeenCalledWith({ execution_id: 'guest-id' })
       expect(starts).toBe(1)
     } finally {
       base = original
+      if (originalCa === undefined) delete globalAgent.options.ca
+      else globalAgent.options.ca = originalCa
       await new Promise<void>((resolve) => secure.close(() => resolve()))
       rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('does not follow runner redirects or send execution to their target', async () => {
+    const original = base
+    const redirect = createServer((_req, res) => {
+      res.writeHead(302, { location: `${original}/v1/boxes/box/exec-generation` })
+      res.end()
+    })
+    try {
+      await new Promise<void>((resolve) => redirect.listen(0, '127.0.0.1', resolve))
+      base = `http://127.0.0.1:${(redirect.address() as AddressInfo).port}`
+      await expect(call(randomUUID())).rejects.toMatchObject({ status: 302 })
+      expect(starts).toBe(0)
+    } finally {
+      base = original
+      await new Promise<void>((resolve) => redirect.close(() => resolve()))
     }
   })
 

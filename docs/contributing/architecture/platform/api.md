@@ -595,8 +595,12 @@ long startup requests. The heartbeat ends on response completion, close or error
 The dedicated lock pool retries initialization after a transient connection failure;
 it bounds each API process to four active keyed requests and returns retryable 503
 when full. This is shared process capacity, not a tenant fairness guarantee.
-Keyed runner HTTPS calls follow the existing runner proxy certificate policy and
-do not follow redirects. An older guest's missing keyed RPC returns an unsupported
+Keyed runner HTTPS calls verify the runner certificate and do not follow redirects.
+Private runner CAs must be trusted by the API's Node process, for example through
+`NODE_EXTRA_CA_CERTS` set before starting the API. Untrusted or hostname-mismatched
+certificates are rejected. Unlike the historical ordinary proxy's `secure: false`,
+keyed HTTPS requires this trust configuration; deployments using private runner
+certificates must provide it. HTTP runner endpoints retain their existing behavior. An older guest's missing keyed RPC returns an unsupported
 operation error and never falls back to starting an unkeyed command.
 
 Resource permissions are enforced per route. A box mutation — create, start,
