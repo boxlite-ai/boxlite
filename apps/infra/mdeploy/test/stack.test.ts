@@ -22,7 +22,8 @@ import type { ClickHouse } from '../stack/clickhouse.ts'
 const out = <T>(value: T): any => ({ apply: (fn: (v: T) => unknown) => out(fn(value)), __output: value })
 
 /** What a fake handed back, unwrapped. */
-const read = (value: any): unknown => (value && typeof value === 'object' && '__output' in value ? value.__output : value)
+const read = (value: any): unknown =>
+  value && typeof value === 'object' && '__output' in value ? value.__output : value
 
 const config: DeployConfig = parseDeployConfig(
   '/repo/apps/infra/mdeploy.config.json',
@@ -95,7 +96,10 @@ test('retention is resolved once, and only a self-hosted ClickHouse accepts one'
   assert.equal(retentionSeen(null), 720)
   for (const mode of ['managed', 'disabled'] as const) {
     assert.equal(retentionSeen(null, mode), 720)
-    assert.throws(() => retentionSeen(168, mode), /CLICKHOUSE_RETENTION_HOURS cannot be set when deploy.clickhouse.mode is/)
+    assert.throws(
+      () => retentionSeen(168, mode),
+      /CLICKHOUSE_RETENTION_HOURS cannot be set when deploy.clickhouse.mode is/,
+    )
   }
 })
 
@@ -143,11 +147,13 @@ const bundle = ({
   clickhouse = true,
   registryCredentials = true,
   registryProxy = true,
+  checkpoints = false,
   servesUserDomain = true,
 }: {
   clickhouse?: boolean
   registryCredentials?: boolean
   registryProxy?: boolean
+  checkpoints?: boolean
   servesUserDomain?: boolean
 } = {}) => {
   const seen: Record<string, any> = {}
@@ -159,12 +165,23 @@ const bundle = ({
   }
   const network = {
     binding: { cloud: 'aws' as const, cidr: out('10.0.0.0/16') },
-    placementFor: (role: string) => ({ cloud: 'aws' as const, exposure: role === 'runner' ? 'egress-only-public' : 'private', role }),
+    placementFor: (role: string) => ({
+      cloud: 'aws' as const,
+      exposure: role === 'runner' ? 'egress-only-public' : 'private',
+      role,
+    }),
     ready: ['network-rules'],
   }
   const storage = {
     name: out('boxlite-dev-storage'),
     binding: { cloud: 'aws' as const, credentialVending: { roleName: 'r', roleArn: out('arn:role') } },
+    checkpoints: checkpoints
+      ? {
+          active: true,
+          bucket: out('boxlite-dev-checkpoints'),
+          archivePrefix: out('gs://boxlite-dev-checkpoints/checkpoints/'),
+        }
+      : { active: false },
     ready: [],
   }
   const database = {
@@ -223,7 +240,13 @@ const bundle = ({
         ready: ['api'],
       }),
     edge: (input: any) => (request: any) =>
-      record('edge', { input, request, url: out('https://box.dev.boxlite.ai'), metricTarget: out('net/proxy/1'), ready: ['edge'] }),
+      record('edge', {
+        input,
+        request,
+        url: out('https://box.dev.boxlite.ai'),
+        metricTarget: out('net/proxy/1'),
+        ready: ['edge'],
+      }),
     servesUserDomain: () => servesUserDomain,
     registryProxy: (input: any) => (request: any) =>
       record(
@@ -289,10 +312,13 @@ test('the runner is placed directly, because it is a machine rather than a task'
 test('the parsed runner data disk size reaches the provider', () => {
   const { providers, seen } = bundle()
   const settings = Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'path' && key !== 'root'))
-  const sizedConfig = parseDeployConfig(config.path, JSON.stringify({
-    ...settings,
-    runners: { ...config.runners, dataDiskGb: 2048 },
-  }))
+  const sizedConfig = parseDeployConfig(
+    config.path,
+    JSON.stringify({
+      ...settings,
+      runners: { ...config.runners, dataDiskGb: 2048 },
+    }),
+  )
   deployStack({ providers, config: sizedConfig, inputs: inputs() })
   assert.equal(seen.runners.request.dataDiskGb, 2048)
 })
@@ -305,8 +331,24 @@ test('the stack’s own names win over a stale copy in the store', () => {
     inputs: inputs({ apiEnvironment: { DB_HOST: 'yesterdays-database.invalid', OIDC_AUDIENCE: 'boxlite' } }),
   })
   const environment = seen.api.request.environment
-  assert.equal(read(environment.DB_HOST), 'db.internal', 'the database this deploy built, not the one the store remembers')
+  assert.equal(
+    read(environment.DB_HOST),
+    'db.internal',
+    'the database this deploy built, not the one the store remembers',
+  )
   assert.equal(environment.OIDC_AUDIENCE, 'boxlite', 'and a name only the store decides is carried through')
+})
+
+test('checkpoint admission stays off until the API environment explicitly enables it', () => {
+  for (const enabled of [undefined, 'false', 'true']) {
+    const { providers, seen } = bundle()
+    deployStack({
+      providers,
+      config,
+      inputs: inputs({ apiEnvironment: enabled === undefined ? {} : { CHECKPOINTS_ENABLED: enabled } }),
+    })
+    assert.equal(seen.api.request.environment.CHECKPOINTS_ENABLED, enabled ?? 'false')
+  }
 })
 
 test('the API is told the origin a client composes a box URL from', () => {
@@ -453,7 +495,11 @@ test('the API and the first host are handed the same minted token', () => {
   // answered 401 on every call it makes, and never reports in — which is what a
   // provider minting its own token after the API was built would produce.
   const { providers, seen } = bundle()
-  deployStack({ providers, config, inputs: inputs({ runnerFleet: fleetOf('default', 'runner-2'), apiEnvironment: { ADMIN_API_KEY: 'admin' } }) })
+  deployStack({
+    providers,
+    config,
+    inputs: inputs({ runnerFleet: fleetOf('default', 'runner-2'), apiEnvironment: { ADMIN_API_KEY: 'admin' } }),
+  })
 
   const forApi = seen.api.request.environment.DEFAULT_RUNNER_API_KEY
   const forHost = seen.runners.request.fleet[0].token
@@ -467,10 +513,14 @@ test('every host gets its own token, named after the row it will hold', () => {
   // resource name follows the control-plane name rather than the index, so
   // growing the fleet does not renumber tokens already registered.
   const { providers, seen } = bundle()
-  deployStack({ providers, config, inputs: inputs({
+  deployStack({
+    providers,
+    config,
+    inputs: inputs({
       runnerFleet: fleetOf('default', 'runner-2', 'runner-3'),
       apiEnvironment: { ADMIN_API_KEY: 'admin' },
-    }) })
+    }),
+  })
 
   const tokens = seen.runners.request.fleet.map((assignment: any) => assignment.token)
   assert.deepEqual(tokens, ['minted:RunnerToken-default', 'minted:RunnerToken-runner-2', 'minted:RunnerToken-runner-3'])
@@ -546,16 +596,51 @@ test('the API is granted exactly the capabilities its storage supports', () => {
   const { providers, seen } = bundle()
   void seen
   deployStack({ providers, config, inputs: inputs() })
-  assert.deepEqual(
-    seen.api.request.capabilities.map((capability: any) => capability.kind).sort(),
-    [
-      'list-own-bucket',
-      'manage-volume-buckets',
-      'read-telemetry',
-      'vend-volume-credentials',
-      'write-registry-credentials',
-    ],
+  assert.deepEqual(seen.api.request.capabilities.map((capability: any) => capability.kind).sort(), [
+    'list-own-bucket',
+    'manage-volume-buckets',
+    'read-telemetry',
+    'vend-volume-credentials',
+    'write-registry-credentials',
+  ])
+})
+
+test('the checkpoint archive grant comes after every grant an existing stage already holds', () => {
+  // Providers name each grant by its index; a grant inserted ahead of others
+  // would move them to new resources, and on GCP that deletes the bindings.
+  const kinds = (deployed: ReturnType<typeof bundle>) =>
+    deployed.seen.api.request.capabilities.map((capability: any) => capability.kind)
+  const before = bundle()
+  deployStack({ providers: before.providers, config, inputs: inputs() })
+  const after = bundle({ checkpoints: true })
+  deployStack({ providers: after.providers, config, inputs: inputs() })
+
+  assert.deepEqual(kinds(after), [...kinds(before), 'manage-checkpoint-archives'])
+})
+
+test('checkpoints are on only where storage keeps a bucket for them, for the API and the hosts alike', () => {
+  const kept = bundle({ checkpoints: true })
+  deployStack({ providers: kept.providers, config, inputs: inputs() })
+  assert.equal(kept.seen.api.request.environment.CHECKPOINT_ARCHIVE_PREFIX, kept.seen.storage.checkpoints.archivePrefix)
+  const grant = kept.seen.api.request.capabilities.find(
+    (capability: any) => capability.kind === 'manage-checkpoint-archives',
   )
+  assert.equal(grant?.checkpoints.bucket, kept.seen.storage.checkpoints.bucket)
+  // The hosts write the archives the API deletes, so they are handed the same bucket.
+  assert.equal(kept.seen.runners.request.checkpointBucket, kept.seen.storage.checkpoints.bucket)
+
+  /*
+   * A cloud with no checkpoint store (AWS, reserved) gets no variable, no grant
+   * and no bucket for its hosts; the API then reports checkpoints off.
+   */
+  const none = bundle()
+  deployStack({ providers: none.providers, config, inputs: inputs() })
+  assert.equal('CHECKPOINT_ARCHIVE_PREFIX' in none.seen.api.request.environment, false)
+  assert.equal(
+    none.seen.api.request.capabilities.some((capability: any) => capability.kind === 'manage-checkpoint-archives'),
+    false,
+  )
+  assert.equal(none.seen.runners.request.checkpointBucket, null)
 })
 
 test('the API writes registry passwords only where a store keeps them, and is told which store', () => {

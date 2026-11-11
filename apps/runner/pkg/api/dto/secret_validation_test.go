@@ -30,7 +30,7 @@ func TestSecretFieldsValidatePerElement(t *testing.T) {
 		Id:              "box-1",
 		Image:           "alpine:latest",
 		OsUser:          "root",
-		CpuQuota:        1,
+		CpuQuota:        cpuQuota(1),
 		MemoryQuota:     1,
 		StorageQuota:    1,
 		Secrets:         []SecretDTO{{Name: "openai", Value: "sk-test"}},
@@ -49,7 +49,7 @@ func TestSecretFieldsValidatePerElement(t *testing.T) {
 		return RecoverBoxDTO{
 			FromVolumeId:    "vol-1",
 			OsUser:          "root",
-			CpuQuota:        1,
+			CpuQuota:        cpuQuota(1),
 			MemoryQuota:     1,
 			StorageQuota:    1,
 			ErrorReason:     "recover",
@@ -90,8 +90,8 @@ func TestOutboundEnabledIsRequiredAtTheBoundary(t *testing.T) {
 		name string
 		box  any
 	}{
-		{"create", CreateBoxDTO{Id: "box-1", Image: "alpine:latest", OsUser: "root", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 1}},
-		{"recover", RecoverBoxDTO{OsUser: "root", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 1, ErrorReason: "recover"}},
+		{"create", CreateBoxDTO{Id: "box-1", Image: "alpine:latest", OsUser: "root", CpuQuota: cpuQuota(1), MemoryQuota: 1, StorageQuota: 1}},
+		{"recover", RecoverBoxDTO{OsUser: "root", CpuQuota: cpuQuota(1), MemoryQuota: 1, StorageQuota: 1, ErrorReason: "recover"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			err := v.Struct(tt.box)
@@ -102,7 +102,7 @@ func TestOutboundEnabledIsRequiredAtTheBoundary(t *testing.T) {
 	}
 
 	// false is a policy, not an absence.
-	explicit := CreateBoxDTO{Id: "box-1", Image: "alpine:latest", OsUser: "root", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 1, OutboundEnabled: &disabled}
+	explicit := CreateBoxDTO{Id: "box-1", Image: "alpine:latest", OsUser: "root", CpuQuota: cpuQuota(1), MemoryQuota: 1, StorageQuota: 1, OutboundEnabled: &disabled}
 	if err := v.Struct(explicit); err != nil {
 		t.Fatalf("outboundEnabled=false rejected: %v", err)
 	}

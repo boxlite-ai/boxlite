@@ -16,6 +16,35 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ## Usage
 
+### Managed checkpoints
+
+The source must be stopped before `Create`; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`
+and `ImportBox(ctx, key, name, boxID)`, each taking a context. The handle follows its runtime's
+lifetime and needs no separate close. Captured archives survive source deletion.
+
+```go
+checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
+if err != nil { return err }
+worker, err := runtime.Checkpoints().ImportBox(ctx, checkpoint.ID, "worker", "")
+if err != nil { return err }
+defer worker.Close()
+```
+
+Pass an empty `boxID` for a new Box; a nonempty `boxID` replaces that target.
+Name and target are mutually exclusive.
+
+Cloud capture may report `creating`; query until `ready` before use. New imports
+and replacements inherit all saved execution settings without overrides.
+Replacement preserves the public Box ID. `Remove(ctx, key, true)` ignores absence
+only. Local runtime checkpoint operations return an unsupported-operation error.
+Storage and replacement coordination belong to the server. Existing native archive
+export/import and the runner's archive preparation helper remain available.
+
+### Create a box
+
 ```go
 package main
 
@@ -405,9 +434,18 @@ Build from source (requires Rust toolchain):
 # From the project root
 make dev:go
 
-# Run tests
-cd sdks/go && go test -tags boxlite_dev -v ./...
+# Run hosted unit and REST tests
+make test:unit:go
+
+# Run native archive import/export tests on a VM-capable host
+make test:integration:go
 ```
+
+Native archive import/export tests use the production runtime constructor and
+require a VM-capable host, even when the test does not start a VM.
+The Linux native-binding coverage job runs the no-VM import/export cases through
+`make coverage:go:checkpoint` and flushes the instrumented native counters before
+Go exits. Full VM archive round-trips remain in the integration suite.
 
 ## License
 

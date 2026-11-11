@@ -18,14 +18,31 @@ vi.mock('react-oidc-context', () => ({
 vi.mock('posthog-js/react', () => ({ usePostHog: () => undefined }))
 vi.mock('./hooks/useConfig', () => ({ useConfig: () => ({}) }))
 
-const { passThrough } = vi.hoisted(() => ({
+const { passThrough, registration, organizationMount, notificationMount } = vi.hoisted(() => ({
   passThrough: ({ children }: { children?: React.ReactNode }) => children,
+  registration: { required: false },
+  organizationMount: vi.fn(),
+  notificationMount: vi.fn(),
 }))
 vi.mock('./providers/ApiProvider', () => ({ ApiProvider: passThrough }))
-vi.mock('@/providers/OrganizationsProvider', () => ({ OrganizationsProvider: passThrough }))
+vi.mock('./components/RegistrationGate', () => ({
+  RegistrationGate: ({ children }: { children: React.ReactNode }) =>
+    registration.required ? <p>Registration required</p> : children,
+}))
+vi.mock('@/providers/OrganizationsProvider', () => ({
+  OrganizationsProvider: ({ children }: { children: React.ReactNode }) => {
+    organizationMount()
+    return children
+  },
+}))
 vi.mock('@/providers/SelectedOrganizationProvider', () => ({ SelectedOrganizationProvider: passThrough }))
 vi.mock('./providers/RegionsProvider', () => ({ RegionsProvider: passThrough }))
-vi.mock('@/providers/NotificationSocketProvider', () => ({ NotificationSocketProvider: passThrough }))
+vi.mock('@/providers/NotificationSocketProvider', () => ({
+  NotificationSocketProvider: ({ children }: { children: React.ReactNode }) => {
+    notificationMount()
+    return children
+  },
+}))
 vi.mock('./providers/BoxSessionProvider', () => ({ BoxSessionProvider: passThrough }))
 vi.mock('./components/Banner', () => ({ BannerProvider: passThrough }))
 
@@ -67,6 +84,9 @@ describe('App routes', () => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    registration.required = false
+    organizationMount.mockClear()
+    notificationMount.mockClear()
   })
 
   async function renderAt(path: string) {
@@ -94,6 +114,13 @@ describe('App routes', () => {
   // mount their pages.
   it('opens the image catalog', async () => {
     expect(await renderAt('/dashboard/images')).toBe('images page, images tab')
+  })
+
+  it('keeps organization and notification providers behind registration', async () => {
+    registration.required = true
+    expect(await renderAt('/dashboard/boxes?template=python')).toBe('Registration required')
+    expect(organizationMount).not.toHaveBeenCalled()
+    expect(notificationMount).not.toHaveBeenCalled()
   })
 
   it('opens Domains as a peer dashboard page', async () => {

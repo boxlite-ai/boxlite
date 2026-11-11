@@ -148,6 +148,7 @@ model_send_webhook_dto.go
 model_storage_access_dto.go
 model_trace_span.go
 model_trace_summary.go
+model_turnstile_config.go
 model_update_box_state_dto.go
 model_update_job_status.go
 model_update_organization_default_region.go

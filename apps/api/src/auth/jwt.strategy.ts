@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -13,9 +13,10 @@ import { UserService } from '../user/user.service'
 import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
-import { TypedConfigService } from '../config/typed-config.service'
 import { LoginEventRecorder } from './login-event.recorder'
+import { TypedConfigService } from '../config/typed-config.service'
 import { Context } from '../common/context/context'
+import { UserAlreadyExistsException } from '../user/user-already-exists.exception'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -69,6 +70,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userId = payload.uid
       email = payload.sub
     }
+    if (typeof userId !== 'string' || !userId.trim()) throw new UnauthorizedException('Invalid credentials')
     let user = await this.userService.findOne(userId)
 
     if (user && !user.emailVerified && payload.email_verified) {
@@ -78,25 +80,28 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (!user) {
+      if (this.configService.get('turnstile')) {
+        throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
+      }
       if (typeof email !== 'string' || !email.trim()) {
         throw new ForbiddenException({ message: 'Email address required for registration', code: 'email_required' })
       }
-      user = await this.userService.create(
-        {
-          id: userId,
-          name: payload.name || payload.username || 'Unknown',
-          email,
-          emailVerified: payload.email_verified || false,
-          // Anchor the auto-created default organization to the platform's
-          // default region, matching the admin-seed path in AppService. Without
-          // this, OrganizationService.handleUserCreatedEvent creates the org
-          // with defaultRegionId=undefined and downstream callers that read
-          // organization.defaultRegionId fail for every OIDC-created user.
-          defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
-        },
-        Context.user({ userId, authMethod: 'jwt' }),
-      )
-      this.logger.debug(`Created new user with ID: ${userId}`)
+      try {
+        user = await this.userService.create(
+          {
+            id: userId,
+            name: payload.name || payload.username || 'Unknown',
+            email,
+            emailVerified: payload.email_verified === true,
+            defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+          },
+          Context.user({ userId, authMethod: 'jwt' }),
+        )
+      } catch (error) {
+        if (!(error instanceof UserAlreadyExistsException)) throw error
+        user = await this.userService.findOne(userId)
+        if (!user) throw error
+      }
     } else {
       // Only what the token states replaces stored profile data: tokens for
       // third-party MCP clients carry no profile claims, and their absence must
