@@ -23,6 +23,7 @@ pub(in crate::service) mod executor;
 mod output;
 pub(crate) mod process_instance;
 pub(in crate::service) mod registry;
+pub(crate) mod requests;
 pub(in crate::service) mod state;
 mod timeout;
 pub(crate) mod tty;
@@ -215,8 +216,27 @@ pub(crate) enum TtyResize {
 #[tonic::async_trait]
 impl Execution for GuestServer {
     async fn exec(&self, request: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+        if request.metadata().contains_key("idempotency-key") {
+            return self.exec_keyed(request).await;
+        }
         let req = request.into_inner();
         Ok(Response::new(start_execution(self, req, None).await))
+    }
+
+    async fn exec_keyed(
+        &self,
+        request: Request<ExecRequest>,
+    ) -> Result<Response<ExecResponse>, Status> {
+        let key = request
+            .metadata()
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| Status::invalid_argument("idempotency-key is required"))?
+            .to_owned();
+        self.execution_requests
+            .execute(self, &key, request.into_inner())
+            .await
+            .map(Response::new)
     }
 
     async fn list_executions(
@@ -883,6 +903,57 @@ mod container_id_path_tests {
         assert!(is_single_path_component(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
+    }
+
+    #[tokio::test]
+    async fn keyed_execution_retries_do_not_repeat_counter_side_effects() {
+        use boxlite_shared::{ExecRequest, Execution};
+        let directory = tempfile::tempdir().unwrap();
+        let counter = directory.path().join("counter");
+        let _ = crate::reaper::REAPER.set(crate::reaper::Reaper::install());
+        let server = GuestServer::new(GuestLayout::new());
+        let key = format!("counter-request.{}", super::now_ms() + 86_400_000);
+        let request = || {
+            let mut request = tonic::Request::new(ExecRequest {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), format!("echo once >> '{}'", counter.display())],
+                env: std::collections::HashMap::from([("BOXLITE_EXECUTOR".into(), "guest".into())]),
+                ..Default::default()
+            });
+            request
+                .metadata_mut()
+                .insert("idempotency-key", key.parse().unwrap());
+            request
+        };
+        let (first, concurrent) = tokio::join!(server.exec(request()), server.exec(request()));
+        let first = first.unwrap().into_inner();
+        assert_eq!(
+            first.execution_id,
+            concurrent.unwrap().into_inner().execution_id
+        );
+        assert!(first.error.is_none(), "{:?}", first.error);
+        server.wait_execution(&first.execution_id).await.unwrap();
+        let mut changed = request();
+        changed.get_mut().args.push("different".into());
+        assert_eq!(
+            server
+                .exec(changed)
+                .await
+                .unwrap()
+                .into_inner()
+                .error
+                .unwrap()
+                .reason,
+            "idempotency_mismatch"
+        );
+        let second = server.exec(request()).await.unwrap().into_inner();
+        server.wait_execution(&second.execution_id).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&counter).unwrap(),
+            "once\n",
+            "a retry repeated command effects"
+        );
+        assert_eq!(first.execution_id, second.execution_id);
     }
 
     #[test]

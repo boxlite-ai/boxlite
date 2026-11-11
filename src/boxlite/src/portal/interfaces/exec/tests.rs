@@ -36,6 +36,10 @@ impl ExecutionService for RecordingExecutionService {
         Err(Status::unimplemented("exec is not used by these tests"))
     }
 
+    async fn exec_keyed(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+        Err(Status::unimplemented("keyed exec is not used by these tests"))
+    }
+
     async fn list_executions(
         &self,
         _: Request<ListExecutionsRequest>,

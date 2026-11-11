@@ -64,6 +64,9 @@ service Execution {
   // Start execution immediately.
   rpc Exec(ExecRequest) returns (ExecResponse);
 
+  // Requires idempotency-key metadata. Separate RPC fails closed on older guests.
+  rpc ExecKeyed(ExecRequest) returns (ExecResponse);
+
   // Snapshot of live registered sessions, including the container init.
   rpc ListExecutions(ListExecutionsRequest) returns (ListExecutionsResponse);
 

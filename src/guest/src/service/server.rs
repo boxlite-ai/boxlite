@@ -26,6 +26,7 @@ pub(crate) struct GuestInitState {
 /// - Container: OCI container lifecycle
 /// - Execution: Command execution with bidirectional streaming
 /// - Files: Container-rootfs file transfer
+#[derive(Clone)]
 pub(crate) struct GuestServer {
     /// Guest filesystem layout
     pub layout: GuestLayout,
@@ -39,11 +40,13 @@ pub(crate) struct GuestServer {
     /// Execution registry for tracking running executions
     pub registry: ExecutionRegistry,
 
+    pub execution_requests: Arc<crate::service::exec::requests::ExecutionRequests>,
+
     /// Independently reconfigurable embedded SSH listener.
-    pub ssh_manager: crate::service::ssh::SshManager,
+    pub ssh_manager: Arc<crate::service::ssh::SshManager>,
 
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
-    pub frozen_mounts: Mutex<Vec<PathBuf>>,
+    pub frozen_mounts: Arc<Mutex<Vec<PathBuf>>>,
 
     /// Set when a host-driven Shutdown RPC is in progress. The reaper's
     /// init-exit action checks this to avoid powering the VM off underneath a
@@ -73,8 +76,9 @@ impl GuestServer {
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
-            ssh_manager: crate::service::ssh::SshManager::default(),
-            frozen_mounts: Mutex::new(Vec::new()),
+            execution_requests: Arc::new(Default::default()),
+            ssh_manager: Arc::new(crate::service::ssh::SshManager::default()),
+            frozen_mounts: Arc::new(Mutex::new(Vec::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),
         }

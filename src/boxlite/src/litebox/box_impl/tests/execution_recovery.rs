@@ -17,6 +17,10 @@ impl ExecutionService for ExitRecoveryGuest {
         panic!("recovering an execution must not start a command");
     }
 
+    async fn exec_keyed(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+        panic!("recovering an execution must not start a keyed command");
+    }
+
     async fn list_executions(
         &self,
         _: Request<ListExecutionsRequest>,
