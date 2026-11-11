@@ -22,6 +22,9 @@ const turnstile = {
 }
 const settings = {
   TURNSTILE_TIMEOUT_MS: '7000',
+  RATE_LIMIT_REGISTRATION_LIMIT: '12',
+  RATE_LIMIT_REGISTRATION_TTL: '900',
+  TRUST_PROXY_CIDRS: '10.0.1.0/24,10.0.2.0/24',
 }
 const fixture = (home: Cloud): Record<string, string> => ({
   ...Object.fromEntries(

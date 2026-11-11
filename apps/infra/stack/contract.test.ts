@@ -174,6 +174,13 @@ test('keeps every ClickHouse IAM resource inside the deploy-role namespace and p
   }
 })
 
+test('the legacy API receives configurable registration limits and explicit proxy trust', () => {
+  const api = liveText('script', readFileSync(new URL('./api.ts', import.meta.url), 'utf8'))
+  assert.match(api, /RATE_LIMIT_REGISTRATION_LIMIT: envOr\('RATE_LIMIT_REGISTRATION_LIMIT', '10'\)/)
+  assert.match(api, /RATE_LIMIT_REGISTRATION_TTL: envOr\('RATE_LIMIT_REGISTRATION_TTL', '600'\)/)
+  assert.match(api, /TRUST_PROXY_CIDRS: envOr\('TRUST_PROXY_CIDRS', ''\)/)
+})
+
 test('uses the shared AWS region resolver and waits for the critical API service', () => {
   assert.match(liveConfig, /await import\('\.\.\/deployment\/environment\.js'\)/)
   assert.match(liveConfig, /const REGION = resolveAwsRegion\(\)/)

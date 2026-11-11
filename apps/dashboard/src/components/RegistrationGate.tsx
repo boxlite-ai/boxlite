@@ -27,6 +27,9 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   const [submitting, setSubmitting] = useState(false)
   const [admitted, setAdmitted] = useState(false)
   const pending = useRef(false)
+  const [retryAt, setRetryAt] = useState(0)
+  const [now, setNow] = useState(Date.now)
+  const waitSeconds = Math.max(0, Math.ceil((retryAt - now) / 1000))
   const account = useQuery({
     queryKey: ['users', 'registration', user?.profile.sub],
     enabled: Boolean(turnstile?.sitekey),
@@ -44,8 +47,18 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
     else if (account.isSuccess && account.isFetchedAfterMount) setAdmitted(true)
   }, [needsRegistration, account.isSuccess, account.isFetchedAfterMount])
 
+  useEffect(() => {
+    if (!retryAt) return
+    const timer = setInterval(() => {
+      const timestamp = Date.now()
+      setNow(timestamp)
+      if (timestamp >= retryAt) clearInterval(timer)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [retryAt])
+
   async function register() {
-    if (!token || pending.current) return
+    if (!token || pending.current || waitSeconds) return
     pending.current = true
     setSubmitting(true)
     setMessage('')
@@ -56,6 +69,11 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
       if (error instanceof RegistrationEmailError) {
         setEmailError(error)
       } else if (error instanceof RegistrationError) {
+        if (error.code === 'registration_rate_limited') {
+          const timestamp = Date.now()
+          setNow(timestamp)
+          setRetryAt(timestamp + (error.retryAfterSeconds ?? 1) * 1000)
+        }
         setMessage(error.message)
       } else {
         // A lost response can follow a committed registration. Read before asking for another challenge.
@@ -92,10 +110,15 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
           {message}
         </p>
       )}
+      {waitSeconds > 0 && (
+        <p role="status">
+          Try again in {waitSeconds} {waitSeconds === 1 ? 'second' : 'seconds'}.
+        </p>
+      )}
       {needsRegistration ? (
         <>
-          <Turnstile key={challenge} {...turnstile} onToken={setToken} />
-          <Button onClick={() => void register()} disabled={!token || submitting}>
+          {!waitSeconds && <Turnstile key={challenge} {...turnstile} onToken={setToken} />}
+          <Button onClick={() => void register()} disabled={!token || submitting || waitSeconds > 0}>
             {submitting ? 'Creating account…' : 'Continue'}
           </Button>
         </>

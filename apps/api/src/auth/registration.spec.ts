@@ -20,6 +20,7 @@ import { UserService } from '../user/user.service'
 import { JwtStrategy } from './jwt.strategy'
 import { LoginEventRecorder } from './login-event.recorder'
 import { RegistrationJwtGuard } from './registration-jwt.guard'
+import { RegistrationRateLimitGuard } from './registration-rate-limit.guard'
 import { RegistrationController } from './registration.controller'
 import { RegistrationService } from './registration.service'
 import { TurnstileService } from './turnstile.service'
@@ -91,7 +92,10 @@ describe('POST /api/auth/register', () => {
         { provide: TypedConfigService, useValue: config },
         { provide: LoginEventRecorder, useValue: loginEvents },
       ],
-    }).compile()
+    })
+      .overrideGuard(RegistrationRateLimitGuard)
+      .useValue({ canActivate: () => true })
+      .compile()
     app = module.createNestApplication()
     app.setGlobalPrefix('api')
     app.useGlobalPipes(new ValidationPipe({ transform: true }))

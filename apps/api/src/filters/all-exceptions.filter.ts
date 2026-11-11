@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common'
 import { ThrottlerException } from '@nestjs/throttler'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
+import { isRegistrationRequest } from '../auth/registration-route'
 
 const ADMIN_ERRORS: Record<number, [string, string]> = {
   400: ['InvalidArgumentError', 'invalid_argument'],
@@ -67,7 +68,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     // Track failed authentication attempts
-    if (exception instanceof UnauthorizedException) {
+    if (exception instanceof UnauthorizedException && !isRegistrationRequest(request)) {
       try {
         await this.failedAuthTracker.incrementFailedAuth(request, response)
       } catch (trackingError) {

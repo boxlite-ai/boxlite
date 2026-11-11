@@ -320,6 +320,35 @@ describe('RegistrationGate', () => {
     },
   )
 
+  it('waits for Retry-After before obtaining a fresh challenge', async () => {
+    api.register.mockRejectedValueOnce(new RegistrationError('Too many attempts', 'registration_rate_limited', 2))
+    await render()
+    await click('Complete challenge')
+    vi.useFakeTimers()
+    await act(async () => {
+      button('Continue').click()
+    })
+    expect(document.body.textContent).toContain('Try again in 2 seconds')
+    expect(button('Continue').disabled).toBe(true)
+    expect(document.body.textContent).not.toContain('Complete challenge')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(document.body.textContent).toContain('Try again in 1 second')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+    expect(button('Continue').disabled).toBe(true)
+    expect(widgetMount).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      button('Complete challenge').click()
+    })
+    await act(async () => {
+      button('Continue').click()
+    })
+    expect(api.register).toHaveBeenNthCalledWith(2, 'token-2')
+  })
+
   it('allows a failed initial check to be retried without mounting the widget', async () => {
     api.userApi.getAuthenticatedUser.mockRejectedValueOnce(new Error('Unavailable'))
     await render()

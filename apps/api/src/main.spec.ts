@@ -66,7 +66,10 @@ describe('API bootstrap listener', () => {
     const listen = jest.fn().mockResolvedValue(undefined)
     const httpServer = { on: jest.fn(), requestTimeout: -1 }
     const service = {
-      get: (key: string) => (key === 'port' ? 3300 : undefined),
+      get: (key: string) => {
+        if (key === 'port') return 3300
+        if (key === 'rateLimit.registration.trustedProxies') return []
+      },
       register: jest.fn(),
       matchAttachPath: jest.fn(() => false),
     }

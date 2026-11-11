@@ -19,8 +19,9 @@ remains in the Auth0 login Action.
 
 The console reads the public widget sitekey and `signup` action from `/config`.
 Failed or expired challenges are discarded. A lost registration response triggers
-another user check before a new challenge is requested. Service failures allow
-retry or sign-out without restarting the Auth0 login flow.
+another user check before a new challenge is requested. Registration rate limits
+display the server's `Retry-After` wait, then require a fresh challenge. Service
+failures allow retry or sign-out without restarting the Auth0 login flow.
 
 Account creation requests time out after 30 seconds; account checks and verification
 script loading time out after 10 seconds. A timed-out creation request follows the

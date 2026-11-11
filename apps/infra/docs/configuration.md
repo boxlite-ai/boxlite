@@ -76,6 +76,34 @@ For the legacy SST path, enabling protection requires the stage-scoped `TURNSTIL
 stdin for the value. Its ordinary settings belong in the bootstrap `.env`/stage configuration;
 the secret does not. Use `.env.example` for the names and defaults.
 
+### Registration rate limits and proxy trust
+
+| API setting | Default | Meaning |
+| --- | --- | --- |
+| `RATE_LIMIT_REGISTRATION_LIMIT` | `10` | Positive integer request allowance per IP |
+| `RATE_LIMIT_REGISTRATION_TTL` | `600` | Positive integer fixed-window duration in seconds |
+| `TRUST_PROXY_CIDRS` | Empty | Comma-separated trusted proxy IPs/CIDRs; empty trusts no proxy |
+
+Only `POST /auth/register` consumes this allowance, including failed authentication, failed
+challenges and repeated requests from existing accounts. The first request starts the window;
+later requests do not extend it. API instances share the existing throttler Redis connection
+(DB 1). A limit response is `429 registration_rate_limited` with the remaining seconds in
+`Retry-After`, exposed to cross-origin Dashboard requests. Redis failure returns
+`503 registration_rate_limit_unavailable` for registration. Existing users retain their normal
+business access.
+
+Set proxy trust from the target stage's actual ingress chain: AWS API traffic passes through an
+ALB; GCP API traffic reaches Cloud Run through a load balancer. Verify the socket peer and
+forwarded-address chain at each real entry point before selecting CIDRs. Workload egress subnets
+are not automatically ingress proxy ranges. Do not use `0.0.0.0/0` or `::/0` to replace this
+configuration. Before production rollout, verify that client-supplied forwarding headers cannot
+change the counter's IP and that existing anonymous/failed-authentication limits still identify
+the caller correctly.
+
+Changes apply after API redeployment. Existing Redis windows retain their remaining lifetime;
+new windows use the new duration. Validate a stage with three same-IP requests under a temporary
+two-request limit: the third must return `429`, and the next window must admit requests again.
+
 ## Runner sizing
 
 `deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
