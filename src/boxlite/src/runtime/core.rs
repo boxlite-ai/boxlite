@@ -410,16 +410,14 @@ impl BoxliteRuntime {
         CheckpointHandle::new(self.checkpoint_backend.as_ref().map(Arc::clone))
     }
 
-    /// Validate a downloaded cloud archive for the runner's native import path.
-    /// This does not create or manage local checkpoints.
-    pub async fn prepare_checkpoint_archive(
+    /// Validate and stage an archive without creating a box (local runtimes only).
+    /// The returned owner commits the same disks without reading the source again.
+    pub async fn prepare_import(
         &self,
-        source: super::checkpoint_archive::CheckpointArchiveSource,
-        platform_env: Option<std::collections::BTreeMap<String, String>>,
-    ) -> BoxliteResult<super::checkpoint_archive::PreparedCheckpointArchive> {
-        self.backend
-            .prepare_checkpoint_archive(source, platform_env)
-            .await
+        archive: BoxArchive,
+        options: super::ImportOptions,
+    ) -> BoxliteResult<super::PreparedImport> {
+        self.backend.prepare_import(archive, options).await
     }
 
     // ========================================================================

@@ -1,7 +1,6 @@
 pub mod advanced_options;
 pub mod auth;
 pub(crate) mod backend;
-pub mod checkpoint_archive;
 pub mod checkpoints;
 pub mod constants;
 pub mod cpu_count;
@@ -27,5 +26,6 @@ pub use checkpoints::{CheckpointHandle, CheckpointInfo, CheckpointState};
 pub use core::BoxliteRuntime;
 pub use domains::{Domain, DomainHandle, DomainList, DomainTarget};
 pub use images::ImageHandle;
+pub use import::{ImportArchiveInfo, ImportOptions, PreparedImport};
 pub use registries::{NewRegistryCredential, RegistryCredential, RegistryHandle};
 pub use volumes::VolumeHandle;

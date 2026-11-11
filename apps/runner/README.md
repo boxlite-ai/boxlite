@@ -774,14 +774,20 @@ job from capturing the changed source again. These rules apply to checkpoint
 jobs; the migration job sequence keeps its existing export/upload contract.
 
 Checkpoint downloads use a private directory per import attempt, including
-duplicate deliveries of the same job. Transfer failures, unexpected lengths
-and link destinations are rejected and their staging is removed. Native
-checkpoint preparation performs the subsequent checksum, disk/configuration
-and pinned-image checks; the download helper alone does not certify an archive
-for recovery. Its owner must stay alive until that preparation finishes.
+duplicate deliveries of the same job. Transfer failures, unexpected lengths,
+SHA-256 mismatches and link destinations are rejected and staging is removed.
+Runner owns these cloud metadata checks and the pinned-image/platform-identity
+policy; native runtime has no checkpoint-specific archive preparer.
 
-`IMPORT_CHECKPOINT` composes download, shared archive preparation and native
-import; recovery removes the predecessor only after preflight succeeds. The
+`IMPORT_CHECKPOINT` follows download/SHA verification → generic `PrepareImport`
+→ remove predecessor → `PreparedImport.Commit`. Native preflight reuses existing
+manifest, configuration and disk validation, with startup dependency checks enabled;
+runner then rejects incomplete source configuration, host rootfs, volumes, mounts
+and secrets before removal. The prepared owner holds the validated disk staging,
+so commit neither repacks nor extracts the archive again.
+
+The download remains owned until preparation finishes, and prepared staging stays
+owned until commit finishes. Recovery removes the predecessor after preflight. The
 request identifies a stable operation and a monotonically increasing target
 sequence, independently of individual job attempts. Its journal lives under
 `<BOXLITE_HOME_DIR>/work/checkpoint-operations/` and is keyed by the public box ID.

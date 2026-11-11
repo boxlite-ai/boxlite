@@ -45,7 +45,8 @@ pub use litebox::{
 pub use portal::GuestSession;
 pub use runtime::{
     AuthHandle, BoxliteRuntime, CheckpointHandle, CheckpointInfo, CheckpointState, Domain,
-    DomainHandle, DomainList, DomainTarget, ImageHandle, Principal,
+    DomainHandle, DomainList, DomainTarget, ImageHandle, ImportArchiveInfo, ImportOptions,
+    PreparedImport, Principal,
 };
 
 pub use boxlite_shared::BoxByteStream;

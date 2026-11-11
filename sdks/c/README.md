@@ -958,21 +958,26 @@ make
 
 ## Memory Management
 
-### Prepared checkpoint archives
+### Prepared imports
 
-`boxlite_runtime_prepare_checkpoint_archive` validates a downloaded archive,
-its recorded SHA-256, disks and pinned OCI startup configuration through the
-existing native validators. The callback receives an owned
-`CPreparedCheckpointArchive`; its borrowed path comes from
-`boxlite_prepared_checkpoint_archive_path` and can be supplied to the existing
-`boxlite_runtime_import` function. No box is created or removed by preparation.
+`boxlite_runtime_prepare_import` reuses native import validation and returns an
+owned `CPreparedImport` through the drain queue. No box is created or removed.
+Optional JSON accepts `image`, `env` values (null removes a key), and
+`preflight_startup`; startup checks may pull image configuration and default off.
 
-Retain this owner until native import completes, then release it with
-`boxlite_prepared_checkpoint_archive_free`. Freeing it removes only the private
-derived archive; the original file stays owned by the caller. The optional
-platform-environment JSON accepts only reserved target identity keys and cannot
-override captured user configuration. Preparation uses the normal runtime drain
-queue; callbacks and borrowed error pointers follow the same rules as import.
+`boxlite_prepared_import_info_json` borrows the original version, box options and
+checksum-presence metadata until the owner is freed. After successful preparation,
+the source file can be deleted: `boxlite_prepared_import_commit` submits the same
+validated staging without extracting or repacking another archive.
+
+Synchronous rejection preserves staging; accepted commit consumes it once, even
+if the callback is abandoned. After submission returns, the wrapper can be freed
+with `boxlite_prepared_import_free`; accepted work owns the disks independently.
+Freeing an uncommitted owner removes staging and never deletes the source or a box.
+
+Serialize freeing with any call using the same pointer. Callback-owned box handles
+and borrowed errors follow ordinary import's rules. This utility is local-only;
+cloud SHA-256 and identity policy stay in runner, while checkpoints use REST.
 
 ### Rules
 

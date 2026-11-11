@@ -35,11 +35,11 @@ func (n restoreBoundaryBackend) Remove(ctx context.Context, id string) error {
 	return n.recoveryNative.Remove(ctx, id)
 }
 
-func (n restoreBoundaryBackend) Import(ctx context.Context, path, target string) (string, error) {
+func (n restoreBoundaryBackend) Import(ctx context.Context, prepared PreparedArchive, target string) (string, error) {
 	if n.importID != nil {
 		return *n.importID, nil
 	}
-	id, err := n.recoveryNative.Import(ctx, path, target)
+	id, err := n.recoveryNative.Import(ctx, prepared, target)
 	if n.afterImport != nil {
 		if err := n.afterImport(); err != nil {
 			return "", err

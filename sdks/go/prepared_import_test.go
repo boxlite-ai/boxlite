@@ -5,38 +5,26 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestCheckpointArchivePreparationValidatesArgumentsBeforeNativeSubmission(t *testing.T) {
-	source := CheckpointArchiveSource{Path: "archive.boxlite", SHA256: strings.Repeat("a", 64), PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}
-	for _, name := range []string{"path", "sha", "image"} {
-		for _, invalid := range []string{"", "value\x00ignored"} {
-			candidate := source
-			switch name {
-			case "path":
-				candidate.Path = invalid
-			case "sha":
-				candidate.SHA256 = invalid
-			case "image":
-				candidate.PinnedImage = invalid
-			}
-			if _, err := (&Runtime{}).PrepareCheckpointArchive(context.Background(), candidate, nil); !IsInvalidArgument(err) {
-				t.Fatalf("%s %q: expected invalid argument, got %v", name, invalid, err)
-			}
+func TestPreparedImportValidatesArgumentsBeforeNativeSubmission(t *testing.T) {
+	source := "archive.boxlite"
+	for _, invalid := range []string{"", "value\x00ignored"} {
+		if _, err := (&Runtime{}).PrepareImport(context.Background(), invalid, ImportOptions{}); !IsInvalidArgument(err) {
+			t.Fatalf("%q: expected invalid argument, got %v", invalid, err)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := (&Runtime{}).PrepareCheckpointArchive(ctx, source, nil); !errors.Is(err, context.Canceled) {
+	if _, err := (&Runtime{}).PrepareImport(ctx, source, ImportOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled preparation: %v", err)
 	}
 }
 
-func TestCheckpointArchivePreparationOnRestNeverSendsLocalArchivePaths(t *testing.T) {
+func TestPreparedImportOnRestNeverSendsLocalArchivePaths(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -48,7 +36,7 @@ func TestCheckpointArchivePreparationOnRestNeverSendsLocalArchivePaths(t *testin
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	_, err = runtime.PrepareCheckpointArchive(context.Background(), CheckpointArchiveSource{Path: "/private/checkpoint.boxlite", SHA256: strings.Repeat("a", 64), PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}, nil)
+	_, err = runtime.PrepareImport(context.Background(), "/private/archive.boxlite", ImportOptions{})
 	var native *Error
 	if !errors.As(err, &native) || native.Code != ErrUnsupported {
 		t.Fatalf("expected unsupported local operation, got %v", err)
@@ -58,8 +46,8 @@ func TestCheckpointArchivePreparationOnRestNeverSendsLocalArchivePaths(t *testin
 	}
 }
 
-func TestCheckpointArchivePreparationRejectsUninitializedAndClosedRuntime(t *testing.T) {
-	source := CheckpointArchiveSource{Path: "archive.boxlite", SHA256: strings.Repeat("a", 64), PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}
+func TestPreparedImportRejectsUninitializedAndClosedRuntime(t *testing.T) {
+	source := "archive.boxlite"
 	runtime, err := NewRest(BoxliteRestOptions{URL: "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatal(err)
@@ -68,19 +56,19 @@ func TestCheckpointArchivePreparationRejectsUninitializedAndClosedRuntime(t *tes
 		t.Fatal(err)
 	}
 	for _, candidate := range []*Runtime{new(Runtime), runtime} {
-		if _, err := candidate.PrepareCheckpointArchive(context.Background(), source, nil); !errors.Is(err, ErrRuntimeClosed) {
+		if _, err := candidate.PrepareImport(context.Background(), source, ImportOptions{}); !errors.Is(err, ErrRuntimeClosed) {
 			t.Errorf("expected ErrRuntimeClosed, got %v", err)
 		}
 	}
 }
 
-func TestCheckpointArchivePreparationRejectsClosingAndCancelledSubmission(t *testing.T) {
+func TestPreparedImportRejectsClosingAndCancelledSubmission(t *testing.T) {
 	runtime, err := NewRest(BoxliteRestOptions{URL: "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	source := CheckpointArchiveSource{Path: "archive.boxlite", SHA256: strings.Repeat("a", 64), PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}
+	source := "archive.boxlite"
 	base, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	release := make(chan struct{})
@@ -93,7 +81,7 @@ func TestCheckpointArchivePreparationRejectsClosingAndCancelledSubmission(t *tes
 	}()
 	ctx := &cancelBetweenErrChecksContext{Context: base, sampled: make(chan struct{}), resume: release}
 	done := make(chan error, 1)
-	go func() { _, err := runtime.PrepareCheckpointArchive(ctx, source, nil); done <- err }()
+	go func() { _, err := runtime.PrepareImport(ctx, source, ImportOptions{}); done <- err }()
 	select {
 	case <-ctx.sampled:
 	case <-time.After(time.Second):
@@ -110,7 +98,7 @@ func TestCheckpointArchivePreparationRejectsClosingAndCancelledSubmission(t *tes
 		t.Fatal("cancelled submission did not return")
 	}
 	runtime.closingOnce.Do(func() { close(runtime.closing) })
-	if _, err := runtime.PrepareCheckpointArchive(context.Background(), source, nil); !errors.Is(err, ErrRuntimeClosed) {
+	if _, err := runtime.PrepareImport(context.Background(), source, ImportOptions{}); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("closing preparation: %v", err)
 	}
 }

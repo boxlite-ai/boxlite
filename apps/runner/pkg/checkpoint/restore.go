@@ -51,10 +51,9 @@ type NativeBox struct {
 	PID   int
 }
 
-// PreparedArchive remains owned until Import actually returns, including when
-// the original caller cancelled. Only its derived temporary archive is removed.
+// PreparedArchive owns validated import staging until Import actually returns,
+// including when the original caller cancelled. Close never removes a box.
 type PreparedArchive interface {
-	Path() string
 	Close() error
 }
 
@@ -62,7 +61,7 @@ type RecoveryBackend interface {
 	Lookup(context.Context, string) (*NativeBox, error)
 	Prepare(context.Context, *DownloadedArchive, map[string]string) (PreparedArchive, error)
 	Remove(context.Context, string) error
-	Import(context.Context, string, string) (string, error)
+	Import(context.Context, PreparedArchive, string) (string, error)
 }
 
 type RestoreResult struct {
@@ -123,7 +122,7 @@ func (r Restorer) Restore(ctx context.Context, request RestoreRequest, attemptID
 	case completed := <-done:
 		return completed.result, completed.err
 	case <-ctx.Done():
-		// The worker owns the target, download and derived archive until native
+		// The worker owns the target, download and prepared staging until native
 		// work and its journal update complete. No orphan cleanup removes it.
 		return RestoreResult{}, ctx.Err()
 	}
@@ -213,7 +212,7 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 	if err := lease.write(*record); err != nil {
 		return RestoreResult{}, err
 	}
-	nativeID, err := r.Backend.Import(ctx, prepared.Path(), request.Target)
+	nativeID, err := r.Backend.Import(ctx, prepared, request.Target)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("checkpoint import failed; archive retained for retry: %w", err)
 	}

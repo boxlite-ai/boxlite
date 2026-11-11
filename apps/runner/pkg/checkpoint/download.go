@@ -24,9 +24,8 @@ type DownloadedArchive struct {
 
 func (d *DownloadedArchive) Close() error { return os.RemoveAll(d.directory) }
 
-// Download isolates transfer staging and checks the expected length. The shared
-// native checkpoint preparer subsequently verifies SHA-256, archive members,
-// disks, configuration and pinned startup dependencies before target removal.
+// Download owns cloud integrity checks. Native import subsequently validates
+// archive members, disks and configuration before target removal.
 func (a Artifacts) Download(ctx context.Context, record Artifact, importJobID string, store storage.ArchiveStore) (_ *DownloadedArchive, err error) {
 	if err := validateReference(record.Reference); err != nil {
 		return nil, err
@@ -66,20 +65,15 @@ func (a Artifacts) Download(ctx context.Context, record Artifact, importJobID st
 	if err := store.Download(ctx, record.ArcPath, path); err != nil {
 		return nil, err
 	}
-	file, err := regularFile(path)
+	size, digest, err := checksum(path)
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
-	closeErr := file.Close()
-	if err != nil {
-		return nil, err
-	}
-	if closeErr != nil {
-		return nil, closeErr
-	}
-	if info.Size() != record.SizeBytes {
+	if size != record.SizeBytes {
 		return nil, fmt.Errorf("downloaded checkpoint length does not match its recorded size")
+	}
+	if digest != record.SHA256 {
+		return nil, fmt.Errorf("downloaded checkpoint SHA-256 does not match its record")
 	}
 	if err := os.Chmod(path, 0400); err != nil {
 		return nil, err

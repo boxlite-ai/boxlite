@@ -184,26 +184,34 @@ server's untrusted-upload policy.
 Export and Import never delete the archive. The caller owns its retention and
 must explicitly remove it when it is no longer needed.
 
-`rt.PrepareCheckpointArchive` checks a downloaded checkpoint's recorded SHA-256,
-native manifest and disk, then loads the pinned OCI startup configuration. It
-returns a `PreparedCheckpointArchive` whose `Path()` can be passed to the same
-`rt.Import`. It neither creates nor removes a box, so recovery callers can finish
-preflight before removing their old target.
+`rt.PrepareImport` runs ordinary archive extraction, manifest/configuration,
+checksum and disk validation without creating a box. It returns a local-only
+`PreparedImport`; `Commit` consumes its staging directly, without repacking or
+reading the source again. REST runtimes return unsupported without sending paths.
 
-`SHA256()` and `SizeBytes()` describe the derived file, including its target
-identity metadata; they do not replace the source checkpoint's immutable record.
+```go
+prepared, err := rt.PrepareImport(ctx, "/tmp/saved.boxlite", boxlite.ImportOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+defer prepared.Close()
+restored, err := prepared.Commit(ctx, "restored")
+```
 
-Keep the prepared owner open until native import finishes; `Close()` removes
-its private derived archive and leaves the source file intact. Optional platform
-environment values may replace only the reserved BoxLite identity/telemetry
-keys, require a target `BOXLITE_BOX_ID`, and preserve all other user variables
-and execution settings. This utility requires a local runtime; a REST runtime
-returns unsupported without transmitting local paths.
+`Info()` exposes original archive metadata before overrides. `ImportOptions`
+can replace the image and set or remove environment keys (`nil` removes a key).
+`PreflightStartup: true` additionally checks runtime feature opt-ins, readable
+kernel assets and image configuration; it may pull the image. Ordinary `Import`
+keeps this check disabled and retains its existing offline behavior.
 
-Canceling the preparation context stops the caller's wait. Accepted native work
-retains its temporary archive until completion; an undelivered successful result
-is freed by the callback. The caller must keep the source archive available until
-that accepted work finishes.
+`Close()` releases uncommitted staging and never deletes a committed box. Invalid
+arguments, canceled admission or synchronous rejection preserve the owner;
+accepted `Commit` consumes it once, even if the caller stops waiting. `Commit`
+and `Close` serialize access, so an accepted task retains the disks independently.
+
+Cancellation stops waiting for preparation and frees a late successful result.
+Keep the source until preparation actually completes; after successful preparation
+it can be deleted. Cloud metadata integrity and identity policy belong to runner.
 
 ### Runtime Image Management
 

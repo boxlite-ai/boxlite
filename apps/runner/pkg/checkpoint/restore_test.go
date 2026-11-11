@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +45,6 @@ func (n *recoveryNative) Lookup(context.Context, string) (*NativeBox, error) {
 
 type preparedRecovery struct{ path string }
 
-func (p preparedRecovery) Path() string { return p.path }
 func (p preparedRecovery) Close() error { return os.RemoveAll(filepath.Dir(p.path)) }
 
 func (n *recoveryNative) Prepare(_ context.Context, source *DownloadedArchive, env map[string]string) (PreparedArchive, error) {
@@ -59,11 +59,11 @@ func (n *recoveryNative) Prepare(_ context.Context, source *DownloadedArchive, e
 	if err != nil || size != source.Artifact.SizeBytes || digest != source.Artifact.SHA256 {
 		return nil, fmt.Errorf("preflight rejected transferred bytes: %v", err)
 	}
-	directory, err := os.MkdirTemp(filepath.Dir(source.Path), "derived-")
+	directory, err := os.MkdirTemp(filepath.Dir(source.Path), "staged-")
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(directory, "derived.boxlite")
+	path := filepath.Join(directory, "staged-disk")
 	data, err := os.ReadFile(source.Path)
 	if err == nil {
 		err = os.WriteFile(path, data, 0600)
@@ -86,7 +86,8 @@ func (n *recoveryNative) Remove(_ context.Context, id string) error {
 	return nil
 }
 
-func (n *recoveryNative) Import(ctx context.Context, path, _ string) (string, error) {
+func (n *recoveryNative) Import(ctx context.Context, prepared PreparedArchive, _ string) (string, error) {
+	path := prepared.(preparedRecovery).path
 	n.mu.Lock()
 	n.imports++
 	n.importPath = path
@@ -158,6 +159,18 @@ func TestCheckpointRestorePreflightsBeforeTargetRemoval(t *testing.T) {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("completed attempt leaked temporary archive %s: %v", path, err)
 		}
+	}
+}
+
+func TestCheckpointRestoreRejectsSameLengthCorruptionBeforeNativePreparation(t *testing.T) {
+	r, request, native, store := recoveryHarness(t)
+	store.damage = "corrupt"
+	predecessor := native.current.ID
+	if _, err := r.Restore(t.Context(), request, uuid.NewString()); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("corrupted download reached native restore: %v", err)
+	}
+	if native.prepares != 0 || native.removes != 0 || native.imports != 0 || native.current.ID != predecessor {
+		t.Fatal("cloud integrity failure changed native state")
 	}
 }
 
