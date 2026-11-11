@@ -229,7 +229,7 @@ impl DestBefore {
     fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
         let dest_is_dir = dest_root.is_dir();
         let mut targets = self.created_dirs.clone();
-        if !dest_is_dir || !self.dest_existed {
+        if !self.dest_existed || (!dest_is_dir && !entry_paths.is_empty()) {
             targets.push(dest_root.to_path_buf());
         }
         targets.extend(entry_paths.iter().map(|rel| {
@@ -525,7 +525,7 @@ impl Files for GuestServer {
                 // and are indistinguishable from ones the image shipped.
                 let dest_existed = dest_root.exists();
                 let created_dirs = missing_ancestors(&dest_root);
-                let report = boxlite_shared::tar::unpack_stream(
+                let (report, unpack_result) = boxlite_shared::tar::unpack_stream_with_report(
                     tar_stream,
                     dest_root.clone(),
                     boxlite_shared::tar::UnpackContext {
@@ -534,8 +534,7 @@ impl Files for GuestServer {
                         force_directory,
                     },
                 )
-                .await
-                .map_err(upload_unpack_status)?;
+                .await;
                 let boxlite_shared::tar::UnpackReport {
                     entry_paths,
                     preexisting_dirs,
@@ -551,7 +550,7 @@ impl Files for GuestServer {
                 // hintless arm's refuse-before (a refused copy may have
                 // partially landed), but the failure surfaces instead of a
                 // silent write beneath the mount.
-                dest.refuse_shadowed_payload(&entry_paths)?;
+                let shadow_result = dest.refuse_shadowed_payload(&entry_paths);
 
                 // Hand the recorded paths to the box user, plus the
                 // ancestors captured above — the recording names what the
@@ -564,6 +563,8 @@ impl Files for GuestServer {
                     DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
                 )
                 .await;
+                unpack_result.map_err(upload_unpack_status)?;
+                shadow_result?;
             }
             // Legacy fallback for older hosts/runners that omit the hint:
             // buffer to a size-capped temp file and detect the shape by peeking.
@@ -630,7 +631,7 @@ impl Files for GuestServer {
 
                 // dest_path may have a trailing '/' indicating directory mode.
                 let force_directory = dest_path.ends_with('/');
-                boxlite_shared::tar::unpack(
+                let (report, unpack_result) = boxlite_shared::tar::unpack_with_report(
                     staged.path().to_path_buf(),
                     dest_root.clone(),
                     boxlite_shared::tar::UnpackContext {
@@ -639,8 +640,8 @@ impl Files for GuestServer {
                         force_directory,
                     },
                 )
-                .await
-                .map_err(upload_unpack_status)?;
+                .await;
+                let entry_paths: Arc<[PathBuf]> = report.entry_paths.into();
 
                 // Hand the payload to the user the box actually runs as. tar
                 // preserves neither owner (it extracts as this process, root)
@@ -649,6 +650,7 @@ impl Files for GuestServer {
                 // cannot open it.
                 self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
                     .await;
+                unpack_result.map_err(upload_unpack_status)?;
             }
         }
 

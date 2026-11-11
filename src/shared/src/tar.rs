@@ -262,6 +262,36 @@ pub async fn unpack(tar_path: PathBuf, dest: PathBuf, opts: UnpackContext) -> Bo
         .map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?
 }
 
+/// Retain the paths reached before a staged extraction failed.
+pub async fn unpack_with_report(
+    tar_path: PathBuf,
+    dest: PathBuf,
+    opts: UnpackContext,
+) -> (UnpackReport, BoxliteResult<()>) {
+    tokio::task::spawn_blocking(move || {
+        let mut report = UnpackReport::default();
+        let result = (|| {
+            let mode = if opts.force_directory {
+                ExtractionMode::IntoDirectory
+            } else {
+                detect_extraction_mode(&dest, &tar_path)?
+            };
+            let reader = std::fs::File::open(&tar_path).map_err(copy_unpack_error)?;
+            extract_from_reader(reader, &dest, &opts, mode, Some(&mut report))
+        })();
+        (report, result)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        (
+            UnpackReport::default(),
+            Err(BoxliteError::Storage(format!(
+                "unpack task join error: {e}"
+            ))),
+        )
+    })
+}
+
 fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> BoxliteResult<()> {
     let mode = if opts.force_directory {
         ExtractionMode::IntoDirectory
@@ -361,15 +391,29 @@ fn extract_from_reader<R: Read>(
                 })?;
                 let is_directory = file.header().entry_type().is_dir();
                 if let Ok(path) = file.path() {
-                    record(path.as_ref(), Some(dest));
                     if let Some(relative) = sanitize_entry_path(path.as_ref()) {
-                        for step in implied_dirs_then_self(&relative) {
-                            if observed.insert(step.clone()) && dest.join(&step).is_dir() {
-                                preexisting_dirs.insert(step);
-                            }
-                        }
                         let target = dest.join(&relative);
                         check_copy_destination(&target, is_directory, opts.overwrite)?;
+                        record(path.as_ref(), Some(dest));
+                        for step in implied_dirs_then_self(&relative) {
+                            // Atomic mkdir decides whose header may set metadata;
+                            // pathname replacement after creation is not confined here.
+                            if !opts.overwrite
+                                && (step != relative || is_directory)
+                                && observed.insert(step.clone())
+                            {
+                                let directory = dest.join(&step);
+                                check_copy_destination(&directory, true, false)?;
+                                match std::fs::create_dir(&directory) {
+                                    Ok(()) => {}
+                                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                                        check_copy_destination(&directory, true, false)?;
+                                        preexisting_dirs.insert(step);
+                                    }
+                                    Err(error) => return Err(copy_unpack_error(error)),
+                                }
+                            }
+                        }
                         // Reused directories are containers for new entries; unpacking
                         // their headers would reset existing permissions and timestamps.
                         if !opts.overwrite && is_directory && preexisting_dirs.contains(&relative) {
@@ -598,10 +642,20 @@ impl Read for PipeReader {
 /// the caller can hand only newly created paths to the box user and refuse
 /// entries the mounts shadow.
 pub async fn unpack_stream(
-    mut stream: BoxByteStream,
+    stream: BoxByteStream,
     dest: PathBuf,
     opts: UnpackContext,
 ) -> BoxliteResult<UnpackReport> {
+    let (report, result) = unpack_stream_with_report(stream, dest, opts).await;
+    result.map(|()| report)
+}
+
+/// Retain the paths reached before extraction failed, for ownership finalization.
+pub async fn unpack_stream_with_report(
+    mut stream: BoxByteStream,
+    dest: PathBuf,
+    opts: UnpackContext,
+) -> (UnpackReport, BoxliteResult<()>) {
     let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(COPY_CHUNKS_IN_FLIGHT);
     let forward = tokio::spawn(async move {
         while let Some(item) = stream.next().await {
@@ -618,19 +672,30 @@ pub async fn unpack_stream(
             ExtractionMode::FileToFile
         };
         let mut report = UnpackReport::default();
-        extract_from_reader(&mut reader, &dest, &opts, mode, Some(&mut report))?;
+        let result = extract_from_reader(&mut reader, &dest, &opts, mode, Some(&mut report));
+        if let Err(error) = result {
+            return (report, Err(error));
+        }
         // Extraction can finish before the byte stream ends: FileToFile stops
         // after one entry, and tar-rs stops at the archive end marker. Drain
         // the raw stream so a terminal producer error cannot become success.
-        io::copy(&mut reader, &mut io::sink())
-            .map_err(|e| BoxliteError::Storage(format!("failed to drain tar stream: {}", e)))?;
-        Ok(report)
+        let result = io::copy(&mut reader, &mut io::sink())
+            .map(|_| ())
+            .map_err(|e| BoxliteError::Storage(format!("failed to drain tar stream: {}", e)));
+        (report, result)
     });
     let result = unpack.await;
     // Abort the forwarder before mapping the join result, so a panicked
     // unpack task can't leak a forwarder that keeps draining the stream.
     forward.abort();
-    result.map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?
+    result.unwrap_or_else(|e| {
+        (
+            UnpackReport::default(),
+            Err(BoxliteError::Storage(format!(
+                "unpack task join error: {e}"
+            ))),
+        )
+    })
 }
 
 // ── Private ───────────────────────────────────────────────────────
@@ -1499,6 +1564,63 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_overwrite_preserves_competing_directory_metadata() {
+        use std::os::unix::fs::PermissionsExt;
+        struct CompetingReader {
+            data: io::Cursor<Vec<u8>>,
+            target: PathBuf,
+            competitor_created: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl Read for CompetingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.data.position() == 512 && std::fs::create_dir(&self.target).is_ok() {
+                    std::fs::set_permissions(&self.target, std::fs::Permissions::from_mode(0o700))?;
+                    self.competitor_created
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                let count = buf.len().min(512);
+                self.data.read(&mut buf[..count])
+            }
+        }
+        let tmp = copy_policy_tempdir();
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o600);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "private", io::empty())
+            .unwrap();
+        let target = tmp.path().join("private");
+        let created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader = CompetingReader {
+            data: io::Cursor::new(builder.into_inner().unwrap()),
+            target: target.clone(),
+            competitor_created: created.clone(),
+        };
+        extract_from_reader(
+            reader,
+            tmp.path(),
+            &uc(false, true, true),
+            ExtractionMode::IntoDirectory,
+            None,
+        )
+        .unwrap();
+        let expected = if created.load(std::sync::atomic::Ordering::SeqCst) {
+            0o700
+        } else {
+            0o600
+        };
+        assert_eq!(
+            std::fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            expected,
+            "another creator's metadata must remain intact"
         );
     }
 

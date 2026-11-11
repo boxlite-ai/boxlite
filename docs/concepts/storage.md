@@ -43,6 +43,10 @@ directories and reject existing files, symlinks, and incompatible entry types.
 Existing bytes and directory metadata are preserved. Entries written before a
 later conflict remain; extraction does not roll back the archive. Directories
 created during extraction still receive permissions from later directory headers.
+Protected extraction uses the result of directory creation to distinguish reused
+directories from ones created by this upload. If a later entry conflicts, paths
+already reached still receive the usual ownership handoff to the box user before
+the conflict is returned; an untouched conflicting destination keeps its owner.
 
 Guest extraction rejects symlink ancestors, including ancestors omitted from
 archive headers. Protected copy-out resolves trusted host parents first, leaving
