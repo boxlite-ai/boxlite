@@ -456,14 +456,21 @@ impl BoxBackend for RestBox {
     ) -> BoxliteResult<()> {
         let box_id = self.box_id_str();
 
-        // Older runners ignore overwrite=false. Until server support can be
-        // established reliably, retain the SDK's safe refusal before sending
-        // data; blindly forwarding false could silently replace remote files.
+        // Honor overwrite=false at the REST boundary. The runner's
+        // upload handler always extracts the tar over whatever's at
+        // container_dst (the test in apps/e2e/cases/test_files_io.py::
+        // test_copy_in_overwrite_false_rejects_conflict was catching
+        // 'overwrite=False replaced guest content'). The test contract
+        // explicitly accepts a raised exception OR a no-op — the
+        // invariant is "guest content must be unchanged". We can't
+        // express the per-entry "skip if dst exists" semantics over
+        // the current single-tar upload protocol, so refuse the call
+        // outright instead of silently clobbering.
         if !opts.overwrite {
             return Err(BoxliteError::Unsupported(
                 "copy_into with overwrite=false is not supported over the REST backend; \
-                 remote overwrite protection cannot be confirmed. \
-                 Use the local backend for protected copies."
+                 the current upload protocol cannot express per-entry skip-if-exists. \
+                 Use the FFI backend or pre-check the destination before calling."
                     .into(),
             ));
         }

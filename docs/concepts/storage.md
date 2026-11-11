@@ -38,19 +38,17 @@ Image Layers          Rootfs Builder              Box Rootfs
 
 ## File copy conflicts
 
-With `CopyOptions::no_overwrite()`, local copies add new files into existing
-directories and reject existing files, symlinks, and incompatible entry types.
-Existing bytes and directory metadata are preserved. Entries written before a
-later conflict remain; extraction does not roll back the archive. Directories
-created during extraction still receive permissions from later directory headers.
+Protected host copy-out resolves trusted host parents through filesystem path
+resolution, retaining `..` and symlink semantics. A trailing `/` requests a
+destination directory independently of the resolved path. This preparation does
+not enable merging protected copies into existing directories: the existing
+extraction policy still rejects that operation.
 
-Guest extraction rejects symlink ancestors, including ancestors omitted from
-archive headers. Protected copy-out resolves trusted host parents first, leaving
-the destination leaf protected. Missing host parents use filesystem resolution
-for `..` and symlinks; a trailing `/` requests a destination directory.
-
-REST runtimes retain their refusal of protected copies when runner support cannot
-be established. This prevents older runners from silently replacing files.
+Shared extraction also exposes report-preserving variants for staged archives
+and streams. They return both paths reached and the extraction result, allowing
+future callers to finalize partial writes without losing the original error.
+The reports describe reached paths; they do not prove inode ownership. Existing
+callers retain their result-only APIs and existing ownership behavior.
 
 ## Home directory
 

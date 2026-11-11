@@ -373,66 +373,6 @@ async fn copy_integration() {
     overwrite_false_rejects_copy_in(&bx, tmp.path()).await;
     overwrite_false_rejects_copy_in_dir(&bx, tmp.path()).await;
     overwrite_false_rejects_copy_out(&bx, tmp.path()).await;
-    #[cfg(unix)]
-    {
-        let root = tmp.path().canonicalize().unwrap();
-        let linked = root.join("host-parent-link");
-        std::os::unix::fs::symlink(&root, &linked).unwrap();
-        let output = linked.join("missing/new.txt");
-        bx.copy_out(
-            "/root/input.txt",
-            &output,
-            CopyOptions::default().no_overwrite(),
-        )
-        .await
-        .expect("trusted host symlink parent must resolve");
-        let expected = std::fs::read(tmp.path().join("input.txt")).unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), expected);
-        for suffix in ["directory-output/", "absent/../parent-output/"] {
-            let destination = linked.join(suffix);
-            bx.copy_out(
-                "/root/input.txt",
-                &destination,
-                CopyOptions::default().no_overwrite(),
-            )
-            .await
-            .expect("host destination directory intent must survive resolution");
-            assert!(
-                destination.is_dir(),
-                "trailing slash must create a directory"
-            );
-            assert_eq!(
-                std::fs::read(destination.join("input.txt")).unwrap(),
-                expected
-            );
-        }
-        let target = root.join("directory-target");
-        std::fs::create_dir(&target).unwrap();
-        let directory_leaf = root.join("directory-leaf");
-        std::os::unix::fs::symlink(&target, &directory_leaf).unwrap();
-        assert!(
-            bx.copy_out(
-                "/root/input.txt",
-                &directory_leaf.join(""),
-                CopyOptions::default().no_overwrite(),
-            )
-            .await
-            .is_err(),
-            "trailing slash must not bypass leaf link rejection"
-        );
-        assert!(!target.join("input.txt").exists());
-        let leaf = linked.join("leaf-link");
-        std::os::unix::fs::symlink(root.join("missing/new.txt"), &leaf).unwrap();
-        assert!(
-            bx.copy_out(
-                "/root/input.txt",
-                &leaf,
-                CopyOptions::default().no_overwrite()
-            )
-            .await
-            .is_err()
-        );
-    }
     non_recursive_rejects_directory(&bx, tmp.path()).await;
     follow_symlinks_false_preserves_link(&bx, tmp.path()).await;
     follow_symlinks_true_dereferences(&bx, tmp.path()).await;

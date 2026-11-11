@@ -301,7 +301,6 @@ fn map_tonic_err(err: tonic::Status) -> BoxliteError {
         tonic::Code::FailedPrecondition => BoxliteError::Unsupported(message),
         tonic::Code::InvalidArgument => BoxliteError::InvalidArgument(message),
         tonic::Code::NotFound => BoxliteError::NotFound(message),
-        tonic::Code::AlreadyExists => BoxliteError::AlreadyExists(message),
         tonic::Code::ResourceExhausted => BoxliteError::ResourceExhausted(message),
         _ => BoxliteError::Internal(err.to_string()),
     }
@@ -340,13 +339,6 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert_eq!(error.http().0, 400);
-    }
-
-    #[test]
-    fn upload_conflict_maps_to_already_exists() {
-        let error = map_tonic_err(Status::already_exists("destination exists"));
-        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error:?}");
-        assert_eq!(error.http().0, 409);
     }
 
     #[test]
