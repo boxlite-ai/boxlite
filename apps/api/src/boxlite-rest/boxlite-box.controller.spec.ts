@@ -29,7 +29,7 @@ describe('BoxliteBoxController existing box lookup', () => {
       findOneByIdOrName: jest.fn().mockResolvedValue(box),
       toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
     }
-    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any)
+    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any)
     const response = await controller.getBox({ organizationId: organization.id, organization } as any, box.name)
     expect(response.box_id).toBe(box.id)
     expect(response).not.toHaveProperty('reuse_error')
@@ -207,6 +207,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxService as any,
       boxStateWaiter as any,
       commerceBoxLimitService as any,
+      {} as any,
     )
     return { controller, boxService }
   }

@@ -18,34 +18,34 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ### Managed checkpoints
 
-Checkpoint import belongs to the checkpoint handle, separate from archive import.
-The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
-checkpoint import requests through REST. The runtime facade owns the shared
-checkpoint backend; native archive import and provision remain unchanged.
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
 
 The source must be stopped before `Create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`
-and `ImportBox(ctx, key, name, boxID)`, each taking a context. The handle follows its runtime's
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get` and
+`Remove`, each taking a context. The handle follows its runtime's
 lifetime and needs no separate close. Captured archives survive source deletion.
 
 ```go
 checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
 if err != nil { return err }
-worker, err := runtime.Checkpoints().ImportBox(ctx, checkpoint.ID, "worker", "")
+worker, err := runtime.Create(ctx, "", boxlite.WithCheckpoint(checkpoint.ID), boxlite.WithName("worker"))
 if err != nil { return err }
 defer worker.Close()
 ```
 
-Pass an empty `boxID` for a new Box; a nonempty `boxID` replaces that target.
-Name and target are mutually exclusive.
+Pass an empty image with `WithCheckpoint`; combining it with an image or
+`WithRootfsPath` returns an error.
 
-Cloud capture may report `creating`; query until `ready` before use. New imports
-and replacements inherit all saved execution settings without overrides.
-Replacement preserves the public Box ID. `Remove(ctx, key, true)` ignores absence
+Cloud capture may report `creating`; query until `ready` before use. A box created
+from a checkpoint inherits all saved execution settings; any other option is
+refused with an invalid-argument error. `Remove(ctx, key, true)` ignores absence
 only. Local runtime checkpoint operations return an unsupported-operation error.
-Storage and replacement coordination belong to the server. Existing native archive
+Storage belongs to the server. Existing native archive
 export/import and the runner's archive preparation helper remain available.
 
 ### Create a box

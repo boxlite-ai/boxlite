@@ -110,32 +110,28 @@ impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
             result => result,
         }
     }
+}
 
-    async fn import_box(
+impl RestRuntime {
+    /// Create a box from a managed checkpoint. The server restores the saved
+    /// settings and refuses every other create field, so the body is minimal.
+    async fn create_from_checkpoint(
         &self,
-        key: &str,
-        name: Option<String>,
-        box_id: Option<&str>,
+        checkpoint: &str,
+        name: Option<&str>,
     ) -> BoxliteResult<LiteBox> {
         #[derive(serde::Serialize)]
-        struct Import<'a> {
+        struct Request<'a> {
             checkpoint_id: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
-            name: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            box_id: Option<&'a str>,
+            name: Option<&'a str>,
         }
-        let response: BoxResponse = self
-            .client
-            .post(
-                "/boxes/import",
-                &Import {
-                    checkpoint_id: key,
-                    name,
-                    box_id,
-                },
-            )
-            .await?;
+        use crate::runtime::checkpoints::checked_name;
+        let request = Request {
+            checkpoint_id: checked_name(checkpoint)?,
+            name: name.map(checked_name).transpose()?,
+        };
+        let response: BoxResponse = self.client.post("/boxes", &request).await?;
         Ok(litebox_from_rest(Arc::new(RestBox::new(
             self.client.clone(),
             response.to_box_info()?,
@@ -443,6 +439,13 @@ impl BoxOptions {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        // A checkpoint source carries no other option: the server restores
+        // the saved box, so this never builds a `CreateBoxRequest`.
+        if let Some(checkpoint) = options.checkpoint_source()? {
+            return self
+                .create_from_checkpoint(checkpoint, name.as_deref())
+                .await;
+        }
         options.sanitize_remote()?;
         options.validate_secrets()?;
 
@@ -481,6 +484,13 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        if matches!(options.rootfs, crate::RootfsSpec::Checkpoint(_)) {
+            return Err(BoxliteError::Unsupported(
+                "get_or_create cannot use a checkpoint source; a checkpoint box \
+                 cannot be matched against an existing one, so call create"
+                    .into(),
+            ));
+        }
         options.sanitize_remote()?;
 
         if let Some(ref box_name) = name {
@@ -852,7 +862,7 @@ mod tests {
 
     #[tokio::test]
     async fn ordinary_create_does_not_probe_server_capabilities() {
-        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let (port, server) = exchange_server(vec![(200, BOX_RESPONSE)]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
 
@@ -860,7 +870,101 @@ mod tests {
             .await
             .expect("create without a capability policy");
 
-        assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST /v1/boxes HTTP/1.1");
+        // An image create never mentions a checkpoint.
+        assert!(json_body(&requests[0].1).get("checkpoint_id").is_none());
+    }
+
+    fn checkpoint_options(checkpoint: &str) -> BoxOptions {
+        BoxOptions {
+            rootfs: crate::RootfsSpec::Checkpoint(checkpoint.into()),
+            ..Default::default()
+        }
+    }
+
+    fn json_body(body: &str) -> serde_json::Value {
+        serde_json::from_str(body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_from_a_checkpoint_sends_only_the_checkpoint_and_name() {
+        let (port, server) = exchange_server(vec![(201, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let created =
+            RuntimeBackend::create(&runtime, checkpoint_options("base"), Some("worker".into()))
+                .await
+                .expect("create from a checkpoint");
+
+        assert_eq!(created.id().as_str(), "01HJK4TNRPQSXYZ8WM6NCVT9R5");
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST /v1/boxes HTTP/1.1");
+        assert_eq!(
+            json_body(&requests[0].1),
+            serde_json::json!({"checkpoint_id": "base", "name": "worker"})
+        );
+    }
+
+    #[tokio::test]
+    async fn create_from_a_checkpoint_without_a_name_sends_only_the_checkpoint() {
+        let (port, server) = exchange_server(vec![(201, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, checkpoint_options("base"), None)
+            .await
+            .expect("unnamed create from a checkpoint");
+
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0].0, "POST /v1/boxes HTTP/1.1");
+        assert_eq!(
+            json_body(&requests[0].1),
+            serde_json::json!({"checkpoint_id": "base"})
+        );
+    }
+
+    /// The server inherits the saved settings and accepts no overrides, so the
+    /// client must refuse them rather than send a request that drops them. No
+    /// server listens here: a sent request would surface as a transport error.
+    #[tokio::test]
+    async fn create_from_a_checkpoint_refuses_overrides_and_bad_names_before_any_request() {
+        let runtime = RestRuntime::new(&BoxliteRestOptions::new("http://127.0.0.1:1")).unwrap();
+        let overridden = [
+            BoxOptions {
+                cpus: Some(2.0),
+                ..checkpoint_options("base")
+            },
+            BoxOptions {
+                env: vec![("A".into(), "B".into())],
+                ..checkpoint_options("base")
+            },
+            BoxOptions {
+                detach: true,
+                ..checkpoint_options("base")
+            },
+        ];
+        for options in overridden {
+            let error = RuntimeBackend::create(&runtime, options, None)
+                .await
+                .err()
+                .expect("overrides must be refused");
+            assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+            assert!(error.to_string().contains("inherits"), "{error}");
+        }
+        for (checkpoint, name) in [("bad/key", None), ("base", Some("bad/name".to_owned()))] {
+            assert!(matches!(
+                RuntimeBackend::create(&runtime, checkpoint_options(checkpoint), name).await,
+                Err(BoxliteError::InvalidArgument(_))
+            ));
+        }
+        assert!(matches!(
+            RuntimeBackend::get_or_create(&runtime, checkpoint_options("base"), None).await,
+            Err(BoxliteError::Unsupported(_))
+        ));
     }
 
     /// A server that does not honor `ExecRequest.user` would run the command

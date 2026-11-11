@@ -1187,16 +1187,6 @@ enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteRuntime *runtime,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
 
-// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
-// A non-null box_id replaces an idle target; the callback owns the Box handle.
-enum BoxliteErrorCode boxlite_checkpoint_import_box(CBoxliteRuntime *runtime,
-                                                    const char *key,
-                                                    const char *name,
-                                                    const char *box_id,
-                                                    CRuntimeImportCb cb,
-                                                    void *user_data,
-                                                    CBoxliteError *out_error);
-
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
                                         const char *guest_dst,
@@ -1755,6 +1745,13 @@ enum BoxliteErrorCode boxlite_options_new(const char *image,
                                           CBoxliteError *out_error);
 
 void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
+
+// Create the box from a REST-managed checkpoint instead of the image.
+//
+// The box inherits the checkpoint's saved settings, so every other option
+// must stay unset; only the name may accompany it. Local runtimes fail the
+// create with an unsupported error.
+void boxlite_options_set_checkpoint(CBoxliteOptions *opts, const char *checkpoint);
 
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
 

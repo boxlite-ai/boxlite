@@ -237,6 +237,7 @@ type boxConfig struct {
 	memoryMiB  int
 	diskSizeGB int
 	rootfsPath string
+	checkpoint string
 	env        [][2]string
 	volumes    []volumeEntry
 	ports      []PortSpec
@@ -286,6 +287,15 @@ func WithMemory(mib int) BoxOption {
 // on first boot.
 func WithDiskSize(gb int) BoxOption {
 	return func(c *boxConfig) { c.diskSizeGB = gb }
+}
+
+// WithCheckpoint creates the box from a REST-managed checkpoint, by ID or name.
+//
+// Pass an empty image to [Runtime.Create]. The box inherits the checkpoint's
+// saved settings, so only [WithName] may accompany it; the server accepts no
+// overrides. Local runtimes return an unsupported error.
+func WithCheckpoint(checkpoint string) BoxOption {
+	return func(c *boxConfig) { c.checkpoint = checkpoint }
 }
 
 // WithRootfsPath prefers a local OCI image layout directory over pulling from a registry.
@@ -475,7 +485,10 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			useLocalOCI = true
 		}
 	}
-	if image == "" && !useLocalOCI {
+	if cfg.checkpoint != "" && (image != "" || rootfsPath != "") {
+		return nil, fmt.Errorf("boxlite: WithCheckpoint cannot be combined with an image or WithRootfsPath")
+	}
+	if image == "" && !useLocalOCI && cfg.checkpoint == "" {
 		return nil, fmt.Errorf("boxlite: image reference is required when WithRootfsPath is unset, missing, or not a directory")
 	}
 
@@ -489,6 +502,11 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		return nil, freeError(&cerr)
 	}
 
+	if cfg.checkpoint != "" {
+		cCheckpoint := toCString(cfg.checkpoint)
+		C.boxlite_options_set_checkpoint(cOpts, cCheckpoint)
+		C.free(unsafe.Pointer(cCheckpoint))
+	}
 	if useLocalOCI {
 		cPath := toCString(rootfsPath)
 		C.boxlite_options_set_rootfs_path(cOpts, cPath)

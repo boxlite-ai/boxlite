@@ -530,6 +530,10 @@ pub(crate) struct PyBoxOptions {
     pub(crate) image: Option<String>,
     #[pyo3(get, set)]
     pub(crate) rootfs_path: Option<String>,
+    /// REST-managed checkpoint to create from. The box inherits the saved
+    /// settings, so every other option must be left unset.
+    #[pyo3(get, set)]
+    pub(crate) checkpoint: Option<String>,
     #[pyo3(get, set)]
     pub(crate) cpus: Option<f64>,
     #[pyo3(get, set)]
@@ -610,6 +614,7 @@ impl PyBoxOptions {
         tty=None,
         advanced=None,
         secrets=vec![],
+        checkpoint=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -634,10 +639,12 @@ impl PyBoxOptions {
         tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
+        checkpoint: Option<String>,
     ) -> Self {
         Self {
             image,
             rootfs_path,
+            checkpoint,
             cpus,
             memory_mib,
             disk_size_gb,
@@ -691,9 +698,15 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
 
-        // Convert image/rootfs_path to RootfsSpec
-        let rootfs = match &py_opts.rootfs_path {
-            Some(path) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
+        // Convert image/rootfs_path/checkpoint to RootfsSpec
+        let rootfs = match (&py_opts.checkpoint, &py_opts.rootfs_path) {
+            (Some(_), _) if py_opts.image.is_some() || py_opts.rootfs_path.is_some() => {
+                return Err(boxlite::BoxliteError::InvalidArgument(
+                    "checkpoint cannot be combined with image or rootfs_path".into(),
+                ));
+            }
+            (Some(checkpoint), _) => RootfsSpec::Checkpoint(checkpoint.clone()),
+            (None, Some(path)) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
             _ => {
                 let image = py_opts
                     .image
@@ -1190,6 +1203,7 @@ mod tests {
         PyBoxOptions {
             image: None,
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -1218,6 +1232,7 @@ mod tests {
         PyBoxOptions {
             image: None,
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,

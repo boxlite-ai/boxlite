@@ -570,6 +570,7 @@ impl BoxInfo {
             image: match &config.options.rootfs {
                 RootfsSpec::Image(r) => r.clone(),
                 RootfsSpec::RootfsPath(p) => format!("rootfs:{}", p),
+                RootfsSpec::Checkpoint(c) => format!("checkpoint:{}", c),
             },
             cpus: config.options.cpus.unwrap_or(f64::from(DEFAULT_CPUS)),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),

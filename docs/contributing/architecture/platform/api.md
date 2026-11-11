@@ -86,7 +86,7 @@ The inventory is implementation-grounded:
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including clone, binary archive import/export,
 and runtime-wide metrics. `GET /v1/config` reports those archive capabilities as
-disabled. Checkpoint capture and JSON checkpoint import are a separate capability:
+disabled. Checkpoint capture and box creation from a checkpoint are a separate capability:
 `checkpoints_enabled` requires both `CHECKPOINTS_ENABLED=true` and a configured
 checkpoint archive prefix. Private tunnels are enabled; clients check that
 capability before every private prepare.
@@ -613,7 +613,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Checkpoints and checkpoint import</b> · 5 routes</summary>
+<summary><b>Checkpoints</b> · 5 routes</summary>
 
 | Method | Path | What it does |
 | ------ | ---- | ------------ |
@@ -621,23 +621,23 @@ organization membership.
 | `GET` | `/v1[/{prefix}]/checkpoints` | Lists organization checkpoints; accepts `pageToken` or `page_token`, and returns `next_page_token`. |
 | `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state and optional `error_reason`. |
 | `DELETE` | `/v1[/{prefix}]/checkpoints/{key}` | Deletes an unused checkpoint; `force=true` tolerates an already absent checkpoint, but active capture/use returns `409`; returns `204`. |
-| `POST` | `/v1[/{prefix}]/boxes/import` | Imports a checkpoint into a new Box (`201`) or replaces a specified Box (`200`). |
+| `POST` | `/v1[/{prefix}]/boxes` | With `checkpoint_id`, creates a Box from a checkpoint; returns `201`. |
 
-Import requires JSON: `{"checkpoint_id":"base","name":"child"}` creates a Box;
-`{"checkpoint_id":"base","box_id":"existing"}` replaces an existing Box while
-preserving its public cloud ID. `name` and `box_id` are mutually exclusive.
-Ordinary Box creation accepts no checkpoint selector, and there is no standalone
-checkpoint recover route. Binary archive upload is not supported by this hosted route.
+Ordinary Box creation takes the checkpoint: `{"checkpoint_id":"base","name":"child"}`
+creates a Box that inherits the saved settings. `checkpoint_id` excludes `image` and
+`rootfs_path`, and any field other than `name` returns `400`. There is no
+`/boxes/import` route on the hosted service and no way to replace an existing Box
+from a checkpoint.
 
 Capture requires a stopped, idle source; callers stop the Box and wait for
 `stopped` first. Other states return `409`; capture never automatically stops a Box.
 The runner checks again under its source-operation lock before native export.
 
-Capture, import, and deletion require `write:boxes`; reads require organization
-membership. Turning off checkpoint admission leaves reads, deletion, and already
-accepted work available. Import waits for the requested Box state; a failure after
-admission includes `boxId`, which clients query before considering another import.
-See [checkpoint capture and import](../../../../apps/api/README.md#checkpoint-capture)
+Capture, creation from a checkpoint, and deletion require `write:boxes`; reads require
+organization membership. Turning off checkpoint admission leaves reads, deletion, and
+already accepted work available. Creation waits for the Box to start; a failure after
+admission includes `boxId`, which clients query before considering another create.
+See [checkpoint capture and use](../../../../apps/api/README.md#checkpoint-capture)
 for storage and lifecycle details.
 
 </details>

@@ -174,6 +174,10 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
+    /// REST-managed checkpoint to create from (alternative to image). The box
+    /// inherits the saved settings, so every other option must be left unset.
+    pub checkpoint: Option<String>,
+
     /// CPU allocation (default: 1, range: 0.125-16); fractional values require a Linux execution host
     pub cpus: Option<f64>,
 
@@ -490,7 +494,12 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
         if let Some(cpus) = js_opts.cpus {
             boxlite::runtime::cpu_count::CpuCount::new(cpus)?;
         }
-        let auto_remove = js_opts.auto_remove.unwrap_or(false);
+        // This SDK keeps boxes on stop unless asked otherwise. A checkpoint box
+        // inherits its saved settings instead, so an unset value must stay at
+        // the core default: only a caller-set option counts as an override.
+        let auto_remove = js_opts.auto_remove.unwrap_or_else(|| {
+            js_opts.checkpoint.is_some() && BoxOptions::default().auto_remove
+        });
         let auto_delete = js_opts.auto_delete;
         // Convert volumes
         let volumes = js_opts
@@ -514,9 +523,15 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .map(PortSpec::from)
             .collect();
 
-        // Convert image/rootfs_path to RootfsSpec
-        let rootfs = match &js_opts.rootfs_path {
-            Some(path) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
+        // Convert image/rootfs_path/checkpoint to RootfsSpec
+        let rootfs = match (&js_opts.checkpoint, &js_opts.rootfs_path) {
+            (Some(_), _) if js_opts.image.is_some() || js_opts.rootfs_path.is_some() => {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    "checkpoint cannot be combined with image or rootfsPath".into(),
+                ));
+            }
+            (Some(checkpoint), _) => RootfsSpec::Checkpoint(checkpoint.clone()),
+            (None, Some(path)) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
             _ => {
                 let image = js_opts
                     .image
@@ -911,6 +926,7 @@ mod tests {
         let js = JsBoxOptions {
             image: Some("alpine:latest".into()),
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -1009,6 +1025,7 @@ mod tests {
         let js = JsBoxOptions {
             image: Some("python:slim".into()),
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
