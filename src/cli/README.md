@@ -24,7 +24,7 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Lifecycle** — Start, stop, restart, remove boxes
 - **Inspect** — Show detailed box info (JSON, YAML, or Go template)
 - **Exec** — Run commands in a running or safely resumable box
-- **Images** — Pull and list OCI images
+- **Images** — Pull, list and safely remove local OCI images
 
 - **Executions** — List live guest processes with `boxlite top BOX`; reattach with `boxlite attach BOX EXECUTION_ID`, or recover control with `boxlite kill BOX EXECUTION_ID` / `boxlite signal BOX EXECUTION_ID SIGNAL`.
 - **Copy** — Copy files between host and box (`boxlite cp`)
@@ -740,6 +740,26 @@ List cached images.
 |--------|-------|-------------|
 | `--quiet` | `-q` | Show only image IDs; conflicts with `--format` |
 | `--format FMT` | | Output format: `table`, `json`, `yaml`; conflicts with `--quiet` |
+
+### `boxlite rmi`
+
+Remove untagged local images and reclaim unused cache data.
+
+**Usage:** `boxlite rmi <IMAGE_ID>...`
+
+```bash
+boxlite rmi 1f8c03c8f5e5
+boxlite --home /srv/boxlite rmi 1f8c03c8f5e5 e402cca67371
+```
+
+IDs may be full SHA-256 manifest IDs or unambiguous hex prefixes.
+All targets are resolved before deletion; failures do not prevent processing other targets.
+Successful full IDs go to stdout; errors and a reclaimed-byte summary go to stderr.
+The command exits nonzero if any target fails and requires no interactive confirmation.
+
+Tags and existing boxes block deletion, including stopped boxes.
+Shared cache data remains; selected REST runtimes return unsupported.
+See [removal semantics and accounting limits](../../docs/concepts/images.md#removing-local-images).
 
 ### `boxlite cp`
 

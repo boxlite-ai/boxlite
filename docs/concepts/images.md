@@ -81,7 +81,7 @@ a cached tag.
 
 ## Removing local images
 
-Use Rust's `images.remove_by_id("1f8c03c8f5e5")` to reclaim an unwanted local image by manifest ID.
+Use `boxlite rmi 1f8c03c8f5e5` to reclaim an unwanted local image by manifest ID.
 Full lowercase SHA-256 IDs and unambiguous hexadecimal prefixes are accepted.
 Every untagged cache reference to that manifest is removed across repositories.
 An explicit digest reference does not prevent deletion.
