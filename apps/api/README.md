@@ -102,6 +102,12 @@ MCP `listBoxes` delegates to this REST operation and uses the same continuation.
 A resolved organization is required, including for system administrators; requests
 without one return 400 before querying inventory.
 
+Deployment must coordinate client upgrades with the bounded server response.
+Previously released native clients that issue only one list request return at most
+the first 100 Boxes after this server change. Upgrade those SDK/CLI clients to a
+version that follows continuation tokens before deploying this behavior for
+organizations with larger inventories; this endpoint has no legacy unbounded mode.
+
 Filtering occurs before the database limit and matches the response's public
 `status`, including desired-state transitions. For example, a stored started Box
 targeting stopped matches `stopping`, while a stopped Box targeting started matches
