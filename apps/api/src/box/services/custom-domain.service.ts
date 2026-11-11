@@ -101,7 +101,8 @@ export class CustomDomainService {
     requireDomainSubscription((await this.subscriptions.refresh(organizationId)).status)
     await this.db.query(
       `UPDATE custom_domain_config SET next_check_at = CASE
-        WHEN error_code IN ('provider_capacity_exhausted', 'provider_permission_denied', 'provider_resource_conflict')
+        WHEN error_code IN ('provider_capacity_exhausted', 'provider_permission_denied', 'provider_resource_conflict',
+          'certificate_provisioning_failed')
           THEN next_check_at ELSE now() END
       WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL`,
       [id, organizationId],

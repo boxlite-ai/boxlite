@@ -357,6 +357,7 @@ export const gcpApiProvider =
         roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domains' }).replaceAll('-', '_'),
         title: 'Reconcile customer domain certificates',
         permissions: [
+          'resourcemanager.projects.get',
           'certificatemanager.dnsauthorizations.create',
           'certificatemanager.dnsauthorizations.get',
           'certificatemanager.dnsauthorizations.delete',

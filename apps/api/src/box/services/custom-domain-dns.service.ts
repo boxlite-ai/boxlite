@@ -4,6 +4,7 @@ import { Injectable } from '@nestjs/common'
 import { Resolver } from 'node:dns/promises'
 import { connect } from 'node:tls'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { DomainDnsRecord } from './custom-domain-policy'
 
 export class DomainSetupError extends Error {
   constructor(
@@ -17,6 +18,24 @@ export class DomainSetupError extends Error {
 @Injectable()
 export class CustomDomainDnsService {
   constructor(private readonly config: TypedConfigService) {}
+
+  async verifyCertificate(record: DomainDnsRecord): Promise<void> {
+    const resolver = new Resolver({ timeout: 2000, tries: 1 })
+    resolver.setServers(['8.8.8.8', '1.1.1.1'])
+    const canonical = (name: string) => name.toLowerCase().replace(/\.$/, '')
+    try {
+      const names = await resolver.resolveCname(record.name)
+      if (names.length !== 1 || canonical(names[0]) !== canonical(record.value))
+        throw new DomainSetupError('certificate_dns_mismatch')
+    } catch (error) {
+      if (error instanceof DomainSetupError) throw error
+      if (['ENODATA', 'ENOTFOUND'].includes((error as NodeJS.ErrnoException).code))
+        throw new DomainSetupError('certificate_dns_mismatch')
+      throw new DomainSetupError('dns_unavailable')
+    } finally {
+      resolver.cancel()
+    }
+  }
 
   async verify(hostname: string, challenge: string): Promise<void> {
     const resolver = new Resolver({ timeout: 2000, tries: 1 })

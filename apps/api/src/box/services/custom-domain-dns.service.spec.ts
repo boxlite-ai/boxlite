@@ -57,6 +57,47 @@ describe('public DNS proof', () => {
   })
 })
 
+describe('certificate authorization DNS proof', () => {
+  const dns = new CustomDomainDnsService({} as never)
+  const record = {
+    name: '_acme-challenge_project.app.example.com.',
+    type: 'CNAME' as const,
+    value: 'token.authorize.certificatemanager.goog.',
+  }
+  beforeEach(() => {
+    jest.clearAllMocks()
+    resolver.resolveCname.mockReset()
+  })
+
+  it('checks the exact provider record using public DNS and accepts DNS case/trailing-dot equivalence', async () => {
+    resolver.resolveCname.mockResolvedValue(['TOKEN.AUTHORIZE.CERTIFICATEMANAGER.GOOG'])
+    await expect(dns.verifyCertificate(record)).resolves.toBeUndefined()
+    expect(resolver.resolveCname).toHaveBeenCalledWith(record.name)
+    expect(resolver.setServers).toHaveBeenCalledWith(['8.8.8.8', '1.1.1.1'])
+    expect(resolver.cancel).toHaveBeenCalled()
+  })
+
+  it.each([[], ['proxy.platform.com.'], [record.value, 'other.example.com.']])(
+    'rejects missing, traffic and ambiguous CNAME targets: %j',
+    async (...names) => {
+      resolver.resolveCname.mockResolvedValue(names)
+      await expect(dns.verifyCertificate(record)).rejects.toMatchObject({ code: 'certificate_dns_mismatch' })
+      expect(resolver.cancel).toHaveBeenCalled()
+    },
+  )
+
+  it.each(['ENODATA', 'ENOTFOUND', 'ETIMEOUT'])(
+    'distinguishes %s from a mismatched certificate record',
+    async (code) => {
+      resolver.resolveCname.mockRejectedValue({ code })
+      await expect(dns.verifyCertificate(record)).rejects.toMatchObject({
+        code: code === 'ETIMEOUT' ? 'dns_unavailable' : 'certificate_dns_mismatch',
+      })
+      expect(resolver.cancel).toHaveBeenCalled()
+    },
+  )
+})
+
 describe('edge HTTPS proof', () => {
   const dns = new CustomDomainDnsService({
     getOrThrow: () => ['192.0.2.1', '192.0.2.2'],

@@ -686,6 +686,14 @@ require organization membership and Box write permission:
 Each configuration has `id`, `hostname`, `phase`, `ready`, `errorCode`,
 `challengeExpiresAt` and `dnsRecords` (`name`, `type`, `value`). Challenges and
 certificate DNS records appear here, not in portable bind/list responses.
+`pending_certificate_dns` waits for the current authorization CNAME, while
+`provisioning` covers issuance, map activation and HTTPS verification. The
+`certificate_dns_mismatch` error identifies the separate certificate record rather
+than the traffic CNAME. A verify response acknowledges scheduling only; terminal
+certificate failures retain retry backoff. The worker can recreate an owned, unissued
+or expired `FAILED` certificate once it is at least one hour old and the current CNAME
+passes, preserving its DNS authorization. Individual failed authorization attempts
+on a `PROVISIONING` certificate do not trigger replacement.
 Pending, failed and expired drafts count toward the custom-domain allowance.
 Creating a different hostname while any non-deleted configuration exists returns
 `400 custom_domain_count_limit_reached`; retrying the same hostname remains idempotent.

@@ -120,6 +120,55 @@ describe('Custom domains setup', () => {
     expect(api.bindDomain).toHaveBeenCalledWith('org-1', 'app.example.com', 'my-box', 8080)
   })
 
+  it('acknowledges an asynchronous check while keeping an unready domain unbindable', async () => {
+    response.domains = [{ ...domain, phase: 'provisioning', ready: false }]
+    let complete!: () => void
+    api.verifyCustomDomain.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve
+        }),
+    )
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    await act(async () => button('Check DNS / retry').click())
+    await settle()
+    try {
+      expect(document.body.textContent).toContain('Requesting check…')
+    } finally {
+      await act(async () => complete())
+      await settle()
+    }
+    expect(document.body.textContent).toContain('Check requested')
+    expect(document.body.textContent).toContain('not a confirmation that DNS or HTTPS is ready')
+    input('Box ID or name', 'box-1')
+    expect(button('Bind').disabled).toBe(true)
+  })
+
+  it('explains where to wait and distinguishes the certificate CNAME from traffic DNS', async () => {
+    response.domains = [{ ...domain, phase: 'provisioning', ready: false }]
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    const text = document.querySelector('[role="dialog"]')!.textContent
+    expect(text).toContain('60 minutes')
+    expect(text).toContain('10 seconds')
+    expect(text).toContain('close this dialog')
+    expect(text).toContain('Certificate authorization')
+    expect(text).toContain('Traffic routing')
+    expect(text).toContain('Copy name')
+    expect(text).toContain('do not replace the traffic CNAME')
+  })
+
+  it('explains terminal certificate retry delays without promising immediate issuance', async () => {
+    response.domains = [
+      { ...domain, phase: 'provisioning', ready: false, errorCode: 'certificate_provisioning_failed' },
+    ]
+    await render()
+    await act(async () => document.querySelector<HTMLButtonElement>('section > button')!.click())
+    expect(document.body.textContent).toContain('one hour')
+    expect(document.body.textContent).toContain('pki.goog')
+  })
+
   it('allows unbind and explicit deletion after subscription expiry while retaining DNS guidance', async () => {
     response.subscription = 'required'
     held = [

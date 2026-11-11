@@ -142,6 +142,7 @@ for (const reserved of [undefined, 'retired.example.test']) {
     assert.equal(role.args.project, settings.CUSTOM_DOMAIN_GCP_PROJECT)
     assert.equal(role.args.roleId, 'boxlite_app_stage_custom_domains')
     assert.ok(role.args.permissions.includes('certificatemanager.certs.create'))
+    assert.ok(role.args.permissions.includes('resourcemanager.projects.get'))
     assert.equal(role.args.permissions.includes('certificatemanager.certmaps.update'), false)
     assert.equal(grant.args.project, settings.CUSTOM_DOMAIN_GCP_PROJECT)
     assert.equal(String(grant.args.member), 'serviceAccount:api@example.com')

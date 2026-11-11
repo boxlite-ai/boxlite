@@ -124,7 +124,10 @@ export class CustomDomainWorkerService {
       const failure = error instanceof DomainSetupError ? error : new DomainSetupError('verification_unavailable')
       await this.db.query(
         `UPDATE custom_domain_config SET error_code = $4::varchar, attempts = attempts + 1,
-        phase = CASE WHEN deleted_at IS NULL AND $4::varchar = 'https_not_ready' THEN 'provisioning' ELSE phase END,
+        phase = CASE
+          WHEN deleted_at IS NULL AND $4::varchar = 'https_not_ready' THEN 'provisioning'
+          WHEN deleted_at IS NULL AND $4::varchar = 'certificate_dns_mismatch' THEN 'pending_certificate_dns'
+          ELSE phase END,
         dns_valid_until = CASE WHEN $5 THEN '-infinity' ELSE dns_valid_until END,
         next_check_at = now() + make_interval(secs => LEAST(3600, 30 * power(2, LEAST(attempts, 7)))::int), updated_at = now()
         WHERE id = $1 AND generation = $2 AND lease_owner = $3 AND lease_until > now()`,

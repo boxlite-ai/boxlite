@@ -315,16 +315,32 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
     })
   })
 
-  it('does not let manual retries bypass provider capacity backoff', async () => {
+  it.each(['provider_capacity_exhausted', 'certificate_provisioning_failed'])(
+    'does not let manual retries bypass %s backoff',
+    async (code) => {
+      const draft = await domains.create(org, 'app.example.com')
+      provider.reconcile.mockRejectedValue(new DomainSetupError(code))
+      await worker.reconcileDue()
+      const [before] = await db.query(`SELECT next_check_at FROM custom_domain_config WHERE id = $1`, [draft.id])
+      await domains.verify(org, draft.id)
+      const [after] = await db.query(`SELECT next_check_at FROM custom_domain_config WHERE id = $1`, [draft.id])
+      expect(after.next_check_at).toEqual(before.next_check_at)
+      await worker.reconcileDue()
+      expect(provider.reconcile).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('returns to the certificate DNS step when its record no longer matches', async () => {
     const draft = await domains.create(org, 'app.example.com')
-    provider.reconcile.mockRejectedValue(new DomainSetupError('provider_capacity_exhausted'))
     await worker.reconcileDue()
-    const [before] = await db.query(`SELECT next_check_at FROM custom_domain_config WHERE id = $1`, [draft.id])
-    await domains.verify(org, draft.id)
-    const [after] = await db.query(`SELECT next_check_at FROM custom_domain_config WHERE id = $1`, [draft.id])
-    expect(after.next_check_at).toEqual(before.next_check_at)
+    await db.query(`UPDATE custom_domain_config SET phase = 'provisioning', next_check_at = now()`)
+    provider.reconcile.mockRejectedValue(new DomainSetupError('certificate_dns_mismatch'))
     await worker.reconcileDue()
-    expect(provider.reconcile).toHaveBeenCalledTimes(1)
+    expect(await domains.get(org, draft.id)).toMatchObject({
+      phase: 'pending_certificate_dns',
+      ready: false,
+      errorCode: 'certificate_dns_mismatch',
+    })
   })
 
   it('bounds two replicas and ignores overlapping ticks without processing a hostname twice', async () => {

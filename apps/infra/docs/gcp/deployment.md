@@ -112,7 +112,15 @@ The API also needs its existing Commerce connection to determine subscription
 eligibility. Missing billing connectivity cannot authorize custom-domain access.
 The GCP provider grants the API service account a custom role for DNS authorization,
 certificate and map-entry create/get/delete/use plus operation get; it does not
-grant map mutation. With the feature enabled, Cloud Run keeps at least one instance
+grant map mutation. The role also includes `resourcemanager.projects.get` on the
+configured certificate project. Certificate Manager can return project IDs in resource
+names and project numbers in references; the API resolves their exact mapping through
+Resource Manager and validates full paths, ownership labels and generation before use
+or deletion. Deploy the role update before the API, and enable the Resource Manager
+API in that project; the GCP bootstrap already enables it. Failed lookups are retried,
+including during IAM propagation, rather than cached as a permanent failure.
+
+With the feature enabled, Cloud Run keeps at least one instance
 and allocates CPU outside requests so the reconciliation worker continues at idle.
 This changes idle cost. Every proxy receives the required `PROXY_DOMAIN` namespace;
 other valid customer hosts always use exact domain lookup.
@@ -131,6 +139,13 @@ real issuance, SNI on each fixed entry IP, public Box access, suspension, recove
 and deletion cleanup. Renewal and production-scale reconciliation latency need
 separate observation; local provider mocks do not establish these properties.
 No live issuance or deployment was performed as part of the local implementation.
+
+The provider reads the current DNS authorization before checking its CNAME. Changed
+records are published to the Dashboard before issuance continues. Only terminal
+`FAILED` certificates without a valid remaining lifetime are replaced, after at least
+one hour from creation; the owned map entry is removed first, and the authorization
+record is retained. `PROVISIONING` certificates remain in place even when an individual
+authorization attempt failed. See the [customer waiting and retry guide](../../../../docs/concepts/networking.md#bring-your-own-domain).
 
 Resource/rate failures persist with backoff; manual retry cannot bypass provider
 capacity errors. Unbind and subscription suspension retain certificates and their

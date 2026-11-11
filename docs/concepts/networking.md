@@ -161,9 +161,38 @@ must delete all its configurations before adding a different hostname.
 
 1. Enter a public subdomain, such as `app.example.com`; use ASCII/Punycode, at most 220 bytes, with no wildcard or apex domain.
 2. At your DNS provider, add the traffic CNAME and configuration-specific TXT shown in the guide; turn off CDN proxying.
-3. Click **Check DNS / retry**, then add the certificate authorization CNAME when it appears.
-4. Keep all records in place; BoxLite checks ownership and traffic DNS, requests a Google-managed certificate, and checks HTTPS at the proxy entry.
+3. Click **Check DNS / retry**, then add the separate **Certificate authorization** CNAME when it appears. Copy its full `_acme-challenge…` name and value; keep the traffic CNAME unchanged.
+4. Keep all records in place; BoxLite checks ownership, traffic DNS and the current certificate CNAME before requesting a Google-managed certificate, then checks HTTPS at the proxy entry.
 5. When the domain is **Ready**, bind a Box port in Dashboard or with the existing CLI/SDK bind operation; the public-tunnel and inbound rules above still apply.
+
+In Cloudflare, use **DNS only** for both CNAME records. If the DNS editor automatically
+adds the zone suffix, enter the relative record name and verify that its resulting full
+name matches the displayed name. **Copy name** and **Copy value** are separate actions.
+
+**Check DNS / retry** requests a background check; its acknowledgment does not mean
+DNS or HTTPS has passed. Watch the status in the same dialog or the domain list,
+which refreshes every 10 seconds. Closing the dialog does not stop background checks.
+
+| Status | What to do |
+| --- | --- |
+| Waiting for DNS verification | Add the traffic CNAME and ownership TXT; allow public DNS to propagate |
+| Waiting for certificate DNS | Add the exact certificate authorization CNAME when it appears |
+| Waiting for HTTPS | Keep the DNS records; Google is issuing or deploying the certificate and BoxLite checks HTTPS |
+| Ready | Bind a Box port; retain all DNS records for verification and renewal |
+
+DNS propagation can take minutes to hours. Google documents [up to 60 minutes for
+issuance after DNS and load-balancer changes propagate](https://docs.cloud.google.com/certificate-manager/docs/troubleshooting#managed-certificate-state);
+HTTPS deployment can take additional time. If there is no progress after an hour
+with DNS fully propagated, verify the displayed records and that any CAA restrictions
+allow `pki.goog`, or contact support. An earlier failed authorization attempt can remain
+visible in Google while the overall certificate is still provisioning; BoxLite retains
+that certificate for Google's retries.
+
+If Google stops issuance entirely (`FAILED`), BoxLite rechecks the current certificate
+CNAME and recreates the failed, unissued or expired certificate using the same resource
+ID and DNS authorization. Replacements are spaced at least one hour apart, and manual
+checks retain retry backoff. A still-valid certificate is retained; customers do not need
+to delete their domain configuration or change the ownership TXT to retry issuance.
 
 Bind does not perform DNS challenges: it reads saved DNS and HTTPS readiness,
 whose deadline is also bounded by subscription eligibility. A known custom domain returns `403 subscription_required` when

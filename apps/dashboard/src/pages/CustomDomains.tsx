@@ -11,7 +11,7 @@ const INPUT = 'w-full rounded border border-border bg-background px-3 py-2 text-
 const PHASES = {
   pending_verification: 'Waiting for DNS verification',
   pending_certificate_dns: 'Waiting for certificate DNS',
-  provisioning: 'Preparing HTTPS',
+  provisioning: 'Waiting for HTTPS',
   ready: 'Ready',
 }
 const ERRORS: Record<string, string> = {
@@ -21,6 +21,8 @@ const ERRORS: Record<string, string> = {
     'Traffic resolves to another address. Disable CDN proxying and remove conflicting A/AAAA records.',
   dns_record_missing: 'A DNS record is missing. Check the names and allow time for DNS propagation.',
   dns_unavailable: 'DNS could not be checked. The background check will retry.',
+  certificate_dns_mismatch:
+    'The certificate authorization CNAME is missing or does not match. Copy its exact name and value below; do not replace the traffic CNAME.',
   challenge_expired: 'This challenge expired. Add the same hostname again to obtain a new TXT value.',
   domain_already_owned: 'This hostname is already held by another organization. Release it there before retrying.',
   provider_capacity_exhausted:
@@ -28,8 +30,10 @@ const ERRORS: Record<string, string> = {
   provider_permission_denied: 'The HTTPS service needs platform attention. Contact support.',
   provider_unavailable: 'The HTTPS service is temporarily unavailable. Checks will retry.',
   provider_resource_conflict: 'The HTTPS configuration needs platform attention. Contact support.',
+  provider_invalid_response:
+    'The HTTPS service returned an unexpected response. Contact support if checks keep failing.',
   certificate_provisioning_failed:
-    'Certificate issuance failed. Check the certificate CNAME and any CAA restrictions, then retry or contact support.',
+    'Google stopped issuing this certificate. Check the certificate CNAME and allow pki.goog in any CAA restrictions. BoxLite retries automatically after DNS passes; replacements are spaced at least one hour apart. Requesting a check does not skip this delay.',
   https_not_ready: 'The certificate is not yet available at every entry point. Checks will retry.',
   subscription_required: 'An active organization subscription is required. Your configuration is retained.',
   subscription_not_ready:
@@ -54,6 +58,7 @@ export default function CustomDomains({
   const [box, setBox] = useState('')
   const [port, setPort] = useState('3000')
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [checkRequestedFor, setCheckRequestedFor] = useState<string | null>(null)
   const query = useQuery({
     queryKey: key,
     queryFn: () => api.listCustomDomains(organizationId),
@@ -81,6 +86,7 @@ export default function CustomDomains({
       if (operation.type === 'unbind') await api.unbindDomain(organizationId, operation.hostname)
     },
     onSuccess: async (_, operation) => {
+      if (operation.type === 'verify') setCheckRequestedFor(operation.id)
       if (operation.type === 'delete') {
         setSelected(null)
         setDeleting(null)
@@ -92,7 +98,11 @@ export default function CustomDomains({
   const canCreate = canManage && data?.enabled && data.subscription === 'active'
   const domain = data?.domains.find((value) => value.id === selected)
   const target = held.find((value) => value.hostname === domain?.hostname)?.target
+  const certificateRecord = domain?.dnsRecords.find(
+    (record) => record.type === 'CNAME' && record.name !== domain.hostname,
+  )
   const run = (type: 'verify' | 'delete' | 'bind' | 'unbind') => {
+    if (type === 'verify') setCheckRequestedFor(null)
     if (domain) action.mutate({ type, id: domain.id, hostname: domain.hostname })
   }
   if (!canManage) return null
@@ -113,6 +123,7 @@ export default function CustomDomains({
             setHostname('')
             create.reset()
             action.reset()
+            setCheckRequestedFor(null)
             setOpen(true)
           }}
         >
@@ -144,6 +155,7 @@ export default function CustomDomains({
           onClick={() => {
             setSelected(item.id)
             action.reset()
+            setCheckRequestedFor(null)
             setDeleting(null)
             setBox('')
             setOpen(true)
@@ -181,11 +193,12 @@ export default function CustomDomains({
               records.
             </li>
             <li>
-              Check DNS, then add the certificate authorization CNAME when it appears; keep all records for ongoing
-              verification and renewal.
+              Click Check DNS / retry, then add the separate certificate authorization CNAME when it appears. Use its
+              exact name, including the _acme-challenge prefix; do not replace the traffic CNAME.
             </li>
             <li>
-              Wait for Ready, then bind a Box port. The port must also have a public tunnel and inbound access enabled.
+              Wait for Ready in this dialog or the domain list, then bind a Box port. The port must also have a public
+              tunnel and inbound access enabled.
             </li>
           </ol>
           {!domain ? (
@@ -226,6 +239,30 @@ export default function CustomDomains({
                     ? 'Awaiting renewed verification'
                     : PHASES[domain.phase]}
               </p>
+              {!domain.ready && canCreate && (
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <p>
+                    {domain.phase === 'pending_verification'
+                      ? 'Add the traffic CNAME and ownership TXT first. Once public DNS matches, the certificate authorization record will appear here.'
+                      : domain.phase === 'pending_certificate_dns'
+                        ? certificateRecord
+                          ? 'Add the certificate authorization CNAME below. BoxLite checks that exact record before requesting HTTPS.'
+                          : 'BoxLite is preparing your certificate authorization record. Wait for the additional CNAME to appear here.'
+                        : domain.errorCode === 'https_not_ready'
+                          ? 'The certificate is being checked at every HTTPS entry point. Binding stays unavailable until all checks pass.'
+                          : 'Google is issuing or deploying your HTTPS certificate. Binding stays unavailable until HTTPS checks pass.'}
+                  </p>
+                  <p>
+                    DNS changes can take minutes to hours to propagate. After DNS and load-balancer changes propagate,
+                    Google certificate issuance can take up to 60 minutes; HTTPS deployment can take additional time.
+                  </p>
+                  <p>
+                    This status refreshes every 10 seconds. You can close this dialog; background checks continue. If
+                    there is no progress after an hour with DNS fully propagated, check the records and any CAA
+                    restrictions, or contact support.
+                  </p>
+                </div>
+              )}
               {domain.errorCode && (
                 <p role="alert">
                   {ERRORS[domain.errorCode] ?? `Setup needs attention: ${domain.errorCode}. Retry or contact support.`}
@@ -233,20 +270,40 @@ export default function CustomDomains({
               )}
               {domain.dnsRecords.map((record) => (
                 <div key={record.name} className="space-y-1 rounded border border-border p-3 text-xs">
-                  <div className="font-semibold">{record.type}</div>
+                  <div className="font-semibold">
+                    {record.type === 'TXT'
+                      ? 'Domain ownership'
+                      : record.name === domain.hostname
+                        ? 'Traffic routing'
+                        : 'Certificate authorization'}{' '}
+                    · {record.type}
+                  </div>
                   <div className="break-all font-mono">Name: {record.name}</div>
                   <div className="break-all font-mono">Value: {record.value}</div>
-                  <button className={BUTTON} onClick={() => void navigator.clipboard.writeText(record.value)}>
-                    Copy value
-                  </button>
+                  <div className="flex gap-2">
+                    <button className={BUTTON} onClick={() => void navigator.clipboard.writeText(record.name)}>
+                      Copy name
+                    </button>
+                    <button className={BUTTON} onClick={() => void navigator.clipboard.writeText(record.value)}>
+                      Copy value
+                    </button>
+                  </div>
                 </div>
               ))}
               <p className="text-xs text-muted-foreground">
-                DNS changes may take time to propagate. Keep these records while using this domain.
+                Keep all records for verification and certificate renewal. In Cloudflare, use DNS only (gray cloud) for
+                both CNAME records. If your DNS provider adds the zone suffix automatically, enter only the relative
+                name and check that the full name matches the one shown above.
               </p>
               <button className={BUTTON} disabled={!canCreate || action.isPending} onClick={() => run('verify')}>
-                Check DNS / retry
+                {action.isPending && action.variables?.type === 'verify' ? 'Requesting check…' : 'Check DNS / retry'}
               </button>
+              {checkRequestedFor === domain.id && (
+                <p role="status" className="text-sm">
+                  Check requested. This is not a confirmation that DNS or HTTPS is ready. Background checks will update
+                  the status here; provider retry delays still apply.
+                </p>
+              )}
               <p className="text-sm">
                 Saved target: {target?.type === 'box' ? `${target.box}:${target.port}` : 'Unbound'}
               </p>
