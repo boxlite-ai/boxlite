@@ -168,17 +168,25 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
 	operations := []struct {
 		name string
-		call func(context.Context, *Checkpoints, string) error
+		call func(context.Context, *Runtime, string) error
 	}{
-		{"create", func(ctx context.Context, c *Checkpoints, key string) error {
-			_, err := c.Create(ctx, key, "")
+		{"create", func(ctx context.Context, runtime *Runtime, key string) error {
+			_, err := runtime.Checkpoints().Create(ctx, key, "")
 			return err
 		}},
-		{"get", func(ctx context.Context, c *Checkpoints, key string) error { _, err := c.Get(ctx, key); return err }},
-		{"list", func(ctx context.Context, c *Checkpoints, _ string) error { _, err := c.List(ctx); return err }},
-		{"remove", func(ctx context.Context, c *Checkpoints, key string) error { return c.Remove(ctx, key, false) }},
-		{"import", func(ctx context.Context, c *Checkpoints, key string) error {
-			_, err := c.runtime.ImportWithOptions(ctx, "", "", ImportOptions{CheckpointID: key})
+		{"get", func(ctx context.Context, runtime *Runtime, key string) error {
+			_, err := runtime.Checkpoints().Get(ctx, key)
+			return err
+		}},
+		{"list", func(ctx context.Context, runtime *Runtime, _ string) error {
+			_, err := runtime.Checkpoints().List(ctx)
+			return err
+		}},
+		{"remove", func(ctx context.Context, runtime *Runtime, key string) error {
+			return runtime.Checkpoints().Remove(ctx, key, false)
+		}},
+		{"import", func(ctx context.Context, runtime *Runtime, key string) error {
+			_, err := runtime.ImportWithOptions(ctx, "", "", ImportOptions{CheckpointID: key})
 			return err
 		}},
 	}
@@ -197,24 +205,24 @@ func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
 			defer runtime.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := operation.call(ctx, runtime.Checkpoints(), "base"); err == nil || !strings.Contains(err.Error(), "checkpoint unavailable") {
+			if err := operation.call(ctx, runtime, "base"); err == nil || !strings.Contains(err.Error(), "checkpoint unavailable") {
 				t.Fatalf("backend failure was lost: %v", err)
 			}
 			if operation.name != "list" {
-				if err := operation.call(ctx, runtime.Checkpoints(), "\xff"); !IsInvalidArgument(err) {
+				if err := operation.call(ctx, runtime, "\xff"); !IsInvalidArgument(err) {
 					t.Fatalf("native UTF-8 rejection was lost: %v", err)
 				}
 			}
 			cancelled, stop := context.WithCancel(context.Background())
 			stop()
-			if err := operation.call(cancelled, runtime.Checkpoints(), "base"); !errors.Is(err, context.Canceled) {
+			if err := operation.call(cancelled, runtime, "base"); !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancelled admission: %v", err)
 			}
 			if err := operation.call(context.Background(), nil, "base"); !errors.Is(err, ErrRuntimeClosed) {
 				t.Fatalf("nil manager: %v", err)
 			}
 			runtime.closingOnce.Do(func() { close(runtime.closing) })
-			if err := operation.call(context.Background(), runtime.Checkpoints(), "base"); !errors.Is(err, ErrRuntimeClosed) {
+			if err := operation.call(context.Background(), runtime, "base"); !errors.Is(err, ErrRuntimeClosed) {
 				t.Fatalf("closing runtime: %v", err)
 			}
 		})

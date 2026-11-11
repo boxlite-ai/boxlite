@@ -159,6 +159,11 @@ func (r *Runtime) ImportWithOptions(ctx context.Context, archivePath, name strin
 	if r == nil || r.handle == nil {
 		return nil, ErrRuntimeClosed
 	}
+	select {
+	case <-r.closing:
+		return nil, ErrRuntimeClosed
+	default:
+	}
 	r.ensureDrainRunning()
 
 	cArchivePath, freePath := archiveNameCString(archivePath)
