@@ -5,6 +5,7 @@ import { EntityManager } from 'typeorm'
 import {
   ConfirmedWorkerAbsent,
   ConfirmedWorkerCreationRejected,
+  DEFAULT_WORKER_DISK_GIB,
   decodeScope,
   ExecutionJournal,
   ExecutionLease,
@@ -225,7 +226,7 @@ export class CiNativeWorkers {
           image: launch.image,
           cpu: launch.cpus,
           memory: launch.memoryMiB / 1024,
-          disk: launch.diskGiB ?? 10,
+          disk: launch.diskGiB ?? DEFAULT_WORKER_DISK_GIB,
           user: 'runner',
           workingDir: '/home/runner',
           entrypoint: launch.entrypoint,

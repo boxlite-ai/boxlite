@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { constants, closeSync, fstatSync, openSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
+import { DEFAULT_RUNNER_LABELS } from '@boxlite-ai/ci-listener'
 export interface AppAuth {
   issuer: string
   privateKeyFile: string
@@ -137,7 +138,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
       image: env.CI_WORKER_IMAGE ?? 'ghcr.io/actions/actions-runner:latest',
       cpus: integer('CI_WORKER_CPUS', 2, 16),
       memoryMiB: memory,
-      labels: ['self-hosted', 'linux', 'x64', 'boxlite'],
+      // Base labels; per-job selection substitutes the validated resource label for boxlite.
+      labels: [...DEFAULT_RUNNER_LABELS],
     },
     max: integer('CI_WORKER_MAX', 1, 16),
   }

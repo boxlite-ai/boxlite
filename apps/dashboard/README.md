@@ -767,11 +767,12 @@ transitions, stopped workers and errors use the corresponding cube treatment.
 The CI cube is also used in the empty runner view; the page title has no icon.
 Name filtering shares a toolbar with the compact capacity summary, using the same
 380×36px shared ResourceFilter as Boxes and Images, with a solid border, muted icon
-and 13px monospace input. The 128-character limit and existing pagination remain. It searches case-insensitive literal substrings across
+and 13px monospace input.
+The 128-character limit and existing pagination remain. It searches case-insensitive literal substrings across
 all pages, resets pagination on edits and preserves organization-wide capacity.
 Clearing the input restores the inventory; matching count is independent of page size.
-**Connects** (`/dashboard/ci/connects`) uses a registry-style table for GitHub accounts;
-owners can connect a personal account or organization. Capacity appears beside the Runners filter as `CI slots used / limit`, using Images'
+
+Capacity appears beside the Runners filter as `CI slots used / limit`, using Images'
 compact monospace usage-summary styling without a progress bar or surrounding panel.
 A plain **Edit** text action beside the count remains available to owners.
 It shows occupied scheduler slots against the effective shared limit; reservations
@@ -783,6 +784,8 @@ Leave the maximum blank to inherit Commerce, or use zero to pause new workers.
 Other Boxes consume the same commercial account allowance. Repository limits are
 not exposed. GitHub owns job logs; use existing Box tools for worker inspection.
 
+**Connects** (`/dashboard/ci/connects`) uses a registry-style table for GitHub accounts;
+owners can connect a personal account or organization.
 Each connection has a Registries-style **UPDATE** action beside its trash control.
 It edits private-repository permission on the existing verified binding; changing
 GitHub account identity still requires authorization. A changed policy refreshes

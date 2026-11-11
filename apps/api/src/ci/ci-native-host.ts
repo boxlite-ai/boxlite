@@ -2,6 +2,7 @@
 import { ForbiddenException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import {
+  DEFAULT_RUNNER_LABELS,
   decodeScope,
   scopeKey,
   AppDeliveryRecovery,
@@ -270,7 +271,7 @@ export class CiNativeHost implements ListenerHost {
           })
         },
       },
-      ['self-hosted', 'linux', 'x64', 'boxlite'],
+      DEFAULT_RUNNER_LABELS,
     )
   }
   async scan(original: ScanClaim, signal: AbortSignal): Promise<RepositoryScanSession> {
@@ -319,7 +320,7 @@ export class CiNativeHost implements ListenerHost {
         this.store.transaction(async (tx, state) => {
           signal.throwIfAborted()
           await authorize(state, tx)
-          await state.scans().publish(claim, jobs, ['self-hosted', 'linux', 'x64', 'boxlite'])
+          await state.scans().publish(claim, jobs, DEFAULT_RUNNER_LABELS)
         }),
     })
   }

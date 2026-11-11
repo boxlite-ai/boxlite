@@ -1388,14 +1388,45 @@ select only eligible authorized repositories. A policy update advances generatio
 already delivered workers keep their original cleanup identities.
 
 The initial CI schema creates `allow_private` with a false default; there is no
-Public-to-Private conversion migration because CI has not shipped. For existing
-dev installations, use the old version to finish worker/runner cleanup and stop
-its Listeners, then explicitly recreate the CI tables and start a fresh journal.
-Clearing rows alone does not update the old column layout. Reconnect existing
-GitHub installations afterward.
+Public-to-Private conversion migration because CI has not shipped. Existing
+dev installations must follow [Resetting development CI state](#resetting-development-ci-state).
+Clearing rows alone does not update the old column layout.
 
 Standalone users
 also need old-resource cleanup followed by a fresh journal because scope hashes
 now include Private eligibility; their existing Public environment setting retains
 its meaning and Private remains allowed. No cleanup across a discarded journal is
 promised. Deployment and dev data reset remain operator actions.
+
+### Resetting development CI state
+
+1. Use the old version to finish worker and GitHub runner cleanup, then stop all
+   hosted API replicas and standalone Listeners that write the state being reset.
+2. For hosted state, use the API's configured database and schema to recreate only
+   the CI tables and remove their exact entries from TypeORM's `migrations` table:
+
+   ```sql
+   BEGIN;
+   DROP TABLE IF EXISTS ci_connect_attempt;
+   DROP TABLE IF EXISTS ci_installation_binding;
+   DROP TABLE IF EXISTS ci_listener_state;
+   DELETE FROM migrations WHERE name IN (
+     'AddCiConnect1793664000000',
+     'AddCiListenerState1793700000000',
+     'AddCiWebConnect1793786400000',
+     'AddCiAccountSelection1793894400000',
+     'AddCiWebTarget1794000000000'
+   );
+   COMMIT;
+   ```
+
+3. Before starting the new API, run the complete
+   [pre-deploy migration set](src/migrations/README.md#migration-scripts) with the same `DB_*` settings.
+   The five entries above restore the connection tables, Listener journal, web OAuth
+   fields, account-selection state and web target, respectively.
+   Other tables and migration records remain intact; retained CI history would
+   incorrectly make these migrations appear already applied.
+   Match exact names, since unrelated migrations can share a timestamp.
+4. For standalone state, move the cleaned old `CI_STATE_DIR` aside and start with
+   an empty private state directory; PostgreSQL reset steps do not apply to SQLite.
+5. Restart the configured hosts and reconnect the GitHub installations.

@@ -104,13 +104,18 @@ waiting, pending and requested workflow runs. A changing or truncated inventory,
 permission failure or API pagination cap is an error; callers retain their wake
 and retry discovery instead of acknowledging an incomplete pass.
 
-### Resource labels
+## Resource labels
 
 Both hosts share resource parsing across webhook hints, compensation, job matching,
 Box creation and JIT registration. `boxlite` uses configured CPU and memory with
 10 GiB disk. `boxlite-2vcpu-4gbmem-10gbdisk` creates **2 vCPU, 4 GiB RAM and
 10 GiB disk**; its JIT runner advertises that resource label, replacing `boxlite`.
 Other requested labels must match the worker's supported platform labels.
+
+`DEFAULT_RUNNER_LABELS` supplies the shared immutable platform labels and `boxlite`
+default to both hosts and hosted scans. Per-job selection replaces `boxlite` with
+the validated custom label. `DEFAULT_WORKER_DISK_GIB` supplies the same 10-GiB
+default to resource validation, pool launch and both Box request adapters.
 
 All three custom quantities must be positive decimal integers without signs,
 fractions, exponent notation or leading zeroes. CPU is limited to 1–16 and memory
@@ -261,7 +266,7 @@ The host must enforce authority and execution epoch
 again at actual side effects, including native Box persistence. Both host entry
 points use this kernel; runtime acceptance remains a separate deployment check.
 
-### Independent repository compensation
+## Independent repository compensation
 
 Every Listener replica runs two compensation lanes alongside the single execution
 scheduler. A lane claims only work it can start immediately. The existing state
@@ -307,7 +312,7 @@ cleanup releases a slot without waiting for the five-minute scan interval.
 Stopping the Listener cancels and awaits both lanes and retires their credentials;
 failed retirement retains its handle for retry and reports the cleanup failure.
 
-### Worker recovery and logs
+## Worker recovery and logs
 
 The scheduler rotates through at most eight active scopes per recovery page. Each
 pool processes at most 32 active workers per page and keeps its cursor across ticks.
