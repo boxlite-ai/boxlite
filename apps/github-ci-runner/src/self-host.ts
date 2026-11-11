@@ -387,6 +387,7 @@ export class SelfHost implements ListenerHost {
       source,
       {
         workers,
+        rejectUndispatchedCreate: workers.rejectUndispatchedCreate,
         authorize: async (original, operation, signal) => {
           if (operation === 'admission') await admit(signal)
         },

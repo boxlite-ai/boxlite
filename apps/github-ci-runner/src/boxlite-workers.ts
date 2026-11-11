@@ -2,6 +2,7 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   ConfirmedWorkerAbsent,
+  ConfirmedWorkerCreationRejected,
   decodeScope,
   ExecutionJournal,
   ExecutionLease,
@@ -56,21 +57,74 @@ export class BoxLiteWorkers {
     )
       throw new Error('Original BoxLite backend identity unavailable')
   }
-  bind(scope: ExecutionScope, lease: ExecutionLease, admit: () => Promise<void>): WorkerExecutor {
+  bind(
+    scope: ExecutionScope,
+    lease: ExecutionLease,
+    admit: () => Promise<void>,
+  ): WorkerExecutor & {
+    rejectUndispatchedCreate(name: string, effect: string): Promise<never>
+  } {
     scope = decodeScope(scope)
     lease = { ...lease }
     if (scope.actor !== this.http.principal.sub || scope.organization !== this.http.principal.path_prefix)
       throw new Error('Original BoxLite execution identity does not match scope')
     const key = scopeKey(scope),
       journal = new ExecutionJournal(this.state)
-    const owned = async (name: string) => {
+    const allocation = async (name: string) => {
       if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) throw new Error('Original CI allocation name required')
-      await this.http.verify()
       await this.identity()
       const allocation = await journal.allocation(lease, 'worker/' + name.slice(7))
       if (!allocation || allocation.value.scope !== key || allocation.value.name !== name)
         throw new Error('Original CI allocation unavailable')
       return allocation
+    }
+    const owned = async (name: string) => {
+      await this.http.verify()
+      return allocation(name)
+    }
+    const creating = (row: Awaited<ReturnType<typeof allocation>>, effect: string) => {
+      const value = row.value
+      if (
+        value.box.phase !== 'requested' ||
+        value.box.id !== null ||
+        value.runner.phase !== 'none' ||
+        value.delivery !== 'none' ||
+        value.effect?.kind !== 'box-create' ||
+        value.effect.id !== effect
+      )
+        throw new Error('Original Box create intent changed')
+    }
+    const rejectUndispatchedCreate = async (name: string, effect: string): Promise<never> => {
+      const rejected = new ConfirmedWorkerCreationRejected(effect),
+        row = await allocation(name)
+      creating(row, effect)
+      const ledgerKey = 'box-rest/' + name,
+        [prior] = await this.state.read([ledgerKey], lease)
+      if (prior) {
+        if (
+          !object(prior.payload) ||
+          prior.payload.scope !== key ||
+          prior.payload.name !== name ||
+          prior.payload.box !== null ||
+          prior.payload.rejectedCreationEffect !== effect ||
+          prior.payload.dispatchEffect !== undefined
+        )
+          throw new Error('Original CI create may already have dispatched')
+      } else {
+        // Rejection and dispatch compete for one key. A missing ID alone proves nothing.
+        await this.state.commit(
+          lease,
+          [
+            {
+              key: ledgerKey,
+              expected: null,
+              payload: { scope: key, name, box: null, rejectedCreationEffect: effect },
+            },
+          ],
+          [{ key: row.record.key, version: row.record.version }],
+        )
+      }
+      throw rejected
     }
     const admission = async (name: string) => {
       await admit()
@@ -79,17 +133,21 @@ export class BoxLiteWorkers {
       return row
     }
     const ledger = async (name: string) => {
-      const allocation = await owned(name)
-      const [record] = await this.state.read(['box-rest/' + name])
-      if (
-        !record ||
-        !object(record.payload) ||
-        record.payload.scope !== key ||
-        record.payload.name !== name ||
-        !identifier(record.payload.box)
-      )
+      const row = await allocation(name)
+      const [record] = await this.state.read(['box-rest/' + name], lease)
+      if (!record || !object(record.payload) || record.payload.scope !== key || record.payload.name !== name)
         throw new Error('Original CI Box ID is not durably known')
-      if (allocation.value.box.id !== null && allocation.value.box.id !== record.payload.box)
+      if (
+        record.payload.box === null &&
+        typeof record.payload.rejectedCreationEffect === 'string' &&
+        record.payload.dispatchEffect === undefined
+      ) {
+        creating(row, record.payload.rejectedCreationEffect)
+        throw new ConfirmedWorkerCreationRejected(record.payload.rejectedCreationEffect)
+      }
+      if (!identifier(record.payload.box)) throw new Error('Original CI Box ID is not durably known')
+      const current = await owned(name)
+      if (current.value.box.id !== null && current.value.box.id !== record.payload.box)
         throw new Error('Original CI Box ledger identity changed')
       return record.payload.box
     }
@@ -147,12 +205,34 @@ export class BoxLiteWorkers {
       }
     }
     return {
+      rejectUndispatchedCreate,
       create: async (launch: WorkerLaunch) => {
         launch = { ...launch, entrypoint: [...launch.entrypoint] }
         validateWorkerResources(launch)
-        const row = await admission(launch.name)
-        if (row.value.box.phase !== 'requested' || row.value.effect?.kind !== 'box-create')
+        const original = await allocation(launch.name)
+        let row: typeof original
+        try {
+          row = await admission(launch.name)
+        } catch (error) {
+          if (original.value.box.phase === 'requested' && original.value.effect?.kind === 'box-create')
+            return rejectUndispatchedCreate(launch.name, original.value.effect.id)
+          throw error
+        }
+        if (original.value.box.phase !== 'requested' || original.value.effect?.kind !== 'box-create')
           throw new Error('Box create intent missing')
+        const effect = original.value.effect.id
+        creating(row, effect)
+        const [dispatch] = await this.state.commit(
+          lease,
+          [
+            {
+              key: 'box-rest/' + launch.name,
+              expected: null,
+              payload: { scope: key, name: launch.name, box: null, dispatchEffect: effect },
+            },
+          ],
+          [{ key: row.record.key, version: row.record.version }],
+        )
         const box = observe(
           await this.http.request('POST', '/boxes', {
             name: launch.name,
@@ -172,7 +252,7 @@ export class BoxLiteWorkers {
         await this.state.commit(lease, [
           {
             key: 'box-rest/' + launch.name,
-            expected: null,
+            expected: dispatch.version,
             payload: { scope: key, name: launch.name, box: box.box_id },
           },
         ])
