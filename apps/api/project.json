@@ -46,7 +46,6 @@
       "cache": true,
       "inputs": [
         "{projectRoot}/src/**/*.ts",
-        "{workspaceRoot}/libs/resource-limits/src/**/*.ts",
         "!{projectRoot}/src/**/*.spec.ts",
         "{projectRoot}/tsconfig.app.json",
         {

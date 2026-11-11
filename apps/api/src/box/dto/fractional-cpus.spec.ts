@@ -1,5 +1,4 @@
 import 'reflect-metadata'
-import { MIN_CPUS } from '@boxlite-ai/resource-limits'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { CreateBoxDto as RestCreate } from '../../boxlite-rest/dto/create-box.dto'
@@ -12,7 +11,7 @@ import { BoxState } from '../enums/box-state.enum'
 const limits = { maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 }
 
 describe('fractional CPU allocation boundaries', () => {
-  it.each([MIN_CPUS, MIN_CPUS + 0.001, 0.5, 1, 1.001, 1.5, 2, 16])(
+  it.each([0.125, 0.126, 0.5, 1, 1.001, 1.5, 2, 16])(
     'preserves %s through both DTOs and the response mapper',
     async (cpus) => {
       const rest = plainToInstance(RestCreate, { cpus })
@@ -25,7 +24,7 @@ describe('fractional CPU allocation boundaries', () => {
     },
   )
 
-  it.each([0, -1, MIN_CPUS - 0.001, MIN_CPUS + 0.0001, 16.001, 255, NaN, Infinity, -Infinity])(
+  it.each([0, -1, 0.124, 0.1251, 16.001, 255, NaN, Infinity, -Infinity])(
     'rejects %s before persistence',
     async (cpu) => {
       expect((await validate(plainToInstance(RestCreate, { cpus: cpu }))).some((e) => e.property === 'cpus')).toBe(true)

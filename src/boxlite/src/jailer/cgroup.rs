@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn fractional_cpus_quota_respects_precision_and_legacy_budget() {
         let mut limits = ResourceLimits::default();
-        for (cores, quota) in [(1.5, 150_000), (2.0, 200_000)] {
+        for (cores, quota) in [(0.125, 12_500), (0.126, 12_600), (2.0, 200_000)] {
             assert_eq!(
                 cpu_quota_us(
                     crate::runtime::cpu_count::CpuCount::new(cores).unwrap(),

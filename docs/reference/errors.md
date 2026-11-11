@@ -308,7 +308,7 @@ Error: invalid state: cannot execute on stopped box
 ### `InvalidArgument(String)`
 
 CPU allocations outside the supported range or precision return this error.
-For example, `cpus=0` returns `invalid_argument`; the message includes the supported CPU range from the [resource limits](../guides/resource-limits.md#cpu-configuration).
+For example, `cpus=0` returns `invalid argument: cpus must be finite and between 0.125 and 255`.
 The bundled guest kernel additionally limits new boxes to 16 vCPUs; see [CPU configuration](../guides/resource-limits.md#cpu-configuration).
 
 The request itself is wrong; retrying it unchanged fails the same way. Over REST it is HTTP 400.

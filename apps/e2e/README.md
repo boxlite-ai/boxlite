@@ -536,7 +536,7 @@ apps/e2e/
 
 ## Fractional CPU acceptance
 
-`make test:e2e E2E_ARGS=cases/fractional_cpus_acceptance.py` exercises SDK → Cloud API → Runner → VM creation and restart at the configured CPU minimum, `0.5`, and `1.5` CPUs.
+`make test:e2e E2E_ARGS=cases/fractional_cpus_acceptance.py` exercises SDK → Cloud API → Runner → VM creation and restart with `0.125`, `0.5`, and `1.5` CPUs.
 It reads the managed local Runner's SQLite metadata and the running process's cgroup to verify the actual `cpu.max`, as well as guest CPU topology and API query values.
 The suite also calls the Runner v0 create/recover endpoints and verifies that rejected CPU values leave the running VM intact.
 Run this file explicitly against the managed local stack; remote-stage suites do not collect it by default.

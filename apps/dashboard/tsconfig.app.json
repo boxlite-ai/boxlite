@@ -8,7 +8,6 @@
     "types": ["node", "@nx/react/typings/cssmodule.d.ts", "@nx/react/typings/image.d.ts", "vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@boxlite-ai/resource-limits": ["../libs/resource-limits/src/cpu.ts"],
       "@/*": ["src/*"],
       "@boxlite-ai/*": ["../libs/*"],
       "@boxlite-ai/api-client": ["../dist/libs/api-client/src/index.d.ts"],

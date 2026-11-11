@@ -15,7 +15,6 @@
     "skipDefaultLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@boxlite-ai/resource-limits": ["libs/resource-limits/src/cpu.ts"],
       "@boxlite-ai/api-client": ["libs/api-client/src/index.ts"],
       "@boxlite-ai/runner-api-client": ["libs/runner-api-client/src/index.ts"],
       "@boxlite-ai/analytics-api-client": ["libs/analytics-api-client/src/index.ts"]

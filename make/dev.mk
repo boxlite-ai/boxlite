@@ -1,12 +1,5 @@
 PHONY_TARGETS += _ensure-python-deps _ensure-node-deps _ensure-apps-deps
 PHONY_TARGETS += build\:e2e\:drivers
-PHONY_TARGETS += generate\:cpu-resources check\:cpu-resources
-
-generate\:cpu-resources:
-	@python3 scripts/generate_cpu_resources.py
-
-check\:cpu-resources:
-	@python3 scripts/generate_cpu_resources.py --check
 
 # Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:

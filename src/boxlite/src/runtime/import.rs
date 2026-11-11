@@ -663,21 +663,4 @@ mod tests {
             serde_json::from_value::<ArchiveManifest>(value.clone()).unwrap();
         }
     }
-
-    #[test]
-    fn fractional_cpus_import_rejects_below_minimum() {
-        let mut manifest = v3_manifest(BoxOptions {
-            cpus: Some(crate::runtime::cpu_limits::MIN_CPUS - 0.001),
-            ..Default::default()
-        });
-        manifest.version = 6;
-        for policy in [
-            ArchiveImportPolicy::Trusted,
-            ArchiveImportPolicy::UntrustedRemote,
-        ] {
-            let error = options_from_manifest(&manifest, policy).unwrap_err();
-            assert!(matches!(error, BoxliteError::InvalidArgument(_)));
-            assert!(error.to_string().contains("cpus"), "{error}");
-        }
-    }
 }

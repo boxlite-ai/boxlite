@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
@@ -25,7 +24,7 @@ func TestFractionalCPUJob(t *testing.T) {
 		raw  string
 		want float64
 	}{
-		{fmt.Sprintf(`{"id":"cpu","cpuQuota":%g}`, dto.MinCPUs), dto.MinCPUs},
+		{`{"id":"cpu","cpuQuota":0.125}`, 0.125},
 		{`{"id":"cpu","cpuQuota":1.001}`, 1.001},
 	} {
 		raw := tc.raw

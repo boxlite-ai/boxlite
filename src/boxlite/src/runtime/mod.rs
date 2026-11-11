@@ -3,7 +3,6 @@ pub mod auth;
 pub(crate) mod backend;
 pub mod constants;
 pub mod cpu_count;
-pub mod cpu_limits;
 pub mod domains;
 pub mod id;
 pub mod images;

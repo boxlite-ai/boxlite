@@ -15,7 +15,7 @@ func TestFractionalCPUInvalidBeforeRuntime(t *testing.T) {
 	// An uninitialized runtime would panic if either operation proceeded to
 	// mounts, destruction or creation before validating this request.
 	client := &Client{logger: slog.Default()}
-	for _, n := range []float64{0, -1, dto.MinCPUs - 0.001, dto.MinCPUs + 0.0001, 16.001} {
+	for _, n := range []float64{0, -1, 0.124, 0.1251, 16.001} {
 		_, _, err := client.Create(context.Background(), dto.CreateBoxDTO{CpuQuota: cpuQuota(n)})
 		if !errdefs.IsInvalidArgument(err) {
 			t.Fatalf("Create(%v): %v", n, err)

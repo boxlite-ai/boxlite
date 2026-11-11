@@ -78,9 +78,6 @@ Zero, negatives, non-finite values, and excessive precision are rejected.
 A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
 Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
 
-The minimum applies to creation, persisted configuration, import and recovery.
-CPU range query filters remain independent search thresholds.
-
 ### Fractional CPUs (Linux)
 
 Linux applies the allocation to the Box's cgroup using a fixed 100 ms period.

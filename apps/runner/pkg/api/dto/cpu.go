@@ -1,7 +1,7 @@
 package dto
 
 import (
-	"fmt"
+	"errors"
 	"math"
 )
 
@@ -12,8 +12,8 @@ func CPUAllocation(quota *float64) (float64, error) {
 		return 1, nil
 	}
 	cores := *quota
-	if math.IsNaN(cores) || math.IsInf(cores, 0) || cores < MinCPUs || cores > 16 || math.Round(cores*1000)/1000 != cores {
-		return 0, fmt.Errorf("cpuQuota must be between %g and 16, in increments of 0.001 cores", MinCPUs)
+	if math.IsNaN(cores) || math.IsInf(cores, 0) || cores < 0.125 || cores > 16 || math.Round(cores*1000)/1000 != cores {
+		return 0, errors.New("cpuQuota must be between 0.125 and 16, in increments of 0.001 cores")
 	}
 	return cores, nil
 }

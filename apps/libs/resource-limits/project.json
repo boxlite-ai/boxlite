@@ -1,6 +1,0 @@
-{
-  "name": "resource-limits",
-  "sourceRoot": "libs/resource-limits/src",
-  "projectType": "library",
-  "targets": {}
-}

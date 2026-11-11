@@ -1,6 +1,5 @@
 //! CPU resource quantities normalized to integer millicpu.
 
-use super::cpu_limits::MIN_CPUS;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -10,10 +9,10 @@ pub struct CpuCount(u32);
 
 impl CpuCount {
     pub fn new(cores: f64) -> BoxliteResult<Self> {
-        if !cores.is_finite() || !(MIN_CPUS..=255.0).contains(&cores) {
-            return Err(BoxliteError::InvalidArgument(format!(
-                "cpus must be finite and between {MIN_CPUS} and 255"
-            )));
+        if !cores.is_finite() || !(0.125..=255.0).contains(&cores) {
+            return Err(BoxliteError::InvalidArgument(
+                "cpus must be finite and between 0.125 and 255".into(),
+            ));
         }
         let millicpu = (cores * 1000.0).round() as u32;
         if f64::from(millicpu) / 1000.0 != cores {
@@ -88,10 +87,9 @@ mod tests {
 
     #[test]
     fn fractional_cpus_normalize_and_derive_topology() {
-        assert_eq!(MIN_CPUS, 0.125);
         for (cores, vcpus, fractional) in [
-            (MIN_CPUS, 1, true),
-            (MIN_CPUS + 0.001, 1, true),
+            (0.126, 1, true),
+            (0.125, 1, true),
             (0.5, 1, true),
             (1.0, 1, false),
             (1.001, 2, true),
@@ -109,8 +107,8 @@ mod tests {
         for cores in [
             0.0,
             -0.5,
-            MIN_CPUS - 0.001,
-            MIN_CPUS + 0.0001,
+            0.124,
+            0.1251,
             1.0001,
             255.001,
             f64::NAN,

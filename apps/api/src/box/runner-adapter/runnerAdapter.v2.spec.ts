@@ -3,14 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { MIN_CPUS } from '@boxlite-ai/resource-limits'
-
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
 
 describe('RunnerAdapterV2 createBox', () => {
-  it.each([MIN_CPUS, MIN_CPUS + 0.001, 1.001, 1.5, 16])('preserves %s CPUs in the create job', async (cpu) => {
+  it.each([0.125, 0.126, 1.001, 1.5, 16])('preserves %s CPUs in the create job', async (cpu) => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
     await adapter.init({ id: 'runner-1' } as any)

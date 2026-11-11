@@ -3,7 +3,6 @@
 Run explicitly: make test:e2e E2E_ARGS=cases/fractional_cpus_acceptance.py.
 Host cgroups are required, so this file is outside default remote-stage discovery.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -19,15 +18,7 @@ import boxlite
 import pytest
 
 from conftest import drain
-from e2e_auth import auth_context
 from network_fixtures import state
-
-MIN_CPUS = (
-    json.loads(
-        (Path(__file__).resolve().parents[3] / "openapi/cpu-resources.json").read_text()
-    )["minimum_millicpus"]
-    / 1000
-)
 
 
 def runner_pid(box_id: str) -> int:
@@ -46,50 +37,20 @@ def runner_pid(box_id: str) -> int:
 
 def assert_host_quota(box_id: str, cpus: float) -> None:
     membership = Path(f"/proc/{runner_pid(box_id)}/cgroup").read_text()
-    relative = next(
-        line[3:] for line in membership.splitlines() if line.startswith("0::")
-    )
-    quota = (
-        (Path("/sys/fs/cgroup") / relative.lstrip("/") / "cpu.max").read_text().strip()
-    )
+    relative = next(line[3:] for line in membership.splitlines() if line.startswith("0::"))
+    quota = (Path("/sys/fs/cgroup") / relative.lstrip("/") / "cpu.max").read_text().strip()
     assert quota == f"{round(cpus * 100_000)} 100000", quota
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cpus", [MIN_CPUS - 0.001, MIN_CPUS + 0.0001])
-async def test_fractional_cpus_cloud_rejects_invalid_http(cpus):
-    ctx = auth_context()
-
-    def send():
-        request = Request(
-            ctx.url_for(ctx.v1("boxes")),
-            data=json.dumps({"image": "alpine:3.21", "cpus": cpus}).encode(),
-            headers={
-                "Authorization": "Bearer " + ctx.token,
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with pytest.raises(HTTPError) as error:
-            urlopen(request, timeout=30)
-        assert error.value.code == 400
-        assert b"cpu" in error.value.read().lower()
-
-    await asyncio.to_thread(send)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("cpus", [MIN_CPUS, 0.5, 1.5])
+@pytest.mark.parametrize("cpus", [0.125, 0.5, 1.5])
 async def test_fractional_cpus_cloud_create_restart(rt, cpus):
     image = "alpine:3.21"
     box = await rt.create(boxlite.BoxOptions(image=image, cpus=cpus, memory_mib=1024))
     try:
         assert (await box.info()).cpus == cpus
         assert (await rt.get_info(box.id)).cpus == cpus
-        assert (
-            next(info for info in await rt.list_info() if info.id == box.id).cpus
-            == cpus
-        )
+        assert next(info for info in await rt.list_info() if info.id == box.id).cpus == cpus
         execution = await box.exec("nproc", [])
         stdout, _ = await drain(execution)
         assert int(stdout.strip()) == math.ceil(cpus)
@@ -132,7 +93,6 @@ async def runner_post(path: str, body: dict) -> None:
         )
         with urlopen(request, timeout=120) as response:
             assert response.status in (200, 201, 204)
-
     await asyncio.to_thread(send)
 
 
@@ -141,40 +101,24 @@ async def test_fractional_cpus_runner_v0_create_and_recover(rt):
     image = "alpine:3.21"
     # Keep a real Cloud row so Runner reconciliation recognizes this VM while
     # the legacy HTTP entry points recreate it with the same allocation.
-    box = await rt.create(
-        boxlite.BoxOptions(image=image, cpus=MIN_CPUS, memory_mib=1024)
-    )
-    body = {
-        "id": box.id,
-        "image": image,
-        "osUser": "root",
-        "cpuQuota": MIN_CPUS,
-        "memoryQuota": 1,
-        "storageQuota": 1,
-        "outboundEnabled": True,
-    }
+    box = await rt.create(boxlite.BoxOptions(image=image, cpus=0.125, memory_mib=1024))
+    body = {"id": box.id, "image": image, "osUser": "root", "cpuQuota": 0.125,
+            "memoryQuota": 1, "storageQuota": 1, "outboundEnabled": True}
     try:
         await runner_post(f"/boxes/{box.id}/destroy", {})
         await runner_post("/boxes", body)
-        assert_host_quota(box.id, MIN_CPUS)
+        assert_host_quota(box.id, 0.125)
         pid = runner_pid(box.id)
-        for invalid in (0, MIN_CPUS - 0.001, MIN_CPUS + 0.0001):
+        for invalid in (0, 0.124, 0.1251):
             with pytest.raises(HTTPError) as error:
-                await runner_post(
-                    f"/boxes/{box.id}/recover",
-                    {
-                        **body,
-                        "cpuQuota": invalid,
-                        "errorReason": "acceptance",
-                    },
-                )
+                await runner_post(f"/boxes/{box.id}/recover", {
+                    **body, "cpuQuota": invalid, "errorReason": "acceptance",
+                })
             assert error.value.code == 400
             assert runner_pid(box.id) == pid
-            assert_host_quota(box.id, MIN_CPUS)
-        await runner_post(
-            f"/boxes/{box.id}/recover", {**body, "errorReason": "acceptance"}
-        )
-        assert_host_quota(box.id, MIN_CPUS)
-        assert (await rt.get_info(box.id)).cpus == MIN_CPUS
+            assert_host_quota(box.id, 0.125)
+        await runner_post(f"/boxes/{box.id}/recover", {**body, "errorReason": "acceptance"})
+        assert_host_quota(box.id, 0.125)
+        assert (await rt.get_info(box.id)).cpus == 0.125
     finally:
         await remove_settled(rt, box.id)

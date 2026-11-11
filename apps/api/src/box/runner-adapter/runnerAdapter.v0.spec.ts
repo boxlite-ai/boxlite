@@ -3,27 +3,22 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { MIN_CPUS } from '@boxlite-ai/resource-limits'
-
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
-  it.each([MIN_CPUS, MIN_CPUS + 0.001, 1.001, 1.5, 16])(
-    'preserves %s CPUs in create and recover requests',
-    async (cpu) => {
-      const adapter = new RunnerAdapterV0()
-      const create = jest.fn().mockResolvedValue({ data: {} })
-      const recover = jest.fn().mockResolvedValue(undefined)
-      ;(adapter as any).boxApiClient = { create, recover }
-      const box = { id: 'box-cpu', cpu } as any
+  it.each([0.125, 0.126, 1.001, 1.5, 16])('preserves %s CPUs in create and recover requests', async (cpu) => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: {} })
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { create, recover }
+    const box = { id: 'box-cpu', cpu } as any
 
-      await adapter.createBox(box, 'base')
-      await adapter.recoverBox(box)
+    await adapter.createBox(box, 'base')
+    await adapter.recoverBox(box)
 
-      expect(create).toHaveBeenCalledWith(expect.objectContaining({ cpuQuota: cpu }))
-      expect(recover).toHaveBeenCalledWith('box-cpu', expect.objectContaining({ cpuQuota: cpu }))
-    },
-  )
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ cpuQuota: cpu }))
+    expect(recover).toHaveBeenCalledWith('box-cpu', expect.objectContaining({ cpuQuota: cpu }))
+  })
   it.each([false, true])('forwards persisted guest privilege %s to the runner', async (privileged) => {
     const adapter = new RunnerAdapterV0()
     await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
