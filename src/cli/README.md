@@ -33,6 +33,31 @@ Other commands use `--agent ID` and `--turn TURN` to select existing work.
 See the [agent CLI reference](../../docs/reference/cli/README.md#boxlite-agent)
 for commands, grouped options and error behavior.
 
+## GitHub CI connect (in development)
+
+`boxlite --context dev ci connect GITHUB_ACCOUNT` binds a GitHub App installation
+using the selected remote BoxLite context and a browser device authorization.
+Public repositories are enabled by default. Use `--allow-private-repositories` to include private repositories, and `--no-browser`
+to print the authorization URL without opening it. The account may be a personal
+GitHub account or organization.
+
+The command requires BoxLite organization ownership and GitHub installation ownership.
+An API key needs `write:boxes` and `delete:boxes`. Current and future App-selected
+repositories follow the binding. A conflicting binding is rejected rather than replaced.
+
+After connecting, use `runs-on: boxlite` for the configured worker defaults or
+`runs-on: boxlite-2vcpu-4gbmem-10gbdisk` for 2 vCPU, 4 GiB RAM and 10 GiB disk.
+Both hosted and standalone execution enforce the backend's resource and quota
+checks. See [resource labels](../../apps/libs/ci-listener/README.md#resource-labels)
+for accepted quantities and conflicting-label rules.
+
+The current API reports `provisioning` after binding; runner capacity is not ready yet.
+The API deployment also needs the CI Login OAuth App credentials for authenticated GitHub account-type lookup; user authorization still uses the matching Personal or Organization CI App.
+
+See the [Listener README](../../apps/github-ci-runner/README.md#hosted-connect)
+for deployment status and authentication requirements. CI logs and results remain in GitHub
+Actions; running jobs use ordinary Box management commands.
+
 ## Installation
 
 ### One-line install (Linux & macOS Apple Silicon)

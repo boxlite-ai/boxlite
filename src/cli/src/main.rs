@@ -109,6 +109,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
     // Keeping the adapter at the call site (rather than pushing `i32` into
     // 15 commands that have no exit-code concept) preserves type honesty.
     let result: anyhow::Result<i32> = match cli.command {
+        cli::Commands::Ci(args) => commands::ci::execute(args, &global).await.map(|_| 0),
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
         cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
         cli::Commands::Top(args) => commands::top::execute(args, &global).await.map(|_| 0),

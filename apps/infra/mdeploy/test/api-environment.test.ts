@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
+import { EnvError } from 'mstage/env'
 import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
@@ -55,6 +56,146 @@ test('PostHog events use the deployed stage on both clouds', () => {
     })
     assert.equal(environment.POSTHOG_ENVIRONMENT, 'dev', home)
   }
+})
+
+const ciSecrets = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET', 'CI_SECRET_ENCRYPTION_KEY']
+const ciKeys = ['CI_GITHUB_APP_CLIENT_ID', 'CI_GITHUB_APP_SLUG', ...ciSecrets]
+const ciValues = (home: 'aws' | 'gcp'): Record<string, string> => ({
+  CI_GITHUB_APP_CLIENT_ID: 'test-client',
+  CI_GITHUB_APP_SLUG: 'example-app',
+  ...Object.fromEntries(
+    ciSecrets.map((key, index) => [
+      key,
+      JSON.stringify({
+        address:
+          home === 'gcp'
+            ? `projects/test-project/secrets/ci-${index}/versions/1`
+            : `arn:aws:secretsmanager:us-east-1:123456789012:secret:ci-${index}`,
+      }),
+    ]),
+  ),
+})
+
+test('browser connect is optional and carries its client secret only through a secret reference', () => {
+  const key = 'CI_GITHUB_APP_CLIENT_SECRET'
+  const input = {
+    ...base,
+    ...ciValues('gcp'),
+    [key]: JSON.stringify({ address: 'projects/test-project/secrets/ci-oauth/versions/1' }),
+  }
+  const result = apiEnvironmentFrom({
+    environment: input,
+    declaration: groups([...ciKeys, key], [...ciSecrets, key]),
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.equal(result.environment[key], undefined)
+  assert.equal(result.secrets[key], 'projects/test-project/secrets/ci-oauth/versions/1')
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: { ...input, [key]: 'CONFIDENTIAL-DO-NOT-ECHO' },
+        declaration: groups([...ciKeys, key], ciSecrets),
+        region: 'us-east1',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    (error) => {
+      assert.ok(error instanceof ApiEnvironmentError)
+      assert.ok(!error.message.includes('CONFIDENTIAL-DO-NOT-ECHO'))
+      return true
+    },
+  )
+  const declared = parseBase(
+    new URL('../../mstage.env.json', import.meta.url).pathname,
+    readFileSync(new URL('../../mstage.env.json', import.meta.url), 'utf8'),
+  )
+  assert.ok(declared.envSelectGroup.api.includes(key))
+  assert.ok(declared.envSelectGroup.secret.includes(key))
+  assert.ok(declared.envOptional.api.includes(key))
+})
+
+test('the committed catalog carries optional CI fields and marks only its credentials as references', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  for (const key of ciKeys) {
+    assert.ok(declared.envSelectGroup.api.includes(key))
+    assert.ok(declared.envOptional.api.includes(key))
+    assert.equal(declared.envSelectGroup.secret.includes(key), ciSecrets.includes(key))
+  }
+})
+
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} delivers CI credentials only as secret references`, () => {
+    const input = ciValues(home)
+    const result = apiEnvironmentFrom({
+      environment: { ...base, ...input },
+      declaration: groups(ciKeys, ciSecrets),
+      region: 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(result.environment.CI_GITHUB_APP_CLIENT_ID, input.CI_GITHUB_APP_CLIENT_ID)
+    assert.equal(result.environment.CI_GITHUB_APP_SLUG, input.CI_GITHUB_APP_SLUG)
+    for (const key of ciSecrets) {
+      assert.equal(result.environment[key], undefined)
+      assert.equal(result.secrets[key], JSON.parse(input[key]).address)
+    }
+  })
+}
+
+for (const key of ciSecrets) {
+  test(`hosted CI rejects plaintext ${key} without echoing it`, () => {
+    const input = { ...ciValues('aws'), [key]: 'CONFIDENTIAL-DO-NOT-ECHO' }
+    assert.throws(
+      () =>
+        assemble(
+          { ...base, ...input },
+          groups(
+            ciKeys,
+            ciSecrets.filter((k) => k !== key),
+          ),
+        ),
+      (error) => {
+        assert.ok(error instanceof ApiEnvironmentError)
+        assert.match(error.message, new RegExp(key))
+        assert.ok(!error.message.includes(input[key]))
+        return true
+      },
+    )
+  })
+}
+
+for (const key of ciKeys) {
+  test(`hosted CI refuses a partial configuration missing ${key}`, () => {
+    const input = ciValues('aws')
+    delete input[key]
+    assert.throws(
+      () =>
+        assemble(
+          { ...base, ...input },
+          groups(
+            ciKeys.filter((k) => k !== key),
+            ciSecrets.filter((k) => k !== key),
+          ),
+        ),
+      new RegExp(key),
+    )
+  })
+}
+
+test('a secret-reference client ID cannot silently leave the scheduler without background CPU', () => {
+  const key = 'CI_GITHUB_APP_CLIENT_ID'
+  assert.throws(
+    () => assemble({ ...base, [key]: ciValues('aws').CI_GITHUB_APP_PRIVATE_KEY }, groups([key], [key])),
+    /CI_GITHUB_APP_CLIENT_ID/,
+  )
+})
+
+test('hosted CI refuses standalone file inputs', () => {
+  const key = 'CI_GITHUB_APP_PRIVATE_KEY_FILE'
+  assert.throws(() => assemble({ ...base, [key]: '/private/key.pem' }, groups([key])), /self-hosted file input/)
 })
 
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
@@ -338,4 +479,140 @@ test('the deploy group demands only what a deploy cannot run without', () => {
       'STACK_DOMAIN',
     ],
   )
+})
+
+test('Organization App secrets use the workload channel with a distinct identity and the shared anchor', () => {
+  const orgSecrets = [
+    'CI_GITHUB_ORG_APP_PRIVATE_KEY',
+    'CI_GITHUB_ORG_WEBHOOK_SECRET',
+    'CI_GITHUB_ORG_APP_CLIENT_SECRET',
+  ]
+  const orgKeys = ['CI_GITHUB_ORG_APP_CLIENT_ID', 'CI_GITHUB_ORG_APP_SLUG', ...orgSecrets]
+  const values: Record<string, string> = {
+    ...ciValues('gcp'),
+    CI_GITHUB_ORG_APP_CLIENT_ID: 'org-client',
+    CI_GITHUB_ORG_APP_SLUG: 'org-app',
+    ...Object.fromEntries(
+      orgSecrets.map((key, i) => [
+        key,
+        JSON.stringify({ address: `projects/test-project/secrets/org-${i}/versions/1` }),
+      ]),
+    ),
+  }
+  const declaration = groups([...ciKeys, ...orgKeys], [...ciSecrets, ...orgSecrets])
+  const make = (input: Record<string, string>) =>
+    apiEnvironmentFrom({
+      environment: { ...base, ...input },
+      declaration,
+      home: 'gcp',
+      region: 'us-east1',
+      stage: 'dev',
+    })
+  const result = make(values)
+  for (const key of orgSecrets) {
+    assert.equal(result.environment[key], undefined)
+    assert.ok(result.secrets[key])
+  }
+  assert.throws(() => make({ ...values, CI_GITHUB_ORG_APP_CLIENT_ID: values.CI_GITHUB_APP_CLIENT_ID }), /distinct/)
+  assert.throws(
+    () => make({ ...values, CI_GITHUB_ORG_WEBHOOK_SECRET: 'do-not-echo-secret' }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /CI_GITHUB_ORG_WEBHOOK_SECRET.*does not hold JSON/)
+      assert.ok(!error.message.includes('do-not-echo-secret'))
+      return true
+    },
+  )
+  const declared = parseBase(
+    new URL('../../mstage.env.json', import.meta.url).pathname,
+    readFileSync(new URL('../../mstage.env.json', import.meta.url), 'utf8'),
+  )
+  for (const key of orgKeys) assert.ok(declared.envSelectGroup.api.includes(key))
+  for (const key of orgSecrets) assert.ok(declared.envSelectGroup.secret.includes(key))
+})
+
+for (const [scenario, message] of [
+  ['anchor', /Personal App identity is required/],
+  ['client', /Organization App requires a distinct client ID/],
+  ['slug', /Organization App slug is required/],
+  ['private-key', /CI_GITHUB_ORG_APP_PRIVATE_KEY requires a mstage secret ref/],
+  ['webhook', /CI_GITHUB_ORG_WEBHOOK_SECRET requires a mstage secret ref/],
+  ['oauth-secret', /CI_GITHUB_OAUTH_CLIENT_SECRET requires a mstage secret ref/],
+  ['oauth-anchor', /Identity OAuth requires the hosted CI storage anchor/],
+  ['web-anchor', /CI_GITHUB_APP_CLIENT_ID is required for browser connect/],
+] as const) {
+  test(`optional CI App configuration fails closed for a missing or invalid ${scenario}`, () => {
+    const ref = (name: string) => JSON.stringify({ address: `projects/test-project/secrets/${name}/versions/1` })
+    const input: Record<string, string> = {
+      ...ciValues('gcp'),
+      CI_GITHUB_ORG_APP_CLIENT_ID: 'org-client',
+      CI_GITHUB_ORG_APP_SLUG: 'org-app',
+      CI_GITHUB_ORG_APP_PRIVATE_KEY: ref('org-key'),
+      CI_GITHUB_ORG_WEBHOOK_SECRET: ref('org-hook'),
+    }
+    if (['anchor', 'oauth-anchor', 'web-anchor'].includes(scenario)) delete input.CI_GITHUB_APP_CLIENT_ID
+    if (scenario === 'client') input.CI_GITHUB_ORG_APP_CLIENT_ID = 'org/invalid'
+    if (scenario === 'slug') delete input.CI_GITHUB_ORG_APP_SLUG
+    if (scenario === 'private-key') delete input.CI_GITHUB_ORG_APP_PRIVATE_KEY
+    if (scenario === 'webhook') delete input.CI_GITHUB_ORG_WEBHOOK_SECRET
+    if (scenario === 'oauth-secret') input.CI_GITHUB_OAUTH_CLIENT_ID = 'identity-client'
+    if (scenario === 'oauth-anchor' || scenario === 'web-anchor') {
+      for (const key of Object.keys(input)) if (key.startsWith('CI_GITHUB_ORG_')) delete input[key]
+      if (scenario === 'oauth-anchor') {
+        input.CI_GITHUB_OAUTH_CLIENT_ID = 'identity-client'
+        input.CI_GITHUB_OAUTH_CLIENT_SECRET = ref('identity')
+      } else input.CI_GITHUB_APP_CLIENT_SECRET = ref('personal-web')
+    }
+    const keys = Object.keys(input)
+    const secrets = keys.filter((key) => input[key].startsWith('{'))
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, ...input },
+          declaration: groups(keys, secrets),
+          region: 'us-east1',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      message,
+    )
+  })
+}
+
+test('identity OAuth uses a distinct optional client and a secret reference without changing CI credentials', () => {
+  const identity = 'CI_GITHUB_OAUTH_CLIENT_ID',
+    secret = 'CI_GITHUB_OAUTH_CLIENT_SECRET'
+  const declaration = groups([...ciKeys, identity, secret], [...ciSecrets, secret])
+  const values = {
+    ...base,
+    ...ciValues('gcp'),
+    [identity]: 'identity-client',
+    [secret]: JSON.stringify({ address: 'projects/test-project/secrets/identity/versions/1' }),
+  }
+  const make = (environment: Record<string, string>) =>
+    apiEnvironmentFrom({ environment, declaration, region: 'us-east1', stage: 'dev', home: 'gcp' })
+  const result = make(values)
+  assert.equal(result.environment[identity], 'identity-client')
+  assert.equal(result.environment[secret], undefined)
+  assert.equal(result.secrets[secret], 'projects/test-project/secrets/identity/versions/1')
+  assert.equal(result.environment.CI_GITHUB_APP_CLIENT_ID, 'test-client')
+  for (const invalid of [
+    { ...values, [identity]: 'test-client' },
+    { ...values, [identity]: '' },
+  ])
+    assert.throws(
+      () => make(invalid),
+      (error) => error instanceof ApiEnvironmentError && !error.message.includes('private-do-not-echo'),
+    )
+  for (const invalidSecret of ['', 'private-do-not-echo'])
+    assert.throws(
+      () => make({ ...values, [secret]: invalidSecret }),
+      (error) => error instanceof EnvError && !error.message.includes('private-do-not-echo'),
+    )
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const catalog = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  assert.ok(catalog.envOptional.api.includes(identity))
+  assert.ok(catalog.envOptional.api.includes(secret))
+  assert.ok(catalog.envSelectGroup.secret.includes(secret))
+  assert.equal(catalog.envSelectGroup.secret.includes(identity), false)
 })

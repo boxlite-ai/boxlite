@@ -7,7 +7,7 @@
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
+import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
@@ -116,6 +116,8 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  /** Internal transactional admission/ownership; never accepted from a public DTO. */
+  onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -274,7 +276,7 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -385,11 +387,15 @@ export class BoxService {
       // and a name collision, which the insert itself settles, come after it.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        const insert = () =>
+          options.onPersist
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
+            : this.boxRepository.insert(box, options.maxCreatedBoxes)
         return createBoxDto.name
-          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
+          ? insert()
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.boxRepository.insert(box, options.maxCreatedBoxes)
+              return insert()
             })
       })
 
@@ -881,8 +887,26 @@ export class BoxService {
     return url
   }
 
-  async destroy(boxIdOrName: string, organizationId: string | undefined, ctx: Context): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+  private async lifecycleBox(
+    id: string,
+    organizationId: string | undefined,
+    lookup: 'id' | 'id-or-name',
+    lockTimeoutMs?: number,
+  ) {
+    if (lookup === 'id-or-name') return this.findOneByIdOrName(id, organizationId, undefined, lockTimeoutMs)
+    const box = await this.findOne(id, true)
+    if (!organizationId || box.organizationId !== organizationId || box.state === BoxState.DESTROYED)
+      throw new NotFoundException(`Box with ID ${id} not found`)
+    return box
+  }
+
+  async destroy(
+    boxIdOrName: string,
+    organizationId: string | undefined,
+    ctx: Context,
+    lookup: 'id' | 'id-or-name' = 'id-or-name',
+  ): Promise<Box> {
+    const box = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
 
     if (box.pending) {
       throw new BoxError('Box state change in progress')
@@ -988,8 +1012,14 @@ export class BoxService {
     return updated
   }
 
-  async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId, undefined, ctx.lockTimeoutMs)
+  async stop(
+    boxIdOrName: string,
+    organizationId: string | undefined,
+    ctx: Context,
+    force?: boolean,
+    lookup: 'id' | 'id-or-name' = 'id-or-name',
+  ): Promise<Box> {
+    const box = await this.lifecycleBox(boxIdOrName, organizationId, lookup, ctx.lockTimeoutMs)
 
     this.assertBoxNotErrored(box)
 
