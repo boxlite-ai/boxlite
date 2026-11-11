@@ -171,7 +171,9 @@ set -euo pipefail
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
 apt-get update
-apt-get install -y curl ca-certificates iproute2
+# nfs-common is the NFSv4.1 client filestore volumes mount with "mount -t nfs";
+# the Ubuntu cloud image does not carry it by default, so the boot has to install it.
+apt-get install -y curl ca-certificates iproute2 nfs-common
 
 ${platform.installVolumeMount}
 
