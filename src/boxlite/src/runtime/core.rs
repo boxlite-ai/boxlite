@@ -413,12 +413,12 @@ impl BoxliteRuntime {
                 if let Some(name) = &name {
                     crate::runtime::checkpoints::checked_name(name)?;
                 }
-                if let Some(target) = &box_id {
-                    if target.is_empty() || target.contains('\0') {
-                        return Err(BoxliteError::InvalidArgument(
-                            "import target must be a box ID or name".into(),
-                        ));
-                    }
+                if let Some(target) = &box_id
+                    && (target.is_empty() || target.contains('\0'))
+                {
+                    return Err(BoxliteError::InvalidArgument(
+                        "import target must be a box ID or name".into(),
+                    ));
                 }
                 self.checkpoint_backend
                     .as_deref()

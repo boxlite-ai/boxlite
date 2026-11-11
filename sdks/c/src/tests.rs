@@ -10,6 +10,7 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod import_options;
 mod kernel;
 
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}

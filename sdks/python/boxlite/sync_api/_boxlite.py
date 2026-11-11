@@ -367,15 +367,26 @@ class SyncBoxlite:
         return SyncImageHandle(self, self._boxlite.images)
 
     def import_box(
-        self, archive_path: str | None = None, name: str | None = None, *,
-        untrusted: bool = False, checkpoint_id: str | None = None, box_id: str | None = None,
+        self,
+        archive_path: str | None = None,
+        name: str | None = None,
+        *,
+        untrusted: bool = False,
+        checkpoint_id: str | None = None,
+        box_id: str | None = None,
     ) -> "SyncBox":
         """Import an archive or managed checkpoint into a Box."""
         from ._box import SyncBox
 
-        handle = self._sync(self._boxlite.import_box(
-            archive_path, name, untrusted=untrusted, checkpoint_id=checkpoint_id, box_id=box_id,
-        ))
+        handle = self._sync(
+            self._boxlite.import_box(
+                archive_path,
+                name,
+                untrusted=untrusted,
+                checkpoint_id=checkpoint_id,
+                box_id=box_id,
+            )
+        )
         return SyncBox(self, handle)
 
     @property

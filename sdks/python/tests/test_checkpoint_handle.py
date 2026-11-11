@@ -102,7 +102,9 @@ async def test_checkpoint_native_rest_management_and_box_creation(checkpoint_ser
     )
     created = await runtime.import_box(checkpoint_id="checkpoint-1", name="worker")
     assert (created.id, created.name) == ("target-1", "worker")
-    recovered = await runtime.import_box(checkpoint_id="checkpoint-1", box_id="target-1")
+    recovered = await runtime.import_box(
+        checkpoint_id="checkpoint-1", box_id="target-1"
+    )
     assert recovered.id == "target-1"
     await checkpoints.remove("checkpoint-1", True)
     await checkpoints.remove("checkpoint-1")

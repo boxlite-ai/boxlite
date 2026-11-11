@@ -191,7 +191,6 @@ export interface CheckpointHandle {
   list(): Promise<CheckpointInfo[]>;
   get(key: string): Promise<CheckpointInfo>;
   remove(key: string, force?: boolean | null): Promise<void>;
-
 }
 
 /** A registry login the server pulls private images with. Has no password. */
@@ -778,7 +777,11 @@ export interface JsGetOrCreateResult {
 }
 
 export interface JsBoxlite {
-  importBox(archivePath?: string | null, name?: string | null, options?: ImportOptions | null): Promise<JsBox>;
+  importBox(
+    archivePath?: string | null,
+    name?: string | null,
+    options?: ImportOptions | null,
+  ): Promise<JsBox>;
   create(options: JsBoxOptions, name?: string | null): Promise<JsBox>;
   getOrCreate(
     options: JsBoxOptions,

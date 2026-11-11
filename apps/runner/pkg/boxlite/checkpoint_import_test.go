@@ -134,3 +134,68 @@ func TestCheckpointImportCopiesTheOriginalTarTail(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckpointImportArchiveRejectsDamagedPrefixAndCleansPartialOutput(t *testing.T) {
+	manifest := []byte(`{"box_options":{"env":[]}}`)
+	prefix := func(name string, size int64, data []byte) []byte {
+		var buffer bytes.Buffer
+		writer := tar.NewWriter(&buffer)
+		if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: size}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(data); err != nil {
+			t.Fatal(err)
+		}
+		if int64(len(data)) == size {
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return buffer.Bytes()
+	}
+	valid := prefix("manifest.json", int64(len(manifest)), manifest)
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	// The first frame yields a complete manifest; the next frame fails only
+	// after the adapter has created its output and starts copying the disk tail.
+	damagedTail := append(encoder.EncodeAll(valid[:1024], nil), []byte("broken-zstd-frame")...)
+	cases := map[string][]byte{
+		"short magic":             {1, 2, 3},
+		"short header":            []byte("incomplete tar"),
+		"invalid header":          bytes.Repeat([]byte{1}, 512),
+		"wrong first member":      prefix("disk.qcow2", 0, nil),
+		"oversized manifest":      prefix("manifest.json", (1<<20)+1, nil),
+		"truncated manifest":      prefix("manifest.json", 20, []byte("{}")),
+		"truncated padding":       valid[:512+len(manifest)],
+		"invalid manifest":        prefix("manifest.json", 1, []byte("{")),
+		"damaged compressed tail": damagedTail,
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "source.boxlite")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			source := &checkpoint.DownloadedArchive{Path: path, Artifact: checkpoint.Artifact{PinnedImage: "alpine@sha256:" + strings.Repeat("a", 64)}}
+			if output, err := checkpointImportArchive(source, map[string]string{"BOXLITE_BOX_ID": "target"}); err == nil || output != "" {
+				t.Fatalf("damaged archive accepted: %q %v", output, err)
+			}
+			files, err := filepath.Glob(filepath.Join(dir, "import-*.tar"))
+			if err != nil || len(files) != 0 {
+				t.Fatalf("partial output retained: %v %v", files, err)
+			}
+			retained, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(retained, data) {
+				t.Fatal("failed adaptation modified the source")
+			}
+		})
+	}
+	source := &checkpoint.DownloadedArchive{Path: filepath.Join(t.TempDir(), "missing.boxlite")}
+	if _, err := checkpointImportArchive(source, nil); !os.IsNotExist(err) {
+		t.Fatalf("missing source: %v", err)
+	}
+}

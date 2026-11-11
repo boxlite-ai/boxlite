@@ -82,18 +82,25 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       state: "failed",
       errorReason: "archive upload failed",
     });
-    const target = await runtime.importBox(undefined, "worker", { checkpointId: "checkpoint-1" });
+    const target = await runtime.importBox(undefined, "worker", {
+      checkpointId: "checkpoint-1",
+    });
     expect(target.id).toBe("target-1");
     expect(
       (
-        await runtime.importBox(undefined, undefined, { checkpointId: "checkpoint-1", boxId: target.id })
+        await runtime.importBox(undefined, undefined, {
+          checkpointId: "checkpoint-1",
+          boxId: target.id,
+        })
       ).id,
     ).toBe(target.id);
     await runtime.checkpoints.remove("checkpoint-1", true);
     await runtime.checkpoints.remove("checkpoint-1");
     await runtime.checkpoints.remove("checkpoint-1", false);
     await runtime.checkpoints.create("source-1");
-    await runtime.importBox(undefined, undefined, { checkpointId: "checkpoint-1" });
+    await runtime.importBox(undefined, undefined, {
+      checkpointId: "checkpoint-1",
+    });
     expect(requests).toEqual([
       {
         method: "POST",
