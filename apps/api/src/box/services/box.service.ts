@@ -8,7 +8,9 @@ import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { requestedMemoryMib } from '../utils/memory-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager, Raw } from 'typeorm'
+import { Not, Repository, LessThan, MoreThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager, Raw } from 'typeorm'
+import { BoxPublicStatus, publicBoxStatus } from '../utils/box-public-status'
+import { reportedBoxState } from '../utils/box-state.util'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
@@ -558,6 +560,25 @@ export class BoxService {
       new BoxStateUpdatedEvent(updatedBox, BoxState.STARTED, BoxState.STARTED),
     )
     return this.toBoxDto(updatedBox)
+  }
+
+  async findInventory(
+    organizationId: string,
+    query: { pageSize: number; status?: BoxPublicStatus; after?: string },
+  ): Promise<Box[]> {
+    // Enumerate the persisted enum domains through the same projection the response uses.
+    // An empty match (paused/failed today) must never become TypeORM's unfiltered where: [].
+    const where: FindOptionsWhere<Box>[] = []
+    for (const state of Object.values(BoxState)) {
+      for (const desiredState of Object.values(BoxDesiredState)) {
+        if (state === BoxState.DESTROYED || (state === BoxState.ERROR && desiredState === BoxDesiredState.DESTROYED))
+          continue
+        if (query.status && publicBoxStatus(reportedBoxState({ state, desiredState })) !== query.status) continue
+        where.push({ organizationId, state, desiredState, ...(query.after ? { id: MoreThan(query.after) } : {}) })
+      }
+    }
+    if (!where.length) return []
+    return this.boxRepository.find({ where, order: { id: 'ASC' }, take: query.pageSize + 1 })
   }
 
   async findAllDeprecated(

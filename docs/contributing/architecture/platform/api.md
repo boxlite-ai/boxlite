@@ -547,6 +547,11 @@ form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /v1/me`. Except for configuration discovery, these routes use
 combined bearer authentication, then organization authorization.
 
+Box listing filters by the response's public status before taking an ID-ascending
+page. REST and MCP share scoped continuation tokens and live-read semantics; see
+[hosted Box inventory](../../../../apps/api/README.md#hosted-box-inventory) for
+query bounds, transition mappings and consistency limits.
+
 Image and registry management routes also consume the organization's authenticated
 request quota, shared with `/images`, `/images/registries`, and other routes using
 that quota. Canonical and prefixed SDK paths use the same counter. After the quota

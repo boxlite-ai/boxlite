@@ -92,6 +92,36 @@ The secret, allowed hostnames and verification timeout remain server-side. Resta
 the API to change a widget configuration; the dashboard reads it at runtime.
 The generated TypeScript and Go configuration models accept an absent `turnstile`.
 
+## Hosted Box inventory
+
+`GET /v1/boxes` and its prefixed alias return an organization-scoped live list,
+ordered by immutable Box ID ascending. `pageSize` defaults to 100 and accepts
+integers from 1 through 1000. Follow `next_page_token` as `pageToken` until the
+response omits it; repeat the same `status` selection. Page size may change.
+MCP `listBoxes` delegates to this REST operation and uses the same continuation.
+
+Filtering occurs before the database limit and matches the response's public
+`status`, including desired-state transitions. For example, a stored started Box
+targeting stopped matches `stopping`, while a stopped Box targeting started matches
+`configured`. Archived Boxes match `stopped`; eligible errors and resizing match
+`unknown`. `paused` and `failed` are accepted but currently have no hosted matches.
+Destroyed Boxes and error Boxes targeting destruction remain excluded.
+
+Tokens are opaque, versioned and bound to organization, resource and status;
+malformed or incompatible tokens and invalid/repeated query values return 400.
+Base64url is encoding, not a signature: tokens carry a position, and every page
+reapplies authorization using the current authenticated organization. Deleting the
+boundary Box does not prevent continuation. Concurrent state changes and inserts
+behind the cursor require a fresh scan for a complete current inventory; pages
+are not a cross-request snapshot or creation-time ordering.
+
+Run `make test:apps:api TEST_FILES=box-inventory.integration.spec` with `DB_HOST`,
+`DB_PORT`, `DB_USERNAME`, `DB_DATABASE` and any required `DB_PASSWORD` to exercise
+real PostgreSQL queries, REST validation and MCP dispatch. The suite uses a unique
+schema and drops it afterward; it skips without `DB_HOST`. Authentication guards
+and enrichment dependencies are replaced in this harness, so it does not establish
+credential-policy enforcement or deployed infrastructure behavior.
+
 ## Registration email policy
 
 With protection enabled, new OIDC identities register through `POST /api/auth/register`,
