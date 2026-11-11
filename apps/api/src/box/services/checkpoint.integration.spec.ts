@@ -42,6 +42,7 @@ import { Context } from '../../common/context/context'
 import { BoxManager } from '../managers/box.manager'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxCreatedEvent } from '../events/box-create.event'
+import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
 
 const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `checkpoint_api_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -229,6 +230,50 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  it.each(['success', 'failed', 'invalid-receipt'])(
+    'records the committed checkpoint-create outcome once for %s',
+    async (outcome) => {
+      const checkpoint = await readyCheckpoint()
+      const admitted = await recovery
+        .createBox(organization, checkpoint.id, 'event-target', undefined)
+        .then(withCheckpointState)
+      const operation = await dataSource
+        .getRepository(CheckpointOperation)
+        .findOneByOrFail({ jobId: admitted.activeJobId! })
+      const observed: Readonly<Record<string, string>>[] = []
+      const dispose = subscribeBusinessEvents((event) => observed.push(event))
+      try {
+        const receipt =
+          outcome === 'success'
+            ? {
+                operationId: operation.id,
+                targetSequence: operation.sequence,
+                nativeId: 'restored-native',
+              }
+            : undefined
+        const job = await finish(
+          operation.jobId,
+          receipt,
+          outcome === 'failed' ? JobStatus.FAILED : JobStatus.COMPLETED,
+        )
+        await receiver.handleJobCompletion(job)
+        await receiver.reconcile()
+        expect(observed).toEqual([
+          expect.objectContaining({
+            'event.name': 'box.create',
+            'event.outcome': outcome === 'success' ? 'success' : 'exception',
+            'correlation.id': admitted.id,
+          }),
+        ])
+        expect(await boxes.findOneByOrFail({ id: admitted.id })).toMatchObject({
+          state: outcome === 'success' ? BoxState.STOPPED : BoxState.ERROR,
+        })
+      } finally {
+        dispose()
+      }
+    },
+  )
 
   it('prefers the exact Box ID over a colliding name during capture', async () => {
     const target = await source('exact-source')

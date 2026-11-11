@@ -61,11 +61,18 @@ pub struct CreateArgs {
     pub boot: KernelFlags,
 }
 
+/// Create the selected source; the parser has already refused checkpoint overrides.
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let (box_options, rt) = match args.checkpoint.as_deref() {
         Some(checkpoint) => {
             let rt = crate::commands::checkpoint::runtime(global)?;
-            (args.checkpoint_box_options(checkpoint, global)?, rt)
+            (
+                BoxOptions {
+                    rootfs: RootfsSpec::Checkpoint(checkpoint.to_owned()),
+                    ..Default::default()
+                },
+                rt,
+            )
         }
         None => (args.to_box_options(global)?, global.create_runtime()?),
     };
@@ -113,37 +120,6 @@ impl CreateArgs {
         Ok(options)
     }
 
-    /// Options for a box created from a checkpoint.
-    ///
-    /// The server restores the saved settings and accepts no overrides, so any
-    /// other create option is an error. This compares against what a bare
-    /// `create --checkpoint` yields rather than listing flags, which stays
-    /// correct as flags are added. The CLI's own defaults, such as detach,
-    /// differ from `BoxOptions::default()`, so the result is rebuilt from it.
-    fn checkpoint_box_options(
-        &self,
-        checkpoint: &str,
-        global: &GlobalFlags,
-    ) -> anyhow::Result<BoxOptions> {
-        use clap::Parser;
-        let bare =
-            crate::cli::Cli::try_parse_from(["boxlite", "create", "--checkpoint", checkpoint])?;
-        let crate::cli::Commands::Create(bare) = bare.command else {
-            unreachable!("`create` parses to the create command");
-        };
-        let requested = serde_json::to_value(self.to_box_options(global)?)?;
-        if requested != serde_json::to_value(bare.to_box_options(global)?)? {
-            anyhow::bail!(
-                "a box created from --checkpoint inherits its saved settings; \
-                 only --name may accompany it"
-            );
-        }
-        Ok(BoxOptions {
-            rootfs: RootfsSpec::Checkpoint(checkpoint.to_owned()),
-            ..Default::default()
-        })
-    }
-
     fn rootfs_spec(&self) -> anyhow::Result<RootfsSpec> {
         match (
             self.image.as_ref(),
@@ -168,6 +144,33 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use clap::Parser;
+
+    #[test]
+    fn checkpoint_create_rejects_explicit_defaults() {
+        for flags in [
+            vec!["--auto-delete", "0"],
+            vec!["--network", "enabled"],
+            vec!["--inbound", "disabled"],
+            vec!["--env", "BOXLITE_CHECKPOINT_UNSET_TEST_VARIABLE"],
+        ] {
+            let mut argv = vec!["boxlite", "create", "--checkpoint", "base"];
+            argv.extend(flags);
+            assert!(crate::cli::try_parse_from(&argv).is_err(), "{argv:?}");
+        }
+        assert!(
+            crate::cli::try_parse_from([
+                "boxlite",
+                "--url",
+                "http://127.0.0.1:1",
+                "create",
+                "--checkpoint",
+                "base",
+                "--name",
+                "worker"
+            ])
+            .is_ok()
+        );
+    }
 
     /// `ManagementFlags::apply_to` writes the keep-on-stop sentinel before an
     /// optional deadline. `create` then sets detach without changing lifecycle

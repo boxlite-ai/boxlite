@@ -155,6 +155,29 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 	}
 }
 
+func TestCheckpointRejectsExplicitDefaults(t *testing.T) {
+	for _, key := range []string{"", "base\x00suffix"} {
+		cfg := &boxConfig{}
+		WithCheckpoint(key)(cfg)
+		if err := buildAndFreeCOptions("", cfg); !IsInvalidArgument(err) {
+			t.Errorf("checkpoint %q: expected invalid argument, got %v", key, err)
+		}
+	}
+	for i, override := range []BoxOption{
+		WithDetach(false), WithMemory(0), WithDiskSize(0), WithUser(""),
+		WithWorkDir(""), WithCmd(), WithEntrypoint(), WithRootfsPath(""),
+		WithAutoRemove(true), WithAutoDeleteInterval(0), WithAutoResumeEnabled(true),
+		WithNetwork(NetworkSpec{}), WithAdvancedOptions(nil),
+	} {
+		cfg := &boxConfig{}
+		WithCheckpoint("base")(cfg)
+		override(cfg)
+		if err := buildAndFreeCOptions("", cfg); !IsInvalidArgument(err) {
+			t.Errorf("override %d: expected invalid argument, got %v", i, err)
+		}
+	}
+}
+
 func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
 	operations := []struct {
 		name string

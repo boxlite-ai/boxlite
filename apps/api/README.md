@@ -193,6 +193,14 @@ from the checkpoint. The HTTP state wait is bounded to 30 seconds and does not
 cancel accepted runner work. Every post-admission wait failure includes the
 `boxId` error field, even when a terminal failure occurs before timeout.
 Clients must query that identity before submitting another create.
+The REST SDK includes the admitted identity in its error message as
+`(boxId: ID)`, including terminal import failures, so callers can find the Box.
+
+Checkpoint-created Boxes record the ordinary `box.create` requested event after
+admission, followed by success or exception when the import outcome commits.
+Invalid success receipts record exceptions. Replayed callbacks do not duplicate
+outcomes; a process crash after commit can still lose the in-process log.
+
 `POST /api/v1/boxes/import` is not routed on the cloud API; binary archive
 upload stays unavailable there.
 

@@ -17,6 +17,10 @@ use napi_derive::napi;
 use crate::advanced_options::JsContainerCapabilities;
 use crate::advanced_options::{JsAdvancedBoxOptions, JsSecurityOptions};
 
+#[cfg(test)]
+#[path = "../tests/options/checkpoint_options.rs"]
+mod checkpoint_options;
+
 /// Health check options for boxes.
 ///
 /// Defines how to periodically check if a box's guest agent is responsive.
@@ -489,17 +493,44 @@ impl TryFrom<JsNetworkSpec> for (NetworkSpec, NetworkSpec) {
 impl TryFrom<JsBoxOptions> for BoxOptions {
     type Error = boxlite_shared::errors::BoxliteError;
 
+    /// Reject supplied checkpoint settings before conversion erases defaults.
     #[allow(deprecated)]
     fn try_from(js_opts: JsBoxOptions) -> Result<Self, Self::Error> {
+        if js_opts.checkpoint.is_some()
+            && (js_opts.cpus.is_some()
+                || js_opts.memory_mib.is_some()
+                || js_opts.disk_size_gb.is_some()
+                || js_opts.working_dir.is_some()
+                || js_opts.env.is_some()
+                || js_opts.volumes.is_some()
+                || js_opts.network.is_some()
+                || js_opts.ports.is_some()
+                || js_opts.auto_remove.is_some()
+                || js_opts.auto_stop.is_some()
+                || js_opts.auto_delete.is_some()
+                || js_opts.auto_resume.is_some()
+                || js_opts.detach.is_some()
+                || js_opts.entrypoint.is_some()
+                || js_opts.cmd.is_some()
+                || js_opts.user.is_some()
+                || js_opts.advanced.is_some()
+                || js_opts.security.is_some()
+                || js_opts.health_check.is_some()
+                || js_opts.secrets.is_some())
+        {
+            return Err(Self::Error::InvalidArgument(
+                "a box created from a checkpoint inherits its saved settings; leave every other option unset".into(),
+            ));
+        }
         if let Some(cpus) = js_opts.cpus {
             boxlite::runtime::cpu_count::CpuCount::new(cpus)?;
         }
         // This SDK keeps boxes on stop unless asked otherwise. A checkpoint box
         // inherits its saved settings instead, so an unset value must stay at
         // the core default: only a caller-set option counts as an override.
-        let auto_remove = js_opts.auto_remove.unwrap_or_else(|| {
-            js_opts.checkpoint.is_some() && BoxOptions::default().auto_remove
-        });
+        let auto_remove = js_opts
+            .auto_remove
+            .unwrap_or_else(|| js_opts.checkpoint.is_some() && BoxOptions::default().auto_remove);
         let auto_delete = js_opts.auto_delete;
         // Convert volumes
         let volumes = js_opts

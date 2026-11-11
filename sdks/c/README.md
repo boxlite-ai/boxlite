@@ -9,6 +9,12 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 ## Managed checkpoints
 
+Execution setters are rejected even when they set defaults, such as
+`boxlite_options_set_detach(opts, 0)`, before or after checkpoint selection.
+Null, empty or invalid UTF-8 checkpoint input returns `InvalidArgument` from
+create; it never falls back to the constructor's image. A synchronous refusal
+leaves the options handle owned by the caller.
+
 A checkpoint is a source for a new box, like an image: pass it to the ordinary
 create call. The checkpoint handle only manages checkpoints. Archive import is a
 separate operation for local `.boxlite` files and is unchanged. The CLI form is

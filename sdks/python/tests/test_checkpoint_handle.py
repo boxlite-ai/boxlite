@@ -36,6 +36,47 @@ BOX = {
 }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"detach": False},
+        {"tty": False},
+        {"auto_remove": True},
+        {"advanced": "default"},
+        {"network": "default"},
+        {"env": []},
+        {"volumes": []},
+        {"ports": []},
+        {"secrets": []},
+    ],
+)
+async def test_checkpoint_rejects_explicit_defaults(checkpoint_server, overrides):
+    """Reject supplied defaults before the native conversion loses their presence."""
+    url, requests = checkpoint_server
+    if overrides.get("advanced") == "default":
+        overrides = {"advanced": boxlite.AdvancedBoxOptions(privileged=False)}
+    if overrides.get("network") == "default":
+        overrides = {"network": boxlite.NetworkSpec(mode="enabled")}
+    runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
+    with pytest.raises(boxlite.InvalidArgumentError):
+        await runtime.create(boxlite.BoxOptions(checkpoint="base", **overrides))
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["env", "secrets"])
+async def test_checkpoint_rejects_mutated_empty_collections(checkpoint_server, field):
+    """Property setters must preserve presence just like constructor arguments."""
+    url, requests = checkpoint_server
+    options = boxlite.BoxOptions(checkpoint="base")
+    setattr(options, field, [])
+    runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
+    with pytest.raises(boxlite.InvalidArgumentError):
+        await runtime.create(options)
+    assert requests == []
+
+
 @pytest.fixture
 def checkpoint_server():
     requests = []

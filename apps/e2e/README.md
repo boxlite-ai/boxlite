@@ -27,7 +27,7 @@ CLI matrix and both authentication modes, is in
 
 ### Managed checkpoints
 
-`cases/test_checkpoints.py` exercises hot export and upload, source deletion and
+`cases/test_checkpoints.py` exercises stopped-source export and upload, source deletion and
 creating a Box from the checkpoint through the SDK and actual guests.
 Guest reads verify immutable disk contents and inherited environment values.
 Deleting the checkpoint must leave the created Box usable.

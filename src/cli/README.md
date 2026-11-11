@@ -156,6 +156,10 @@ boxlite images
 
 ## Checkpoint management
 
+Only `--name` may accompany `create --checkpoint` among creation flags.
+Explicit defaults such as `--auto-delete 0` and `--network enabled` also reject;
+global connection options remain available.
+
 Checkpoints are managed by the selected REST server. Local runtimes return
 an unsupported-operation error. Each checkpoint captures a stopped box's disk
 and execution configuration, survives source deletion, and can create multiple
