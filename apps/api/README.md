@@ -31,9 +31,31 @@ Their SPA fixtures leave the optional MCP resource URL empty, matching the deplo
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
 
+## Registration configuration
+
+Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
+blank to create local users automatically after OIDC authentication, without a
+widget or Cloudflare credentials. A nonempty sitekey enables protection and then
+requires `TURNSTILE_SECRET_KEY` and `TURNSTILE_EXPECTED_HOSTNAMES`. Hostnames are a
+comma-separated list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS`
+defaults to 5000 and must be a positive integer when enabled. Invalid enabled
+settings stop startup and identify the setting without printing its value.
+Hostname matching ignores DNS letter case and requires an exact allowlist entry;
+subdomains and suffixes are not implicitly trusted.
+
+`GET /api/config` omits `turnstile` when protection is disabled. When enabled, it
+publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
+The secret, allowed hostnames and verification timeout remain server-side. Restart
+the API to change a widget configuration; the dashboard reads it at runtime.
+The generated TypeScript and Go configuration models accept an absent `turnstile`.
+
 ## Registration email policy
 
-The first API request from a new OIDC identity requires an email address.
+With protection enabled, new OIDC identities register through `POST /api/auth/register`,
+using an API-audience Access Token and a `turnstileToken` string of 1–2048 characters.
+Ordinary JWT-authenticated requests then return `403 registration_required` until that
+account exists. Database-account email verification remains an Auth0 Action responsibility.
+The API's registration email policy requires an email address for a new local user.
 `UserService.create` trims and lowercases each non-empty email, validates its syntax,
 then rejects disposable domains before generating keys, persisting the user or creating a default organization.
 This covers database, social and enterprise OIDC identities, CLI authentication and administrator-created users.
@@ -93,6 +115,32 @@ either host is unset.
 The `api:test` cache includes PostgreSQL and Redis hosts, ports, usernames, passwords,
 and the database name, so changing connection settings invalidates cached results.
 Coverage runs bypass the cache.
+
+## User creation transactions
+
+User creation inserts a new row and reads database defaults in the same transaction
+that emits the creation event and creates the default organization and owner. An
+organization failure rolls back the user. Creating a duplicate user ID returns
+`409 user_already_exists` without replacing data; other database errors retain their
+original behavior. Concurrent attempts can commit only one user and default organization.
+Both the current `user_id_pk` and legacy `PK_cace4a159ff9f2512dd42373760` user
+primary-key constraints receive this duplicate-ID handling.
+
+## First local registration
+
+When protection is enabled, registration verifies the challenge server-side, including its hostname and `signup`
+action, before inserting the user and creating their default organization in one
+transaction. A new account returns `201 UserDto`; an existing identity returns `200`
+without validating the challenge again. Both require a valid JWT and request body.
+
+Challenge rejection returns `403 turnstile_verification_failed`; verification service
+failure returns `503 turnstile_unavailable`. Neither creates a local account. The
+internal registration endpoint is excluded from public Swagger and MCP tools.
+Existing users, including MCP tokens without profile claims, keep their local profile
+and existing permissions. When protection is enabled, new MCP users first register in Dashboard.
+Notification connections check local user existence before joining rooms.
+A failed user lookup closes the transport before room admission so Socket.IO can
+retry after recovery. Unknown users and invalid credentials are rejected.
 
 ## Box startup timeouts
 

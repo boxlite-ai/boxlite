@@ -165,6 +165,7 @@ docs/SendWebhookDto.md
 docs/StorageAccessDto.md
 docs/TraceSpan.md
 docs/TraceSummary.md
+docs/TurnstileConfig.md
 docs/UpdateBoxStateDto.md
 docs/UpdateJobStatus.md
 docs/UpdateOrganizationDefaultRegion.md
@@ -317,6 +318,7 @@ models/send-webhook-dto.ts
 models/storage-access-dto.ts
 models/trace-span.ts
 models/trace-summary.ts
+models/turnstile-config.ts
 models/update-box-state-dto.ts
 models/update-job-status.ts
 models/update-organization-default-region.ts
