@@ -341,6 +341,8 @@ fn extract_from_reader<R: Read>(
                     )));
                 }
             }
+            let mut observed = HashSet::new();
+            let mut preexisting_dirs = HashSet::new();
             let mut archive = tar::Archive::new(reader);
             archive.set_overwrite(opts.overwrite);
             // The same pass tar::Archive::unpack would run, with one
@@ -361,11 +363,16 @@ fn extract_from_reader<R: Read>(
                 if let Ok(path) = file.path() {
                     record(path.as_ref(), Some(dest));
                     if let Some(relative) = sanitize_entry_path(path.as_ref()) {
-                        let target = dest.join(relative);
+                        for step in implied_dirs_then_self(&relative) {
+                            if observed.insert(step.clone()) && dest.join(&step).is_dir() {
+                                preexisting_dirs.insert(step);
+                            }
+                        }
+                        let target = dest.join(&relative);
                         check_copy_destination(&target, is_directory, opts.overwrite)?;
                         // Reused directories are containers for new entries; unpacking
                         // their headers would reset existing permissions and timestamps.
-                        if !opts.overwrite && is_directory && target.is_dir() {
+                        if !opts.overwrite && is_directory && preexisting_dirs.contains(&relative) {
                             continue;
                         }
                     }
@@ -676,6 +683,13 @@ mod tests {
     use tempfile::TempDir;
 
     // ── Helpers ───────────────────────────────────────────────────
+
+    // macOS exposes its temporary root through /var, a symlink. Policy tests
+    // must start at its real directory and introduce links explicitly.
+    fn copy_policy_tempdir() -> TempDir {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        tempfile::tempdir_in(root).unwrap()
+    }
 
     fn uc(overwrite: bool, mkdir_parents: bool, force_directory: bool) -> UnpackContext {
         UnpackContext {
@@ -1285,7 +1299,7 @@ mod tests {
 
     #[tokio::test]
     async fn unpack_overwrite_false_rejects_existing_file() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = copy_policy_tempdir();
         let tar_path = tmp.path().join("file.tar");
         create_single_file_tar(&tar_path, "data.txt", b"new content");
 
@@ -1299,7 +1313,7 @@ mod tests {
 
     #[tokio::test]
     async fn unpack_overwrite_false_reuses_existing_dir() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = copy_policy_tempdir();
         let tar_path = tmp.path().join("dir.tar");
         create_dir_tar(&tar_path);
 
@@ -1313,7 +1327,7 @@ mod tests {
     #[tokio::test]
     async fn no_overwrite_adds_new_files_to_existing_and_missing_directories() {
         for existing in [false, true] {
-            let tmp = TempDir::new().unwrap();
+            let tmp = copy_policy_tempdir();
             let tar_path = tmp.path().join("files.tar");
             create_single_file_tar(&tar_path, "new.txt", b"new");
             let dest = tmp.path().join("output");
@@ -1333,7 +1347,7 @@ mod tests {
     #[tokio::test]
     async fn no_overwrite_partial_conflicts_match_stream_and_staged() {
         for streamed in [false, true] {
-            let tmp = TempDir::new().unwrap();
+            let tmp = copy_policy_tempdir();
             let tar_path = tmp.path().join("files.tar");
             create_leaf_only_tar(&tar_path, &["new.txt", "keep.txt"]);
             let dest = tmp.path().join("output");
@@ -1364,7 +1378,7 @@ mod tests {
     #[tokio::test]
     async fn no_overwrite_preserves_link_and_directory_collisions() {
         for collision in ["directory", "symlink", "dangling"] {
-            let tmp = TempDir::new().unwrap();
+            let tmp = copy_policy_tempdir();
             let tar_path = tmp.path().join("file.tar");
             create_single_file_tar(&tar_path, "occupied", b"replacement");
             let dest = tmp.path().join("output");
@@ -1399,7 +1413,7 @@ mod tests {
     #[tokio::test]
     async fn no_overwrite_checks_implied_directory_conflicts() {
         for linked in [false, true] {
-            let tmp = TempDir::new().unwrap();
+            let tmp = copy_policy_tempdir();
             let tar_path = tmp.path().join("file.tar");
             create_single_file_tar(&tar_path, "occupied/new.txt", b"new");
             let dest = tmp.path().join("output");
@@ -1427,7 +1441,7 @@ mod tests {
     #[tokio::test]
     async fn no_overwrite_reuses_directory_without_resetting_permissions() {
         use std::os::unix::fs::PermissionsExt;
-        let tmp = TempDir::new().unwrap();
+        let tmp = copy_policy_tempdir();
         let tar_path = tmp.path().join("dir.tar");
         create_dir_tar(&tar_path);
         let dest = tmp.path().join("output");
@@ -1451,9 +1465,46 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_applies_late_header_to_new_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = copy_policy_tempdir();
+        let tar_path = tmp.path().join("late.tar");
+        let mut builder = tar::Builder::new(std::fs::File::create(&tar_path).unwrap());
+        let mut file = tar::Header::new_gnu();
+        file.set_size(4);
+        file.set_mode(0o600);
+        file.set_cksum();
+        builder
+            .append_data(&mut file, "private/file", b"data".as_slice())
+            .unwrap();
+        let mut directory = tar::Header::new_gnu();
+        directory.set_entry_type(tar::EntryType::Directory);
+        directory.set_size(0);
+        directory.set_mode(0o700);
+        directory.set_cksum();
+        builder
+            .append_data(&mut directory, "private/", io::empty())
+            .unwrap();
+        builder.finish().unwrap();
+        let dest = tmp.path().join("output");
+        unpack(tar_path, dest.clone(), uc(false, true, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(dest.join("private"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
     #[tokio::test]
     async fn no_overwrite_reports_typed_file_conflict() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = copy_policy_tempdir();
         let tar_path = tmp.path().join("file.tar");
         create_single_file_tar(&tar_path, "keep.txt", b"replacement");
         let dest = tmp.path().join("keep.txt");

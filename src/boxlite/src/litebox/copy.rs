@@ -38,6 +38,28 @@ impl CopySourceKind {
     }
 }
 
+/// Resolve trusted host ancestors, leaving the destination leaf for extraction's
+/// no-overwrite check. Guest archive components never use this host policy.
+pub(super) fn host_copy_destination(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let Some(leaf) = absolute.file_name() else {
+        return absolute.canonicalize();
+    };
+    let parent = absolute.parent().unwrap();
+    // Copy-out already creates host parents. Let the filesystem interpret `..`
+    // and symlinks before canonicalizing, rather than normalizing them lexically.
+    let mut resolved = match parent.canonicalize() {
+        Ok(resolved) => resolved,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(parent)?;
+            parent.canonicalize()?
+        }
+        Err(error) => return Err(error),
+    };
+    resolved.push(leaf);
+    Ok(resolved)
+}
+
 /// Options controlling copy behavior.
 ///
 /// Whether a directory or its contents is copied is not an option: spell the
@@ -91,6 +113,61 @@ impl CopyOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_destination_preserves_directory_intent() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("missing/output/");
+        let resolved = host_copy_destination(&output).unwrap();
+        assert_eq!(
+            resolved,
+            root.path().canonicalize().unwrap().join("missing/output")
+        );
+    }
+
+    #[test]
+    fn host_destination_resolves_missing_parent_components() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("missing/../output");
+        let resolved = host_copy_destination(&output)
+            .expect("missing parents containing .. must remain valid");
+        assert_eq!(resolved, root.path().canonicalize().unwrap().join("output"));
+    }
+
+    #[test]
+    fn host_destination_resolves_filesystem_paths() {
+        let root = tempfile::tempdir_in(".").unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        assert_eq!(
+            host_copy_destination(&root.path().join("file")).unwrap(),
+            canonical.join("file")
+        );
+        assert_eq!(
+            host_copy_destination(std::path::Path::new("/")).unwrap(),
+            std::path::Path::new("/")
+        );
+        std::fs::write(root.path().join("file"), b"existing").unwrap();
+        assert_eq!(
+            host_copy_destination(&root.path().join("file/child/output"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotADirectory
+        );
+        #[cfg(unix)]
+        {
+            std::fs::create_dir_all(root.path().join("actual/deep")).unwrap();
+            std::os::unix::fs::symlink(canonical.join("actual/deep"), root.path().join("link"))
+                .unwrap();
+            assert_eq!(
+                host_copy_destination(&root.path().join("link/../out")).unwrap(),
+                canonical.join("actual/out")
+            );
+            assert_eq!(
+                host_copy_destination(&root.path().join("link//out")).unwrap(),
+                canonical.join("actual/deep/out")
+            );
+        }
+    }
 
     /// The guest reads `source_is_dir` to pick the extraction shape, so an
     /// inverted arm here silently unpacks a directory as a file (or the
