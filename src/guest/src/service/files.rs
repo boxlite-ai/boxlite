@@ -556,13 +556,15 @@ impl Files for GuestServer {
                 // ancestors captured above — the recording names what the
                 // archive made, the pre-sampled ancestors name what
                 // mkdir_parents made.
-                self.chown_to_container_user(
-                    &container_id,
-                    dest_root.clone(),
-                    Arc::clone(&entry_paths),
-                    DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
-                )
-                .await;
+                if unpack_result.is_ok() || !overwrite {
+                    self.chown_to_container_user(
+                        &container_id,
+                        dest_root.clone(),
+                        Arc::clone(&entry_paths),
+                        DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
+                    )
+                    .await;
+                }
                 unpack_result.map_err(upload_unpack_status)?;
                 shadow_result?;
             }
@@ -648,8 +650,15 @@ impl Files for GuestServer {
                 // nor any notion of who will read the file, so without this
                 // every copy_in lands root-owned and a non-root workload
                 // cannot open it.
-                self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
+                if unpack_result.is_ok() || !overwrite {
+                    self.chown_to_container_user(
+                        &container_id,
+                        dest_root.clone(),
+                        entry_paths,
+                        before,
+                    )
                     .await;
+                }
                 unpack_result.map_err(upload_unpack_status)?;
             }
         }

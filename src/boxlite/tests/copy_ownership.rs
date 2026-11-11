@@ -58,6 +58,62 @@ async fn partial_upload_hands_new_files_to_box_user() {
         .unwrap();
     bx.start().await.unwrap();
     for kind in [CopySourceKind::Dir, CopySourceKind::Unknown] {
+        let dest = format!("/srv/failed-hardlink-{kind:?}");
+        exec_stdout(
+            &bx,
+            BoxCommand::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "mkdir -p {dest}; printf original > {dest}/keep; chmod 600 {dest}/keep"
+                    ),
+                ])
+                .user("0:0"),
+        )
+        .await;
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Link);
+        header.set_link_name("missing-source").unwrap();
+        header.set_mode(0o600);
+        header.set_size(0);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "keep", std::io::empty())
+            .unwrap();
+        let result = bx
+            .copy_in_stream(
+                Box::pin(futures::stream::iter([Ok(archive.into_inner().unwrap())])),
+                &dest,
+                kind,
+                CopyOptions::default(),
+            )
+            .await;
+        assert!(result.is_err(), "missing hardlink source must fail");
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("cat")
+                    .arg(format!("{dest}/keep"))
+                    .user("0:0")
+            )
+            .await,
+            "original"
+        );
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("stat")
+                    .args(["-c", "%u:%g", &format!("{dest}/keep")])
+                    .user("0:0")
+            )
+            .await
+            .trim(),
+            "0:0",
+            "failed replacement must not change untouched ownership"
+        );
+    }
+    for kind in [CopySourceKind::Dir, CopySourceKind::Unknown] {
         let dest = format!("/srv/partial-{kind:?}");
         exec_stdout(
             &bx,

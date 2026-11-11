@@ -28,7 +28,8 @@ func TestIntegrationUploadOverwriteHTTP(t *testing.T) {
 	}
 	defer runtime.Close()
 	enabled := false
-	_, _, err = runtime.Create(ctx, dto.CreateBoxDTO{Id: "upload-protection", Image: "alpine:latest", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 2, OutboundEnabled: &enabled})
+	cpuQuota := 1.0
+	_, _, err = runtime.Create(ctx, dto.CreateBoxDTO{Id: "upload-protection", Image: "alpine:latest", CpuQuota: &cpuQuota, MemoryQuota: 1, StorageQuota: 2, OutboundEnabled: &enabled})
 	if err != nil {
 		t.Fatal(err)
 	}

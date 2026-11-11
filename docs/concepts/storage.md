@@ -47,6 +47,8 @@ Protected extraction uses the result of directory creation to distinguish reused
 directories from ones created by this upload. If a later entry conflicts, paths
 already reached still receive the usual ownership handoff to the box user before
 the conflict is returned; an untouched conflicting destination keeps its owner.
+Failed overwrite-enabled copies retain their earlier failure behavior and do not
+hand off paths merely named by an unsuccessful archive entry.
 
 Guest extraction rejects symlink ancestors, including ancestors omitted from
 archive headers. Protected copy-out resolves trusted host parents first, leaving
