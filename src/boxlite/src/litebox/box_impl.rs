@@ -1038,7 +1038,12 @@ impl BoxImpl {
         let extraction_destination = if opts.overwrite {
             host_dst.to_path_buf()
         } else {
-            super::copy::host_copy_destination(host_dst)
+            let destination = host_dst.to_path_buf();
+            tokio::task::spawn_blocking(move || super::copy::host_copy_destination(&destination))
+                .await
+                .map_err(|e| {
+                    BoxliteError::Storage(format!("host copy resolution task failed: {e}"))
+                })?
                 .map_err(|e| BoxliteError::Storage(format!("resolve host copy destination: {e}")))?
         };
         boxlite_shared::tar::unpack(

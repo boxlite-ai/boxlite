@@ -23,19 +23,79 @@ AWS bootstrap and mdeploy currently use different app names; read the
 
 ## Inputs
 
-| Input | Owner |
-| --- | --- |
-| App identity, build artifacts, environment groups | Committed `mstage.env.json` |
-| Cloud, region/project, registry and resource sizing | Ignored `.mstage.config.json` |
-| Domains, fleet count, secrets and feature settings | Encrypted stage environment |
-| Container identity | Invocation's `BOXLITE_IMAGE_TAG` |
-| Runner release | Workspace `Cargo.toml`, or invocation's `VERSION` |
-| Runner commit build | `RUNNER_ARTIFACT_SOURCE=build` and `RUNNER_ARTIFACT_REF=<full-sha>` |
+| Input                                               | Owner                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| App identity, build artifacts, environment groups   | Committed `mstage.env.json`                                         |
+| Cloud, region/project, registry and resource sizing | Ignored `.mstage.config.json`                                       |
+| Domains, fleet count, secrets and feature settings  | Encrypted stage environment                                         |
+| Container identity                                  | Invocation's `BOXLITE_IMAGE_TAG`                                    |
+| Runner release                                      | Workspace `Cargo.toml`, or invocation's `VERSION`                   |
+| Runner commit build                                 | `RUNNER_ARTIFACT_SOURCE=build` and `RUNNER_ARTIFACT_REF=<full-sha>` |
 
 See [configuration](../docs/configuration.md) for writing and verifying each input.
 `BOXLITE_IMAGE_TAG` accepts a full lowercase SHA or `vX.Y.Z-<sha>` for release images.
 The environment describes the desired deployment; setting a tag does not build an artifact.
 Use [mbuild](../mbuild/README.md) and the [runner runbook](../docs/runners.md) to prepare it first.
+
+## Hosted GitHub CI Listener
+
+Personal and Organization Apps use separate credentials and webhook URLs. Add
+`CI_GITHUB_ORG_APP_CLIENT_ID` and `CI_GITHUB_ORG_APP_SLUG` as ordinary settings
+for the Organization App. Its `CI_GITHUB_ORG_APP_PRIVATE_KEY`,
+`CI_GITHUB_ORG_WEBHOOK_SECRET` and optional `CI_GITHUB_ORG_APP_CLIENT_SECRET`
+use secret refs in both the `api` and `secret` groups, as the Personal App does.
+An Organization App requires the Personal App storage anchor and a distinct
+client ID. The deployment validates this configuration before infrastructure
+changes; configuring both Apps still creates one hosted Listener and one account quota.
+
+The API imports the shared TypeScript Listener. Configure its App identity and slug
+as ordinary mstage API settings. Configure `CI_GITHUB_APP_PRIVATE_KEY`,
+`CI_GITHUB_WEBHOOK_SECRET` and `CI_SECRET_ENCRYPTION_KEY` as secret references.
+The committed catalog already places the credentials in both the optional `api`
+consumer group and the optional `secret` marker group; no additional enable flag is needed.
+A partial CI configuration or plaintext credential channel stops deployment.
+Dashboard browser connect additionally uses optional `CI_GITHUB_OAUTH_CLIENT_ID`
+and a separate `CI_GITHUB_OAUTH_CLIENT_SECRET` reference. The identity OAuth App
+requests only profile and organization-membership reads; the CI Apps keep their
+runner permissions. Device Flow and the scheduler do not require identity OAuth.
+
+For a GCP stage, store reference documents rather than secret values:
+
+```bash
+npm run mstage env set -- --stage dev CI_GITHUB_APP_CLIENT_ID=YOUR_CLIENT_ID CI_GITHUB_APP_SLUG=YOUR_APP_SLUG CI_GITHUB_OAUTH_CLIENT_ID=YOUR_IDENTITY_OAUTH_CLIENT_ID
+npm run mstage env set -- --stage dev --json \
+  'CI_GITHUB_APP_PRIVATE_KEY={"address":"projects/PROJECT/secrets/ci-app-private-key/versions/1"}' \
+  'CI_GITHUB_WEBHOOK_SECRET={"address":"projects/PROJECT/secrets/ci-webhook/versions/1"}' \
+  'CI_SECRET_ENCRYPTION_KEY={"address":"projects/PROJECT/secrets/ci-connect-encryption/versions/1"}' \
+  'CI_GITHUB_OAUTH_CLIENT_SECRET={"address":"projects/PROJECT/secrets/ci-identity-oauth-client-secret/versions/1"}'
+npm run mstage env list -- --stage dev --select-group api
+```
+
+Run these commands from `apps/infra`, replacing the placeholders with existing
+secrets. The final command prints configured names. mdeploy grants the API identity
+read access to the referenced secrets and emits Cloud Run `secretKeyRef` entries;
+the PEM/HMAC/encryption values are not copied into revision configuration or passed
+to runner hosts and JIT Boxes. The encryption secret holds base64 for exactly 32
+bytes. Keep it stable across replicas while connect attempts are pending.
+
+For browser connect, add the exact `${DASHBOARD_URL}/settings/ci/callback` URL
+to the GitHub App; leave wildcard matching and OAuth-during-installation disabled.
+Apply the additive CI web-connect migration. For GCP, the API image bundles both
+API and Dashboard artifacts; one Cloud Run revision updates both surfaces.
+The Dashboard's CI tab starts authorization; merely installing the App does not
+establish BoxLite account ownership. Keep the current standalone Listener and its
+webhook active until a coordinated hosted cutover can avoid duplicate providers.
+
+Pin secret versions and deploy a new revision when rotating them. The API receives
+the resolved values at instance startup; it does not fetch Secret Manager itself.
+Cloud Run receives a service-level minimum of one instance and `cpuIdle: false`
+only when hosted CI is configured, so scheduling continues outside requests.
+This introduces idle instance costs. Other API deployments retain their defaults;
+multiple replicas still use the PostgreSQL lease to select one scheduler.
+
+See the [API configuration contract](../../api/README.md#hosted-configuration-and-deployment)
+and [Cloud Run secret delivery](https://docs.cloud.google.com/run/docs/configuring/services/secrets).
+Provider-input tests do not replace a deployed App/CI acceptance run.
 
 ## Runner convergence
 
@@ -45,6 +105,35 @@ attached-disk changes are ignored for existing hosts; binary and unit-environmen
 Updates verify artifact checksums and readiness. Already-converged hosts need no restart;
 release downgrade requires the explicit operator command. Follow [GCP runner convergence](../docs/gcp/runners.md)
 or [AWS runner convergence](../docs/aws/runners.md) for the update mechanism and its completion boundary.
+
+### Runner process environment
+
+`BOXLITE_RUNNER_ENV` is an optional JSON object in mstage's `runner` environment
+group. From `apps/infra`, for example:
+
+```sh
+npm run mstage env set -- --stage dev --json 'BOXLITE_RUNNER_ENV={"BOXLITE_EXPERIMENTAL":"nested-virtualization"}'
+```
+
+Apply the stage with mdeploy after changing the value. New hosts receive the map
+at boot; existing GCP hosts converge through OS Config and AWS hosts through the
+existing update payload. Changes restart the Runner process, without rebooting
+or replacing the instance. Running boxes are affected by that process restart.
+An unchanged map, including reordered keys, causes no environment-driven restart.
+
+Values must be single-line strings; JSON trailing commas are invalid. The map
+adds process settings, not guest environment or secret references. Deployment-owned
+identity, API, storage, kernel and telemetry keys, direct runner-group settings,
+secret names/address keys, and `PATH` cannot be overridden here. The cloud secret
+wrappers need the deployment's tool search path. Use the existing
+configuration channels. Map values appear in deployment state and host configuration;
+use the secret channel for credentials.
+
+Removing a map entry removes its previously managed value; `{}` or removing the
+wrapper clears all managed entries. Unrelated settings and file permissions are
+preserved. A previously injected duplicate of a newly managed key is replaced
+when adopted and does not return after removal. The map grants no capabilities
+itself; a setting's effect depends on the deployed Runner's configuration support.
 
 ## Cloud implementations
 
@@ -76,17 +165,33 @@ npm run mdeploy -- --stage prod --confirm
 npm run mdeploy -- --stage dev --refresh
 ```
 
-| Intent | Effect |
-| --- | --- |
-| Default | Apply the resource graph; protected stages require `--confirm` |
-| `--diff` | Preview resource changes |
-| `--refresh` | Reconcile deployment state with the cloud; protected stages require `--confirm` |
-| `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage |
-| `--local-env` | Read ambient environment instead of the encrypted stage store |
+| Intent               | Effect                                                                          |
+| -------------------- | ------------------------------------------------------------------------------- |
+| Default              | Apply the resource graph; protected stages require `--confirm`                  |
+| `--diff`             | Preview resource changes                                                        |
+| `--refresh`          | Reconcile deployment state with the cloud; protected stages require `--confirm` |
+| `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage               |
+| `--local-env`        | Read ambient environment instead of the encrypted stage store                   |
 
 `--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary
 configuration path; the caller must supply the required inputs.
+
+## Checkpoint archive bucket
+
+GCP creates a dedicated `Checkpoints` resource named `<app>-<stage>-checkpoints`.
+Archives use `gs://<bucket>/checkpoints/`; the stack passes this location to the
+API as `CHECKPOINT_ARCHIVE_PREFIX` and the same bucket to runner object grants.
+The API and runners receive `roles/storage.objectUser` on this bucket alone.
+Uniform access and public access prevention are enabled; versioning and soft
+delete retention are disabled for this archive bucket.
+
+This bucket is separate from application storage, per-volume buckets and the
+infrastructure engine's state/checkpoint bucket. AWS does not enable this archive
+capability. Deploy the checkpoint database migration and compatible API/runners
+with this storage configuration before enabling capture. The REST API and
+capture/import orchestration use this archive path; see the
+[API checkpoint contract](../../api/README.md#checkpoint-capture).
 
 ## Implementation and validation
 

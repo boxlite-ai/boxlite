@@ -61,8 +61,15 @@ The `serve` command has two test surfaces with different responsibilities:
   make test:integration:cli FILTER=ssh_rest
   ```
 
-The [CI coverage selection](../../../make/coverage.mk) includes CLI unit
-tests and the `auth` integration target, excluding VM suites such as `ssh_rest.rs`.
+The [CI coverage selection](../../../make/coverage.mk) includes CLI unit tests
+and the `auth`, `ssh_cloud`, `custom_kernel_rc`, and `checkpoint` integration
+targets, excluding VM suites such as `ssh_rest.rs`.
+
+The `checkpoint` target runs real CLI commands against loopback HTTP without a
+guest. It checks checkpoint management, import creation/replacement, tenant and
+credential forwarding, pagination, deletion errors, and rejection of configuration
+overrides. These command paths contribute coverage alongside the inline parser
+and reference-server tests.
 
 Authentication unit tests inspect the resolved REST endpoint and bearer
 credential without contacting the hosted API. Login resolves the server URL

@@ -227,7 +227,7 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 
 ### `cpus: float`
 
-CPU allocation, default `1`, from `0.01` to `16` with the bundled kernel, in increments of `0.001`.
+CPU allocation, default `1`, from `0.125` to `16` with the bundled kernel, in increments of `0.001`.
 Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
 Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
@@ -237,9 +237,9 @@ cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
 cpus=2    # 2 guest vCPUs, no additional bandwidth quota
 ```
 
-Fractional values require a Linux execution host, the jailer, and writable cgroup v2 CPU quotas.
+Fractional values require a Linux execution host and the jailer; enforcement also needs writable cgroup v2 CPU quotas.
 Local macOS execution rejects them; macOS REST clients can request them from a supporting Linux server.
-Quota-write failures prevent startup; cgroup membership remains best-effort and can leave a running Box without enforcement.
+A quota-write failure is logged at error level and does not prevent startup; like best-effort cgroup membership, it can leave a running Box without enforcement.
 Information queries return the configured allocation.
 Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
 

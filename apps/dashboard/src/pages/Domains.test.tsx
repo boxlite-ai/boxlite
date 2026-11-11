@@ -162,7 +162,7 @@ describe('Domains page', () => {
   it('renders empty and fetch-error states', async () => {
     state.list.mockResolvedValue({ ...list, domains: [], used: 0, remaining: 5 })
     await render()
-    expect(document.body.textContent).toContain('No domains yet')
+    expect(document.body.textContent).toContain('No Domains yet.')
     state.organizationId = 'org-error'
     state.list.mockRejectedValue(new Error('Network unavailable'))
     await render()
@@ -211,7 +211,7 @@ describe('Domains page', () => {
     expect(document.querySelector('tbody')?.textContent).toContain('shop-one.apps.test')
     type('missing')
     expect(document.body.textContent).toContain('No domain matches')
-    expect(document.body.textContent).not.toContain('No domains yet')
+    expect(document.body.textContent).not.toContain('No Domains yet.')
     await act(async () =>
       [...document.querySelectorAll('button')].find((b) => b.textContent === 'Clear filter')!.click(),
     )

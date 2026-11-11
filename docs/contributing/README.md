@@ -36,9 +36,11 @@ How to build, test, and change the code.
 Dated root-cause analyses and design studies, newest first.
 
 - 2026-11-11 · [Upload overwrite protection](investigations/2026-11-11-upload-overwrite-protection.md): per-entry conflict handling and compatible streaming options.
+- 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
 - 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.
 - 2026-11-09 · [Desktop dashboard consistency](investigations/2026-11-09-desktop-review-corrections.md): shared resource presentation, compact usage summaries and desktop screenshot evidence.
+- 2026-11-06 · [CI capacity summary](investigations/2026-11-06-ci-capacity-meter.md): inline slot occupancy and owner capacity editing beside the runner filter.
 - 2026-11-06 · [SSH connection dialog](investigations/ssh-connection-dialog.md): progressive connection steps, saved-key recovery, and backend-compatible SSH controls.
 - 2026-11-06 · [Registration email policy](investigations/2026-11-06-registration-email-policy.md): disposable-domain rejection at platform account creation with existing-user access preserved.
 - 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): managed SSH credentials and the printed SSH connection command.

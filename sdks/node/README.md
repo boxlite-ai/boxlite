@@ -10,6 +10,34 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 [![npm version](https://badge.fury.io/js/%40boxlite%2Fcore.svg)](https://badge.fury.io/js/boxlite)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+## Managed checkpoints
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
+The source must be stopped before `create`; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+The REST runtime's `checkpoints` handle exposes `create`, `list`,
+`get` and `remove` as promises. Checkpoints survive their source box.
+
+```typescript
+const checkpoint = await runtime.checkpoints.create("source", "dev-base");
+const worker = await runtime.create({ checkpoint: checkpoint.id }, "worker");
+```
+
+A box created from a checkpoint inherits its saved execution settings. Setting any
+other option, including `image` or `rootfsPath`, rejects with an invalid-argument
+error before a request is sent.
+This includes explicit defaults such as `detach: false` or
+`advanced: { privileged: false }`, and empty lists such as `env: []`.
+Cloud capture may initially report `creating`; query until `ready` before use.
+`remove(key, true)` ignores absence only. Storage belongs to the server.
+Local runtime checkpoint operations, including `create` with a checkpoint, reject
+with an unsupported-operation error.
+
 ## Features
 
 - **Hardware-level VM isolation** (KVM on Linux, Hypervisor.framework on macOS)
@@ -569,6 +597,10 @@ node simplebox.js
 
 ### Maintaining the native bindings
 
+Rust sources in `sdks/node/src/` use the workspace formatter. From the
+repository root, run `make fmt:rust` before committing binding changes and
+`make fmt:check:rust` to reproduce the CI formatting check.
+
 The Rust bindings require `napi` 3.16.1+, `napi-derive` 3.7.0+, and
 `napi-build` 2.6.0+. Update the runtime and macro generator together:
 `napi-derive` selects `napi-derive-backend`, whose generated reference
@@ -661,7 +693,12 @@ The SDK uses a dual-layer architecture:
 
 See [../../CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
 
-### Agent binding tests
+### Native binding tests
+
+Checkpoint native REST tests run with
+`make test:integration:node FILTER='checkpoint native'`. They use loopback HTTP
+without a VM and are included in native binding coverage. Ordinary unit jobs
+do not build the native module and exclude these integration tests.
 
 From the repository root, run
 `make test:integration:node FILTER='agent namespace'`. The native Box getter test
@@ -672,8 +709,15 @@ prototype-only method receivers before the agent operation runs.
 These receiver tests exercise napi-rs callback unwrapping. They do not exercise
 the generated `FromNapiRef` and `FromNapiMutRef` conversions flagged by CodeQL,
 so passing them does not establish that those pointer alerts are false positives.
-The conversions are generated in the locked
-[napi-rs backend](https://github.com/napi-rs/napi-rs/blob/5ed87dd7e930961e9273f95cd0ed77c2da967bc1/crates/backend/src/codegen/struct.rs#L112-L146).
+The locked
+[napi-rs backend 7.0.0](https://github.com/napi-rs/napi-rs/blob/f89400d99b136c5c8a27818654b91256832b5bd6/crates/backend/src/codegen/struct.rs#L168-L242)
+checks `napi_unwrap`, validates the napi8 class tag, and registers a native borrow
+before constructing either reference. The matching
+[napi 3.16.1 runtime](https://github.com/napi-rs/napi-rs/blob/417375ad5ef1d8cb4c49edf13d2cc6c0204bb5b1/crates/napi/src/bindgen_runtime/native_borrow.rs#L688-L696)
+rejects a null native pointer during borrow acquisition; its error propagates
+before dereference. When reviewing an alert, compare its expanded conversion
+path against these exact locked sources, including the guards between pointer
+initialization and dereference.
 
 ## License
 

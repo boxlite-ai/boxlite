@@ -104,7 +104,7 @@ async fn create_response(
 
 #[tokio::test]
 async fn fractional_cpus_posts_once_and_preserves_wire_numbers() {
-    for cpus in [None, Some(2.0), Some(0.01), Some(0.125), Some(1.5)] {
+    for cpus in [None, Some(2.0), Some(0.125), Some(0.126), Some(1.5)] {
         let body = BOX_RESPONSE.replace("0.125", &cpus.unwrap_or(1.0).to_string());
         let (result, requests) = create_response(201, &body, cpus, None).await;
         assert!(result.is_ok(), "{:?}", result.as_ref().err());
@@ -188,8 +188,8 @@ async fn fractional_cpus_invalid_inputs_never_reach_the_server() {
     for cpus in [
         0.0,
         -0.5,
-        0.009,
-        0.0101,
+        0.124,
+        0.1251,
         255.001,
         f64::NAN,
         f64::INFINITY,

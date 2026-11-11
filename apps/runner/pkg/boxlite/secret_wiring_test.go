@@ -50,7 +50,7 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 	recoverDto := dto.RecoverBoxDTO{
 		FromVolumeId: "vol-1",
 		OsUser:       "root",
-		CpuQuota:     2,
+		CpuQuota:     cpuQuota(2),
 		GpuQuota:     1,
 		MemoryQuota:  4,
 		StorageQuota: 10,
@@ -72,8 +72,8 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 	if createDto.OsUser != recoverDto.OsUser {
 		t.Errorf("createDto.OsUser = %q, want %q", createDto.OsUser, recoverDto.OsUser)
 	}
-	if createDto.CpuQuota != recoverDto.CpuQuota {
-		t.Errorf("createDto.CpuQuota = %d, want %d", createDto.CpuQuota, recoverDto.CpuQuota)
+	if createDto.CpuQuota == nil || *createDto.CpuQuota != *recoverDto.CpuQuota {
+		t.Errorf("createDto.CpuQuota = %v, want allocation %v", createDto.CpuQuota, *recoverDto.CpuQuota)
 	}
 	if createDto.GpuQuota != recoverDto.GpuQuota {
 		t.Errorf("createDto.GpuQuota = %d, want %d", createDto.GpuQuota, recoverDto.GpuQuota)

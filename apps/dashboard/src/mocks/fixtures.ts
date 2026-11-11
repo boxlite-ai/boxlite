@@ -53,6 +53,7 @@ const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISO
 export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
   return {
     version: '0.0.0-mock',
+    turnstile: { sitekey: 'mock-sitekey', action: 'signup' },
     // OIDC values are placeholders: the mock target swaps the real AuthProvider
     // for a fake authenticated session, so no OIDC network call is ever made.
     //

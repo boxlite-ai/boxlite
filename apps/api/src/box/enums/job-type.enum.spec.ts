@@ -18,6 +18,9 @@ describe('JobType', () => {
       'ROLLBACK_EXPORT_BOX',
       'ROLLBACK_IMPORT_BOX',
       'DISCARD_EXPORTED_BOX',
+      'EXPORT_CHECKPOINT',
+      'UPLOAD_CHECKPOINT',
+      'IMPORT_CHECKPOINT',
     ])
   })
 })

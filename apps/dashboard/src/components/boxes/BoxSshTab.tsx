@@ -362,41 +362,42 @@ function SshControls({
 
   const needsInbound = box.network?.inbound.mode === NetworkMode.DISABLED
   const statusRow = (
-    <div className="mb-[6px]">
-      <div className="flex items-baseline gap-2">
-        <span className="text-muted-foreground">ssh</span>
-        <span className="min-w-[8px] flex-1" />
-        <button
-          type="button"
-          title="Refresh SSH status"
-          disabled={loading || !!pending}
-          onClick={() => setStatusRefresh((value) => value + 1)}
-          className="whitespace-nowrap text-muted-foreground hover:text-foreground"
-        >
-          {pending
-            ? 'updating…'
-            : loading
-              ? 'loading…'
-              : !running
-                ? 'not running'
-                : status
-                  ? status.enabled
-                    ? 'enabled'
-                    : 'disabled'
-                  : 'unavailable · retry'}
-        </button>
-        {canManage && (
-          <Switch
-            aria-label="SSH access"
-            checked={status?.enabled ?? false}
-            disabled={disabled || !status}
-            className="ml-1 mr-3 shrink-0 scale-90 self-center"
-            onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
-          />
-        )}
+    <div>
+      <div className="grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
+        <span className="text-meta text-muted-foreground">SSH</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            title="Refresh SSH status"
+            disabled={loading || !!pending}
+            onClick={() => setStatusRefresh((value) => value + 1)}
+            className="whitespace-nowrap text-muted-foreground hover:text-foreground"
+          >
+            {pending
+              ? 'updating…'
+              : loading
+                ? 'loading…'
+                : !running
+                  ? 'not running'
+                  : status
+                    ? status.enabled
+                      ? 'enabled'
+                      : 'disabled'
+                    : 'unavailable · retry'}
+          </button>
+          {canManage && (
+            <Switch
+              aria-label="SSH access"
+              checked={status?.enabled ?? false}
+              disabled={disabled || !status}
+              className="shrink-0"
+              onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
+            />
+          )}
+        </div>
       </div>
       {error && !open && (
-        <p role="alert" className="mt-2 text-xs text-destructive">
+        <p role="alert" className="mt-2 text-meta text-destructive">
           {error}
         </p>
       )}
@@ -419,11 +420,11 @@ function SshControls({
         }}
       >
         <DialogTrigger asChild>
-          <Button variant="outline" className="min-h-10" disabled={!instructions}>
+          <Button variant="outline" disabled={!instructions}>
             Connect via SSH
           </Button>
         </DialogTrigger>
-        <DialogContent className="w-[calc(100%_-_2rem)] gap-5 overflow-hidden p-0 pt-6 text-sm leading-6 sm:max-w-2xl">
+        <DialogContent className="w-[calc(100%_-_2rem)] gap-5 overflow-hidden p-0 pt-6 text-body leading-6 sm:max-w-2xl">
           <DialogHeader className="shrink-0 px-6 pr-12">
             <DialogTitle>{confirmSetup ? 'Reset SSH configuration?' : 'Connect via SSH'}</DialogTitle>
             <DialogDescription className="sr-only">Connect from your local terminal.</DialogDescription>
@@ -602,7 +603,7 @@ function SshControls({
                         <p className="mt-2 text-muted-foreground">Run from the folder containing your key.</p>
                       )}
                       {status.host_key_fingerprint && (
-                        <details className="mt-3 text-xs text-muted-foreground">
+                        <details className="mt-3 text-meta text-muted-foreground">
                           <summary className="cursor-pointer">Host fingerprint</summary>
                           <p className="mt-2 break-all">{status.host_key_fingerprint}</p>
                         </details>
@@ -651,7 +652,7 @@ function SshStep({
         {number}
       </span>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="font-display text-base font-semibold">{title}</h3>
+        <h3 className="font-display text-em font-semibold">{title}</h3>
         {action}
       </div>
       {children}
@@ -670,7 +671,7 @@ function SshCommand({ command }: { command: string }) {
           {result === 'copied' ? 'Copied' : result === 'failed' ? 'Copy failed — retry' : 'Copy'}
         </button>
       </div>
-      <pre className="whitespace-pre-wrap break-all p-3 text-xs leading-6">{command}</pre>
+      <pre className="whitespace-pre-wrap break-all p-3 text-meta leading-6">{command}</pre>
     </div>
   )
 }

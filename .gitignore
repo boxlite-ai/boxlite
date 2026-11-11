@@ -254,3 +254,6 @@ target/
 .omc/
 .omx/
 .workbuddy/
+
+# Local API-owned Listener executable
+/apps/bin/ci-listener

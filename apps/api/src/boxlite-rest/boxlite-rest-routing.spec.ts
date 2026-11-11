@@ -8,6 +8,7 @@ import { PATH_METADATA } from '@nestjs/common/constants'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Reflector } from '@nestjs/core'
+import { ConfigService } from '@nestjs/config'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
@@ -16,6 +17,7 @@ import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { DomainService } from '../box/services/domain.service'
@@ -58,6 +60,10 @@ describe('BoxLite REST routing', () => {
       [BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
       [
         {
+          provide: ConfigService,
+          useValue: new ConfigService({ checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true } }),
+        },
+        {
           provide: BoxService,
           useValue: {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
@@ -72,6 +78,10 @@ describe('BoxLite REST routing', () => {
         },
         {
           provide: CommerceBoxLimitService,
+          useValue: {},
+        },
+        {
+          provide: CheckpointRecoverService,
           useValue: {},
         },
       ],
@@ -288,6 +298,7 @@ describe('BoxLite REST routing', () => {
     const body = await response.json()
 
     expect(body.capabilities.inbound_update_enabled).toBe(true)
+    expect(body.capabilities.checkpoints_enabled).toBe(true)
     expect(body.capabilities.exec_user_enabled).toBe(true)
   })
 

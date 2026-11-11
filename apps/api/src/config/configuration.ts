@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { turnstileConfig } from './turnstile-config'
+import { checkpointConfig } from './checkpoint-config'
+
 /**
  * A whole number at least 1, or a hard failure.
  *
@@ -436,7 +439,20 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
   return { appDomain, appHost, platformSubdomainMinLength }
 }
 
+function ciWorkerResources() {
+  const cpus = Number(process.env.CI_WORKER_CPUS ?? '2')
+  const memoryGB = Number(process.env.CI_WORKER_MEMORY_GB ?? '2')
+  const memoryMiB = memoryGB * 1024
+  if (!Number.isInteger(cpus) || cpus < 1 || cpus > 16)
+    throw new Error('CI_WORKER_CPUS must be an integer between 1 and 16')
+  if (!Number.isInteger(memoryMiB) || memoryMiB < 128 || memoryMiB > 131072)
+    throw new Error('CI_WORKER_MEMORY_GB must convert to whole MiB between 128 MiB and 128 GiB')
+  return { workerCPUs: cpus, workerMemoryGB: memoryGB }
+}
+
 const configuration = {
+  turnstile: turnstileConfig(),
+  checkpoint: checkpointConfig(),
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,
@@ -766,6 +782,24 @@ const configuration = {
     // a backstop for a lost job-completion callback, not a fast path: raise it
     // if legitimate startups ever get closed out ahead of their own callback.
     startConfirmationStallSeconds: parseInt(process.env.BOX_SYNC_START_CONFIRMATION_STALL_SECONDS || '60', 10),
+  },
+  ci: {
+    workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
+    workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
+    ...ciWorkerResources(),
+    githubOAuthClientId: process.env.CI_GITHUB_OAUTH_CLIENT_ID,
+    githubOAuthClientSecret: process.env.CI_GITHUB_OAUTH_CLIENT_SECRET,
+    githubWebhookSecret: process.env.CI_GITHUB_WEBHOOK_SECRET,
+    githubClientId: process.env.CI_GITHUB_APP_CLIENT_ID,
+    githubClientSecret: process.env.CI_GITHUB_APP_CLIENT_SECRET,
+    githubAppSlug: process.env.CI_GITHUB_APP_SLUG,
+    githubPrivateKey: process.env.CI_GITHUB_APP_PRIVATE_KEY,
+    githubOrgClientId: process.env.CI_GITHUB_ORG_APP_CLIENT_ID,
+    githubOrgClientSecret: process.env.CI_GITHUB_ORG_APP_CLIENT_SECRET,
+    githubOrgAppSlug: process.env.CI_GITHUB_ORG_APP_SLUG,
+    githubOrgPrivateKey: process.env.CI_GITHUB_ORG_APP_PRIVATE_KEY,
+    githubOrgWebhookSecret: process.env.CI_GITHUB_ORG_WEBHOOK_SECRET,
+    secretEncryptionKey: process.env.CI_SECRET_ENCRYPTION_KEY,
   },
   encryption: {
     key: process.env.ENCRYPTION_KEY,

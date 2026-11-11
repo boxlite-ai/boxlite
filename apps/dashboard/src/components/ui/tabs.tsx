@@ -51,7 +51,7 @@ const SEGMENTED_TRIGGER = [
   // shared ones collapse into single rules. That is what lets the active
   // segment brighten its *whole* outline; with a `border-r` divider it could
   // only ever recolour one side, which does not read as an enclosure.
-  '-ml-px h-full gap-1.5 rounded-none border border-border px-5 text-xs first:ml-0',
+  '-ml-px h-full gap-1.5 rounded-none border border-border px-5 text-meta first:ml-0',
   'text-muted-foreground hover:text-foreground',
   // `relative z-10` so the brightened outline wins the collapse against its
   // neighbours instead of being half-covered by them.
@@ -95,10 +95,10 @@ function TabsTrigger({ className, ...props }: React.ComponentProps<typeof TabsPr
       data-slot="tabs-trigger"
       className={cn(
         variant === 'underline'
-          ? `${TRIGGER_BASE} rounded-none border-b-2 border-transparent px-4 py-2.5 text-sm data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none`
+          ? `${TRIGGER_BASE} rounded-none border-b-2 border-transparent px-4 py-2.5 text-body data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none`
           : variant === 'segmented'
             ? SEGMENTED_TRIGGER
-            : `${TRIGGER_BASE} px-3 text-sm data-[state=active]:bg-card data-[state=active]:text-foreground`,
+            : `${TRIGGER_BASE} px-3 text-body data-[state=active]:bg-card data-[state=active]:text-foreground`,
         className,
       )}
       {...props}

@@ -25,7 +25,7 @@ function AttemptStatusBadge({ status }: { status: number }) {
 
 function TriggerTypeBadge({ triggerType }: { triggerType: number }) {
   return (
-    <Badge variant="outline" className="font-normal text-xs">
+    <Badge variant="outline" className="font-normal text-meta">
       {triggerType === 1 ? 'Manual' : 'Scheduled'}
     </Badge>
   )
@@ -42,7 +42,7 @@ function AttemptExpandedRow({ attempt }: { attempt: MessageAttemptOut }) {
 
   return (
     <div className="flex flex-col gap-3 px-3 py-3">
-      <div className="flex flex-col gap-2 text-sm">
+      <div className="flex flex-col gap-2 text-body">
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">Status Code</span>
           {!attempt.responseStatusCode ? (
@@ -76,10 +76,10 @@ function AttemptExpandedRow({ attempt }: { attempt: MessageAttemptOut }) {
 
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-sm text-muted-foreground">Response Body</span>
+          <span className="text-body text-muted-foreground">Response Body</span>
           <CopyButton value={attempt.response || ''} size="icon-xs" tooltipText="Copy Response" />
         </div>
-        <pre className="text-xs font-mono bg-muted/80 p-2.5 rounded-md overflow-auto whitespace-pre-wrap break-all max-h-[200px]">
+        <pre className="text-meta font-mono bg-muted/80 p-2.5 rounded-md overflow-auto whitespace-pre-wrap break-all max-h-[200px]">
           {responseBody}
         </pre>
       </div>
@@ -138,7 +138,7 @@ export function MessageAttemptsTable({ messageId, reloadKey }: { messageId: stri
 
   const header = (
     <div className="flex items-center gap-2 mb-3">
-      <span className="text-base font-medium">Delivery Attempts</span>
+      <span className="text-em font-medium">Delivery Attempts</span>
       <AnimatePresence>
         {countdown !== null && (
           <motion.span
@@ -147,7 +147,7 @@ export function MessageAttemptsTable({ messageId, reloadKey }: { messageId: stri
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -10, opacity: 0 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground"
+            className="flex items-center gap-1.5 text-meta text-muted-foreground"
           >
             <LoaderCircle className="size-3 animate-spin" />
             Reloading in {countdown}...
@@ -174,7 +174,7 @@ export function MessageAttemptsTable({ messageId, reloadKey }: { messageId: stri
     return (
       <div>
         {header}
-        <div className="text-sm text-muted-foreground">Failed to load message attempts.</div>
+        <div className="text-body text-muted-foreground">Failed to load message attempts.</div>
       </div>
     )
   }
@@ -185,7 +185,7 @@ export function MessageAttemptsTable({ messageId, reloadKey }: { messageId: stri
     return (
       <div>
         {header}
-        <div className="text-sm text-muted-foreground">No delivery attempts yet.</div>
+        <div className="text-body text-muted-foreground">No delivery attempts yet.</div>
       </div>
     )
   }
@@ -221,7 +221,7 @@ export function MessageAttemptsTable({ messageId, reloadKey }: { messageId: stri
                       <AttemptStatusBadge status={attempt.status} />
                     </TableCell>
                     <TableCell className="px-3">
-                      <span className="text-sm font-mono truncate block max-w-[200px]">{attempt.url}</span>
+                      <span className="text-body font-mono truncate block max-w-[200px]">{attempt.url}</span>
                     </TableCell>
                     <TableCell className="px-3">
                       <TimestampTooltip
@@ -231,7 +231,7 @@ export function MessageAttemptsTable({ messageId, reloadKey }: { messageId: stri
                             : String(attempt.timestamp)
                         }
                       >
-                        <span className="text-sm cursor-default">{relativeTimeString}</span>
+                        <span className="text-body cursor-default">{relativeTimeString}</span>
                       </TimestampTooltip>
                     </TableCell>
                   </TableRow>

@@ -64,6 +64,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     }
     const organizationService = {
       findOne: jest.fn(async () => ({ boxMetadata: {} })),
+      isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
     }
 
     const action = new BoxStartAction(
@@ -71,7 +72,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       runnerAdapterFactory as any,
       boxRepository as any,
       organizationService as any,
-      {} as any, // configService
+      { getOrThrow: () => 1 } as any, // configService
       redisLockProvider as any,
       {} as any, // boxActivityService
       {} as any, // curatedImagePins
@@ -108,14 +109,17 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       }),
     }
     const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
-    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
+    const organizationService = {
+      findOne: jest.fn(async () => ({ boxMetadata: {} })),
+      isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+    }
 
     const action = new BoxStartAction(
       runnerService as any,
       runnerAdapterFactory as any,
       boxRepository as any,
       organizationService as any,
-      {} as any,
+      { getOrThrow: () => 1 } as any,
       redisLockProvider as any,
       {} as any,
       {} as any,
@@ -156,14 +160,17 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       }),
     }
     const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
-    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
+    const organizationService = {
+      findOne: jest.fn(async () => ({ boxMetadata: {} })),
+      isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+    }
 
     const action = new BoxStartAction(
       runnerService as any,
       runnerAdapterFactory as any,
       boxRepository as any,
       organizationService as any,
-      {} as any,
+      { getOrThrow: () => 1 } as any,
       redisLockProvider as any,
       {} as any,
       {} as any,
@@ -171,7 +178,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
 
     const result = await (action as BoxAction).run(box, lockCode)
 
-    expect(createBox).toHaveBeenCalledWith(box, 'boxlite/base', expect.any(Object))
+    expect(createBox).toHaveBeenCalledWith(box, 'boxlite/base', expect.any(Object), false)
     expect(result).toBe(SYNC_AGAIN)
     expect(updatedFields.some((u) => u.state === BoxState.CREATING)).toBe(true)
   })
@@ -200,14 +207,17 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       }),
     }
     const redisLockProvider = { getCode: jest.fn(async () => lockCode) }
-    const organizationService = { findOne: jest.fn(async () => ({ boxMetadata: {} })) }
+    const organizationService = {
+      findOne: jest.fn(async () => ({ boxMetadata: {} })),
+      isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+    }
 
     const action = new BoxStartAction(
       runnerService as any,
       runnerAdapterFactory as any,
       boxRepository as any,
       organizationService as any,
-      {} as any,
+      { getOrThrow: () => 1 } as any,
       redisLockProvider as any,
       {} as any,
       {} as any,
@@ -239,8 +249,11 @@ describe('BoxStartAction image dispatch', () => {
       { findOneOrFail: jest.fn(async () => ({ id: 'runner-1', state: RunnerState.READY })) } as any,
       { create: jest.fn(async () => ({ createBox })) } as any,
       { update: jest.fn(async () => box) } as any,
-      { findOne: jest.fn(async () => ({ boxMetadata: {} })) } as any,
-      {} as any,
+      {
+        findOne: jest.fn(async () => ({ boxMetadata: {} })),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      } as any,
+      { getOrThrow: () => 1 } as any,
       { getCode: jest.fn(async () => lockCode) } as any,
       {} as any,
       curatedImagePins as any,
@@ -258,7 +271,7 @@ describe('BoxStartAction image dispatch', () => {
     const { box, createBox, curatedImagePins } = await dispatch(CURATED, false)
 
     expect(curatedImagePins.refFor).toHaveBeenCalledWith('runner-1', CURATED)
-    expect(createBox).toHaveBeenCalledWith(box, PINNED, expect.any(Object))
+    expect(createBox).toHaveBeenCalledWith(box, PINNED, expect.any(Object), false)
     expect(box.image).toBe(CURATED)
   })
 
@@ -266,6 +279,6 @@ describe('BoxStartAction image dispatch', () => {
     const { box, createBox, curatedImagePins } = await dispatch('quay.io/acme/app:v1', true)
 
     expect(curatedImagePins.refFor).not.toHaveBeenCalled()
-    expect(createBox).toHaveBeenCalledWith(box, 'quay.io/acme/app:v1', expect.any(Object))
+    expect(createBox).toHaveBeenCalledWith(box, 'quay.io/acme/app:v1', expect.any(Object), false)
   })
 })

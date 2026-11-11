@@ -1639,6 +1639,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn partial_report_handles_single_files_and_invalid_archives() {
+        let tmp = TempDir::new().unwrap();
+        let archive = tmp.path().join("file.tar");
+        create_single_file_tar(&archive, "source", b"payload");
+        let destination = tmp.path().join("file");
+        let (report, result) =
+            unpack_with_report(archive.clone(), destination.clone(), uc(true, true, false)).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"payload");
+        assert_eq!(report.entry_paths, vec![PathBuf::from("source")]);
+        let missing = tmp.path().join("missing.tar");
+        for force_directory in [false, true] {
+            let (report, result) = unpack_with_report(
+                missing.clone(),
+                destination.clone(),
+                uc(true, true, force_directory),
+            )
+            .await;
+            assert!(result.is_err());
+            assert!(report.entry_paths.is_empty());
+        }
+        let bytes = std::fs::read(archive).unwrap();
+        let stream = futures::stream::iter([
+            Ok(bytes),
+            Err(io::Error::other("terminal producer failure")),
+        ]);
+        let (report, result) =
+            unpack_stream_with_report(Box::pin(stream), destination.clone(), uc(true, true, false))
+                .await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("terminal producer failure"));
+        assert_eq!(report.entry_paths, vec![PathBuf::from("source")]);
+        assert_eq!(std::fs::read(destination).unwrap(), b"payload");
+    }
+
+    #[tokio::test]
     async fn partial_report_retains_progress_and_error() {
         for streamed in [false, true] {
             let tmp = TempDir::new().unwrap();

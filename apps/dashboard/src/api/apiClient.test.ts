@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
@@ -75,6 +75,7 @@ async function makeClient(
   status = 401,
   body: unknown = {},
   requests: any[] = [],
+  headers: Record<string, string> = {},
 ) {
   vi.resetModules()
   const axios = (await import('axios')).default
@@ -83,7 +84,13 @@ async function makeClient(
   // AxiosError carrying `.response`, exactly like the built-in adapters.
   axios.defaults.adapter = (async (cfg: unknown) => {
     requests.push(cfg)
-    const response = { data: body, status, statusText: '', headers: {}, config: cfg }
+    const response = {
+      data: typeof body === 'function' ? body(cfg) : body,
+      status,
+      statusText: '',
+      headers,
+      config: cfg,
+    }
     if (status >= 200 && status < 300) return response
     const err = new Error(`Request failed with status code ${status}`) as Error & Record<string, unknown>
     err.response = response
@@ -95,12 +102,196 @@ async function makeClient(
   return new ApiClient(config, 'tok', onUnauthorized)
 }
 
+describe('ApiClient registration deadline', () => {
+  let api: import('./apiClient').ApiClient
+  let send: ReturnType<typeof vi.fn<import('axios').AxiosAdapter>>
+  const onUnauthorized = vi.fn()
+
+  beforeAll(async () => {
+    vi.resetModules()
+    const { default: axios, AxiosError } = await import('axios')
+    send = vi.fn<import('axios').AxiosAdapter>(
+      (request) =>
+        new Promise<never>((_resolve, reject) => {
+          if (request.timeout) {
+            setTimeout(
+              () => reject(new AxiosError(`timeout of ${request.timeout}ms exceeded`, 'ECONNABORTED', request)),
+              request.timeout,
+            )
+          }
+        }),
+    )
+    axios.defaults.adapter = send
+    const { ApiClient } = await import('./apiClient')
+    api = new ApiClient(config, 'tok', onUnauthorized)
+  })
+
+  it('ends a stalled registration after 30 seconds without resending it or restarting authentication', async () => {
+    vi.useFakeTimers()
+    try {
+      const rejected = vi.fn()
+      void api.register('challenge-token').catch(rejected)
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(rejected).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ message: 'Operation timed out' }))
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(onUnauthorized).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('ApiClient registration', () => {
+  it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {
+    const user = { id: 'auth0|new-user', name: 'User' }
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), status, user, requests)
+    api.setAccessToken('renewed-token')
+    await expect(api.register('challenge-token')).resolves.toEqual(user)
+    expect(requests[0]).toMatchObject({
+      method: 'post',
+      url: '/auth/register',
+      baseURL: 'http://api.test/api',
+      data: JSON.stringify({ turnstileToken: 'challenge-token' }),
+      headers: { Authorization: 'Bearer renewed-token' },
+    })
+  })
+
+  it.each([
+    [403, 'registration_required'],
+    [400, 'turnstile_token_required'],
+    [400, 'turnstile_token_invalid'],
+    [403, 'turnstile_verification_failed'],
+    [503, 'turnstile_unavailable'],
+    [503, 'registration_rate_limit_unavailable'],
+  ])('preserves %i/%s without restarting authentication', async (status, code) => {
+    const onUnauthorized = vi.fn()
+    const api = await makeClient(onUnauthorized, Number(status), { code, message: 'Please retry' })
+    await expect(api.register('token')).rejects.toMatchObject({ code, message: 'Please retry' })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['42', 42],
+    ['0', undefined],
+    ['invalid', undefined],
+    ['1.5', undefined],
+  ])('preserves a valid Retry-After: %s', async (header, seconds) => {
+    const api = await makeClient(vi.fn(), 429, { code: 'registration_rate_limited' }, [], {
+      'retry-after': String(header),
+    })
+    await expect(api.register('token')).rejects.toMatchObject({
+      code: 'registration_rate_limited',
+      retryAfterSeconds: seconds,
+    })
+  })
+})
+
 describe('ApiClient 401 -> bounded re-login recovery', () => {
   beforeEach(() => {
     window.sessionStorage.clear()
   })
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+  it('CI methods use the explicitly supplied original organization, current token and REST paths', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { status: 'connected' }, requests)
+    api.setAccessToken('new-token')
+    await api.getCiRunners('original-org', 2, 25)
+    await api.deleteCiConnection('original-org', 'binding-id')
+    await api.getCiSettings('original-org')
+    await api.setCiCapacity('original-org', null)
+    await api.getCiConnectConfiguration('original-org')
+    await api.startCiConnect('original-org', {
+      account_type: 'User',
+      follow_installation: true,
+      allow_private_repositories: true,
+    })
+    await api.completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
+    expect(requests.map((request) => request.url)).toEqual([
+      '/v1/original-org/ci/runners',
+      '/v1/original-org/ci/connections/binding-id',
+      '/v1/original-org/ci/settings',
+      '/v1/original-org/ci/settings',
+      '/v1/original-org/ci/connect/configuration',
+      '/v1/original-org/ci/connect/web',
+      '/v1/original-org/ci/connect/attempt-id/complete',
+    ])
+    expect(requests[0].params).toEqual({ page: 2, limit: 25 })
+    expect(requests[1].method).toBe('delete')
+    expect(requests[1].data).toBeUndefined()
+    expect(requests.every((request) => request.headers.Authorization === 'Bearer new-token')).toBe(true)
+    expect(JSON.parse(requests[3].data)).toEqual({ max_concurrent_jobs: null })
+    expect(JSON.parse(requests[6].data)).toEqual({ code: 'private-code', state: 'private-state' })
+  })
+  it('adds a normalized literal runner name filter without changing the unfiltered request', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    await api.getCiRunners('org/one', 2, 25)
+    await api.getCiRunners('org/one', 1, 25, ' CI-JIT-% ')
+    expect(requests.map((request) => request.url)).toEqual(['/v1/org%2Fone/ci/runners', '/v1/org%2Fone/ci/runners'])
+    expect(requests[0].params).toEqual({ page: 2, limit: 25 })
+    expect(requests[1].params).toEqual({ page: 1, limit: 25, name: 'CI-JIT-%' })
+  })
+  it('scopes repository pages and account actions to the captured organization and encoded grant', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    const signal = new AbortController().signal
+    await api.getCiRepositories('org/one', { kind: 'binding', id: 'binding/id' }, 2, signal)
+    await api.getCiRepositories('org/one', { kind: 'grant', id: 'grant/id', account: 37 }, 1, signal)
+    await api.getCiConnect('org/one', 'grant/id')
+    await api.cancelCiConnect('org/one', 'grant/id')
+    await api.selectCiAccount('org/one', 'grant/id', 37, true)
+    await api.selectCiConnect('org/one', 'grant/id', 11)
+    await api.completeCiInstallation('org/one', 'grant/id', { installation_id: 11, state: 'private-state' })
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      { method: 'get', url: '/v1/org%2Fone/ci/connections/binding%2Fid/repositories' },
+      { method: 'get', url: '/v1/org%2Fone/ci/connect/grant%2Fid/accounts/37/repositories' },
+      { method: 'get', url: '/v1/org%2Fone/ci/connect/grant%2Fid' },
+      { method: 'delete', url: '/v1/org%2Fone/ci/connect/grant%2Fid' },
+      { method: 'post', url: '/v1/org%2Fone/ci/connect/grant%2Fid/accounts' },
+      { method: 'post', url: '/v1/org%2Fone/ci/connect/grant%2Fid/select' },
+      { method: 'post', url: '/v1/org%2Fone/ci/connect/grant%2Fid/installation' },
+    ])
+    expect(requests[0].params).toEqual({ page: 2, limit: 25 })
+    expect(requests[1].params).toEqual({ page: 1, limit: 25 })
+    expect(requests[0].signal).toBe(signal)
+    expect(requests[1].signal).toBe(signal)
+    expect(requests.every((request) => request.headers.Authorization === 'Bearer tok')).toBe(true)
+    expect(JSON.parse(requests[4].data)).toEqual({ account_id: 37, allow_private_repositories: true })
+    expect(JSON.parse(requests[5].data)).toEqual({ installation_id: 11 })
+    expect(JSON.parse(requests[6].data)).toEqual({ installation_id: 11, state: 'private-state' })
+  })
+  it('updates only a connection policy using its captured organization and encoded binding', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    api.setAccessToken('current-token')
+    await api.updateCiConnection('org/one', 'binding/id', false)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].url).toBe('/v1/org%2Fone/ci/connections/binding%2Fid')
+    expect(requests[0].method).toBe('patch')
+    expect(requests[0].headers.Authorization).toBe('Bearer current-token')
+    expect(JSON.parse(requests[0].data)).toEqual({ allow_private_repositories: false })
+  })
+  it('CI completion discards Axios request bodies from surfaced errors', async () => {
+    const api = await makeClient(vi.fn(), 403, { message: 'private-code private-token' })
+    const error = await api
+      .completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
+      .catch((error) => error)
+    expect(error.message).toBe('GitHub authorization could not be completed. Restart connect.')
+    expect(error.cause).toBeUndefined()
+  })
+  it('installation completion discards Axios state and response bodies from surfaced errors', async () => {
+    const api = await makeClient(vi.fn(), 403, { message: 'private-state private-token' })
+    const error = await api
+      .completeCiInstallation('org', 'grant', { installation_id: 11, state: 'private-state' })
+      .catch((error) => error)
+    expect(error.message).toBe('GitHub installation could not be verified. Restart connect.')
+    expect(error.config).toBeUndefined()
+    expect(error.cause).toBeUndefined()
   })
 
   it('first 401 triggers onUnauthorized once and suspends the caller (no error flash)', async () => {
@@ -191,6 +382,66 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(error).toBeInstanceOf(BoxliteError)
     expect((error as Error).message).toBe(refusal)
     expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+})
+
+describe('ApiClient checkpoints', () => {
+  it('discovers checkpoint capability using the authenticated REST client', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { capabilities: { checkpoints_enabled: true } }, requests)
+    await expect(api.getCheckpointCapabilities()).resolves.toEqual({ checkpoints_enabled: true })
+    expect(requests[0]).toMatchObject({ method: 'get', url: '/v1/config', headers: { Authorization: 'Bearer tok' } })
+  })
+  it('uses scoped authenticated requests and omits execution overrides and absent names', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { box_id: 'target' }, requests)
+    await api.createCheckpoint('org/one', 'source')
+    await api.createCheckpoint('org/one', 'source', 'base')
+    await api.createBoxFromCheckpoint('org/one', 'checkpoint')
+    await api.createBoxFromCheckpoint('org/one', 'checkpoint', 'worker')
+    await api.removeCheckpoint('org/one', 'base/name')
+    expect(
+      requests.map(({ method, url, data, headers }) => ({
+        method,
+        url,
+        data: data && JSON.parse(data),
+        auth: headers.Authorization,
+      })),
+    ).toEqual([
+      { method: 'post', url: '/v1/org%2Fone/checkpoints', data: { source_box_id: 'source' }, auth: 'Bearer tok' },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/checkpoints',
+        data: { source_box_id: 'source', name: 'base' },
+        auth: 'Bearer tok',
+      },
+      { method: 'post', url: '/v1/org%2Fone/boxes', data: { checkpoint_id: 'checkpoint' }, auth: 'Bearer tok' },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/boxes',
+        data: { checkpoint_id: 'checkpoint', name: 'worker' },
+        auth: 'Bearer tok',
+      },
+      { method: 'delete', url: '/v1/org%2Fone/checkpoints/base%2Fname', data: undefined, auth: 'Bearer tok' },
+    ])
+  })
+
+  it('reads every page and refuses repeated continuation tokens', async () => {
+    const requests: any[] = []
+    const api = await makeClient(
+      vi.fn(),
+      200,
+      (cfg: any) =>
+        cfg.params?.page_token
+          ? { checkpoints: [{ id: 'second' }] }
+          : { checkpoints: [{ id: 'first' }], next_page_token: 'next /+' },
+      requests,
+    )
+    await expect(api.listCheckpoints('org-1')).resolves.toEqual([{ id: 'first' }, { id: 'second' }])
+    expect(requests[0].params).toBeUndefined()
+    expect(requests[1].params).toEqual({ page_token: 'next /+' })
+    const looping = await makeClient(vi.fn(), 200, { checkpoints: [], next_page_token: 'same' })
+    await expect(looping.listCheckpoints('org-1')).rejects.toThrow('repeated a pagination token')
   })
 })
 

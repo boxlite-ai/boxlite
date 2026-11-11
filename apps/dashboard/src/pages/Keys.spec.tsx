@@ -54,7 +54,7 @@ describe('console member key defaults', () => {
       root = createRoot(host)
       root.render(<Keys />)
     })
-    await act(async () => document.querySelector<HTMLButtonElement>('button[title="Create Key"]')?.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="New API key"]')?.click())
     const name = document.querySelector<HTMLInputElement>('input[placeholder="Name"]')
     expect(name).toBeTruthy()
     await act(async () => {

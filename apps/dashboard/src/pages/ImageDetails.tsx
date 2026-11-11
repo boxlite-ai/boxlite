@@ -24,6 +24,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { usePinImageTagMutation, useUnpinImageTagMutation } from '@/hooks/mutations/useImageAliasMutations'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
 import { useImageQuery } from '@/hooks/queries/useImagesQuery'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { formatBytes, timeAgo } from '@/lib/format'
@@ -55,7 +56,7 @@ function Field({ label, value, title }: { label: string; value: React.ReactNode;
 
 function HeaderRow({ grid, children }: { grid: string; children: React.ReactNode }) {
   return (
-    <div className={cn(grid, 'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground')}>
+    <div className={cn(grid, 'border-b border-border pb-2 font-mono text-meta font-medium text-muted-foreground')}>
       {children}
     </div>
   )
@@ -78,6 +79,7 @@ const ImageDetails: React.FC = () => {
   const { idOrRef } = useParams<{ idOrRef: string }>()
   const { selectedOrganization, organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
   const { data: image, isLoading, error } = useImageQuery(idOrRef)
+  usePageTitle(image?.name ?? 'Image')
   const { byImage, truncated } = useBoxesByImageQuery()
   const pinTag = usePinImageTagMutation()
   const unpinTag = useUnpinImageTagMutation()
@@ -162,7 +164,7 @@ const ImageDetails: React.FC = () => {
               </AsciiButton>
               {canCreateBox && (
                 <AsciiButton variant="primary" onClick={() => setNewBoxImage(imageStartRef(image))}>
-                  New box
+                  New Box
                 </AsciiButton>
               )}
             </div>
@@ -491,10 +493,10 @@ function VersionRow({ image, version, onUse }: { image: ImageDetail; version: Im
           <button
             type="button"
             onClick={onUse}
-            title="New box pinned to this digest"
-            className="px-2 py-[3px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-foreground"
+            title="New Box pinned to this digest"
+            className="inline-flex h-7 items-center border border-border px-2.5 font-mono text-meta text-foreground transition-colors hover:border-brand"
           >
-            New box
+            New Box
           </button>
         )}
       </div>

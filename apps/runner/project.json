@@ -18,7 +18,12 @@
         "^goProduction",
         { "env": "VERSION" },
         { "dependentTasksOutputFiles": "**/*", "transitive": true }
-      ]
+      ],
+      "configurations": {
+        "development": {
+          "flags": ["-tags=boxlite_dev", "-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
+        }
+      }
     },
     "build-amd64": {
       "executor": "@nx-go/nx-go:build",
@@ -56,7 +61,11 @@
       }
     },
     "test": {
-      "executor": "@nx-go/nx-go:test"
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "go test -tags boxlite_dev ./..."
+      }
     },
     "lint": {
       "executor": "@nx-go/nx-go:lint"

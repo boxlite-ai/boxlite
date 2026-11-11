@@ -27,9 +27,11 @@ import {
   BookOpen,
   Building2,
   Container,
+  Database,
   Layers,
   HardDrive,
   Globe,
+  Github,
   CreditCardIcon,
   Check,
   ChevronDown,
@@ -40,12 +42,13 @@ import {
   MoonIcon,
   MoreHorizontal,
   PanelLeft,
+  Play,
   Settings,
   Server,
   SunIcon,
 } from '@/components/ui/icon'
 import { usePostHog } from 'posthog-js/react'
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
@@ -86,7 +89,32 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
     icon: <HardDrive className="size-[18px] shrink-0" aria-hidden="true" />,
     path: RoutePath.VOLUMES,
   },
+  {
+    label: 'Checkpoints',
+    icon: <Database className="size-[18px] shrink-0" aria-hidden="true" />,
+    path: RoutePath.CHECKPOINTS,
+  },
   { label: 'Domains', icon: <Globe className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.DOMAINS },
+]
+
+const APPLICATION_NAV_ITEMS: NavItem[] = [
+  {
+    label: 'CI',
+    icon: <Play className="size-[18px] shrink-0" aria-hidden="true" />,
+    path: RoutePath.CI,
+    children: [
+      { label: 'Runners', path: RoutePath.CI, icon: <Container className="size-3.5 shrink-0" aria-hidden="true" /> },
+      {
+        label: 'Connects',
+        path: RoutePath.CI_CONNECTS,
+        icon: <Github className="size-3.5 shrink-0" aria-hidden="true" />,
+      },
+    ],
+  },
+]
+const NAV_SECTIONS = [
+  { label: 'Infrastructure', items: PRIMARY_NAV_ITEMS },
+  { label: 'Applications', items: APPLICATION_NAV_ITEMS },
 ]
 
 const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] = [
@@ -99,23 +127,26 @@ const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] 
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
     <div className="px-2 py-2">
-      <div className="px-1 pb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
+      <div className="px-1 pb-2 font-mono text-meta uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
       <ToggleGroup
         type="single"
         value={theme}
         onValueChange={(value) => {
           if (value) setTheme(value as Theme)
         }}
-        variant="outline"
         size="sm"
-        className="grid w-full grid-cols-3 gap-0 border border-border"
+        className="grid w-full grid-cols-3 gap-0"
       >
         {themeOptions.map((option) => (
           <ToggleGroupItem
             key={option.value}
             value={option.value}
             aria-label={`Use ${option.label.toLowerCase()} theme`}
-            className="h-9 justify-center gap-1.5 rounded-none border-0 border-r border-border text-xs text-muted-foreground transition-colors last:border-r-0 hover:text-foreground data-[state=on]:bg-card data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_0_0_1px_hsl(var(--border-selected))]"
+            // Every segment carries all four edges and overlaps its left neighbour by a
+            // pixel, so shared edges collapse into one line (same idea as the segmented
+            // tabs). Selection is a soft raised fill and a bold label, not a brighter
+            // outline: inside a small menu an outlined segment reads as a heavy box.
+            className="-ml-px h-9 justify-center gap-1.5 rounded-none border border-border text-meta text-muted-foreground transition-colors first:ml-0 hover:bg-accent/50 hover:text-foreground data-[state=on]:bg-accent data-[state=on]:font-semibold data-[state=on]:text-foreground"
           >
             {option.icon}
             <span>{option.label}</span>
@@ -201,7 +232,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     }
   }, [expanded])
   useEffect(() => {
-    const activeGroup = PRIMARY_NAV_ITEMS.find(
+    const activeGroup = [...PRIMARY_NAV_ITEMS, ...APPLICATION_NAV_ITEMS].find(
       (item) => item.children && (pathname === item.path || pathname.startsWith(`${item.path}/`)),
     )
     if (activeGroup)
@@ -211,8 +242,6 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   }, [pathname])
   const { selectedOrganization, onSelectOrganization } = useSelectedOrganization()
   const { organizations } = useOrganizations()
-
-  const primaryItems: NavItem[] = PRIMARY_NAV_ITEMS
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -286,7 +315,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
       <aside
         aria-label="Feature navigation"
         style={{ '--navigation-width': expanded ? '224px' : '64px' } as CSSProperties}
-        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-mono text-[13px] md:block"
+        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-mono text-body md:block"
       >
         <div
           ref={panelRef}
@@ -359,94 +388,101 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             aria-label="Primary"
             className="hidden min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto overflow-x-hidden px-2 py-4 md:flex"
           >
-            <div role="group" aria-label="Infrastructure" className="flex w-full shrink-0 flex-col items-center gap-2">
-              {showLabels && (
-                <div className="w-full px-3 pb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                  Infrastructure
-                </div>
-              )}
-              {primaryItems.map((item) => {
-                const groupOpen = openGroups.includes(item.path)
-                const expandedGroup = showLabels && Boolean(item.children)
-                const selected = isActive(item.path) && !(expandedGroup && groupOpen)
-                const currentChild = item.children?.filter((child) => isActive(child.path)).at(-1)
-                return (
-                  <div key={item.path} className={cn('shrink-0', showLabels && 'w-full')}>
-                    <div
-                      className={cn(
-                        'flex items-center',
-                        expandedGroup && 'hover:bg-card',
-                        expandedGroup && selected && 'bg-accent hover:bg-accent',
-                      )}
-                    >
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Link
-                            to={item.path}
-                            onClick={() => {
-                              if (!showLabels && item.children) setExpanded(true)
-                            }}
-                            aria-current={
-                              isActive(item.path) && !(showLabels && item.children && groupOpen) ? 'page' : undefined
-                            }
-                            className={cn(
-                              railItemClass(selected && !expandedGroup),
-                              expandedGroup && 'hover:bg-transparent',
-                              isActive(item.path) && 'text-foreground',
-                            )}
-                          >
-                            {item.icon}
-                            <span className={showLabels ? 'truncate' : 'sr-only'}>{item.label}</span>
-                          </Link>
-                        </TooltipTrigger>
-                        {!showLabels && (
-                          <TooltipContent side="right" sideOffset={12}>
-                            {item.label}
-                          </TooltipContent>
+            {NAV_SECTIONS.map((section) => (
+              <div
+                key={section.label}
+                role="group"
+                aria-label={section.label}
+                className="flex w-full shrink-0 flex-col items-center gap-2"
+              >
+                {showLabels && (
+                  <div className="w-full px-3 pb-1 text-label uppercase tracking-[0.12em] text-muted-foreground">
+                    {section.label}
+                  </div>
+                )}
+                {section.items.map((item) => {
+                  const groupOpen = openGroups.includes(item.path)
+                  const expandedGroup = showLabels && Boolean(item.children)
+                  const selected = isActive(item.path) && !(expandedGroup && groupOpen)
+                  const currentChild = item.children?.filter((child) => isActive(child.path)).at(-1)
+                  return (
+                    <div key={item.path} className={cn('shrink-0', showLabels && 'w-full')}>
+                      <div
+                        className={cn(
+                          'flex items-center',
+                          expandedGroup && 'hover:bg-card',
+                          expandedGroup && selected && 'bg-accent hover:bg-accent',
                         )}
-                      </Tooltip>
+                      >
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Link
+                              to={item.path}
+                              onClick={() => {
+                                if (!showLabels && item.children) setExpanded(true)
+                              }}
+                              aria-current={
+                                isActive(item.path) && !(showLabels && item.children && groupOpen) ? 'page' : undefined
+                              }
+                              className={cn(
+                                railItemClass(selected && !expandedGroup),
+                                expandedGroup && 'hover:bg-transparent',
+                                isActive(item.path) && 'text-foreground',
+                              )}
+                            >
+                              {item.icon}
+                              <span className={showLabels ? 'truncate' : 'sr-only'}>{item.label}</span>
+                            </Link>
+                          </TooltipTrigger>
+                          {!showLabels && (
+                            <TooltipContent side="right" sideOffset={12}>
+                              {item.label}
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                        {showLabels && item.children && (
+                          <button
+                            type="button"
+                            aria-label={`Toggle ${item.label} navigation`}
+                            aria-expanded={groupOpen}
+                            aria-controls={`${item.label.toLowerCase()}-navigation`}
+                            onClick={() =>
+                              setOpenGroups((groups) =>
+                                groupOpen ? groups.filter((path) => path !== item.path) : [...groups, item.path],
+                              )
+                            }
+                            className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                          >
+                            <ChevronDown
+                              className={cn('size-3.5 transition-transform', !groupOpen && '-rotate-90')}
+                              aria-hidden="true"
+                            />
+                          </button>
+                        )}
+                      </div>
                       {showLabels && item.children && (
-                        <button
-                          type="button"
-                          aria-label={`Toggle ${item.label} navigation`}
-                          aria-expanded={groupOpen}
-                          aria-controls={`${item.label.toLowerCase()}-navigation`}
-                          onClick={() =>
-                            setOpenGroups((groups) =>
-                              groupOpen ? groups.filter((path) => path !== item.path) : [...groups, item.path],
-                            )
-                          }
-                          className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-                        >
-                          <ChevronDown
-                            className={cn('size-3.5 transition-transform', !groupOpen && '-rotate-90')}
-                            aria-hidden="true"
-                          />
-                        </button>
+                        <div id={`${item.label.toLowerCase()}-navigation`} hidden={!groupOpen} className="mt-1">
+                          {item.children.map((child) => (
+                            <Link
+                              key={child.path}
+                              to={child.path}
+                              aria-current={currentChild === child ? 'page' : undefined}
+                              className={cn(
+                                'flex min-h-9 items-center gap-2 pl-7 pr-2 text-meta text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                                currentChild === child && 'bg-accent text-foreground hover:bg-accent',
+                              )}
+                            >
+                              {child.icon}
+                              <span className="truncate">{child.label}</span>
+                            </Link>
+                          ))}
+                        </div>
                       )}
                     </div>
-                    {showLabels && item.children && (
-                      <div id={`${item.label.toLowerCase()}-navigation`} hidden={!groupOpen} className="mt-1">
-                        {item.children.map((child) => (
-                          <Link
-                            key={child.path}
-                            to={child.path}
-                            aria-current={currentChild === child ? 'page' : undefined}
-                            className={cn(
-                              'flex min-h-9 items-center gap-2 pl-7 pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
-                              currentChild === child && 'bg-accent text-foreground hover:bg-accent',
-                            )}
-                          >
-                            {child.icon}
-                            <span className="truncate">{child.label}</span>
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+                  )
+                })}
+              </div>
+            ))}
             <div className="my-1 h-px w-full shrink-0 bg-border" />
             <div className={cn('shrink-0', showLabels && 'w-full')}>
               <Tooltip>
@@ -501,7 +537,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                     to={item.path}
                     aria-current={isActive(item.path) ? 'page' : undefined}
                     className={cn(
-                      'flex min-h-9 items-center gap-2 pl-7 pr-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
+                      'flex min-h-9 items-center gap-2 pl-7 pr-2 text-meta text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
                       isActive(item.path) && 'bg-accent text-foreground hover:bg-accent',
                     )}
                   >
@@ -539,13 +575,13 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
         <header
           aria-label="Application navigation"
           className={cn(
-            'sticky z-40 flex h-[var(--app-header-height,60px)] w-full shrink-0 items-center border-b border-border bg-background font-mono text-[13px]',
+            'sticky z-40 flex h-[var(--app-header-height,60px)] w-full shrink-0 items-center border-b border-border bg-background font-mono text-body',
             isBannerVisible ? 'top-16 md:top-12' : 'top-0',
           )}
         >
           <Link
             to={RoutePath.BOXES}
-            className="flex h-full shrink-0 items-center md:hidden px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+            className="flex h-full shrink-0 items-center md:hidden px-2 xs:px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
             aria-label="BoxLite home"
           >
             <LogoText className="h-9 w-auto" />
@@ -572,9 +608,9 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             <DropdownMenuTrigger
               aria-label="Open profile menu"
               title="Profile"
-              className="mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-[13px] font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              className="mr-0 xs:mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
             >
-              <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
+              <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-meta font-bold text-brand-foreground">
                 {user?.profile.picture ? (
                   <img src={user.profile.picture} alt={userName} className="h-full w-full object-cover" />
                 ) : (
@@ -584,11 +620,17 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               <span className="hidden min-w-0 truncate md:inline">{userName}</span>
               <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="bottom" align="end" sideOffset={8} className="min-w-[18rem]">
+            <DropdownMenuContent
+              side="bottom"
+              align="end"
+              sideOffset={8}
+              collisionPadding={8}
+              className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[min(18rem,calc(100vw_-_1rem))] max-w-[calc(100vw_-_1rem)] overflow-y-auto"
+            >
               <DropdownMenuLabel className="flex flex-col gap-0.5">
-                <span className="truncate text-[13px] font-semibold text-foreground">{userName}</span>
+                <span className="truncate text-body font-semibold text-foreground">{userName}</span>
                 {user?.profile.email && user.profile.email !== userName && (
-                  <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">
+                  <span className="truncate font-mono text-meta font-normal text-muted-foreground">
                     {user.profile.email}
                   </span>
                 )}
@@ -599,7 +641,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               {/* The selection persists in localStorage, so the chosen organization opens on the next login. */}
               {organizations.length > 1 && (
                 <>
-                  <DropdownMenuLabel className="font-mono text-[11px] font-normal uppercase tracking-[0.18em] text-muted-foreground">
+                  <DropdownMenuLabel className="font-mono text-meta font-normal uppercase tracking-[0.18em] text-muted-foreground">
                     Organizations
                   </DropdownMenuLabel>
                   {organizations.map((organization) => {
@@ -615,7 +657,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                         <Check className={cn('size-4', isSelected ? 'opacity-100' : 'opacity-0')} />
                         <span className="truncate">{organization.name}</span>
                         {organization.isDefaultForAuthenticatedUser && (
-                          <span className="ml-auto text-[11px] text-muted-foreground">Personal</span>
+                          <span className="ml-auto text-meta text-muted-foreground">Personal</span>
                         )}
                       </DropdownMenuItem>
                     )
@@ -651,11 +693,25 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             >
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[14rem]">
-              {primaryItems.map((item) => (
-                <DropdownMenuItem key={item.label} asChild className="cursor-pointer">
-                  <Link to={item.path}>{item.label}</Link>
-                </DropdownMenuItem>
+            <DropdownMenuContent
+              align="end"
+              collisionPadding={8}
+              className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[14rem] overflow-y-auto"
+            >
+              {NAV_SECTIONS.map((section) => (
+                <div key={section.label}>
+                  <DropdownMenuLabel>{section.label}</DropdownMenuLabel>
+                  {section.items.map((item) => (
+                    <Fragment key={item.path}>
+                      {item.children && <DropdownMenuLabel>{item.label}</DropdownMenuLabel>}
+                      {(item.children ?? [item]).map((child) => (
+                        <DropdownMenuItem key={child.path} asChild className="cursor-pointer">
+                          <Link to={child.path}>{child.label}</Link>
+                        </DropdownMenuItem>
+                      ))}
+                    </Fragment>
+                  ))}
+                </div>
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Management</DropdownMenuLabel>

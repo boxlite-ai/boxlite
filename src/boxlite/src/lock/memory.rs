@@ -1,9 +1,9 @@
 //! In-memory lock manager for testing.
 //!
-//! This implementation uses atomic spinlocks and is NOT multiprocess-safe.
+//! This implementation uses atomic reader/writer spinlocks and is NOT multiprocess-safe.
 //! It should only be used for unit and integration testing.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use boxlite_shared::errors::BoxliteResult;
@@ -37,9 +37,12 @@ pub struct InMemoryLockManager {
 
 struct InMemoryLock {
     id: LockId,
-    locked: AtomicBool,
+    state: AtomicUsize,
     allocated: AtomicBool,
 }
+
+// All other states count readers; reserve this value for an exclusive writer.
+const WRITE_LOCKED: usize = usize::MAX;
 
 impl InMemoryLockManager {
     /// Create a new in-memory lock manager with the given number of locks.
@@ -54,7 +57,7 @@ impl InMemoryLockManager {
             .map(|i| {
                 Arc::new(InMemoryLock {
                     id: LockId(i),
-                    locked: AtomicBool::new(false),
+                    state: AtomicUsize::new(0),
                     allocated: AtomicBool::new(false),
                 })
             })
@@ -162,26 +165,46 @@ impl Locker for InMemoryLocker {
     }
 
     fn lock(&self) {
-        // Spin until we acquire the lock
-        while self
-            .lock
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
+        while !self.try_lock() {
             std::thread::yield_now();
         }
     }
 
     fn unlock(&self) {
-        self.lock.locked.store(false, Ordering::Release);
+        self.lock.state.store(0, Ordering::Release);
     }
 
     fn try_lock(&self) -> bool {
         self.lock
-            .locked
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .state
+            .compare_exchange(0, WRITE_LOCKED, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
+    }
+
+    fn read_lock(&self) {
+        while !self.try_read_lock() {
+            std::thread::yield_now();
+        }
+    }
+
+    fn read_unlock(&self) {
+        self.lock.state.fetch_sub(1, Ordering::Release);
+    }
+
+    fn try_read_lock(&self) -> bool {
+        let mut readers = self.lock.state.load(Ordering::Relaxed);
+        while readers < WRITE_LOCKED - 1 {
+            match self.lock.state.compare_exchange_weak(
+                readers,
+                readers + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(current) => readers = current,
+            }
+        }
+        false
     }
 }
 
@@ -190,6 +213,26 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::thread;
+
+    #[test]
+    fn test_reader_count_cannot_reach_writer_state() {
+        let manager = InMemoryLockManager::new(1);
+        let lock = manager.retrieve(LockId(0)).unwrap();
+        manager.locks[0]
+            .state
+            .store(WRITE_LOCKED - 2, Ordering::Relaxed);
+        assert!(lock.try_read_lock());
+        assert!(
+            !lock.try_read_lock(),
+            "reader count must not enter writer state"
+        );
+        assert!(!lock.try_lock());
+        lock.read_unlock();
+        assert_eq!(
+            manager.locks[0].state.load(Ordering::Relaxed),
+            WRITE_LOCKED - 2
+        );
+    }
 
     #[test]
     fn test_allocate_and_free() {

@@ -51,7 +51,8 @@ the conflict is returned; an untouched conflicting destination keeps its owner.
 Guest extraction rejects symlink ancestors, including ancestors omitted from
 archive headers. Protected copy-out resolves trusted host parents first, leaving
 the destination leaf protected. Missing host parents use filesystem resolution
-for `..` and symlinks; a trailing `/` requests a destination directory.
+for `..` and symlinks; a trailing `/` requests a destination directory. Host
+resolution runs on a blocking worker to keep filesystem I/O off the async executor.
 
 REST runtimes retain their refusal of protected copies when runner support cannot
 be established. This prevents older runners from silently replacing files.

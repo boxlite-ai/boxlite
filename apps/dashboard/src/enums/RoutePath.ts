@@ -24,6 +24,10 @@ export enum RoutePath {
   BILLING = '/dashboard/billing',
   PRICING = '/dashboard/pricing',
   IMAGES = '/dashboard/images',
+  CI = '/dashboard/ci',
+  CI_CONNECTS = '/dashboard/ci/connects',
+
+  CHECKPOINTS = '/dashboard/checkpoints',
   /** Registries live under Images, as they do in the API. The old top-level path redirects here. */
   IMAGE_REGISTRIES = '/dashboard/images/registries',
   REGISTRIES = '/dashboard/registries',

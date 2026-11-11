@@ -297,6 +297,25 @@ const VOLUME_SCOPES: &[CommandScope] = &[
     },
 ];
 const COMMAND_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "ci",
+        globals: VOLUME_GLOBALS,
+        children: &[CommandScope {
+            name: "connect",
+            globals: VOLUME_GLOBALS,
+            children: &[],
+        }],
+    },
+    box_command_scope(
+        "checkpoint",
+        &[
+            box_command_scope("create", &[]),
+            box_command_scope("list", &[]),
+            box_command_scope("get", &[]),
+            box_command_scope("delete", &[]),
+        ],
+    ),
+    box_command_scope("import", &[]),
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -533,6 +552,33 @@ where
     let command_path = selected_command_path(&matches);
     let scope = command_scope(&command_path).expect("parsed command must have a declared scope");
 
+    // Check presence before FromArgMatches or option normalization can erase
+    // explicit defaults. Global connection flags are independent of settings.
+    if let Some(("create", create)) = matches.subcommand()
+        && create.get_one::<String>("checkpoint").is_some()
+        && create.ids().any(|id| {
+            parser.find_subcommand("create").is_some_and(|command| {
+                command
+                    .get_arguments()
+                    .any(|argument| argument.get_id() == id)
+            }) && !matches!(id.as_str(), "checkpoint" | "name")
+                && !GlobalOption::ALL
+                    .iter()
+                    .any(|option| option.id() == id.as_str())
+                && create.value_source(id.as_str()) == Some(ValueSource::CommandLine)
+        })
+    {
+        let message = if ["image", "rootfs"]
+            .iter()
+            .any(|id| create.value_source(id) == Some(ValueSource::CommandLine))
+        {
+            "provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT"
+        } else {
+            "a box created from --checkpoint inherits its saved settings; only --name may accompany it"
+        };
+        return Err(parser.error(ErrorKind::ArgumentConflict, message));
+    }
+
     if let Some(option) = GlobalOption::ALL.iter().copied().find(|option| {
         !scope.allows(*option)
             && matches.value_source(option.id()) == Some(ValueSource::CommandLine)
@@ -718,6 +764,8 @@ fn normalize_empty_urls(cli: &mut Cli) {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Connect GitHub Actions to BoxLite.
+    Ci(crate::commands::ci::CiArgs),
     /// Manage the current local or remote target.
     Context(crate::contexts::ContextArgs),
     /// Run a command in a new box
@@ -734,6 +782,10 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
+    /// Manage disk checkpoints on the selected REST server.
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
+    /// Import a .boxlite archive into a new box.
+    Import(crate::commands::import::ImportArgs),
 
     /// List boxes
     #[command(visible_alias = "ls", visible_alias = "ps")]
@@ -1087,6 +1139,13 @@ impl GlobalFlags {
         }
     }
 
+    pub(crate) fn selected_rest_options(&self) -> anyhow::Result<Option<BoxliteRestOptions>> {
+        Ok(self.resolve_rest_options(
+            self.load_selected_profile()?,
+            std::env::var("BOXLITE_API_KEY").ok(),
+        ))
+    }
+
     fn load_selected_profile(&self) -> anyhow::Result<Option<crate::credentials::Profile>> {
         if let Some(selected) = &self.selected_context {
             return Ok(selected.profile.clone());
@@ -1270,7 +1329,7 @@ impl CapabilityFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ResourceFlags {
-    /// CPU allocation (0.01-16); fractional values require a Linux execution host
+    /// CPU allocation (0.125-16); fractional values require a Linux execution host
     #[arg(long, value_parser = clap::value_parser!(f64))]
     pub cpus: Option<f64>,
 
