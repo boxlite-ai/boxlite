@@ -99,7 +99,6 @@ fn cli(home: &TempDir, server: &Server) -> Command {
         .env_remove("BOXLITE_CONTEXT")
         .env_remove("BOXLITE_PROFILE")
         .env_remove("BOXLITE_REST_PATH_PREFIX")
-        .env_remove("BOXLITE_CHECKPOINTS_DIR")
         .env_remove("BOXLITE_SECURITY")
         .timeout(Duration::from_secs(15))
         .args(["--url", &server.url, "--path-prefix", "tenant"]);
@@ -372,7 +371,7 @@ async fn checkpoint_force_deletion_suppresses_absence_but_not_in_use_errors() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn checkpoint_local_directory_is_not_sent_to_the_rest_server() {
+async fn checkpoint_storage_flag_is_not_supported() {
     let home = TempDir::new().unwrap();
     let server = Server::start(|_| panic!("client directory must not be sent remotely")).await;
     cli(&home, &server)
@@ -384,6 +383,34 @@ async fn checkpoint_local_directory_is_not_sent_to_the_rest_server() {
         ])
         .assert()
         .failure()
-        .stderr(contains("--checkpoints-dir is local"));
+        .stderr(contains("unexpected argument '--checkpoints-dir'"));
     assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn checkpoint_commands_require_a_rest_context_without_initializing_a_local_runtime() {
+    let home = TempDir::new().unwrap();
+    for args in [
+        vec!["checkpoint", "list"],
+        vec!["checkpoint", "create", "source"],
+        vec!["import", "--checkpoint", "base", "--name", "worker"],
+        vec!["import", "--checkpoint", "base", "--box", "target"],
+    ] {
+        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .env("BOXLITE_HOME", home.path())
+            .env_remove("BOXLITE_REST_URL")
+            .env_remove("BOXLITE_API_KEY")
+            .env_remove("BOXLITE_CONTEXT")
+            .env_remove("BOXLITE_PROFILE")
+            .env_remove("BOXLITE_REST_PATH_PREFIX")
+            .timeout(Duration::from_secs(15))
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains(
+                "checkpoints are only implemented for REST runtimes",
+            ));
+    }
+    assert!(!home.path().join("checkpoints").exists());
+    assert!(!home.path().join("boxes").exists());
 }

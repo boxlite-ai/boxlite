@@ -20,7 +20,9 @@ See the [policy and lifecycle guide](../../docs/guides/nested-virtualization.md)
 The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-`boxlite_checkpoint_create`, `list`, `get`, `remove` and `import_box` take a runtime and use its existing post-and-drain event queue.
+`boxlite_checkpoint_create`, `list`, `get`, `remove` and `import_box` require a
+REST runtime and use its existing post-and-drain event queue. Local runtimes
+deliver an unsupported-operation error through the same callback queue.
 Import accepts optional name and box_id; they are mutually exclusive. A non-null
 box_id replaces the selected target; otherwise import creates a new Box.
 Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
@@ -30,15 +32,11 @@ callbacks own a Box handle, released with `boxlite_box_free`, which does not
 delete the native Box. Error pointers are borrowed during callback dispatch.
 
 Cloud capture may initially report `creating`; wait for `ready` before use.
-New imports and replacements inherit all saved execution settings. Local recovery
-preserves the name and returns a new native ID; cloud recovery preserves the
-public Box ID. Force removal ignores absence and never bypasses active use.
-
-The default local directory is `<BOXLITE_HOME>/checkpoints`. Use
-`BOXLITE_CHECKPOINTS_DIR`, or the additive
-`boxlite_runtime_new_with_checkpoint_directory` constructor for an explicit
-directory. Existing constructors and archive export/import signatures retain
-their ABI. `boxlite_box_name` returns an owned name string, released with
+New imports and replacements inherit all saved execution settings, and replacement
+preserves the public Box ID. Force removal ignores absence and never bypasses active use.
+Storage and replacement coordination belong to the server. Existing native archive
+export/import and the runner's archive preparation helper remain available.
+`boxlite_box_name` returns an owned name string, released with
 `boxlite_free_string`, or null for an unnamed Box.
 
 ## Table of Contents

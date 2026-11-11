@@ -1225,10 +1225,6 @@ impl BoxImpl {
     }
 
     async fn ensure_booted_with_nested_upgrade(&self, upgrade: bool) -> BoxliteResult<&LiveState> {
-        let _ownership = self
-            .runtime
-            .checkpoint_lifecycle
-            .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \

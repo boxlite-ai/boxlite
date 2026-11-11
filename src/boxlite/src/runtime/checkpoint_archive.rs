@@ -1,24 +1,33 @@
 //! Adapt a captured archive without modifying the native import contract.
 
 use std::collections::BTreeMap;
+
+use crate::runtime::rt_impl::SharedRuntimeImpl;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use super::catalog::Lease;
 use crate::litebox::archive::{
     ArchiveManifest, MANIFEST_FILENAME, build_zstd_tar_archive, extract_archive, sha256_file,
 };
 use crate::runtime::options::{ArchiveImportPolicy, BoxOptions, RootfsSpec};
-use crate::{BoxliteError, BoxliteResult, ResolvedImage};
+use crate::{BoxliteError, BoxliteResult};
+
+/// Immutable archive identity supplied by checkpoint storage after download.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CheckpointArchiveSource {
+    pub path: PathBuf,
+    /// Lowercase SHA-256 hex, optionally prefixed with `sha256:`.
+    pub sha256: String,
+    pub pinned_image: String,
+}
 
 pub struct PreparedCheckpointArchive {
-    pub(super) path: PathBuf,
-    pub(super) pinned_image: String,
-    pub(super) options: BoxOptions,
+    path: PathBuf,
+    pinned_image: String,
+    options: BoxOptions,
     size_bytes: u64,
     sha256: String,
     _directory: tempfile::TempDir,
-    // The source archive cannot be deleted while extraction/import uses it.
-    _lease: Option<Lease>,
 }
 
 impl PreparedCheckpointArchive {
@@ -36,19 +45,13 @@ impl PreparedCheckpointArchive {
     }
 }
 
-pub(super) fn pinned_image(
-    options: &BoxOptions,
-    resolved: Option<&ResolvedImage>,
-) -> BoxliteResult<String> {
-    require_supported_options(options)?;
-    let RootfsSpec::Image(image) = &options.rootfs else {
-        return Err(BoxliteError::Unsupported(
-            "checkpoints require an OCI image; host rootfs paths are external dependencies".into(),
-        ));
-    };
-    let digest = resolved.map(|image| image.manifest_digest.as_str())
-        .or_else(|| image.split_once('@').map(|(_, digest)| digest))
-        .ok_or_else(|| BoxliteError::InvalidState("the source box has no recorded image build; a mutable tag cannot identify the disk's original startup configuration".into()))?;
+fn pinned_image(image: &str) -> BoxliteResult<String> {
+    let digest = image
+        .split_once('@')
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| {
+            BoxliteError::InvalidArgument("checkpoint startup image must be digest-pinned".into())
+        })?;
     let suffix = digest
         .strip_prefix("sha256:")
         .filter(|suffix| suffix.len() == 64 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -57,9 +60,7 @@ pub(super) fn pinned_image(
                 "checkpoint image requires a SHA-256 manifest digest".into(),
             )
         })?;
-    let reference = image
-        .split_once('@')
-        .map_or(image.as_str(), |(name, _)| name);
+    let reference = image.split_once('@').map_or(image, |(name, _)| name);
     let repository = match reference.rsplit_once(':') {
         Some((name, tag)) if !tag.contains('/') => name,
         _ => reference,
@@ -70,7 +71,7 @@ pub(super) fn pinned_image(
     ))
 }
 
-pub(super) fn require_supported_options(options: &BoxOptions) -> BoxliteResult<()> {
+fn require_supported_options(options: &BoxOptions) -> BoxliteResult<()> {
     if !matches!(options.rootfs, RootfsSpec::Image(_)) {
         return Err(BoxliteError::Unsupported(
             "checkpoints require an OCI image; host rootfs paths are external dependencies".into(),
@@ -84,23 +85,8 @@ pub(super) fn require_supported_options(options: &BoxOptions) -> BoxliteResult<(
     Ok(())
 }
 
-pub(super) fn prepare(lease: Lease, work_dir: &Path) -> BoxliteResult<PreparedCheckpointArchive> {
-    lease.verify()?;
-    let mut prepared = prepare_verified_source(
-        &super::CheckpointArchiveSource {
-            path: lease.archive.clone(),
-            sha256: lease.record.archive_sha256.clone(),
-            pinned_image: lease.record.pinned_image.clone(),
-        },
-        None,
-        work_dir,
-    )?;
-    prepared._lease = Some(lease);
-    Ok(prepared)
-}
-
-pub(super) fn prepare_source(
-    source: &super::CheckpointArchiveSource,
+fn prepare_source(
+    source: &CheckpointArchiveSource,
     platform_env: Option<BTreeMap<String, String>>,
     work_dir: &Path,
 ) -> BoxliteResult<PreparedCheckpointArchive> {
@@ -126,7 +112,7 @@ pub(super) fn prepare_source(
 }
 
 fn prepare_verified_source(
-    source: &super::CheckpointArchiveSource,
+    source: &CheckpointArchiveSource,
     platform_env: Option<BTreeMap<String, String>>,
     work_dir: &Path,
 ) -> BoxliteResult<PreparedCheckpointArchive> {
@@ -152,7 +138,7 @@ fn prepare_verified_source(
         ));
     }
     let mut options =
-        super::super::import::options_from_manifest(&manifest, ArchiveImportPolicy::Trusted)?;
+        super::import::options_from_manifest(&manifest, ArchiveImportPolicy::Trusted)?;
     require_supported_options(&options)?;
     // Native import validates persisted kernel options without reopening source
     // files. A replacement must discover unavailable boot dependencies before
@@ -174,17 +160,11 @@ fn prepare_verified_source(
             }
         }
     }
-    let pinned = pinned_image(
-        &BoxOptions {
-            rootfs: RootfsSpec::Image(source.pinned_image.clone()),
-            ..Default::default()
-        },
-        None,
-    )?;
+    let pinned = pinned_image(&source.pinned_image)?;
     let disk = directory
         .path()
         .join(crate::disk::constants::filenames::CONTAINER_DISK);
-    super::super::import::validate_no_backing_references(&disk)?;
+    super::import::validate_no_backing_references(&disk)?;
     if manifest.container_disk_checksum.is_empty()
         || sha256_file(&disk)? != manifest.container_disk_checksum
     {
@@ -209,8 +189,7 @@ fn prepare_verified_source(
     }
     let derived: ArchiveManifest = serde_json::from_value(json.clone())
         .map_err(|error| BoxliteError::Storage(error.to_string()))?;
-    let options =
-        super::super::import::options_from_manifest(&derived, ArchiveImportPolicy::Trusted)?;
+    let options = super::import::options_from_manifest(&derived, ArchiveImportPolicy::Trusted)?;
     std::fs::write(
         &manifest_path,
         serde_json::to_vec(&json).map_err(|error| {
@@ -232,7 +211,6 @@ fn prepare_verified_source(
         size_bytes,
         sha256,
         _directory: directory,
-        _lease: None,
     })
 }
 
@@ -244,3 +222,43 @@ const PLATFORM_ENV_KEYS: [&str; 6] = [
     "BOXLITE_TRACEPARENT",
     "BOXLITE_TRACESTATE",
 ];
+
+/// Validate downloaded cloud bytes before the runner replaces its native box.
+pub(crate) async fn prepare(
+    runtime: SharedRuntimeImpl,
+    source: CheckpointArchiveSource,
+    platform_env: Option<BTreeMap<String, String>>,
+) -> BoxliteResult<PreparedCheckpointArchive> {
+    if runtime.shutdown_token.is_cancelled() {
+        return Err(BoxliteError::Stopped(
+            "Cannot prepare archive: runtime has been shut down".into(),
+        ));
+    }
+    // Accepted native work retains its staging even if its caller stops waiting.
+    tokio::spawn(async move {
+        let directory = runtime.layout.temp_dir();
+        let prepared =
+            tokio::task::spawn_blocking(move || prepare_source(&source, platform_env, &directory))
+                .await
+                .map_err(task_error)??;
+        runtime
+            .experimental_features
+            .require_for_options(&prepared.options)?;
+        runtime
+            .image_manager
+            .pull(&prepared.pinned_image)
+            .await?
+            .load_config()
+            .await?;
+        Ok(prepared)
+    })
+    .await
+    .map_err(task_error)?
+}
+
+fn task_error(error: tokio::task::JoinError) -> BoxliteError {
+    BoxliteError::Internal(format!("checkpoint archive preparation failed: {error}"))
+}
+
+#[cfg(test)]
+mod tests;

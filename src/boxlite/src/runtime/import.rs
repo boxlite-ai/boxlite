@@ -28,46 +28,6 @@ pub(crate) async fn import_box(
     name: Option<String>,
 ) -> BoxliteResult<LiteBox> {
     let t0 = std::time::Instant::now();
-    let prepared = prepare_import(runtime, archive).await?;
-    let litebox = runtime
-        // Imported archives acquire resolved image metadata on their first boot.
-        .provision_box(prepared.staging_dir, name, prepared.options, BoxStatus::Stopped, None)
-        .await?;
-    tracing::info!(box_id = %litebox.id(), elapsed_ms = t0.elapsed().as_millis() as u64, "Imported box from archive");
-    Ok(litebox)
-}
-
-/// Only recovery's name/ID reservation can bypass ordinary import admission.
-pub(crate) async fn import_checkpoint_box(
-    runtime: &Arc<RuntimeImpl>,
-    archive: BoxArchive,
-    name: Option<String>,
-    import_id: crate::BoxID,
-    ownership: &super::checkpoints::RecoveryLease,
-) -> BoxliteResult<LiteBox> {
-    let prepared = prepare_import(runtime, archive).await?;
-    runtime
-        .provision_checkpoint_box(
-            prepared.staging_dir,
-            name,
-            prepared.options,
-            import_id,
-            ownership,
-        )
-        .await
-}
-
-struct PreparedImport {
-    staging_dir: std::path::PathBuf,
-    options: BoxOptions,
-    // Extraction owns installed staging until provisioning completes.
-    _extraction: tempfile::TempDir,
-}
-
-async fn prepare_import(
-    runtime: &Arc<RuntimeImpl>,
-    archive: BoxArchive,
-) -> BoxliteResult<PreparedImport> {
     let archive_path = archive.path().to_path_buf();
     if !archive_path.exists() {
         return Err(BoxliteError::NotFound(format!(
@@ -96,11 +56,19 @@ async fn prepare_import(
         .await
         .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
 
-    Ok(PreparedImport {
-        staging_dir,
-        options,
-        _extraction: temp_dir,
-    })
+    let litebox = runtime
+        // An archive carries the box's options but not what its image resolved
+        // to, so an imported box has no record until one is rebuilt.
+        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
+        .await?;
+
+    tracing::info!(
+        box_id = %litebox.id(),
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+        "Imported box from archive"
+    );
+
+    Ok(litebox)
 }
 
 /// Read the persisted configuration, falling back to the v1/v2 image field.

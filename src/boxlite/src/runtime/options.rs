@@ -24,10 +24,6 @@ use std::fmt;
 pub struct BoxliteOptions {
     #[serde(default = "default_home_dir")]
     pub home_dir: PathBuf,
-    /// Directory of managed disk checkpoints. Defaults to `<home_dir>/checkpoints`.
-    /// An explicit path overrides `BOXLITE_CHECKPOINTS_DIR`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checkpoints_dir: Option<PathBuf>,
     /// OCI registry configuration for image pulls.
     ///
     /// Use this to configure registry transport, TLS verification, auth, and
@@ -219,39 +215,8 @@ impl Default for BoxliteOptions {
     fn default() -> Self {
         Self {
             home_dir: default_home_dir(),
-            checkpoints_dir: None,
             image_registries: Vec::new(),
             image_registry_proxy: None,
-        }
-    }
-}
-
-impl BoxliteOptions {
-    /// Resolve checkpoint storage independently of the box storage directory.
-    pub fn checkpoints_directory(&self) -> BoxliteResult<PathBuf> {
-        self.checkpoints_directory_with_env(
-            std::env::var_os("BOXLITE_CHECKPOINTS_DIR").map(PathBuf::from),
-        )
-    }
-
-    fn checkpoints_directory_with_env(
-        &self,
-        environment: Option<PathBuf>,
-    ) -> BoxliteResult<PathBuf> {
-        let path = self
-            .checkpoints_dir
-            .clone()
-            .or(environment)
-            .unwrap_or_else(|| self.home_dir.join("checkpoints"));
-        if path.as_os_str().is_empty() {
-            return Err(crate::BoxliteError::InvalidArgument(
-                "checkpoint directory must not be empty".into(),
-            ));
-        }
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            Ok(std::env::current_dir()?.join(path))
         }
     }
 }
@@ -260,56 +225,6 @@ impl BoxliteOptions {
 mod registry_options_tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn checkpoint_directory_uses_the_selected_home_and_explicit_environment_precedence() {
-        let mut options = BoxliteOptions {
-            home_dir: PathBuf::from("/tmp/selected-home"),
-            ..Default::default()
-        };
-        assert_eq!(
-            options.checkpoints_directory_with_env(None).unwrap(),
-            PathBuf::from("/tmp/selected-home/checkpoints")
-        );
-        assert_eq!(
-            options
-                .checkpoints_directory_with_env(Some(PathBuf::from("/tmp/env-checkpoints")))
-                .unwrap(),
-            PathBuf::from("/tmp/env-checkpoints")
-        );
-        options.checkpoints_dir = Some(PathBuf::from("/tmp/explicit-checkpoints"));
-        assert_eq!(
-            options
-                .checkpoints_directory_with_env(Some(PathBuf::from("/tmp/env-checkpoints")))
-                .unwrap(),
-            PathBuf::from("/tmp/explicit-checkpoints")
-        );
-        options.checkpoints_dir = Some(PathBuf::new());
-        assert!(options.checkpoints_directory_with_env(None).is_err());
-    }
-
-    #[test]
-    fn checkpoint_directory_configuration_round_trips_without_changing_legacy_json() {
-        let old: BoxliteOptions = serde_json::from_value(json!({"home_dir":"/tmp/home"})).unwrap();
-        assert!(
-            serde_json::to_value(old)
-                .unwrap()
-                .get("checkpoints_dir")
-                .is_none()
-        );
-        let configured: BoxliteOptions = serde_json::from_value(
-            json!({"home_dir":"/tmp/home","checkpoints_dir":"/tmp/archives"}),
-        )
-        .unwrap();
-        assert_eq!(
-            configured.checkpoints_directory_with_env(None).unwrap(),
-            PathBuf::from("/tmp/archives")
-        );
-        assert_eq!(
-            serde_json::to_value(configured).unwrap()["checkpoints_dir"],
-            "/tmp/archives"
-        );
-    }
 
     fn test_registry_password() -> String {
         String::from_utf8(vec![115, 101, 99, 114, 101, 116]).unwrap()

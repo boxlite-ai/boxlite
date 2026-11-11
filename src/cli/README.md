@@ -147,76 +147,38 @@ boxlite images
 
 ## Checkpoint management
 
-A checkpoint is an independently managed disk archive with the box's execution
-configuration. It survives deletion of its source box and can create multiple
-new boxes. It is separate from a box's snapshots and does not capture memory or
-running processes.
+Checkpoints are managed by the selected REST server. Local runtimes return
+an unsupported-operation error. Each checkpoint captures a stopped box's disk
+and execution configuration, survives source deletion, and can create multiple
+boxes. It does not capture memory or running processes.
 
 ```bash
-# Stop the source and wait for stopped before capture.
-boxlite stop source
-boxlite checkpoint create source --name dev-base
-boxlite checkpoint list
-boxlite checkpoint get dev-base
+# Use a REST context, or pass --url with the selected server.
+boxlite --url https://api.example.com stop source
+boxlite --url https://api.example.com checkpoint create source --name dev-base
+boxlite --url https://api.example.com checkpoint list
+boxlite --url https://api.example.com checkpoint get dev-base
 
-# Execution settings are inherited; overrides such as --cpus or -e are refused.
-boxlite import --checkpoint dev-base --name worker
+# Saved execution settings are inherited; configuration overrides are refused.
+boxlite --url https://api.example.com import --checkpoint dev-base --name worker
 
-# Replace an existing stopped or failed box, preserving its name.
-boxlite import --checkpoint dev-base --box worker
-boxlite checkpoint delete dev-base
+# Replace an idle stopped or failed box, preserving its public Box ID.
+boxlite --url https://api.example.com import --checkpoint dev-base --box worker
+boxlite --url https://api.example.com checkpoint delete dev-base
 ```
 
-Local checkpoints default to `<BOXLITE_HOME>/checkpoints/`, normally
-`~/.boxlite/checkpoints/`. Select another directory with
-`BOXLITE_CHECKPOINTS_DIR`, a `checkpoints_dir` JSON configuration field, or a
-per-command `--checkpoints-dir PATH`:
+A capture can initially report `creating`; wait for `ready` before import.
+Capture never automatically stops a Box. Name and replacement target are
+mutually exclusive. Deleting a checkpoint leaves previously imported boxes
+intact; `--force` tolerates absence and never bypasses active use.
 
-```bash
-boxlite checkpoint --checkpoints-dir /data/checkpoints list
-boxlite import --checkpoint dev-base --checkpoints-dir /data/checkpoints --name worker
-```
-
-For the CLI, the explicit storage flag overrides the environment, which overrides
-the JSON configuration, followed by the directory under the selected home. For
-SDK options, an explicitly supplied directory overrides the environment. Remote
-contexts use the server's storage; a client-side `--checkpoints-dir` is refused.
-
-Local replacement returns a **new box ID**; the original name stays available and old
-handles/IDs no longer address that box. Recover validates the archive and pinned
-image configuration before removing the old box, but replacement is not atomic.
-An import failure after removal retains the checkpoint and recovery record for
-retry. Recovery records the planned native ID before replacement. If import
-succeeds but its completion receipt cannot be saved, retry adopts that exact
-Box, including after restart; it does not remove a Box just because its name
-matches. Recovery owns the target name and original ID through preflight, removal,
-import and completion recording. Conflicting starts, removals, imports and
-clones fail while that operation runs. A pending recovery record also reserves
-the name after failure or restart and prevents checkpoint deletion, including
-with force. Retry the same checkpoint, or explicitly remove the target by its
-original ID or name to cancel the pending recovery and release the name. A new
-native ID reported by a failed completion write can also be explicitly removed.
-Superseded handles cannot boot the removed native box. Deleting a checkpoint
-never deletes a box already created from it.
-
-Interrupted archive cleanup remains visible as `deleting` and retains its name.
-Retry deletion by ID or name after correcting the storage error; `--force` only
-ignores an absent checkpoint and does not hide a cleanup failure.
-
-The source must have a recorded image build or an explicitly digest-pinned image.
-A mutable tag without build metadata is refused. Startup uses that fixed digest;
-the corresponding OCI configuration must remain available in the cache or
-registry. Volumes, typed mounts, secrets and host-rootfs sources are unsupported
-for checkpoint capture in this version. Local `serve` also refuses capture when
-the source has a nonzero `auto_stop` or `auto_delete`: those deadlines live only
-in the server and cannot be preserved in the disk archive. Disable them before
-capture. Named replacements serialize target lookup, import and cache cleanup,
-so each replacement invalidates the handle it actually supersedes.
-Capture, replacement and lifecycle deadline publication coordinate per Box.
-Names and native IDs share a lock, and replacement binds its resulting native ID
-before releasing it. Waiting operations resolve the target again before acting.
-The policy map is held only briefly; another Box's capture, replacement, creation
-and metadata reads can proceed during a disk capture.
+Storage, capture coordination, and replacement retries belong to the server.
+The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
+Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
+management routes. Existing binary archive export/import remains available.
+The cloud runner validates downloaded archives through its separate native
+archive helper before using ordinary native import; this creates no local
+checkpoint catalog or recovery records.
 
 ## Connecting to a remote server
 
@@ -814,7 +776,6 @@ Then reload your shell or source the file.
 | Variable | Description |
 |----------|-------------|
 | `BOXLITE_HOME` | Runtime, credential, and context preference directory (default: `~/.boxlite`). Overridden by `--home`. |
-| `BOXLITE_CHECKPOINTS_DIR` | Local checkpoint directory; defaults to `<BOXLITE_HOME>/checkpoints/`. |
 | `BOXLITE_REST_URL` | REST server endpoint; equivalent to `--url`. |
 | `BOXLITE_API_KEY` | Long-lived API key sent as `Authorization: Bearer`. Overrides any stored credentials. |
 | `BOXLITE_CONTEXT` | Override the saved current context; explicit `--context` takes precedence. |

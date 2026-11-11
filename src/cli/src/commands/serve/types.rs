@@ -11,21 +11,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ImportCheckpointRequest {
-    pub checkpoint_id: String,
-    pub name: Option<String>,
-    pub box_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CreateCheckpointRequest {
-    pub source_box_id: String,
-    pub name: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub name: Option<String>,

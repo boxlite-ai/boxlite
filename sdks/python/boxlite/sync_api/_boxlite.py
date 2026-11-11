@@ -368,7 +368,7 @@ class SyncBoxlite:
 
     @property
     def checkpoints(self) -> "SyncCheckpointHandle":
-        """Managed disk checkpoints for this local or REST runtime."""
+        """Manage REST checkpoints; local operations raise an unsupported error."""
         self._require_started()
         from ._checkpoints import SyncCheckpointHandle
 

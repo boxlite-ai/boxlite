@@ -760,8 +760,10 @@ paths:
         settings are inherited, and configuration overrides are refused.
         Replacement validates the archive and pinned image before removal,
         but is not atomic: failure after removal retains ownership for retry.
-        Local replacement preserves the name and returns a new native ID;
-        cloud replacement preserves the public Box ID and existing runner.
+        Replacement preserves the public Box ID and existing runner.
+        Checkpoint management and JSON checkpoint imports require a REST service;
+        local SDK operations return Unsupported, and local serve exposes no
+        checkpoint management routes.
 
         Cloud checkpoint imports require `checkpoints_enabled`; binary upload
         remains controlled separately by `import_enabled`. Cloud wait failures

@@ -753,7 +753,7 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
-    /// Manage disk checkpoints locally or on the selected REST server.
+    /// Manage disk checkpoints on the selected REST server.
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
     /// Import an archive or checkpoint; optionally replace an existing box.
     Import(crate::commands::import::ImportArgs),
@@ -1046,11 +1046,6 @@ impl GlobalFlags {
 
         if let Some(cli_home) = &self.home {
             options.home_dir = cli_home.clone();
-        }
-
-        // Explicit per-command storage flags override this after config loading.
-        if let Some(directory) = std::env::var_os("BOXLITE_CHECKPOINTS_DIR") {
-            options.checkpoints_dir = Some(directory.into());
         }
 
         if !self.registry.is_empty() {

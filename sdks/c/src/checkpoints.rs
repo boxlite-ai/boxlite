@@ -366,15 +366,20 @@ mod tests {
         error: *mut CBoxliteError,
         data: *mut c_void,
     ) {
-        let sender =
-            unsafe { &*(data as *const mpsc::Sender<(c_int, bool, std::thread::ThreadId)>) };
+        let sender = unsafe {
+            &*(data as *const mpsc::Sender<(c_int, BoxliteErrorCode, std::thread::ThreadId)>)
+        };
         let count = if list.is_null() {
             -1
         } else {
             unsafe { (*list).count }
         };
-        let success = error.is_null() || unsafe { (*error).code == BoxliteErrorCode::Ok };
-        let _ = sender.send((count, success, std::thread::current().id()));
+        let code = if error.is_null() {
+            BoxliteErrorCode::Ok
+        } else {
+            unsafe { (*error).code }
+        };
+        let _ = sender.send((count, code, std::thread::current().id()));
         unsafe {
             boxlite_free_checkpoint_list(list);
         }
@@ -417,7 +422,8 @@ mod tests {
                 BoxliteErrorCode::InvalidArgument
             );
             crate::boxlite_error_free(&mut error);
-            let (sender, receiver) = mpsc::channel::<(c_int, bool, std::thread::ThreadId)>();
+            let (sender, receiver) =
+                mpsc::channel::<(c_int, BoxliteErrorCode, std::thread::ThreadId)>();
             let data = &sender as *const _ as *mut c_void;
             assert_eq!(
                 boxlite_checkpoint_list(&mut runtime, Some(list_received), data, &mut error),
@@ -428,9 +434,9 @@ mod tests {
                 "callbacks run only when the caller drains"
             );
             crate::boxlite_runtime_drain(&mut runtime, 5000, &mut error);
-            let (count, success, thread) = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
-            assert_eq!(count, 0);
-            assert!(success);
+            let (count, code, thread) = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(count, -1);
+            assert_eq!(code, BoxliteErrorCode::Unsupported);
             assert_eq!(thread, std::thread::current().id());
             runtime.liveness.mark_closed();
             assert_eq!(
