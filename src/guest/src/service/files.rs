@@ -24,6 +24,13 @@ use tracing::info;
 
 const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
 
+fn upload_unpack_status(error: boxlite_shared::BoxliteError) -> Status {
+    match error {
+        boxlite_shared::BoxliteError::AlreadyExists(message) => Status::already_exists(message),
+        other => Status::internal(other.to_string()),
+    }
+}
+
 /// A staged upload, deleted whenever it goes out of scope.
 ///
 /// The guest's temp dir is RAM-backed, and a request leaves through half a
@@ -528,7 +535,7 @@ impl Files for GuestServer {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .map_err(upload_unpack_status)?;
                 let boxlite_shared::tar::UnpackReport {
                     entry_paths,
                     preexisting_dirs,
@@ -633,7 +640,7 @@ impl Files for GuestServer {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .map_err(upload_unpack_status)?;
 
                 // Hand the payload to the user the box actually runs as. tar
                 // preserves neither owner (it extracts as this process, root)

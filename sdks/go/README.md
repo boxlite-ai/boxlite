@@ -131,6 +131,21 @@ if err != nil {
 defer restored.Close()
 ```
 
+### Streaming file uploads
+
+`CopyInStream` accepts a raw tar reader and defaults to replacing existing files.
+Pass `WithCopyOverwrite(false)` to add only new entries:
+
+```go
+err := box.CopyInStream(ctx, "/app", boxlite.CopySourceDir, tarReader,
+    boxlite.WithCopyOverwrite(false))
+```
+
+Existing directories are reused. A conflicting file, symlink or incompatible
+file/directory entry returns `ErrAlreadyExists` and retains existing contents.
+Entries written before a conflict can remain; there is no archive rollback.
+The existing call without an option retains `overwrite=true`.
+
 A local runtime treats the archive as trusted because local applications own
 both the runtime and archive. A REST runtime uploads the file and relies on the
 server's untrusted-upload policy.

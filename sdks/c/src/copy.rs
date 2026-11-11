@@ -423,6 +423,32 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
     out_error: *mut CBoxliteError,
 ) -> *mut CBoxCopyInStream {
     unsafe {
+        boxlite_copy_in_start_with_overwrite(
+            handle,
+            guest_dst,
+            source_kind,
+            true,
+            copy_cb,
+            user_data,
+            out_error,
+        )
+    }
+}
+
+/// Begin streaming copy-in with explicit overwrite policy. False rejects
+/// conflicting entries; earlier new entries can remain after a conflict.
+/// The original start function retains overwrite=true for ABI compatibility.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_copy_in_start_with_overwrite(
+    handle: *mut CBoxHandle,
+    guest_dst: *const c_char,
+    source_kind: i32,
+    overwrite: bool,
+    copy_cb: CBoxCopyCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> *mut CBoxCopyInStream {
+    unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
             return std::ptr::null_mut();
@@ -453,7 +479,15 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .copy_in_stream(bytes, dst.as_str(), source, CopyOptions::default())
+                .copy_in_stream(
+                    bytes,
+                    dst.as_str(),
+                    source,
+                    CopyOptions {
+                        overwrite,
+                        ..CopyOptions::default()
+                    },
+                )
                 .await;
             push_event(
                 &queue,

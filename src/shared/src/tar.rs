@@ -306,13 +306,9 @@ fn extract_from_reader<R: Read>(
                     )));
                 }
             }
-            if !opts.overwrite && dest.exists() {
-                return Err(BoxliteError::Storage(format!(
-                    "destination {} exists and overwrite=false",
-                    dest.display()
-                )));
-            }
+            check_copy_destination(dest, false, opts.overwrite)?;
             let mut archive = tar::Archive::new(reader);
+            archive.set_overwrite(opts.overwrite);
             let mut entries = archive
                 .entries()
                 .map_err(|e| BoxliteError::Storage(format!("failed to read tar entries: {}", e)))?;
@@ -323,17 +319,12 @@ fn extract_from_reader<R: Read>(
                 if let Ok(path) = entry.path() {
                     record(path.as_ref(), None);
                 }
-                entry.unpack(dest).map_err(|e| {
-                    BoxliteError::Storage(format!(
-                        "failed to unpack file to {}: {}",
-                        dest.display(),
-                        with_causes(&e)
-                    ))
-                })?;
+                entry.unpack(dest).map_err(copy_unpack_error)?;
             }
             Ok(())
         }
         ExtractionMode::IntoDirectory => {
+            check_copy_destination(dest, true, opts.overwrite)?;
             if !dest.exists() {
                 if opts.mkdir_parents {
                     std::fs::create_dir_all(dest).map_err(|e| {
@@ -350,13 +341,8 @@ fn extract_from_reader<R: Read>(
                     )));
                 }
             }
-            if dest.exists() && !opts.overwrite {
-                return Err(BoxliteError::Storage(format!(
-                    "destination {} exists and overwrite=false",
-                    dest.display()
-                )));
-            }
             let mut archive = tar::Archive::new(reader);
+            archive.set_overwrite(opts.overwrite);
             // The same pass tar::Archive::unpack would run, with one
             // addition: every extracted name is recorded (sanitized, with
             // implied directories) so callers can hand the created paths to
@@ -371,28 +357,65 @@ fn extract_from_reader<R: Read>(
                 let mut file = entry.map_err(|e| {
                     BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
+                let is_directory = file.header().entry_type().is_dir();
                 if let Ok(path) = file.path() {
                     record(path.as_ref(), Some(dest));
+                    if let Some(relative) = sanitize_entry_path(path.as_ref()) {
+                        let target = dest.join(relative);
+                        check_copy_destination(&target, is_directory, opts.overwrite)?;
+                        // Reused directories are containers for new entries; unpacking
+                        // their headers would reset existing permissions and timestamps.
+                        if !opts.overwrite && is_directory && target.is_dir() {
+                            continue;
+                        }
+                    }
                 }
-                if file.header().entry_type() == tar::EntryType::Directory {
+                if is_directory {
                     directories.push(file);
                 } else {
-                    file.unpack_in(dest).map_err(|e| {
-                        BoxliteError::Storage(format!(
-                            "failed to extract archive: {}",
-                            with_causes(&e)
-                        ))
-                    })?;
+                    file.unpack_in(dest).map_err(copy_unpack_error)?;
                 }
             }
             directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
             for mut dir in directories {
-                dir.unpack_in(dest).map_err(|e| {
-                    BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
-                })?;
+                dir.unpack_in(dest).map_err(copy_unpack_error)?;
             }
             Ok(())
         }
+    }
+}
+
+fn check_copy_destination(path: &Path, directory: bool, overwrite: bool) -> BoxliteResult<()> {
+    if !overwrite {
+        // Leaf-only archives still require real directory ancestors. Check
+        // outermost first so ENOTDIR at a leaf becomes a typed parent conflict.
+        if let Some(parent) = path.parent().filter(|parent| *parent != path) {
+            check_copy_destination(parent, true, false)?;
+        }
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if !(directory && metadata.is_dir()) => {
+                return Err(BoxliteError::AlreadyExists(format!(
+                    "destination {} exists and overwrite=false",
+                    path.display()
+                )));
+            }
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                return Err(copy_unpack_error(error));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn copy_unpack_error(error: io::Error) -> BoxliteError {
+    if error.kind() == io::ErrorKind::AlreadyExists {
+        BoxliteError::AlreadyExists(with_causes(&error))
+    } else {
+        BoxliteError::Storage(format!(
+            "failed to extract archive: {}",
+            with_causes(&error)
+        ))
     }
 }
 
@@ -1275,7 +1298,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unpack_overwrite_false_rejects_existing_dir() {
+    async fn unpack_overwrite_false_reuses_existing_dir() {
         let tmp = TempDir::new().unwrap();
         let tar_path = tmp.path().join("dir.tar");
         create_dir_tar(&tar_path);
@@ -1284,7 +1307,162 @@ mod tests {
         std::fs::create_dir(&dest).unwrap();
 
         let result = unpack(tar_path, dest, uc(false, false, false)).await;
-        assert!(result.is_err());
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_adds_new_files_to_existing_and_missing_directories() {
+        for existing in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("files.tar");
+            create_single_file_tar(&tar_path, "new.txt", b"new");
+            let dest = tmp.path().join("output");
+            if existing {
+                std::fs::create_dir(&dest).unwrap();
+                std::fs::write(dest.join("keep.txt"), b"original").unwrap();
+            }
+            let result = unpack(tar_path, dest.clone(), uc(false, true, true)).await;
+            assert!(result.is_ok(), "new entries must succeed: {result:?}");
+            assert_eq!(std::fs::read(dest.join("new.txt")).unwrap(), b"new");
+            if existing {
+                assert_eq!(std::fs::read(dest.join("keep.txt")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_partial_conflicts_match_stream_and_staged() {
+        for streamed in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("files.tar");
+            create_leaf_only_tar(&tar_path, &["new.txt", "keep.txt"]);
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            std::fs::write(dest.join("keep.txt"), b"original").unwrap();
+            let result = if streamed {
+                let data = std::fs::read(&tar_path).unwrap();
+                unpack_stream(
+                    Box::pin(futures::stream::iter([Ok(data)])),
+                    dest.clone(),
+                    uc(false, true, true),
+                )
+                .await
+                .map(|_| ())
+            } else {
+                unpack(tar_path, dest.clone(), uc(false, true, true)).await
+            };
+            assert!(
+                matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                "{result:?}"
+            );
+            assert_eq!(std::fs::read(dest.join("keep.txt")).unwrap(), b"original");
+            assert_eq!(std::fs::read(dest.join("new.txt")).unwrap(), b"new.txt");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_preserves_link_and_directory_collisions() {
+        for collision in ["directory", "symlink", "dangling"] {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "occupied", b"replacement");
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            let occupied = dest.join("occupied");
+            let target = tmp.path().join("target");
+            if collision == "directory" {
+                std::fs::create_dir(&occupied).unwrap();
+            } else {
+                if collision == "symlink" {
+                    std::fs::write(&target, b"original").unwrap();
+                }
+                std::os::unix::fs::symlink(&target, &occupied).unwrap();
+            }
+            let result = unpack(tar_path, dest, uc(false, true, true)).await;
+            assert!(
+                matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                "{result:?}"
+            );
+            if collision == "directory" {
+                assert!(occupied.is_dir());
+            } else {
+                assert_eq!(std::fs::read_link(occupied).unwrap(), target);
+                if collision == "symlink" {
+                    assert_eq!(std::fs::read(target).unwrap(), b"original");
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_checks_implied_directory_conflicts() {
+        for linked in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "occupied/new.txt", b"new");
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            let target = dest.join("target");
+            std::fs::create_dir(&target).unwrap();
+            if linked {
+                std::os::unix::fs::symlink(&target, dest.join("occupied")).unwrap();
+            } else {
+                std::fs::write(dest.join("occupied"), b"original").unwrap();
+            }
+            let result = unpack(tar_path, dest.clone(), uc(false, true, true)).await;
+            assert!(
+                matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                "{result:?}"
+            );
+            assert!(!target.join("new.txt").exists());
+            if !linked {
+                assert_eq!(std::fs::read(dest.join("occupied")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_reuses_directory_without_resetting_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("dir.tar");
+        create_dir_tar(&tar_path);
+        let dest = tmp.path().join("output");
+        std::fs::create_dir_all(dest.join("mydir")).unwrap();
+        std::fs::set_permissions(dest.join("mydir"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        unpack(tar_path, dest.clone(), uc(false, true, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(dest.join("mydir"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::read(dest.join("mydir/file.txt")).unwrap(),
+            b"inside dir"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_reports_typed_file_conflict() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("file.tar");
+        create_single_file_tar(&tar_path, "keep.txt", b"replacement");
+        let dest = tmp.path().join("keep.txt");
+        std::fs::write(&dest, b"original").unwrap();
+        let error = unpack(tar_path, dest.clone(), default_unpack(false))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error:?}");
+        assert_eq!(std::fs::read(dest).unwrap(), b"original");
     }
 
     // ── unpack: mkdir_parents ────────────────────────────────────
