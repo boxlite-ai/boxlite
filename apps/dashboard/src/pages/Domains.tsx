@@ -199,7 +199,9 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                             <td className="truncate px-4 py-3 font-mono text-muted-foreground">
                               {domain.target?.type === 'box' ? (
                                 <Link
-                                  to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(domain.target.box) })}
+                                  to={generatePath(RoutePath.BOX_DETAILS, {
+                                    boxId: encodeURIComponent(domain.target.box),
+                                  })}
                                   className="text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
                                 >
                                   {domain.target.box}

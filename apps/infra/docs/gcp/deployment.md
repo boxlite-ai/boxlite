@@ -101,12 +101,10 @@ unchanged. The API still validates this runtime setting and uses it for DNS
 comparison and TLS probes. Deploy this infrastructure change before removing an
 existing stored value; older deployment code still needs it.
 
-Choose the workflow branch containing both the environment declarations and the
-custom-domain GCP provider. The workflow's `ref` input chooses application artifacts;
-it does not switch the infrastructure checkout. For a stage deployment from a
-branch containing both changes, leave `ref` empty to use that dispatch's commit
-for the artifacts too. Preview first and inspect the full resource diff:
-`components=api` narrows artifact preparation, not the infrastructure update.
+Deploy from a branch containing both the environment declarations and the
+custom-domain GCP provider, following the [shared deployment runbook](../deployment.md).
+Preview first and inspect the full resource diff; custom-domain support does not
+add deployment environments or alter the workflow's supported stage choices.
 
 The API also needs its existing Commerce connection to determine subscription
 eligibility. Missing billing connectivity cannot authorize custom-domain access.

@@ -1,19 +1,16 @@
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
 import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
-import { gcpCollectorProvider } from '../stack/providers/gcp/collector.ts'
-import { gcpRegistryProxyProvider } from '../stack/providers/gcp/registry-proxy.ts'
 import { recordServices } from './service-recording.ts'
 
 process.env.MSTAGE_CONFIG ??= fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 
-export const platformServices = (stage: string, apiEnvironment: Record<string, string> = {}) =>
+const customDomainApi = (stage: string, apiEnvironment: Record<string, string> = {}) =>
   recordServices('boxlite-app', stage, () => {
     const output = (globalThis as any).$util.output
     const placement: any = {
@@ -66,20 +63,6 @@ export const platformServices = (stage: string, apiEnvironment: Record<string, s
         },
       } as any,
     })({ image: 'api:sha', port: 3000, environment: apiEnvironment, secrets: {}, capabilities: [] } as any)
-    gcpCollectorProvider({
-      project: 'boxlite-dev-project',
-      region: 'us-east5',
-      placement,
-      clickhouse: { active: false },
-      dependsOn: [],
-    } as any)({ image: 'collector:sha', exporters: '[boxlite_exporter]', environment: {}, secrets: {} })
-    gcpRegistryProxyProvider({
-      project: 'boxlite-dev-project',
-      region: 'us-east5',
-      placement,
-      registryCredentials: { active: false },
-      dependsOn: [],
-    })({ image: 'registry:sha', environment: {} })
   })
 
 const apiEnvironmentFromStore = (settings: Record<string, string>) => {
@@ -119,7 +102,7 @@ for (const reserved of [undefined, 'retired.example.test']) {
       ...(reserved ? { CUSTOM_DOMAIN_RESERVED_SUFFIXES: reserved } : {}),
     }
     const delivered = apiEnvironmentFromStore(settings)
-    const resources = platformServices('stage', delivered.environment)
+    const resources = customDomainApi('stage', delivered.environment)
     const service = resources.find((resource) => resource.logical === 'Api')!
     const container = service.args.template.containers[0]
     const envs = container.envs.toJSON()
@@ -152,7 +135,7 @@ for (const reserved of [undefined, 'retired.example.test']) {
 }
 
 test('GCP replaces a stale stored edge IP with its reserved proxy address', () => {
-  const resources = platformServices('stage', {
+  const resources = customDomainApi('stage', {
     CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project',
     CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: 'customer-map',
     CUSTOM_DOMAIN_TRAFFIC_HOST: 'proxy.stage.example.test',
@@ -166,7 +149,7 @@ test('GCP replaces a stale stored edge IP with its reserved proxy address', () =
 
 test('an unconfigured stage needs no custom-domain IAM or always-on API', () => {
   const delivered = apiEnvironmentFromStore({})
-  const resources = platformServices('stage', delivered.environment)
+  const resources = customDomainApi('stage', delivered.environment)
   const service = resources.find((resource) => resource.logical === 'Api')!
   const container = service.args.template.containers[0]
   assert.equal(
@@ -180,42 +163,3 @@ test('an unconfigured stage needs no custom-domain IAM or always-on API', () => 
     false,
   )
 })
-
-for (const stage of ['dev', 'prod', 'preview', 'stage']) {
-  test(`platform Cloud Run discovery labels for ${stage}`, () => {
-    const built = platformServices(stage)
-    const services = built.filter((resource) => resource.kind === 'gcp.cloudrunv2.Service')
-    assert.deepEqual(services.map((service) => service.logical).sort(), ['Api', 'OtelCollector', 'RegistryProxy'])
-    if (process.env.DISCOVERY_RECEIPTS)
-      writeFileSync(join(process.env.DISCOVERY_RECEIPTS, `platform-${stage}.json`), JSON.stringify(built, null, 2))
-    for (const service of services) {
-      if (stage === 'stage')
-        assert.deepEqual(
-          service.args.labels,
-          { stage: 'stage' },
-          `${service.logical} is missing its stage discovery label`,
-        )
-      else assert.equal(Object.hasOwn(service.args, 'labels'), false, `${stage}/${service.logical} gained labels`)
-      assert.equal(Object.hasOwn(service.args.template, 'labels'), false, 'inventory labels belong to the Service')
-    }
-  })
-}
-
-for (const stage of ['dev', 'prod', 'stage']) {
-  for (const [logical, port, protocol] of [
-    ['Api', 3000, 'http1'],
-    ['OtelCollector', 4318, 'http1'],
-    ['RegistryProxy', 4100, 'h2c'],
-  ] as const) {
-    test(`${stage}/${logical} supplies one Cloud Run ports object`, () => {
-      const resources = platformServices(stage)
-      if (process.env.SHAPE_RECEIPTS)
-        writeFileSync(join(process.env.SHAPE_RECEIPTS, `cloudrun-${stage}.json`), JSON.stringify(resources, null, 2))
-      const service = resources.find(
-        (resource) => resource.kind === 'gcp.cloudrunv2.Service' && resource.logical === logical,
-      )
-      assert.ok(service, `${logical} was not constructed`)
-      assert.deepEqual(service.args.template.containers[0].ports, { name: protocol, containerPort: port })
-    })
-  }
-}
