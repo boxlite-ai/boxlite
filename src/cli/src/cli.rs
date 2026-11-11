@@ -306,7 +306,6 @@ const COMMAND_SCOPES: &[CommandScope] = &[
             children: &[],
         }],
     },
-
     box_command_scope(
         "checkpoint",
         &[
