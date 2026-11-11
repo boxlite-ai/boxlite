@@ -216,6 +216,7 @@ fn unsupported_include_expansion_and_relative_handwritten_collision_fail_preflig
     fs::create_dir(&ssh).unwrap();
     let fragment = ssh.join("manual.conf");
     fs::write(&fragment, "Host DEV\n  User manual\n").unwrap();
+    fs::write(ssh.join("%h.conf"), "Host DEV\n  User manual\n").unwrap();
     for original in [
         "Include manual.conf\n",
         "Include %h.conf\n",
@@ -321,19 +322,73 @@ fn include_path_with_spaces_quotes_glob_chars_and_percent_is_literal() {
         .unwrap()
         .commit(&stanza("dev", "actual-box"))
         .unwrap();
-    let config = fs::read_to_string(root(&home)).unwrap();
-    let (_, include_value) = directive(config.lines().nth(1).unwrap()).unwrap();
-    let include = words(include_value).unwrap();
-    assert_eq!(include.len(), 1);
-    let pattern = include_pattern(&include[0], &home).unwrap();
-    assert!(
-        glob::Pattern::new(&pattern)
-            .unwrap()
-            .matches(managed(&home).to_str().unwrap()),
-        "generated Include does not resolve to its managed file: {pattern}"
-    );
     assert!(effective(&home, "dev").contains("hostname actual-box\n"));
     assert_eq!(fs::read_dir(home.join(".boxlite/ssh")).unwrap().count(), 2);
+}
+
+#[test]
+fn handwritten_percent_includes_match_openssh_conflict_detection() {
+    for single_conflicts in [false, true] {
+        let home = test_home();
+        let ssh = home.path().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        for (name, conflicts) in [
+            ("manual%.conf", single_conflicts),
+            ("manual%%.conf", !single_conflicts),
+        ] {
+            let alias = if conflicts { "dev" } else { "unrelated" };
+            fs::write(ssh.join(name), stanza(alias, "handwritten")).unwrap();
+        }
+        let original = format!("Include \"{}\"\n", ssh.join("manual%%.conf").display());
+        fs::write(root(home.path()), &original).unwrap();
+        let conflicts = effective(home.path(), "dev").contains("hostname handwritten\n");
+        let installation = plan(home.path(), "dev", "A", false);
+        if conflicts {
+            let error = installation.err().expect("handwritten Host must conflict");
+            assert!(error.to_string().contains("handwritten Host"), "{error:#}");
+            assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
+            assert!(!managed(home.path()).exists());
+        } else {
+            installation
+                .unwrap()
+                .commit(&stanza("dev", "installed"))
+                .unwrap();
+            assert!(effective(home.path(), "dev").contains("hostname installed\n"));
+            assert!(effective(home.path(), "unrelated").contains("hostname handwritten\n"));
+        }
+    }
+}
+
+#[test]
+fn reinstall_repairs_percent_include_without_changing_user_configuration() {
+    let parent = test_home();
+    let home = parent.path().join("home 100%");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(home.join(".ssh")).unwrap();
+    let original = stanza("unrelated", "personal");
+    fs::write(root(&home), &original).unwrap();
+    plan(&home, "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    let published = fs::read_to_string(root(&home)).unwrap();
+    let obsolete = if published.contains("%%") {
+        published.replace("%%", "%")
+    } else {
+        published.replace('%', "%%")
+    };
+    fs::write(root(&home), obsolete).unwrap();
+    plan(&home, "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "repaired"))
+        .unwrap();
+    assert!(effective(&home, "dev").contains("hostname repaired\n"));
+    assert!(effective(&home, "unrelated").contains("hostname personal\n"));
+    assert_eq!(fs::read_to_string(root(&home)).unwrap(), published);
+    assert_eq!(
+        fs::read_to_string(home.join(".ssh/config.boxlite-backup")).unwrap(),
+        original
+    );
 }
 
 #[test]

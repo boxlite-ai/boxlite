@@ -215,6 +215,13 @@ permissions, symlinks and ambiguous configurations fail rather than being
 silently rewritten. Marked entries are checked for manual edits; use the CLI
 to update their target instead of editing the generated stanza.
 
+Include paths containing `%` work with both older and newer OpenSSH clients.
+The installer detects the client version: Include treats `%` literally before
+OpenSSH 9.9, while newer clients require `%%` for a literal percent sign.
+After changing OpenSSH versions, reinstall the alias. Reinstallation also repairs
+the previous managed Include encoding without changing handwritten configuration
+or replacing the original backup.
+
 The default SSH alias is the resolved box name, falling back to its complete ID.
 Aliases must be a single ASCII hostname-like value; unsupported names require
 `--alias NAME`. Aliases are stored in lowercase; use that spelling with `ssh`.

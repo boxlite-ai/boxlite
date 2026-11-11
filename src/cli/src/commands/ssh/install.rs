@@ -24,6 +24,8 @@ pub(super) struct Installation {
     managed: PathBuf,
     backup: PathBuf,
     prefix: String,
+    original_prefix_len: usize,
+    expand_include_tokens: bool,
     original: Option<Vec<u8>>,
     previous: Option<Vec<u8>>,
     entries: Vec<ManagedEntry>,
@@ -61,6 +63,7 @@ impl Installation {
             home.is_absolute(),
             "SSH configuration home must be absolute"
         );
+        let expand_include_tokens = include_expands_tokens()?;
         check_directory(home)?;
         let home = fs::canonicalize(home).context("resolve SSH configuration home")?;
         check_ancestors(&home)?;
@@ -105,16 +108,27 @@ impl Installation {
         let literal =
             glob::Pattern::escape(managed.to_str().context("SSH Include path must be UTF-8")?)
                 .replace('\\', r"[\\]");
-        let prefix = format!(
-            "{INCLUDE_MARKER}Include {}\n",
-            super::connect::ssh_config_path(Path::new(&literal))?
-        );
+        let prefix = include_prefix(&literal, expand_include_tokens)?;
+        let original_prefix_len = match original.as_deref() {
+            Some(original) if original.starts_with(prefix.as_bytes()) => prefix.len(),
+            Some(original) => {
+                let alternate = include_prefix(&literal, !expand_include_tokens)?;
+                if original.starts_with(alternate.as_bytes()) {
+                    alternate.len()
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        };
         let installation = Self {
             home,
             root,
             managed,
             backup,
             prefix,
+            original_prefix_len,
+            expand_include_tokens,
             original,
             previous,
             entries,
@@ -179,7 +193,8 @@ impl Installation {
             None
         } else {
             let mut bytes = self.prefix.as_bytes().to_vec();
-            bytes.extend_from_slice(self.original.as_deref().unwrap_or_default());
+            let original = self.original.as_deref().unwrap_or_default();
+            bytes.extend_from_slice(&original[self.original_prefix_len..]);
             Some(temporary_file(&self.root, &bytes)?)
         };
         if root_candidate.is_some()
@@ -233,17 +248,59 @@ impl Installation {
 
     fn scan_original(&self) -> Result<()> {
         let original = self.original.as_deref().unwrap_or_default();
-        let original = original
-            .strip_prefix(self.prefix.as_bytes())
-            .unwrap_or(original);
         scan_config(
-            original,
+            &original[self.original_prefix_len..],
             &self.home,
             &self.managed,
             &self.alias,
+            self.expand_include_tokens,
             &mut Vec::new(),
         )
     }
+}
+
+fn include_expands_tokens() -> Result<bool> {
+    let output = Command::new("ssh")
+        .arg("-V")
+        .stdin(Stdio::null())
+        .output()
+        .context("read OpenSSH version for Include syntax")?;
+    let banner = String::from_utf8_lossy(&output.stderr);
+    ensure!(output.status.success(), "OpenSSH ssh -V failed: {banner}");
+    let version = banner
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.strip_prefix("OpenSSH_"))
+        .context("cannot determine OpenSSH version for Include syntax")?;
+    let (major, minor) = version
+        .split_once('.')
+        .context("invalid OpenSSH version for Include syntax")?;
+    let minor_end = minor
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(minor.len());
+    let major: u32 = major.parse().context("invalid OpenSSH major version")?;
+    let minor: u32 = minor[..minor_end]
+        .parse()
+        .context("invalid OpenSSH minor version")?;
+    // Include gained percent-token expansion in OpenSSH 9.9.
+    Ok((major, minor) >= (9, 9))
+}
+
+fn include_prefix(literal: &str, expand_tokens: bool) -> Result<String> {
+    let value = super::connect::ssh_path(Path::new(literal))?;
+    let mut prefix = String::with_capacity(INCLUDE_MARKER.len() + value.len() + 11);
+    prefix.push_str(INCLUDE_MARKER);
+    prefix.push_str("Include \"");
+    for character in value.chars() {
+        match character {
+            '\\' | '"' => prefix.push('\\'),
+            '%' if expand_tokens => prefix.push('%'),
+            _ => {}
+        }
+        prefix.push(character);
+    }
+    prefix.push_str("\"\n");
+    Ok(prefix)
 }
 
 fn normalize_alias(alias: &str) -> Result<String> {
@@ -519,6 +576,7 @@ fn scan_config(
     home: &Path,
     managed: &Path,
     alias: &str,
+    expand_include_tokens: bool,
     stack: &mut Vec<PathBuf>,
 ) -> Result<()> {
     let text =
@@ -558,7 +616,7 @@ fn scan_config(
                 let paths = words(value)?;
                 ensure!(!paths.is_empty(), "empty SSH Include directive");
                 for path in paths {
-                    let pattern = include_pattern(&path, home)?;
+                    let pattern = include_pattern(&path, home, expand_include_tokens)?;
                     let managed_text = managed.to_str().context("managed SSH path is not UTF-8")?;
                     ensure!(
                         !glob::Pattern::new(&pattern)?.matches(managed_text),
@@ -586,7 +644,7 @@ fn scan_config(
                         let bytes = fs::read(&included)
                             .with_context(|| format!("read SSH Include {}", included.display()))?;
                         stack.push(canonical);
-                        scan_config(&bytes, home, managed, alias, stack)?;
+                        scan_config(&bytes, home, managed, alias, expand_include_tokens, stack)?;
                         stack.pop();
                     }
                 }
@@ -604,7 +662,7 @@ fn scan_config(
     Ok(())
 }
 
-fn include_pattern(value: &str, home: &Path) -> Result<String> {
+fn include_pattern(value: &str, home: &Path, expand_tokens: bool) -> Result<String> {
     ensure!(
         !value.is_empty() && !value.contains('$') && !value.contains('`'),
         "unsupported SSH Include environment expansion"
@@ -618,7 +676,7 @@ fn include_pattern(value: &str, home: &Path) -> Result<String> {
     let mut literal = String::new();
     let mut characters = value.chars();
     while let Some(character) = characters.next() {
-        if character == '%' {
+        if expand_tokens && character == '%' {
             ensure!(
                 characters.next() == Some('%'),
                 "unsupported SSH Include token expansion"
