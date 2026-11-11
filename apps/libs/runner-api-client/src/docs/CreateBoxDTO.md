@@ -7,7 +7,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **authToken** | **string** |  | [optional] [default to undefined]
 **cmd** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
-**cpuQuota** | **number** |  | [optional] [default to undefined]
+**cpuQuota** | **number** | CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1. | [optional] [default to undefined]
 **entrypoint** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **env** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
 **fromVolumeId** | **string** |  | [optional] [default to undefined]
@@ -16,6 +16,7 @@ Name | Type | Description | Notes
 **image** | **string** |  | [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
 **metadata** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
+**nestedVirtualization** | **boolean** | Requires explicit authorization on the Runner process; omitted means off. | [optional] [default to undefined]
 **organizationId** | **string** | Nullable for backward compatibility | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
 **otelEndpoint** | **string** |  | [optional] [default to undefined]
@@ -48,6 +49,7 @@ const instance: CreateBoxDTO = {
     image,
     memoryQuota,
     metadata,
+    nestedVirtualization,
     organizationId,
     osUser,
     otelEndpoint,

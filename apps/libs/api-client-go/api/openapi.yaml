@@ -4418,6 +4418,59 @@ paths:
       summary: Query recorded resource usage with fixed snapshot pagination
       tags:
       - admin
+  /admin/organizations/{organizationId}/nested-virtualization:
+    get:
+      operationId: adminGetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Read organization nesting allowlist
+      tags:
+      - admin
+    put:
+      operationId: adminSetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/adminSetOrganizationNestedVirtualization_request"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Set organization nesting allowlist
+      tags:
+      - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -7394,6 +7447,7 @@ components:
       type: object
     RunnerHealthcheck:
       example:
+        nestedVirtualizationEnabled: true
         supportsPrivileged: true
         metrics: ""
         serviceHealth:
@@ -7408,6 +7462,9 @@ components:
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        nestedVirtualizationEnabled:
+          description: Runner runtime authorizes nested virtualization
+          type: boolean
         supportsPrivileged:
           description: Runner preserves the guest privileged creation option
           type: boolean
@@ -9937,6 +9994,17 @@ components:
       - message
       - statusCode
       type: object
+    AdminOrganizationNestedVirtualization:
+      example:
+        enabled: true
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
+      type: object
     WebhookAppPortalAccess:
       example:
         token: appsk_...
@@ -10375,6 +10443,16 @@ components:
           type: array
       required:
       - series
+      type: object
+    adminSetOrganizationNestedVirtualization_request:
+      additionalProperties: false
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
       type: object
     WebhookController_getStatus_200_response:
       example:

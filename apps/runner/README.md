@@ -4,33 +4,30 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
-The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
-Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
-API for SDK clients and the control-plane API. One runner process hosts many
-boxes; each box hosts many executions; each execution can be attached to at
-most one client at a time.
+## Nested virtualization capability
 
-Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3003`
-behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
-and [runner operations](../infra/docs/runners.md).
+Cloud requests nesting when creating a Box. Runner captures its process
+`BOXLITE_EXPERIMENTAL` at startup and combines authorization with current Linux
+Intel/AMD KVM nested settings. Missing permission or unsupported hosts select an
+ordinary new Box. Guest privilege remains independent.
 
-`BOXLITE_KERNEL_PATH` selects an operator-installed kernel for newly created
-Boxes. It must be an absolute readable regular file; invalid settings fail
-startup. The Runner enables the local `custom-kernel` RC capability through
-the Go/C SDK and preserves the guest privilege policy separately. An unset
-path keeps the bundled default. Cloud deployment downloads and verifies the
-file; the Runner itself performs no download. Existing Boxes retain their
-saved boot configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
-custom-kernel Boxes: clearing it removes the feature opt-in needed to restart them.
-The `--kernel` flag belongs to the local CLI; the Runner uses the environment
-variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
+V0 `/info` reports `nestedVirtualizationEnabled`; Cloud carries the report through
+its authenticated V2 heartbeat. Actual creation uses the standard Go
+`AdvancedBoxOptions.SetNestedVirtualization` binding. Runtime create saves this
+existing option in BoxConfig. No Cloud per-box database field is added.
 
-The health response includes `custom_kernel: "supported"` to identify binaries
-that implement this setting. It describes build capability; deployment also
-checks the running process's kernel environment and listening socket.
+Start uses ordinary `Box.Start(ctx)` and the saved configuration. Organization
+allowlist changes affect future creates, never upgrade or downgrade an existing
+Box on stop/start. Creation replay adopts the existing choice. Local runtime
+compatibility checks, kernel and privileged settings retain their main behavior.
+A nested Box can fail to start if its host later cannot provide that capability.
 
-For the system-wide context (CDN, load balancers, where the runner fits in
-the request path), see the [hosted platform](../../docs/contributing/architecture/platform/README.md).
+There is no private Runner start bridge, start-option ABI or Runner-only SDK build
+tag. Runner tests cover creation/replay and optional fallback without booting VMs;
+real VM/L2 and cross-Runner reconstruction require separate qualification.
+
+Cloud stages deliver process settings through
+[`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
 
 ---
 
@@ -872,18 +869,17 @@ that the guest listener restarts.
 
 ```bash
 # All runner tests
-cd apps/runner && go test -tags boxlite_dev ./...
+make test:apps:runner
 
 # Just the attach + exec_manager suites
-cd apps/runner && go test -tags boxlite_dev ./pkg/api/controllers/... ./pkg/boxlite/...
+make test:apps:runner FILTER='Attach|ExecManager'
 
 # With race detector (recommended; cleanupLoop ticker + attach goroutines)
-cd apps/runner && go test -tags boxlite_dev -race ./...
+make test:apps:runner GOTEST_FILTER='-race'
 ```
 
-The `boxlite_dev` build tag is required because the Go SDK uses FFI
-symbols that aren't in the released `libboxlite.a`. The dev tag links
-against the local cargo-built version.
+These make targets configure `boxlite_dev` to link the local C library.
+Runner uses the standard Go SDK start operation without a separate build tag.
 
 If you hit "libboxlite.a not found" or unresolved-symbol errors:
 

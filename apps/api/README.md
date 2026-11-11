@@ -384,6 +384,10 @@ described in the [DinD guide](../../docs/guides/docker-in-docker.md).
 
 Migration-backed integration suites that query `Box`, including usage accounting,
 run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
+The organization nesting migration adds only the Admin allowlist switch; nesting
+is selected only at Cloud create; restart uses the existing runtime BoxConfig,
+without a new Cloud Box field. See
+[the rollout contract](../../docs/contributing/architecture/platform/api.md#organization-nested-virtualization-allowlist-rc).
 
 ## GitHub CI installation connect (in development)
 

@@ -450,3 +450,14 @@ Go exits. Full VM archive round-trips remain in the integration suite.
 ## License
 
 Apache-2.0
+
+### Nested virtualization at creation
+
+Configure `AdvancedBoxOptions.SetNestedVirtualization(true)` and pass the handle
+through `WithAdvancedOptions` to create a nested Box. The runtime must explicitly
+authorize `nested-virtualization` using `WithExperimentalFeatures`. The existing
+runtime create operation saves the option; `Box.Start(ctx)` keeps that saved value.
+
+Runner reads its feature ENV at startup and chooses this creation option only for
+eligible Cloud requests on supported hosts. This adds no start options or change
+to default local creation. Changing organization policy affects future creates.
