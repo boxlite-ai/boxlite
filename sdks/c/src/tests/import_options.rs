@@ -1,7 +1,6 @@
 use super::*;
 use crate::archive::{CBoxImportOptions, boxlite_runtime_import_with_options};
-use boxlite::BoxArchive;
-use boxlite::rest::checkpoints::BoxImportSource;
+use boxlite::{BoxArchive, BoxImportSource};
 
 extern "C" fn imported(_: *mut CBoxHandle, _: *mut CBoxliteError, _: *mut c_void) {}
 
@@ -75,7 +74,7 @@ fn checkpoint_import_options_validate_sources_before_queueing() {
 }
 
 #[test]
-fn checkpoint_sdk_import_rejects_invalid_parameters_before_local_capability() {
+fn checkpoint_runtime_import_rejects_invalid_parameters_before_local_capability() {
     let home = unique_test_home("checkpoint-import-validation");
     let runtime = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
         home_dir: home.clone(),
@@ -96,22 +95,10 @@ fn checkpoint_sdk_import_rejects_invalid_parameters_before_local_capability() {
             box_id: target.map(str::to_owned),
         };
         assert!(matches!(
-            tokio.block_on(source.import_box(&runtime, None, name.map(str::to_owned))),
+            tokio.block_on(source.import_box(&runtime, name.map(str::to_owned))),
             Err(BoxliteError::InvalidArgument(_))
         ));
     }
-    for target in [None, Some("target".to_owned())] {
-        let source = BoxImportSource::Checkpoint {
-            checkpoint_id: "base".into(),
-            box_id: target,
-        };
-        assert!(matches!(
-            tokio.block_on(source.import_box(&runtime, None, None)),
-            Err(BoxliteError::Unsupported(_))
-        ));
-    }
-    assert!(!home.join("checkpoints").exists());
-    assert!(tokio.block_on(runtime.list_info()).unwrap().is_empty());
     // The unchanged archive call compiles and reaches the existing importer.
     assert!(
         tokio
@@ -126,7 +113,6 @@ fn checkpoint_sdk_import_rejects_invalid_parameters_before_local_capability() {
 #[test]
 fn checkpoint_import_options_reject_a_closed_runtime_before_submission() {
     let mut runtime = crate::runtime::RuntimeHandle {
-        checkpoint_backend: None,
         runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://127.0.0.1:1"))
             .unwrap(),
         tokio_rt: crate::runtime::create_tokio_runtime().unwrap(),

@@ -759,7 +759,6 @@ mod phase2_regression_tests {
         ))
         .expect("rest runtime");
         Box::into_raw(Box::new(RuntimeHandle {
-            checkpoint_backend: None,
             runtime,
             tokio_rt,
             liveness: Arc::new(RuntimeLiveness::new()),
@@ -1040,7 +1039,6 @@ mod close_and_free_tests {
         ))
         .expect("rest runtime");
         Box::into_raw(Box::new(RuntimeHandle {
-            checkpoint_backend: None,
             runtime,
             tokio_rt,
             liveness: Arc::new(RuntimeLiveness::new()),

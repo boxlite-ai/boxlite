@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use anyhow::{Result, bail};
-use boxlite::{CheckpointHandle, CheckpointInfo};
+use boxlite::{BoxliteRuntime, CheckpointInfo};
 use clap::{Args, Subcommand};
 use tabled::Tabled;
 
@@ -62,19 +62,18 @@ pub struct DeleteArgs {
     pub force: bool,
 }
 
-pub(crate) fn backend(
-    global: &GlobalFlags,
-) -> Result<std::sync::Arc<dyn boxlite::runtime::checkpoints::CheckpointBackend>> {
-    let Some(options) = global.rest_options()? else {
+pub(crate) fn runtime(global: &GlobalFlags) -> Result<BoxliteRuntime> {
+    if !global.targets_rest()? {
         bail!(
             "checkpoints are only implemented for REST runtimes; select a REST context or use --url"
         );
-    };
-    Ok(boxlite::rest::checkpoints::checkpoint_backend(&options)?)
+    }
+    global.create_runtime()
 }
 
 pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
-    let checkpoints = CheckpointHandle::new(Some(backend(global)?));
+    let rt = runtime(global)?;
+    let checkpoints = rt.checkpoints();
     match args.command {
         CheckpointCommand::Create(args) => {
             let info = checkpoints.create(&args.source, args.name).await?;

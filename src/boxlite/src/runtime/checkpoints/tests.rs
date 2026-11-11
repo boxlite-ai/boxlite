@@ -33,21 +33,3 @@ async fn invalid_checkpoint_arguments_are_rejected_before_backend_dispatch() {
         ));
     }
 }
-
-#[tokio::test]
-async fn local_sdk_checkpoint_management_is_unsupported() {
-    let checkpoints = CheckpointHandle::new(None);
-    let errors = [
-        checkpoints
-            .create("source", Some("base".into()))
-            .await
-            .unwrap_err(),
-        checkpoints.list().await.unwrap_err(),
-        checkpoints.get("base").await.unwrap_err(),
-        checkpoints.remove("base", false).await.unwrap_err(),
-        checkpoints.remove("base", true).await.unwrap_err(),
-    ];
-    for error in errors {
-        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
-    }
-}

@@ -27,10 +27,13 @@ pub struct ImportArgs {
 
 pub async fn execute(args: ImportArgs, global: &GlobalFlags) -> Result<()> {
     let bx = if let Some(key) = args.checkpoint {
-        let backend = checkpoint::backend(global)?;
-        backend
-            .import_box(&key, args.name, args.box_id.as_deref())
-            .await?
+        let rt = checkpoint::runtime(global)?;
+        boxlite::BoxImportSource::Checkpoint {
+            checkpoint_id: key,
+            box_id: args.box_id,
+        }
+        .import_box(&rt, args.name)
+        .await?
     } else {
         let path = args
             .archive

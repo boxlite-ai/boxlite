@@ -18,13 +18,13 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ### Managed checkpoints
 
-Checkpoint operations use a separate REST backend in the SDK adapter. The Rust
-runtime keeps `import_box(BoxArchive, name)` for archive files; it has no checkpoint
-selector or checkpoint management entry point. Local SDK checkpoint requests return
-`Unsupported`. Remote import uses the existing JSON `POST /boxes/import` endpoint;
-runner downloads the archive under its checkpoint work directory, imports the local
-file, and removes staging only after native import finishes.
-
+The runtime facade owns `checkpoint_backend`, shared by SDK bindings and the CLI.
+The shared REST import adapter obtains that capability from the runtime and sends
+JSON to the existing `POST /boxes/import` endpoint.
+Native disk import and provision retain their archive-only implementation; existing
+archive calls remain compatible. Local checkpoint requests return `Unsupported`.
+Runner stages downloads under its checkpoint work root and removes staging only
+after native import finishes.
 
 `Runtime.Import(ctx, archivePath, name)` retains its original signature.
 Use `Runtime.ImportWithOptions` with `ImportOptions{CheckpointID: key, BoxID: target}` for checkpoint creation or replacement.

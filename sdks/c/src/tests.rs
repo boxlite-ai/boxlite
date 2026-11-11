@@ -268,7 +268,6 @@ fn test_rest_runtime_images_refuses_pull() {
     let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://localhost:1"))
         .expect("create rest runtime");
     let mut runtime_handle = crate::runtime::RuntimeHandle {
-        checkpoint_backend: None,
         runtime,
         tokio_rt,
         liveness: Arc::new(crate::runtime::RuntimeLiveness::new()),

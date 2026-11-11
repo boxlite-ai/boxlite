@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::rest::checkpoints::{BoxImportSource, checkpoint_backend};
-use boxlite::runtime::checkpoints::CheckpointBackend;
-use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxImportSource, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
@@ -17,7 +15,6 @@ use crate::volumes::PyVolumeHandle;
 #[pyclass(name = "Boxlite")]
 pub(crate) struct PyBoxlite {
     pub(crate) runtime: Arc<BoxliteRuntime>,
-    checkpoint_backend: Option<Arc<dyn CheckpointBackend>>,
 }
 
 #[pymethods]
@@ -31,7 +28,6 @@ impl PyBoxlite {
 
         Ok(Self {
             runtime: Arc::new(runtime),
-            checkpoint_backend: None,
         })
     }
 
@@ -44,7 +40,6 @@ impl PyBoxlite {
         let runtime = BoxliteRuntime::default_runtime();
         Ok(Self {
             runtime: Arc::new(runtime.clone()),
-            checkpoint_backend: None,
         })
     }
 
@@ -62,12 +57,9 @@ impl PyBoxlite {
     ///     runtime = boxlite.Boxlite.rest(opts)
     #[staticmethod]
     fn rest(options: PyBoxliteRestOptions) -> PyResult<Self> {
-        let options = options.into();
-        let checkpoint_backend = checkpoint_backend(&options).map_err(map_err)?;
-        let runtime = BoxliteRuntime::rest(options).map_err(map_err)?;
+        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
         Ok(Self {
             runtime: Arc::new(runtime),
-            checkpoint_backend: Some(checkpoint_backend),
         })
     }
 
@@ -182,9 +174,7 @@ impl PyBoxlite {
     #[getter]
     fn checkpoints(&self) -> crate::checkpoints::PyCheckpointHandle {
         crate::checkpoints::PyCheckpointHandle {
-            handle: Arc::new(boxlite::CheckpointHandle::new(
-                self.checkpoint_backend.clone(),
-            )),
+            handle: Arc::new(self.runtime.checkpoints()),
         }
     }
 
@@ -263,7 +253,6 @@ impl PyBoxlite {
         box_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
-        let checkpoint_backend = self.checkpoint_backend.clone();
         if untrusted && checkpoint_id.is_some() {
             return Err(map_err(boxlite::BoxliteError::InvalidArgument(
                 "untrusted requires an archive source".into(),
@@ -279,10 +268,7 @@ impl PyBoxlite {
         let source =
             BoxImportSource::from_options(archive, checkpoint_id, box_id).map_err(map_err)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let handle = source
-                .import_box(&runtime, checkpoint_backend.as_deref(), name)
-                .await
-                .map_err(map_err)?;
+            let handle = source.import_box(&runtime, name).await.map_err(map_err)?;
             Ok(PyBox {
                 handle: Arc::new(handle),
             })
