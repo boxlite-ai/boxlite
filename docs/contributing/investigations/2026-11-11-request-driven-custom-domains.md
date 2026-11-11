@@ -135,6 +135,36 @@ The prior implementation failed nine assertions covering continuation controls, 
 After implementation, all 1,148 Dashboard tests and the production build pass through make targets.
 The local browser preview test also runs through make and confirms both successful verification and failure-then-retry reopen with progress but no HTTPS continuation button.
 
+### DNS preparation without an intermediate screen
+
+The create response may contain a saved draft without DNS records; selecting it currently opens an empty management screen with a second continuation action.
+Keep the hostname form until all three records are available, then display the existing DNS configuration directly.
+For example, a successful Get DNS configuration request opens the three records; an incomplete response leaves the hostname form with a retry message.
+
+Reuse the existing create/prepare endpoints and React Query mutation state; no new server workflow, background polling or dependency is needed.
+The installed mutation implementation awaits its callbacks, so avoid awaiting an unrelated list refresh before displaying the operation result.
+Cache the returned draft directly, appending new IDs and replacing existing IDs; cancel outstanding list reads before either preparation operation.
+Create is explicit; subsequent attempts on a saved draft use prepare with the same ID and locked hostname.
+Opening an incomplete draft only displays this form and never creates resources or starts preparation automatically.
+
+| Option | Outcome | Decision |
+| --- | --- | --- |
+| Keep the management screen | Requires the redundant continuation step | Reject |
+| Poll prepare until records arrive | Adds timers, cancellation and retry policy | Reject for this presentation change |
+| Reuse the hostname form and explicit preparation | Preserves bounded requests and draft identity | Pick |
+
+While requesting, disable submission, hostname editing and dismissal.
+An incomplete response keeps Get DNS configuration available with inline status; provider or transport failure keeps the error and permits retry.
+Saved incomplete drafts retain deletion, including the existing confirmation, so they cannot strand the organization quota.
+Deletion confirmation also blocks form submission by Enter.
+If the first create response is lost before its ID arrives, retrying the same hostname uses the existing server-side create deduplication.
+Confirmed, Ready and superseded domains retain their existing management behavior.
+Remove the sentence “DNS is not checked until you confirm.” without changing when DNS verification runs.
+
+Regression checks cover complete responses with stale list data, pending requests, incomplete/failed drafts, retry without duplicate creation, deletion, subscription restrictions and ordinary browsing without writes.
+The existing tests that require Continue getting DNS configuration are superseded by the hostname-form contract.
+Preparation does not promise immediate DNS records after a timeout and never treats an incomplete response as ready for verification.
+
 ### HTTPS failure retry
 
 After DNS confirmation, an incomplete configuration with an error offers Retry and a support@boxlite.ai contact link beneath its error message.

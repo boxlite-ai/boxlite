@@ -23,7 +23,7 @@ const ERRORS: Record<string, string> = {
   certificate_dns_mismatch:
     'The certificate authorization CNAME is missing or does not match. Copy its exact name and value below; do not replace the traffic CNAME.',
   confirmation_required: 'Configure all three records, then confirm to verify DNS.',
-  dns_configuration_pending: 'Continue getting DNS configuration before verifying.',
+  dns_configuration_pending: 'DNS configuration is not ready yet. Please try again.',
   domain_superseded: 'A newer verified application owns this hostname. This configuration is no longer valid.',
   domain_creation_limited: 'Wait for pending resource cleanup before creating another configuration.',
   domain_already_owned: 'This hostname is already held by another organization. Release it there before retrying.',
@@ -56,13 +56,14 @@ function DomainStatus({ domain, active }: { domain: CustomDomain; active: boolea
             ? 'Ready'
             : 'Setup completed'
           : domain.confirmed
-            ? 'Waiting for HTTPS'
+            ? 'Waiting for HTTPS CA'
             : domain.dnsRecords.length
               ? 'Waiting for DNS verification'
               : 'Getting DNS configuration'
   return (
     <StatusIndicator
       label={label}
+      normalizeLabel={label !== 'Waiting for HTTPS CA'}
       color={`hsl(var(--${domain.errorCode ? 'warning' : domain.ready && active ? 'brand' : 'muted-foreground'}))`}
     />
   )
@@ -109,12 +110,25 @@ export default function CustomDomains({
       client.invalidateQueries({ queryKey: queryKeys.domains.list(organizationId) }),
     ])
   }
+  const saveDomain = (result: CustomDomain) => {
+    client.setQueryData<CustomDomainList>(key, (current) => {
+      if (!current) return current
+      const exists = current.domains.some((item) => item.id === result.id)
+      return {
+        ...current,
+        domains: exists
+          ? current.domains.map((item) => (item.id === result.id ? result : item))
+          : [...current.domains, result],
+      }
+    })
+  }
   const create = useMutation({
     mutationKey: key,
+    onMutate: () => client.cancelQueries({ queryKey: key }),
     mutationFn: () => api.createCustomDomain(organizationId, hostname),
-    onSuccess: async (domain) => {
+    onSuccess: (domain) => {
+      saveDomain(domain)
       setSelected(domain.id)
-      await refresh()
     },
   })
   const action = useMutation({
@@ -134,14 +148,7 @@ export default function CustomDomains({
     },
     onSuccess: async (result, operation) => {
       if (result) {
-        client.setQueryData<CustomDomainList>(
-          key,
-          (current) =>
-            current && {
-              ...current,
-              domains: current.domains.map((item) => (item.id === result.id ? result : item)),
-            },
-        )
+        saveDomain(result)
         // A slow held-domain refresh must not delay the verification result.
         void client.invalidateQueries({ queryKey: queryKeys.domains.list(organizationId) })
         return
@@ -156,6 +163,9 @@ export default function CustomDomains({
   const data = query.data
   const canCreate = canManage && data?.enabled && data.subscription !== 'required'
   const domain = data?.domains.find((value) => value.id === selected)
+  const showHostnameForm =
+    !domain || (!domain.confirmed && !domain.ready && domain.phase !== 'superseded' && domain.dnsRecords.length < 3)
+  const formHostname = domain?.hostname ?? hostname
   const canRetryHttps = domain?.confirmed && !domain.ready && !!domain.errorCode && domain.phase !== 'superseded'
   const target = held.find((value) => value.hostname === domain?.hostname)?.target
   const run = (type: 'verify' | 'prepare' | 'retry' | 'delete' | 'bind' | 'unbind') => {
@@ -203,7 +213,6 @@ export default function CustomDomains({
     Number(port) >= 1 &&
     Number(port) <= 65535 &&
     !busy
-  const stepLabel = !domain?.dnsRecords.length ? 'Continue getting DNS configuration' : 'Configured, verify'
   const copyRecord = async (value: string, label: string) => {
     if (await copyToClipboard(value)) toast.success(`${label} copied`)
     else toast.error('Could not copy DNS record. Select the value and copy it manually.')
@@ -288,23 +297,29 @@ export default function CustomDomains({
           }
         }}
       >
-        <FormDialogContent className={domain ? 'sm:max-w-[680px]' : 'sm:max-w-[480px]'} showCloseButton={!busy}>
+        <FormDialogContent
+          className={showHostnameForm ? 'sm:max-w-[480px]' : 'sm:max-w-[680px]'}
+          showCloseButton={!busy}
+        >
           <FormDialogHeader>
             <DialogTitle className="break-all">{domain?.hostname ?? 'Add custom domain'}</DialogTitle>
             <DialogDescription className="mt-2 text-body leading-relaxed">
-              {domain
-                ? 'Manage DNS, HTTPS and the Box this domain points to.'
-                : 'Use a subdomain you own, such as app.example.com. BoxLite manages HTTPS.'}
+              {showHostnameForm
+                ? 'Use a subdomain you own, such as app.example.com. BoxLite manages HTTPS.'
+                : 'Manage DNS, HTTPS and the Box this domain points to.'}
             </DialogDescription>
           </FormDialogHeader>
           <FormDialogBody className="space-y-5">
-            {!domain ? (
+            {showHostnameForm ? (
               <form
                 id="custom-domain-create"
                 className="space-y-4"
                 onSubmit={(event) => {
                   event.preventDefault()
-                  if (canCreate && hostname.trim() && !busy) create.mutate()
+                  if (canCreate && formHostname.trim() && !busy && !deleting) {
+                    if (domain) run('prepare')
+                    else create.mutate()
+                  }
                 }}
               >
                 <label className="block text-meta font-medium" htmlFor="custom-hostname">
@@ -314,7 +329,8 @@ export default function CustomDomains({
                   id="custom-hostname"
                   aria-label="Custom hostname"
                   className="font-mono"
-                  value={hostname}
+                  value={formHostname}
+                  disabled={busy || !!domain}
                   maxLength={221}
                   placeholder="app.example.com"
                   onChange={(event) => setHostname(event.target.value)}
@@ -324,9 +340,16 @@ export default function CustomDomains({
                     An active subscription and an enabled deployment are required to add a domain.
                   </p>
                 )}
-                {create.isError && (
+                {!domain && create.isError && (
                   <p role="alert" className="text-destructive">
                     {create.error.message}
+                  </p>
+                )}
+                {domain && !busy && (
+                  <p role={domain.errorCode ? 'alert' : 'status'} className="text-muted-foreground">
+                    {domain.errorCode
+                      ? (ERRORS[domain.errorCode] ?? 'Could not get DNS configuration. Please try again.')
+                      : ERRORS.dns_configuration_pending}
                   </p>
                 )}
               </form>
@@ -339,17 +362,15 @@ export default function CustomDomains({
                       ? 'A newer verified application owns this hostname. This configuration is no longer valid.'
                       : domain.ready
                         ? 'HTTPS is ready. Bind a Box port with a public tunnel and inbound access enabled.'
-                        : !domain.dnsRecords.length
-                          ? 'Getting all three DNS records. You can continue preparation if it takes longer.'
-                          : !domain.confirmed
-                            ? 'Add all three records below, then click Configured, verify. DNS is not checked until you confirm.'
-                            : canRetryHttps
-                              ? 'DNS verification passed. HTTPS setup needs attention.'
-                              : domain.submissionStatus === 'accepted'
-                                ? 'DNS verification passed. HTTPS is being enabled. You can leave this page and return later.'
-                                : domain.submissionStatus === 'unknown'
-                                  ? 'Confirming whether the certificate request was accepted. Do not create another configuration.'
-                                  : 'DNS verification passed, but the certificate request has not been submitted.'}
+                        : !domain.confirmed
+                          ? 'Add all three records below, then click Configured, verify.'
+                          : canRetryHttps
+                            ? 'DNS verification passed. HTTPS setup needs attention.'
+                            : domain.submissionStatus === 'accepted'
+                              ? 'DNS verification passed. HTTPS is being enabled. You can leave this page and return later.'
+                              : domain.submissionStatus === 'unknown'
+                                ? 'Confirming whether the certificate request was accepted. Do not create another configuration.'
+                                : 'DNS verification passed, but the certificate request has not been submitted.'}
                   </p>
                   {!domain.ready && domain.phase !== 'superseded' && (
                     <p className="text-meta text-muted-foreground">DNS propagation and HTTPS setup can take time.</p>
@@ -497,24 +518,43 @@ export default function CustomDomains({
                     )}
                   </div>
                 </details>
-                {deleting === domain.id && (
-                  <p role="alert" className="border-l-2 border-destructive pl-3 leading-relaxed">
-                    Delete {domain.hostname}? Access stops and ownership is released. Remove its DNS records afterward.
-                  </p>
-                )}
-                {action.isError && (
-                  <p role="alert" className="text-destructive">
-                    {action.variables?.type === 'retry'
-                      ? 'Could not retry HTTPS setup. Please try again or contact support@boxlite.ai.'
-                      : action.error.message}
-                  </p>
-                )}
               </>
+            )}
+            {domain && deleting === domain.id && (
+              <p role="alert" className="border-l-2 border-destructive pl-3 leading-relaxed">
+                Delete {domain.hostname}? Access stops and ownership is released. Remove its DNS records afterward.
+              </p>
+            )}
+            {action.isError && (
+              <p role="alert" className="text-destructive">
+                {action.variables?.type === 'retry'
+                  ? 'Could not retry HTTPS setup. Please try again or contact support@boxlite.ai.'
+                  : action.error.message}
+              </p>
             )}
           </FormDialogBody>
           <FormDialogFooter className="flex-wrap">
-            {!domain ? (
+            {domain && deleting === domain.id ? (
               <>
+                <AsciiButton disabled={busy} onClick={() => setDeleting(null)}>
+                  Keep domain
+                </AsciiButton>
+                <AsciiButton variant="dangerSolid" disabled={busy} onClick={() => run('delete')}>
+                  Confirm deletion
+                </AsciiButton>
+              </>
+            ) : showHostnameForm ? (
+              <>
+                {domain && (
+                  <AsciiButton
+                    variant="danger"
+                    aria-label="Delete configuration"
+                    disabled={busy}
+                    onClick={() => setDeleting(domain.id)}
+                  >
+                    Delete
+                  </AsciiButton>
+                )}
                 <AsciiButton disabled={busy} onClick={() => setOpen(false)}>
                   Cancel
                 </AsciiButton>
@@ -522,18 +562,9 @@ export default function CustomDomains({
                   variant="primary"
                   type="submit"
                   form="custom-domain-create"
-                  disabled={!canCreate || !hostname.trim() || busy}
+                  disabled={!canCreate || !formHostname.trim() || busy}
                 >
-                  {create.isPending ? 'Getting DNS configuration…' : 'Get DNS configuration'}
-                </AsciiButton>
-              </>
-            ) : deleting === domain.id ? (
-              <>
-                <AsciiButton disabled={busy} onClick={() => setDeleting(null)}>
-                  Keep domain
-                </AsciiButton>
-                <AsciiButton variant="dangerSolid" disabled={busy} onClick={() => run('delete')}>
-                  Confirm deletion
+                  {busy ? 'Getting DNS configuration…' : 'Get DNS configuration'}
                 </AsciiButton>
               </>
             ) : (
@@ -563,16 +594,12 @@ export default function CustomDomains({
                 ) : (
                   !domain.confirmed &&
                   domain.phase !== 'superseded' && (
-                    <AsciiButton
-                      variant="primary"
-                      disabled={!canCreate || busy}
-                      onClick={() => run(!domain.dnsRecords.length ? 'prepare' : 'verify')}
-                    >
+                    <AsciiButton variant="primary" disabled={!canCreate || busy} onClick={() => run('verify')}>
                       {action.isPending
                         ? action.variables?.type === 'verify'
                           ? 'Verifying DNS, please wait…'
                           : 'Checking progress…'
-                        : stepLabel}
+                        : 'Configured, verify'}
                     </AsciiButton>
                   )
                 )}

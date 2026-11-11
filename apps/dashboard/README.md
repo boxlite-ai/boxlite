@@ -660,6 +660,11 @@ but excluding replaced configurations. Initial loading and initial-load errors s
 The list omits the unavailable-subscription banner and quota footer; the empty state
 keeps its title without explanatory copy. Subscription checks and management actions remain unchanged.
 The add dialog presents the hostname field without DNS instructions or repeated quota guidance; validation and action errors remain visible.
+Get DNS configuration stays on the hostname form while requesting records, with editing and duplicate submissions disabled.
+A complete response opens all three records directly, without an intermediate management screen or continuation button.
+Incomplete responses and preparation errors remain on the form for explicit retry; a saved draft locks the hostname and retries prepare with the same ID.
+Reopening an incomplete draft does not start preparation automatically. Drafts can still be deleted after confirmation, including when the subscription is inactive.
+Create and prepare responses update the list cache directly, so a delayed list response does not hide newly prepared records.
 The Custom domains list quietly reads status every minute while any setup is incomplete.
 It stops when every setup is ready or replaced, when empty or disabled, or when leaving the tab.
 Hidden browser tabs, unconfirmed DNS dialogs and pending actions pause interval reads.

@@ -106,7 +106,7 @@ describe('Custom domains setup', () => {
         await render()
         const row = button('Manage app.example.com')
         const toolbar = document.querySelector('.resource-toolbar')
-        expect(row.textContent).toContain('Waiting for https')
+        expect(row.textContent).toContain('Waiting for HTTPS CA')
         let finish!: (value: CustomDomainList) => void
         api.listCustomDomains.mockImplementationOnce(
           () =>
@@ -124,7 +124,7 @@ describe('Custom domains setup', () => {
         expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
         expect(button('Manage app.example.com')).toBe(row)
         expect(document.body.textContent).not.toContain('Loading custom domains')
-        expect(row.textContent).toContain('Waiting for https')
+        expect(row.textContent).toContain('Waiting for HTTPS CA')
         await act(async () => {
           finish({ ...response, domains: [domain] })
         })
@@ -162,7 +162,7 @@ describe('Custom domains setup', () => {
       await settle()
       expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
       expect(button('Manage app.example.com')).toBe(row)
-      expect(row.textContent).toContain('Waiting for https')
+      expect(row.textContent).toContain('Waiting for HTTPS CA')
       expect(document.body.textContent).not.toContain('Unable to load custom domains.')
       expect(document.body.textContent).not.toContain('Loading custom domains')
       await act(async () => {
@@ -231,7 +231,7 @@ describe('Custom domains setup', () => {
           await vi.advanceTimersByTimeAsync(60_000)
         })
         expect(api.listCustomDomains).toHaveBeenCalledTimes(3)
-        expect(button('Manage app.example.com').textContent).toContain('Waiting for https')
+        expect(button('Manage app.example.com').textContent).toContain('Waiting for HTTPS CA')
         await act(async () => {
           await vi.advanceTimersByTimeAsync(60_000)
         })
@@ -450,6 +450,157 @@ describe('Custom domains setup', () => {
     expect(api.bindDomain).not.toHaveBeenCalled()
   })
 
+  it('keeps the hostname form busy then displays the create response without a stale list refresh', async () => {
+    response.domains = []
+    let complete!: (value: CustomDomain) => void
+    api.createCustomDomain.mockImplementation(
+      () =>
+        new Promise<CustomDomain>((resolve) => {
+          complete = resolve
+        }),
+    )
+    await render()
+    await click('Add custom domain')
+    input('Custom hostname', 'app.example.com')
+    const form = document.querySelector('form')
+    const hostname = document.querySelector<HTMLInputElement>('[aria-label="Custom hostname"]')!
+    await act(async () => button('Get DNS configuration').click())
+    await settle()
+    expect(document.querySelector('form')).toBe(form)
+    expect(hostname.disabled || hostname.readOnly).toBe(true)
+    expect(button('Getting DNS configuration…').disabled).toBe(true)
+    expect(button('Close')).toBeUndefined()
+    await act(async () => button('Getting DNS configuration…').click())
+    expect(api.createCustomDomain).toHaveBeenCalledTimes(1)
+    await act(async () => complete({ ...domain, ready: false, confirmed: false, phase: 'pending_certificate_dns' }))
+    await settle()
+    expect(button('Configured, verify')).toBeDefined()
+    expect(document.querySelectorAll('[aria-label^="Copy name for"]').length).toBe(3)
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain(
+      'DNS is not checked until you confirm.',
+    )
+    expect(api.listCustomDomains).toHaveBeenCalledTimes(1)
+    expect(api.prepareCustomDomain).not.toHaveBeenCalled()
+  })
+
+  it.each([null, 'provider_unavailable'])(
+    'keeps an incomplete create response with error %s in the hostname form and resumes its draft',
+    async (errorCode) => {
+      response.domains = []
+      const draft: CustomDomain = { ...domain, ready: false, confirmed: false, dnsRecords: [], errorCode }
+      api.createCustomDomain.mockResolvedValue(draft)
+      api.prepareCustomDomain.mockResolvedValue({
+        ...domain,
+        ready: false,
+        confirmed: false,
+        phase: 'pending_certificate_dns',
+      })
+      await render()
+      await click('Add custom domain')
+      input('Custom hostname', domain.hostname)
+      const form = document.querySelector('form')
+      await click('Get DNS configuration')
+      expect(document.querySelector('form')).toBe(form)
+      const hostname = document.querySelector<HTMLInputElement>('[aria-label="Custom hostname"]')!
+      expect(hostname.value).toBe(domain.hostname)
+      expect(hostname.disabled || hostname.readOnly).toBe(true)
+      expect(button('Continue getting DNS configuration')).toBeUndefined()
+      expect(button('Configured, verify')).toBeUndefined()
+      expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('DNS help and timing')
+      expect(button('Get DNS configuration').disabled).toBe(false)
+      expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0].id).toBe(domain.id)
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+        errorCode ? 'HTTPS service is temporarily unavailable' : 'DNS configuration is not ready yet.',
+      )
+      await click('Get DNS configuration')
+      expect(api.prepareCustomDomain).toHaveBeenCalledWith('org-1', domain.id)
+      expect(api.createCustomDomain).toHaveBeenCalledTimes(1)
+      expect(button('Configured, verify')).toBeDefined()
+      expect(document.querySelectorAll('[aria-label^="Copy name for"]').length).toBe(3)
+      expect(api.verifyCustomDomain).not.toHaveBeenCalled()
+    },
+  )
+
+  it('retains the draft form after a preparation transport error and retries the same ID', async () => {
+    response.domains = [{ ...domain, ready: false, confirmed: false, dnsRecords: [] }]
+    api.prepareCustomDomain
+      .mockRejectedValueOnce(new Error('Request timed out'))
+      .mockResolvedValueOnce({ ...domain, ready: false, confirmed: false })
+    await render()
+    await click('Manage app.example.com')
+    expect(button('Get DNS configuration')).toBeDefined()
+    await click('Get DNS configuration')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Request timed out')
+    expect(button('Get DNS configuration').disabled).toBe(false)
+    await click('Get DNS configuration')
+    expect(api.prepareCustomDomain.mock.calls).toEqual([
+      ['org-1', domain.id],
+      ['org-1', domain.id],
+    ])
+    expect(api.createCustomDomain).not.toHaveBeenCalled()
+    expect(button('Configured, verify')).toBeDefined()
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('Request timed out')
+  })
+
+  it('does not show another hostname creation error when reopening and preparing an existing draft', async () => {
+    const draft = { ...domain, ready: false, confirmed: false, dnsRecords: [] }
+    response.domains = [draft]
+    api.createCustomDomain.mockRejectedValueOnce(new Error('Cannot create another hostname'))
+    api.prepareCustomDomain.mockResolvedValue(draft)
+    await render()
+    await click('Add custom domain')
+    input('Custom hostname', 'other.example.com')
+    await click('Get DNS configuration')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Cannot create another hostname')
+    await click('Cancel')
+    await click('Manage app.example.com')
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('Cannot create another hostname')
+    await click('Get DNS configuration')
+    expect(api.prepareCustomDomain).toHaveBeenCalledWith('org-1', domain.id)
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('Cannot create another hostname')
+  })
+
+  it.each(['active', 'required'] as const)(
+    'keeps draft deletion available with subscription %s and blocks Enter while confirming deletion',
+    async (subscription) => {
+      response.subscription = subscription
+      response.domains = [{ ...domain, ready: false, confirmed: false, dnsRecords: [] }]
+      api.deleteCustomDomain.mockImplementation(async () => {
+        response.domains = []
+      })
+      await render()
+      await click('Manage app.example.com')
+      expect(button('Get DNS configuration')).toBeDefined()
+      expect(button('Get DNS configuration').disabled).toBe(subscription === 'required')
+      await click('Delete configuration')
+      expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+        'Access stops and ownership is released.',
+      )
+      await act(async () =>
+        document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })),
+      )
+      expect(api.prepareCustomDomain).not.toHaveBeenCalled()
+      await click('Confirm deletion')
+      expect(api.deleteCustomDomain).toHaveBeenCalledWith('org-1', domain.id)
+      expect(api.createCustomDomain).not.toHaveBeenCalled()
+    },
+  )
+
+  it('displays all three create response records even when the list still returns no draft', async () => {
+    response.domains = []
+    api.createCustomDomain.mockResolvedValue({ ...domain, ready: false, confirmed: false })
+    await render()
+    await click('Add custom domain')
+    input('Custom hostname', domain.hostname)
+    await click('Get DNS configuration')
+    expect(document.querySelectorAll('[aria-label^="Copy name for"]').length).toBe(3)
+    expect(button('Configured, verify')).toBeDefined()
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain(
+      'DNS is not checked until you confirm.',
+    )
+    expect(api.listCustomDomains).toHaveBeenCalledTimes(1)
+  })
+
   it('binds a ready hostname using the existing Box target operation', async () => {
     await render()
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
@@ -603,7 +754,8 @@ describe('Custom domains setup', () => {
     } finally {
       vi.useRealTimers()
     }
-    expect(button('Continue getting DNS configuration')).toBeDefined()
+    expect(button('Continue getting DNS configuration')).toBeUndefined()
+    expect(button('Get DNS configuration')).toBeDefined()
   })
 
   it('shows the verification result without waiting for the held-domain refresh', async () => {
@@ -641,7 +793,8 @@ describe('Custom domains setup', () => {
     ]
     await render()
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Manage app.example.com"]')!.click())
-    expect(button('Continue getting DNS configuration')).toBeDefined()
+    expect(button('Continue getting DNS configuration')).toBeUndefined()
+    expect(button('Get DNS configuration')).toBeDefined()
     expect(api.prepareCustomDomain).not.toHaveBeenCalled()
     expect(api.advanceCustomDomain).not.toHaveBeenCalled()
     expect(api.verifyCustomDomain).not.toHaveBeenCalled()
