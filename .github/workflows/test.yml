@@ -474,6 +474,7 @@ jobs:
         timeout-minutes: 20
         run: |
           make setup:submodules
+          make setup:build
           make coverage:copy:vm
 
       - name: Run OpenAPI reference-server unit tests

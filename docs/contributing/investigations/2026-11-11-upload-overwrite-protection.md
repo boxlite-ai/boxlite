@@ -121,8 +121,9 @@ skip this VM case; the local supported-host run provides its HTTP/guest evidence
 `make coverage:copy:vm` adds the existing copy/ownership suites and the explicitly
 ignored serve duplicate-entry regression to collected Rust profiles. The Linux
 x64 Rust job runs it after enabling KVM access when Rust or CLI inputs change.
-Unlike the unit pass, this pass builds the runtime without dependency stubs and
-boots real guests. It preserves earlier profiles, fails on missing KVM or a test
+Unlike the unit pass, this pass installs native build prerequisites through
+`make setup:build`, builds the runtime without dependency stubs and boots real
+guests. It preserves earlier profiles, fails on missing KVM or a test
 failure, and leaves the 90% patch gate unchanged. This connects upload and host
 copy behavior already checked locally to the report reviewers see in CI.
 
