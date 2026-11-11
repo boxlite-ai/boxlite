@@ -993,7 +993,6 @@ mod container_id_path_tests {
         let directory = tempfile::tempdir().unwrap();
         let workdir = directory.path().join("late");
         let counter = directory.path().join("counter");
-        let _ = crate::reaper::REAPER.set(crate::reaper::Reaper::install());
         let server = GuestServer::new(GuestLayout::new());
         let key = format!("retry-rejection.{}", super::now_ms() + 60_000);
         let payload = ExecRequest {
