@@ -24,6 +24,7 @@ export class BoxPageQuery {
   @Length(1, 2048)
   pageToken?: string
 
+  /** Validate the saved position against the caller's organization and unchanged status selection. */
   after(organizationId: string): string | undefined {
     if (this.pageToken === undefined) return undefined
     try {
@@ -46,6 +47,7 @@ export class BoxPageQuery {
     }
   }
 
+  /** Encode a position only; each subsequent query independently reapplies authorization. */
   next(organizationId: string, lastId: string): string {
     return cursorFor(JSON.stringify([1, 'boxes', organizationId, this.status ?? null, lastId]))
   }
