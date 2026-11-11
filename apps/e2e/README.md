@@ -243,6 +243,11 @@ export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 
+# The filestore happy-path case uses this instance name from the runner's
+# FILESTORE_INSTANCES registry instead of its probe name. Without it the case
+# probes and skips when the runner has no registry (see the Filestore section):
+export FILESTORE_E2E_INSTANCE=dev-filestore-1
+
 # The private image case runs only with a real private image and its login,
 # written with its host and a tag or digest. The prefix defaults to the
 # image's namespace. It adds its own login and refuses to start while the
@@ -338,6 +343,36 @@ clear its domain binding. Inspect `boxlite domain ls` under the same profile;
 after confirming that the target is from the interrupted test, recover with
 `boxlite domain unbind "$BOXLITE_E2E_DOMAIN"` before rerunning. A binding that
 moves to another target during the test is left intact and reported as a failure.
+
+## Filestore volume cases
+
+`cases/test_filestore.py` covers volume references that name a Filestore
+instance — `{"filestore": {"instance": "<name>"}, "guest_path": ...}` — instead
+of a managed volume. Instances are **ops-provisioned runner env config**
+(`FILESTORE_INSTANCES`, a JSON registry of named NFS instances on the runner),
+not API objects the suite can create.
+
+A module gate probes for an instance ONCE before any test runs (the registry
+is runner env config with no listing API, so one create attempt is the only
+honest probe). The gate's outcome decides the whole file:
+
+- **Registry holds the instance** → the probe box is deleted and both cases
+  run: the unknown-instance refusal is pinned, then the happy path
+  (write → stop → start → read back) on the proven instance.
+- **No registry** (probing the generated default name) → one warning —
+  `GCP FileStore instance=[<name>] not existed. Skip test_filestore.py .` —
+  and the entire module skips.
+- **`FILESTORE_E2E_INSTANCE` set but unknown** → hard failure, not a skip:
+  a declared instance is operator intent, so its absence is a misconfiguration
+  to fix by hand (correct the injected name, or provision/remove the instance).
+
+Both cases skip when the API key cannot attach volumes (403 without
+READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. Neither is
+marked `smoke` — prod's runner has no Filestore registry either.
+
+Set `FILESTORE_E2E_INSTANCE` to name the instance the gate should probe and
+the cases should use, when the runner's registry holds one under a name other
+than the generated probe default.
 
 ## The cloud legs (CI)
 
@@ -544,6 +579,7 @@ apps/e2e/
     ├── test_box_lifecycle_policy.py # auto_stop / auto_delete reaping
     ├── test_box_metrics.py          # Per-box metrics through the runner
     ├── test_volumes.py              # Managed volumes: CRUD + data reuse
+    ├── test_filestore.py            # Filestore volumes: loud unknown-instance refusal + data across stop/start
     ├── test_network_egress.py       # Outbound policy: block-all, allow_net
     ├── test_exec_*.py               # Exec stdout, attach, timeout
     ├── test_copy_roundtrip.py       # Copy in/out

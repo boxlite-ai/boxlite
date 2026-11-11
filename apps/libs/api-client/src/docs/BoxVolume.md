@@ -5,8 +5,9 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**volumeId** | **string** | The ID of the volume | [default to undefined]
+**volumeId** | **string** | The ID of the managed volume; absent for filestore volumes | [optional] [default to undefined]
 **mountPath** | **string** | The mount path for the volume | [default to undefined]
+**filestore** | [**BoxVolumeFilestoreRef**](BoxVolumeFilestoreRef.md) | The Filestore instance reference; absent for managed volumes | [optional] [default to undefined]
 **subpath** | **string** | Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted. | [optional] [default to undefined]
 
 ## Example
@@ -17,6 +18,7 @@ import { BoxVolume } from './api';
 const instance: BoxVolume = {
     volumeId,
     mountPath,
+    filestore,
     subpath,
 };
 ```

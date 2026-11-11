@@ -5991,20 +5991,34 @@ components:
       - stopped
       - resized
       type: string
+    BoxVolumeFilestoreRef:
+      properties:
+        instance:
+          description: Filestore instance logical name in the runner registry
+          example: ml-scratch
+          type: string
+      required:
+      - instance
+      type: object
     BoxVolume:
       example:
         volumeId: volume123
         mountPath: /data
+        filestore: ""
         subpath: users/alice
       properties:
         volumeId:
-          description: The ID of the volume
+          description: The ID of the managed volume; absent for filestore volumes
           example: volume123
           type: string
         mountPath:
           description: The mount path for the volume
           example: /data
           type: string
+        filestore:
+          allOf:
+          - $ref: "#/components/schemas/BoxVolumeFilestoreRef"
+          description: The Filestore instance reference; absent for managed volumes
         subpath:
           description: "Optional subpath within the volume to mount. When specified,\
             \ only this S3 prefix will be accessible. When omitted, the entire volume\
@@ -6013,7 +6027,6 @@ components:
           type: string
       required:
       - mountPath
-      - volumeId
       type: object
     BoxProgressPhase:
       description: What this box is waiting on while it is being created
@@ -6064,9 +6077,11 @@ components:
         volumes:
         - volumeId: volume123
           mountPath: /data
+          filestore: ""
           subpath: users/alice
         - volumeId: volume123
           mountPath: /data
+          filestore: ""
           subpath: users/alice
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
@@ -6262,9 +6277,11 @@ components:
           volumes:
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
@@ -6300,9 +6317,11 @@ components:
           volumes:
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z

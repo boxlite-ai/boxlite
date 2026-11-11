@@ -78,6 +78,7 @@ docs/BoxProgress.md
 docs/BoxProgressPhase.md
 docs/BoxState.md
 docs/BoxVolume.md
+docs/BoxVolumeFilestoreRef.md
 docs/BoxliteConfiguration.md
 docs/ConfigApi.md
 docs/CpuIncidentListDto.md
@@ -229,6 +230,7 @@ models/box-memory-usage-dto.ts
 models/box-progress-phase.ts
 models/box-progress.ts
 models/box-state.ts
+models/box-volume-filestore-ref.ts
 models/box-volume.ts
 models/box.ts
 models/boxlite-configuration.ts
