@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -84,6 +86,33 @@ type ResizeRequest struct {
 	Rows uint32 `json:"rows"`
 }
 
+// A generation binds an uncertain request to one running VM. It is checked
+// again at startup; an old request must never boot a replacement VM.
+func executionGeneration(ctx *gin.Context, bx *sdkboxlite.Box) (string, error) {
+	info, err := bx.Info(ctx.Request.Context())
+	if err != nil {
+		return "", err
+	}
+	if !info.Running || info.StartedAt.IsZero() {
+		return "", fmt.Errorf("box is not running")
+	}
+	return fmt.Sprintf("%s:%d", info.ID, info.StartedAt.UnixMilli()), nil
+}
+
+func BoxliteExecGeneration(ctx *gin.Context) {
+	bx, err := getExecutionBox(ctx, ctx.Param("boxId"))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	generation, err := executionGeneration(ctx, bx)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"generation": generation})
+}
+
 func BoxliteExec(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
@@ -105,7 +134,20 @@ func BoxliteExec(ctx *gin.Context) {
 		return
 	}
 
-	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOptionsFrom(req))
+	if expected := ctx.GetHeader("X-Boxlite-Exec-Generation"); expected != "" {
+		actual, err := executionGeneration(ctx, bx)
+		if err != nil || actual != expected {
+			ctx.JSON(http.StatusConflict, gin.H{"error": "execution VM generation changed"})
+			return
+		}
+	}
+	options := startOptionsFrom(req)
+	options.IdempotencyKey = ctx.GetHeader("Idempotency-Key")
+	if expected := ctx.GetHeader("X-Boxlite-Exec-Generation"); expected != "" {
+		parts := strings.Split(expected, ":")
+		options.ExpectedStartedAt, _ = strconv.ParseInt(parts[len(parts)-1], 10, 64)
+	}
+	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, options)
 	if err != nil {
 		ctx.JSON(execStartStatus(err), gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
@@ -149,6 +191,13 @@ func startOptionsFrom(req ExecRequest) boxlite.StartOptions {
 // the caller's mistake (400), not a runner fault — answering 500 there would
 // hide the #2116 misclassification. Everything else is a runner fault (500).
 func execStartStatus(err error) int {
+	var sdkError *sdkboxlite.Error
+	if errors.As(err, &sdkError) && sdkError.Code == sdkboxlite.ErrResourceExhausted {
+		return http.StatusTooManyRequests
+	}
+	if strings.Contains(err.Error(), "idempotency_mismatch:") {
+		return http.StatusUnprocessableEntity
+	}
 	if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
 		return http.StatusConflict
 	}

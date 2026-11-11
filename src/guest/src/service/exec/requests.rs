@@ -1,7 +1,7 @@
 //! Request identity survives output eviction and RPC caller cancellation for
 //! a fixed acceptance deadline. Expired tokens are rejected before lookup, so
 //! completed request records can be reclaimed without repeating effects.
-use super::{error_response, start_execution};
+use super::{error_response, start_execution_attempt};
 use crate::service::server::GuestServer;
 use boxlite_shared::{ExecRequest, ExecResponse};
 use sha2::{Digest, Sha256};
@@ -99,7 +99,9 @@ impl ExecutionRequests {
             // caller must not cancel a spawn after its side effects begin.
             let guest = server.clone();
             let requests = Arc::clone(self);
+            let token = key.to_owned();
             tokio::spawn(async move {
+                let mut before_spawn = false;
                 let response = if deadline <= requests.effective_now(super::now_ms()) {
                     error_response(
                         String::new(),
@@ -107,9 +109,15 @@ impl ExecutionRequests {
                         "execution request expired",
                     )
                 } else {
-                    start_execution(&guest, request, None).await
+                    start_execution_attempt(&guest, request, None, &mut before_spawn).await
                 };
+                // Publish and release under the reservation lock: existing
+                // waiters receive this rejection; the next request may retry.
+                let mut entries = requests.entries.lock().await;
                 sender.send_replace(Some(response));
+                if before_spawn {
+                    entries.remove(&token);
+                }
             });
             receiver
         };
@@ -177,10 +185,10 @@ mod tests {
         let requests = Arc::new(ExecutionRequests::default());
         let now = super::super::now_ms();
         let key = format!("old.{}", now + 1000);
-        // Invalid supplied IDs fail before spawn, but still publish a real
-        // startup result through the same reservation/retention machinery.
+        // An unclassified executor failure stays retained conservatively;
+        // releasing explicitly proven pre-spawn failures must not weaken this.
         let payload = ExecRequest {
-            execution_id: Some("forbidden".into()),
+            env: HashMap::from([("BOXLITE_EXECUTOR".into(), "unknown".into())]),
             tty: Some(Default::default()),
             ..Default::default()
         };
@@ -188,7 +196,7 @@ mod tests {
             .execute_at(&server, &key, payload.clone(), now)
             .await
             .unwrap();
-        assert_eq!(response.error.unwrap().reason, "invalid_argument");
+        assert_eq!(response.error.unwrap().reason, "spawn_failed");
         let mut changed = payload.clone();
         changed.tty.as_mut().unwrap().modes.push(Default::default());
         let replay = requests

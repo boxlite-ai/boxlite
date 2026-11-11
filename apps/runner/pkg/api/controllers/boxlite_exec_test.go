@@ -335,6 +335,9 @@ func TestExecStartStatus(t *testing.T) {
 		{"invalid state", wrap(&sdkboxlite.Error{Code: sdkboxlite.ErrInvalidState, Message: "bad state"}), http.StatusConflict},
 		{"invalid argument", wrap(&sdkboxlite.Error{Code: sdkboxlite.ErrInvalidArgument, Message: "User 'x' not found"}), http.StatusBadRequest},
 		{"plain invalid argument", &sdkboxlite.Error{Code: sdkboxlite.ErrInvalidArgument, Message: "User 'x' not found"}, http.StatusBadRequest},
+		{"retention full", wrap(&sdkboxlite.Error{Code: sdkboxlite.ErrResourceExhausted, Message: "retention full"}), http.StatusTooManyRequests},
+		{"payload mismatch", wrap(&sdkboxlite.Error{Code: sdkboxlite.ErrInvalidArgument, Message: "idempotency_mismatch: payload changed"}), http.StatusUnprocessableEntity},
+		{"expired request", wrap(&sdkboxlite.Error{Code: sdkboxlite.ErrInvalidState, Message: "execution request expired"}), http.StatusConflict},
 		{"runner fault", wrap(errors.New("seccomp failed")), http.StatusInternalServerError},
 	}
 	for _, tc := range cases {

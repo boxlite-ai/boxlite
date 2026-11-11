@@ -113,7 +113,8 @@ impl GuestExecutor {
     /// Spawn directly in the guest.
     ///
     /// A refused program is [`SpawnFailure::Rejected`]; every other failure,
-    /// including an unusable working directory, is [`SpawnFailure::Failed`].
+    /// is [`SpawnFailure::Failed`], except a proven pre-spawn rejection such as
+    /// an unusable working directory, which is [`SpawnFailure::BeforeSpawn`].
     pub(crate) async fn spawn_attempt(
         &self,
         req: &ExecRequest,
@@ -150,7 +151,7 @@ fn classify_spawn_error_with(
     // `execve`; a configured working directory that cannot be entered is the
     // configuration's fault, not a verdict about the program.
     if workdir_unusable {
-        return SpawnFailure::Failed(BoxliteError::Internal(format!(
+        return SpawnFailure::BeforeSpawn(BoxliteError::Internal(format!(
             "working directory '{workdir}' is not usable: {error}"
         )));
     }
@@ -460,7 +461,10 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(SpawnFailure::Failed(_))),
+            matches!(
+                result,
+                Err(SpawnFailure::Failed(_) | SpawnFailure::BeforeSpawn(_))
+            ),
             "ENOTDIR must stay a spawn failure"
         );
         drop(result);
@@ -474,7 +478,10 @@ mod tests {
         let result = GuestExecutor.spawn_attempt(&req).await;
 
         assert!(
-            matches!(result, Err(SpawnFailure::Failed(_))),
+            matches!(
+                result,
+                Err(SpawnFailure::BeforeSpawn(_))
+            ),
             "a missing workdir must stay a spawn failure"
         );
     }
@@ -503,7 +510,10 @@ mod tests {
                 std::io::Error::from_raw_os_error(errno),
             );
             assert!(
-                matches!(failure, SpawnFailure::Failed(_)),
+                matches!(
+                    failure,
+                    SpawnFailure::BeforeSpawn(_)
+                ),
                 "errno {errno} from a bad workdir must stay a spawn failure"
             );
         }
@@ -529,7 +539,10 @@ mod tests {
 
         std::fs::set_permissions(&workdir, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(
-            matches!(result, Err(SpawnFailure::Failed(_))),
+            matches!(
+                result,
+                Err(SpawnFailure::BeforeSpawn(_))
+            ),
             "a workdir failure must not become an exit status"
         );
     }

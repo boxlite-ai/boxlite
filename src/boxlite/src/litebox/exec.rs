@@ -36,6 +36,8 @@ pub struct BoxCommand {
     pub(crate) working_dir: Option<String>,
     pub(crate) tty: bool,
     pub(crate) user: Option<String>,
+    pub(crate) idempotency_key: Option<String>,
+    pub(crate) expected_started_at: Option<i64>,
 }
 
 impl BoxCommand {
@@ -49,7 +51,22 @@ impl BoxCommand {
             working_dir: None,
             tty: false,
             user: None,
+            idempotency_key: None,
+            expected_started_at: None,
         }
+    }
+
+    /// Associate retries with one guest execution for 24 hours while its VM lives.
+    /// Older guests reject this operation instead of silently executing twice.
+    pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+
+    /// Bind a retry to the run observed by the caller (Unix milliseconds).
+    pub fn expected_started_at(mut self, milliseconds: i64) -> Self {
+        self.expected_started_at = Some(milliseconds);
+        self
     }
 
     /// Add a single argument.

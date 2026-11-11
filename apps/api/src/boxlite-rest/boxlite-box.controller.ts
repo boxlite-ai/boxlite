@@ -48,6 +48,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+import { BindBoxRequest, BoxRequestService } from './box-request.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -79,6 +80,7 @@ export class BoxliteBoxController {
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
+    private readonly boxRequests?: BoxRequestService,
   ) {}
 
   @Post()
@@ -133,12 +135,30 @@ export class BoxliteBoxController {
     }
 
     const organization = authContext.organization
-    const createBoxDto = createBoxToCreateBox(dto)
-    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
-
-    const box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
-    if (request) request[AUDIT_TARGET_ID] = box.id
-    return boxToBoxResponse(box)
+    const create = async (bindRequest?: BindBoxRequest, boxId?: string) => {
+      let box
+      if (boxId) {
+        const persisted = await this.boxService.findOneByIdOrName(boxId, organization.id)
+        box = await this.boxService.toBoxDto(persisted)
+      } else {
+        const createBoxDto = createBoxToCreateBox(dto)
+        const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+        box = await this.boxService.create(createBoxDto, organization, ctx, {
+          maxCreatedBoxes,
+          ...(bindRequest && { bindRequest }),
+        })
+      }
+      if (request) request[AUDIT_TARGET_ID] = box.id
+      return boxToBoxResponse(box)
+    }
+    const key = request?.headers['idempotency-key']
+    if (key === undefined) return create()
+    return this.boxRequests.run(
+      [organization.id, authContext.userId, 'createBox'],
+      Array.isArray(key) ? key.join(',') : key,
+      dto,
+      create,
+    )
   }
 
   // Mirrors OrganizationResourceActionGuard: a system admin and an interactive

@@ -38,6 +38,7 @@ import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
+import { BoxRequestService } from './box-request.service'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
 import { BoxliteCheckpointImportController } from './boxlite-checkpoint-import.controller'
 
@@ -72,6 +73,7 @@ import { BoxliteCheckpointImportController } from './boxlite-checkpoint-import.c
     BoxliteInvitationController,
   ],
   providers: [
+    BoxRequestService,
     BoxliteWsProxyService,
     CommerceBoxLimitService,
     CiConnectService,

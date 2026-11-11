@@ -37,7 +37,10 @@ impl ExecutionService for RecordingExecutionService {
     }
 
     async fn exec_keyed(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
-        Err(Status::unimplemented("unused keyed exec"))
+        Ok(Response::new(ExecResponse {
+            execution_id: "keyed".into(),
+            ..Default::default()
+        }))
     }
 
     async fn list_executions(
@@ -155,6 +158,33 @@ async fn within_deadline<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(2), future)
         .await
         .expect("execution RPC did not complete before test deadline")
+}
+
+#[tokio::test]
+async fn keyed_replay_does_not_create_stdin_or_output_ownership() {
+    let mut fixture = RpcFixture::new().await;
+    for _ in 0..2 {
+        let components = fixture
+            .interface
+            .exec(
+                BoxCommand::new("cat").idempotency_key("internal.deadline"),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(components.execution_id, "keyed");
+        assert!(
+            components.stdin_tx.is_none(),
+            "dropping a retry must not send stdin EOF"
+        );
+        let wait = fixture.next_wait().await;
+        wait.result.send(Ok(WaitResponse::default())).unwrap();
+        drop(components);
+    }
+    assert!(
+        fixture.attaches.try_recv().is_err(),
+        "keyed startup leaves output acquisition to attach"
+    );
 }
 
 #[tokio::test]

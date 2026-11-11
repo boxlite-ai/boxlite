@@ -61,6 +61,13 @@ received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
 and `journalctl -u boxlite-runner`. If that meta-test passes, every other
 case in this suite is using the same fixtures and the same path.
 
+`cases/test_request_idempotency.py` exercises both REST and delegated MCP
+startup against a real guest. A repeated key returns the same execution ID,
+a changed payload returns 422, and a file counter contains one line after replay.
+Run `make test:e2e E2E_ARGS='cases/test_request_idempotency.py -v'` after setup.
+Quota release/replay and response-commit fault injection are covered separately
+by the API PostgreSQL/controller suites; this case does not simulate those faults.
+
 ## Managed local E2E (preferred)
 
 `make test:e2e:setup` starts the dependency services with Docker Compose and runs the current-source API/Runner/proxies as host processes; fixtures and a real guest smoke follow. State lives in `target/e2e/`; no sudo or system services are used.

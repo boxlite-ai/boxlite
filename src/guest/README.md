@@ -14,7 +14,13 @@ The guest reserves the token before starting a command. Matching payloads share
 one startup task and its result, including completed short commands; changed
 payloads return `idempotency_mismatch`. Caller cancellation cannot cancel the
 owned startup task after effects begin. Output retention and inventory eviction
-do not remove this association.
+do not remove this association. Errors explicitly proven to occur before process
+startup release the request reservation: for example, creating a previously
+missing working directory allows the same payload and key to retry. User lookup
+failures before zygote submission are also retryable. Unclassified spawn or
+post-spawn handshake failures remain retained; they do not authorize another
+command start. A missing executable reported as a completed 126/127 execution
+remains a completed result, not a retryable startup error.
 
 Expired tokens fail before lookup. A monotonic elapsed-time floor preserves the
 highest observed wall time, so forward jumps followed by clock rollback cannot

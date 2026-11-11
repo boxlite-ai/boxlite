@@ -8,7 +8,10 @@ The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
 Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
 API for SDK clients and the control-plane API. One runner process hosts many
 boxes; each box hosts many executions; each execution can be attached to at
-most one client at a time.
+at most one client at a time. Keyed startup serializes only requests with the
+same Box ID and internal token through SDK startup and output adoption. A slow
+startup does not hold a runner-wide lock over other Boxes or request tokens;
+request locks are removed after their last holder or waiter finishes.
 
 Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3003`
 behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
@@ -237,6 +240,7 @@ process inside a VM. The endpoints below split create / status / kill
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
+| `GET` | `exec-generation` | `BoxliteExecGeneration` | Running VM identity for keyed startup; 409 when stopped |
 | `POST` | `exec` | `BoxliteExec` | Create execution; returns `{execution_id}` |
 | `GET` | `executions` | `BoxliteListExecutions` | Live guest inventory, including main; never boots a stopped box |
 | `GET` | `executions/:id/attach` | `BoxliteExecAttach` | WebSocket upgrade; bidirectional stdio + control |
@@ -244,6 +248,24 @@ process inside a VM. The endpoints below split create / status / kill
 | `POST` | `executions/:id/signal` | `BoxliteExecSignal` | Send a cooperative signal (whitelist) |
 | `POST` | `executions/:id/resize` | `BoxliteExecResize` | Resize TTY (cols, rows) — TTY-only |
 | `DELETE` | `executions/:id` | `BoxliteExecKill` | Atomic kill + evict |
+
+For keyed startup the API supplies an internal `Idempotency-Key` token with a
+fixed deadline and `X-Boxlite-Exec-Generation`. Both runner and runtime check
+the observed VM start time; keyed exec never boots a replacement VM. Guest
+startup survives caller disconnects and retries resolve to the original result.
+Expired tokens are rejected before lookup, allowing safe reclamation of finished
+request records. Pending startup remains counted against the 4096-entry bound.
+A key cannot choose an unlimited retention period: the guest rejects deadlines
+more than 24 hours ahead (plus one minute of clock skew). Roll out the keyed
+RPC in guest/runtime/runner before enabling keyed execution in the API; an old
+guest returns an unsupported-operation error.
+
+Keyed startup creates a control handle only. The existing lazy attach path
+acquires output and stdin once; releasing a retry handle neither kills the
+process nor sends stdin EOF. Unkeyed execution keeps its eager stream behavior. Keyed commands retain the
+runner orphan and maximum-lifetime cleanup rules. If the guest startup result
+still exists after ordinary output/status retention expires, retries return the
+original ID; output expiry does not authorize another spawn.
 
 Inventory returns the guest's real `execution_id`, `argv`, `started_at` (Unix
 milliseconds), `tty`, and `is_main_session`. Status, signal, resize, kill, and

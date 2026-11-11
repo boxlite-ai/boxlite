@@ -1390,6 +1390,14 @@ enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
                                        CExecutionHandle **out_execution,
                                        CBoxliteError *out_error);
 
+// Additive ABI entry point: the original BoxliteCommand layout stays stable.
+enum BoxliteErrorCode boxlite_box_exec_keyed(CBoxHandle *handle,
+                                             const struct BoxliteCommand *cmd,
+                                             const char *key,
+                                             int64_t expected_started_at,
+                                             CExecutionHandle **out_execution,
+                                             CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_execution_on_stdout(CExecutionHandle *execution,
                                                   CBoxStdoutCb cb,
                                                   void *user_data,

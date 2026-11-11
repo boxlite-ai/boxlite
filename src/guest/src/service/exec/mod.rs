@@ -367,10 +367,20 @@ async fn start_execution(
     req: ExecRequest,
     ssh_workload: Option<crate::service::ssh::SshWorkload>,
 ) -> ExecResponse {
+    start_execution_attempt(server, req, ssh_workload, &mut false).await
+}
+
+async fn start_execution_attempt(
+    server: &GuestServer,
+    req: ExecRequest,
+    ssh_workload: Option<crate::service::ssh::SshWorkload>,
+    before_spawn: &mut bool,
+) -> ExecResponse {
     let execution_id =
         match execution_id_for_request(req.execution_id.as_deref(), ssh_workload.is_some()) {
             Ok(id) => id,
             Err(detail) => {
+                *before_spawn = true;
                 return error_response(
                     req.execution_id.clone().unwrap_or_default(),
                     "invalid_argument",
@@ -403,6 +413,7 @@ async fn start_execution(
         req,
         ssh_workload,
         reservation.as_ref(),
+        before_spawn,
     )
     .await
     {
@@ -431,13 +442,20 @@ async fn spawn_execution(
     req: ExecRequest,
     ssh_workload: Option<crate::service::ssh::SshWorkload>,
     reservation: Option<&registry::ExecutionReservation>,
+    before_spawn: &mut bool,
 ) -> Result<ExecResponse, ExecResponse> {
     let started_at_ms = now_ms();
 
     let spawned_at = std::time::Instant::now();
 
-    let (state, pid, process) = match spawn_with_executor(server, &req, &execution_id, ssh_workload)
-        .await?
+    let (state, pid, process) = match spawn_with_executor(
+        server,
+        &req,
+        &execution_id,
+        ssh_workload,
+        before_spawn,
+    )
+    .await?
     {
         SpawnedExecution::Rejected(rejection) => (
             state::ExecutionState::rejected(rejection, req.tty.is_some()).await,
@@ -619,6 +637,7 @@ async fn spawn_with_executor(
     req: &ExecRequest,
     execution_id: &str,
     ssh_workload: Option<crate::service::ssh::SshWorkload>,
+    before_spawn: &mut bool,
 ) -> Result<SpawnedExecution, ExecResponse> {
     let executor_value = req.env.get(executor_const::ENV_VAR).map(|s| s.as_str());
 
@@ -636,6 +655,10 @@ async fn spawn_with_executor(
                 Ok(handle) => handle,
                 Err(crate::container::SpawnFailure::Rejected(rejection)) => {
                     return Ok(SpawnedExecution::Rejected(rejection));
+                }
+                Err(crate::container::SpawnFailure::BeforeSpawn(error)) => {
+                    *before_spawn = true;
+                    return Err(spawn_failure_response(execution_id, error));
                 }
                 Err(crate::container::SpawnFailure::Failed(error)) => {
                     return Err(spawn_error(execution_id, error.to_string()));
@@ -740,6 +763,10 @@ async fn spawn_with_executor(
                         Ok(h) => h,
                         Err(crate::container::SpawnFailure::Rejected(rejection)) => {
                             return Ok(SpawnedExecution::Rejected(rejection));
+                        }
+                        Err(crate::container::SpawnFailure::BeforeSpawn(e)) => {
+                            *before_spawn = true;
+                            return Err(spawn_failure_response(execution_id, e));
                         }
                         Err(crate::container::SpawnFailure::Failed(e)) => {
                             // Check if container init died — provide actionable diagnostics
@@ -956,6 +983,45 @@ mod container_id_path_tests {
             "a retry repeated command effects"
         );
         assert_eq!(first.execution_id, second.execution_id);
+    }
+
+    #[tokio::test]
+    async fn keyed_execution_retries_after_workdir_is_created() {
+        use boxlite_shared::ExecRequest;
+        let directory = tempfile::tempdir().unwrap();
+        let workdir = directory.path().join("late");
+        let counter = directory.path().join("counter");
+        let _ = crate::reaper::REAPER.set(crate::reaper::Reaper::install());
+        let server = GuestServer::new(GuestLayout::new());
+        let key = format!("retry-rejection.{}", super::now_ms() + 60_000);
+        let payload = ExecRequest {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), format!("echo once >> '{}'", counter.display())],
+            workdir: workdir.to_str().unwrap().into(),
+            ..Default::default()
+        };
+        let first = server
+            .execution_requests
+            .execute(&server, &key, payload.clone())
+            .await
+            .unwrap();
+        assert_eq!(first.error.unwrap().reason, "spawn_failed");
+        assert!(!counter.exists());
+        std::fs::create_dir(&workdir).unwrap();
+        let second = server
+            .execution_requests
+            .execute(&server, &key, payload.clone())
+            .await
+            .unwrap();
+        assert!(second.error.is_none(), "{:?}", second.error);
+        server.wait_execution(&second.execution_id).await.unwrap();
+        let replay = server
+            .execution_requests
+            .execute(&server, &key, payload)
+            .await
+            .unwrap();
+        assert_eq!(second.execution_id, replay.execution_id);
+        assert_eq!(std::fs::read_to_string(counter).unwrap(), "once\n");
     }
 
     #[test]
