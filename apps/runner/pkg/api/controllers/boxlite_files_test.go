@@ -11,6 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestUploadRejectsInvalidOverwriteBeforeRuntimeAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, raw := range []string{"invalid", "null"} {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/v1/boxes/b/files?path=/root&overwrite="+raw, strings.NewReader("unused"))
+		BoxliteFileUpload(ctx)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("overwrite=%s: status=%d body=%s", raw, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
 // renderCopyError drives the production renderer and hands back what a client
 // would actually receive.
 func renderCopyError(t *testing.T, err error) (int, map[string]any) {

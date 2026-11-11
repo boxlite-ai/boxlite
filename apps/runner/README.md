@@ -457,12 +457,20 @@ a feature.
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream tar body → temp file → `CopyInto(box, tmp, dest)` |
-| `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpDir)` → walk dir, write `application/x-tar` |
+| `PUT` | `/v1/boxes/:boxId/files?path=<dest>&overwrite=false` | `BoxliteFileUpload` | Stream tar through Go/C to guest extraction |
+| `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | Stream guest tar as `application/x-tar` |
 
-Tar framing is used in both directions so a single endpoint can move
-files, directories, and symlinks uniformly. Temp files live under
-`os.TempDir()` and are cleaned up before the response returns.
+Uploads default to `overwrite=true`. With `overwrite=false`, existing directories
+can receive new files, but an occupied file, symlink or incompatible directory
+entry fails with HTTP 409 (`already_exists`) without replacing existing contents.
+New entries written before a conflict can remain; uploads do not roll back.
+Malformed boolean values return 400. For example, an archive containing `new.txt`
+then an existing `keep.txt` can leave `new.txt` behind when `keep.txt` conflicts.
+
+The runner streams in both directions without staging. A supplied `source_is_dir`
+hint lets the guest extract directly; without it, the guest stages the archive to
+detect its shape. REST SDK `copy_into(overwrite=false)` still refuses safely when
+remote support is unknown, since older runners ignore the query parameter.
 
 ### 5. Per-box metrics
 
