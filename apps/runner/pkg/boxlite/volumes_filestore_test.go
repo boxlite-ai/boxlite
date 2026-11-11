@@ -342,7 +342,7 @@ func TestConcurrentGetVolumeMountsRunsFilestoreMountOnce(t *testing.T) {
 	c.filestoreInstances = []config.FilestoreInstance{inst}
 	fake := installFakeFilestoreMounts(c)
 
-	volumes := []dto.VolumeDTO{{MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}}}
+	volumes := []dto.VolumeDTO{{VolumeId: "vol-concurrent", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}}}
 
 	const goroutines = 10
 	errs := make([]error, goroutines)
@@ -546,7 +546,7 @@ func TestRecordWriteHappensUnderTheInstanceLock(t *testing.T) {
 	fake := installFakeFilestoreMounts(c)
 
 	if _, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
 	}); err != nil {
 		t.Fatalf("getVolumeMounts failed: %v", err)
 	}
@@ -683,3 +683,37 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 	})
 }
 
+
+// The volume id names the data directory under the instance's mount root, so
+// the id is path material from the dispatching API's hands. A
+// traversal-shaped id would escape the mount root entirely; an empty one
+// would name the mount root itself, putting every volume of the instance
+// behind one box's bind mount. The control plane mints uuids, but this
+// boundary must not lean on that — same posture as the box id guard.
+func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
+	c := filestoreTestClient(t)
+	c.filestoreInstances = []config.FilestoreInstance{inst}
+	fake := installFakeFilestoreMounts(c)
+
+	for _, id := range []string{"", "../escape", "a/b", "a\\b", ".."} {
+		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
+			{VolumeId: id, MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		})
+		if err == nil {
+			t.Fatalf("volume id %q: expected the path guard to refuse it, got nil", id)
+		}
+		if !strings.Contains(err.Error(), "invalid filestore volume id") {
+			t.Fatalf("volume id %q: expected the volume id guard error, got %q", id, err)
+		}
+	}
+
+	// The refusal must precede all mount and directory work: nothing ran.
+	if fake.mounts.Load() != 0 {
+		t.Errorf("mount command ran %d times; the guard must refuse before any mount work", fake.mounts.Load())
+	}
+}

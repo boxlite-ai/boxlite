@@ -205,6 +205,19 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 // the same per-instance mutex, so a mount cannot be reclaimed in the window
 // between "usable" and "referenced" (design §4.5).
 func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]bool, priorMounts []volumeMount) (volumeMount, error) {
+	// The volume id names a data directory under the instance's mount root.
+	// The control plane mints uuids, which cannot carry separators or '..',
+	// but this boundary must not lean on that — the same posture as the box
+	// id guard in client.go: a traversal-shaped or empty id is rejected
+	// before any path is derived. An empty id is refused outright because
+	// filestoreDataDir(root, "") would name the mount root itself, putting
+	// every volume of the instance behind one box's bind mount.
+	if vol.VolumeId == "" || strings.ContainsAny(vol.VolumeId, "/\\") || strings.Contains(vol.VolumeId, "..") {
+		return volumeMount{}, fmt.Errorf(
+			"invalid filestore volume id %q: must be a bare identifier without path separators or '..'",
+			vol.VolumeId,
+		)
+	}
 	inst, err := c.lookupFilestoreInstance(vol.Filestore.Instance)
 	if err != nil {
 		return volumeMount{}, err
