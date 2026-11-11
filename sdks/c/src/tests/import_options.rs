@@ -109,3 +109,39 @@ fn checkpoint_runtime_import_rejects_invalid_parameters_before_local_capability(
     drop(tokio);
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn checkpoint_import_options_reject_a_closed_runtime_before_submission() {
+    let mut runtime = crate::runtime::RuntimeHandle {
+        runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://127.0.0.1:1"))
+            .unwrap(),
+        tokio_rt: crate::runtime::create_tokio_runtime().unwrap(),
+        liveness: Arc::new(crate::runtime::RuntimeLiveness::new()),
+        queue: Arc::new(crate::event_queue::EventQueue::new()),
+    };
+    runtime.liveness.mark_closed();
+    let key = CString::new("base").unwrap();
+    let options = CBoxImportOptions {
+        archive_path: ptr::null(),
+        name: ptr::null(),
+        checkpoint_id: key.as_ptr(),
+        box_id: ptr::null(),
+    };
+    let mut error = FFIError::default();
+    let code = unsafe {
+        boxlite_runtime_import_with_options(
+            &mut runtime,
+            &options,
+            Some(imported),
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    assert_ne!(code, BoxliteErrorCode::Ok);
+    assert!(
+        unsafe { CStr::from_ptr(error.message) }
+            .to_string_lossy()
+            .contains("closed")
+    );
+    unsafe { boxlite_error_free(&mut error) };
+}

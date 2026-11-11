@@ -152,3 +152,23 @@ test("checkpoint native REST calls preserve configuration inheritance and result
     );
   }
 });
+
+test("checkpoint native runtime import validates source options before HTTP", async () => {
+  const runtime = JsBoxlite.rest(
+    new BoxliteRestOptions({ url: "http://127.0.0.1:1" }),
+  );
+  expect(runtime.checkpoints).not.toHaveProperty("importBox");
+  const inputs = [
+    [undefined, undefined, undefined],
+    ["archive.boxlite", undefined, { checkpointId: "base" }],
+    ["archive.boxlite", undefined, { boxId: "target" }],
+    [undefined, "worker", { checkpointId: "base", boxId: "target" }],
+    [undefined, undefined, { checkpointId: "bad/key" }],
+    [undefined, undefined, { checkpointId: "base", boxId: "" }],
+  ] as const;
+  for (const [archive, name, options] of inputs) {
+    await expect(runtime.importBox(archive, name, options)).rejects.toThrow(
+      /specify|mutually exclusive|must/i,
+    );
+  }
+});
