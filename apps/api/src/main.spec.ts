@@ -25,6 +25,7 @@ jest.mock('./config/typed-config.service', () => ({ TypedConfigService: class {}
 jest.mock('./auth/failed-auth-tracker.service', () => ({ FailedAuthTrackerService: class {} }))
 jest.mock('./filters/all-exceptions.filter', () => ({ AllExceptionsFilter: jest.fn() }))
 jest.mock('./interceptors/metrics.interceptor', () => ({ MetricsInterceptor: jest.fn() }))
+jest.mock('./analytics/services/analytics.service', () => ({ AnalyticsService: class {} }))
 jest.mock('./audit/interceptors/audit.interceptor', () => ({ AuditInterceptor: class {} }))
 jest.mock('./api-key/api-key.service', () => ({ ApiKeyService: class {} }))
 jest.mock('./app.service', () => ({ BOXLITE_ADMIN_USER_ID: 'admin' }))

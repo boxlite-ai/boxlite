@@ -15,6 +15,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Req,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common'
@@ -40,6 +41,8 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { Context } from '../common/context/context'
+import { Request } from 'express'
+import { requestActor } from '../common/decorators/user-context.decorator'
 
 // Audit resolvers run before validation pipes; malformed input has no target identity.
 function linkedAccountTargetId(provider: unknown, userId: unknown): string | null {
@@ -102,8 +105,8 @@ export class UserController {
       }),
     },
   })
-  async create(@Body() createUserDto: CreateUserDto): Promise<User> {
-    return this.userService.create(createUserDto, Context.admin())
+  async create(@Body() createUserDto: CreateUserDto, @Req() req: Request): Promise<User> {
+    return this.userService.create(createUserDto, Context.admin(requestActor(req)))
   }
 
   @Get()

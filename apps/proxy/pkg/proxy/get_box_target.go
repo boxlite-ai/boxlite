@@ -154,6 +154,9 @@ func (p *Proxy) forwardToGuest(ctx *gin.Context, boxId string, targetPort uint16
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
 	}
+	if ctx.Request.Method == http.MethodGet && ctx.Request.Header.Get("Sec-Fetch-Mode") == "navigate" && ctx.Request.Header.Get("Sec-Fetch-Dest") == "document" {
+		go p.recordPreviewOpen(activityCtx, boxId)
+	}
 	return &common_proxy.RequestTarget{
 		URL:       target,
 		Host:      forwardedHost,

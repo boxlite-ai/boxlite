@@ -48,6 +48,15 @@ for (const home of ['aws', 'gcp'] as const) {
   }
 }
 
+test('PostHog events use the deployed stage on both clouds', () => {
+  for (const home of ['aws', 'gcp'] as const) {
+    const { environment } = apiEnvironmentFrom({
+      environment: base, declaration: groups([]), region: 'us-east1', stage: 'dev', home,
+    })
+    assert.equal(environment.POSTHOG_ENVIRONMENT, 'dev', home)
+  }
+})
+
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))

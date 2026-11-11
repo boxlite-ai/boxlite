@@ -44,7 +44,10 @@ import { ContentTypeInterceptor } from '../../common/interceptors/content-type.i
 import { BoxAccessGuard } from '../guards/box-access.guard'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
-import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
+import { UserContext } from '../../common/decorators/user-context.decorator'
+import { Context } from '../../common/context/context'
+import { OrganizationAuthContext, AuthContextType } from '../../common/interfaces/auth-context.interface'
+import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
@@ -315,9 +318,10 @@ export class BoxController {
   async recoverBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
+    @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxDto> {
-    const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization)
+    const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization, ctx)
     if (request) request[AUDIT_TARGET_ID] = recoveredBox.id
     let boxDto = await this.boxService.toBoxDto(recoveredBox)
 
@@ -413,7 +417,15 @@ export class BoxController {
     description: 'Last activity has been updated',
   })
   @UseGuards(OrGuard([BoxAccessGuard, ProxyGuard, RegionBoxAccessGuard]))
-  async updateLastActivity(@Param('boxId') boxId: string): Promise<void> {
+  async updateLastActivity(
+    @Param('boxId') boxId: string,
+    @AuthContext() authContext: AuthContextType,
+    @Req() request: Request,
+  ): Promise<void> {
+    if (request.headers['x-boxlite-preview-open'] === '1' && authContext && isProxyContext(authContext)) {
+      await this.boxService.updateLastActivityAt(boxId, new Date(), true)
+      return
+    }
     await this.boxService.updateLastActivityAt(boxId, new Date())
   }
 

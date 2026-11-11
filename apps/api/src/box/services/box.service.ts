@@ -61,6 +61,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { mutationFailureType, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -108,6 +109,9 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
+
+// Leave room inside the proxy's two-second delivery timeout.
+const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
@@ -387,7 +391,7 @@ export class BoxService {
             })
       })
 
-      recordBoxRequested('box.create', insertedBox.id, ctx)
+      recordBoxRequested('box.create', insertedBox, ctx)
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -470,7 +474,7 @@ export class BoxService {
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
 
-    recordWarmPoolClaim(updatedBox.id, ctx)
+    recordWarmPoolClaim(updatedBox, ctx)
 
     // Treat this as a newly started box
     this.eventEmitter.emit(
@@ -889,13 +893,18 @@ export class BoxService {
       whereCondition: { pending: box.pending, state: box.state },
     })
 
-    recordBoxRequested('box.delete', updatedBox.id, ctx)
+    recordBoxRequested('box.delete', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization, options?: { idOnly?: boolean }): Promise<Box> {
+  async start(
+    boxIdOrName: string,
+    organization: Organization,
+    ctx: Context,
+    options?: { idOnly?: boolean },
+  ): Promise<Box> {
     const box = options?.idOnly
       ? await this.findOne(boxIdOrName)
       : await this.findOneByIdOrName(boxIdOrName, organization.id)
@@ -937,6 +946,8 @@ export class BoxService {
       whereCondition: { pending: false, state: box.state },
     })
 
+    recordBoxRequested('box.start', updatedBox, ctx)
+
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
     return updatedBox
@@ -964,6 +975,8 @@ export class BoxService {
     if (!updated) {
       return this.findOneByIdOrName(box.id, organization.id)
     }
+
+    recordBoxRequested('box.start', updated, Context.platform(PlatformReason.AUTO_RESUME))
 
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
     this.eventEmitter.emit(
@@ -1001,14 +1014,14 @@ export class BoxService {
       lockTimeoutMs: ctx.lockTimeoutMs,
     })
 
-    recordBoxRequested('box.stop', updatedBox.id, ctx)
+    recordBoxRequested('box.stop', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
 
     return updatedBox
   }
 
-  async recover(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async recover(boxIdOrName: string, organization: Organization, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     if (box.state !== BoxState.ERROR) {
@@ -1057,7 +1070,7 @@ export class BoxService {
 
     // Now that box is in STOPPED state, use the normal start flow
     // This handles state validation and event emission.
-    return await this.start(box.id, organization)
+    return await this.start(box.id, organization, ctx)
   }
 
   async updateInboundEnabled(boxIdOrName: string, inboundEnabled: boolean, organizationId?: string): Promise<Box> {
@@ -1073,8 +1086,52 @@ export class BoxService {
     })
   }
 
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
-    await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
+    if (!previewOpen) return this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+    const controller = new AbortController()
+    const { signal } = controller
+    let operation = 'update_activity'
+    let timeout: ReturnType<typeof setTimeout>
+    const observe = async () => {
+      await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt, signal)
+      signal.throwIfAborted()
+      operation = 'deduplicate'
+      const first = await this.redis.set(`box:preview-open:${boxId}`, '1', 'EX', 60, 'NX')
+      signal.throwIfAborted()
+      if (first !== 'OK') return
+      operation = 'load_box'
+      const box = await this.findOne(boxId)
+      signal.throwIfAborted()
+      operation = 'record_event'
+      recordBusinessEvent({
+        name: 'box.open',
+        outcome: 'success',
+        correlationId: box.id,
+        organizationId: box.organizationId,
+      })
+    }
+    try {
+      await Promise.race([
+        observe(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            const error = new Error('Preview activity deadline exceeded')
+            controller.abort(error)
+            reject(error)
+          }, PREVIEW_ACTIVITY_TIMEOUT_MS)
+        }),
+      ])
+    } catch (error) {
+      // Preserve activity-buffer failures; only preview observation/timeouts fail closed.
+      if (operation === 'update_activity' && !signal.aborted) throw error
+      this.logger.warn('Preview activity observation could not be recorded', {
+        boxId,
+        operation,
+        errorType: signal.aborted ? 'timeout' : mutationFailureType(error),
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   /**
