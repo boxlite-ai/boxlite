@@ -232,6 +232,9 @@ Provision `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` and grant the
 API/runner identities object access. Storage alone does not enable admission.
 After compatible runners are deployed, set `CHECKPOINTS_ENABLED=true` to allow
 capture and checkpoint import; it defaults to false, including mdeploy stacks.
+For mdeploy, the optional `api` group delivers this switch. Set it in the selected
+stage with `npm run mstage env set -- CHECKPOINTS_ENABLED=true --stage dev` from
+`apps/infra`, then deploy the API. The stack supplies the archive prefix separately.
 Disabling admission keeps existing records readable and lets accepted jobs finish. The optional
 `CHECKPOINT_MAX_PER_ORGANIZATION` defaults to 10; creating, ready, failed and
 deleting records all count. Quota and name checks run in the transaction that
