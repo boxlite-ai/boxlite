@@ -497,9 +497,9 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
         // This SDK keeps boxes on stop unless asked otherwise. A checkpoint box
         // inherits its saved settings instead, so an unset value must stay at
         // the core default: only a caller-set option counts as an override.
-        let auto_remove = js_opts.auto_remove.unwrap_or_else(|| {
-            js_opts.checkpoint.is_some() && BoxOptions::default().auto_remove
-        });
+        let auto_remove = js_opts
+            .auto_remove
+            .unwrap_or_else(|| js_opts.checkpoint.is_some() && BoxOptions::default().auto_remove);
         let auto_delete = js_opts.auto_delete;
         // Convert volumes
         let volumes = js_opts

@@ -595,6 +595,10 @@ node simplebox.js
 
 ### Maintaining the native bindings
 
+Rust sources in `sdks/node/src/` use the workspace formatter. From the
+repository root, run `make fmt:rust` before committing binding changes and
+`make fmt:check:rust` to reproduce the CI formatting check.
+
 The Rust bindings require `napi` 3.16.1+, `napi-derive` 3.7.0+, and
 `napi-build` 2.6.0+. Update the runtime and macro generator together:
 `napi-derive` selects `napi-derive-backend`, whose generated reference
