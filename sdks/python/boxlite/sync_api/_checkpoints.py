@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..boxlite import CheckpointHandle, CheckpointInfo
-    from ._box import SyncBox
     from ._boxlite import SyncBoxlite
 
 
@@ -27,11 +26,3 @@ class SyncCheckpointHandle:
 
     def remove(self, key: str, force: bool = False) -> None:
         self._bridge._sync(self._handle.remove(key, force))
-
-    def import_box(
-        self, key: str, name: str | None = None, *, box_id: str | None = None
-    ) -> "SyncBox":
-        from ._box import SyncBox
-
-        handle = self._bridge._sync(self._handle.import_box(key, name, box_id=box_id))
-        return SyncBox(self._runtime, handle)

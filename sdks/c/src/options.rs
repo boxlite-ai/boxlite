@@ -30,6 +30,26 @@ pub unsafe extern "C" fn boxlite_options_set_rootfs_path(
     options_set_rootfs_path(opts, path)
 }
 
+/// Create the box from a REST-managed checkpoint instead of the image.
+///
+/// The box inherits the checkpoint's saved settings, so every other option
+/// must stay unset; only the name may accompany it. Local runtimes fail the
+/// create with an unsupported error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_checkpoint(
+    opts: *mut CBoxliteOptions,
+    checkpoint: *const c_char,
+) {
+    unsafe {
+        if opts.is_null() || checkpoint.is_null() {
+            return;
+        }
+        if let Ok(checkpoint) = c_str_to_string(checkpoint) {
+            (*opts).options.rootfs = RootfsSpec::Checkpoint(checkpoint);
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_name(opts: *mut CBoxliteOptions, name: *const c_char) {
     options_set_name(opts, name)

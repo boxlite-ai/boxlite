@@ -162,6 +162,9 @@ impl CreateBoxRequest {
         let (image, rootfs_path) = match &options.rootfs {
             RootfsSpec::Image(img) => (Some(img.clone()), None),
             RootfsSpec::RootfsPath(path) => (None, Some(path.clone())),
+            // `RestRuntime::create` sends a checkpoint source as its own
+            // minimal request and never reaches this conversion.
+            RootfsSpec::Checkpoint(_) => (None, None),
         };
 
         let env = if options.env.is_empty() {

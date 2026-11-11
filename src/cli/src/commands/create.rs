@@ -16,6 +16,11 @@ pub struct CreateArgs {
     #[arg(long = "rootfs", value_name = "PATH")]
     pub rootfs: Option<String>,
 
+    /// Checkpoint on the selected REST server to create from. The box inherits
+    /// the saved settings, so only --name may accompany it.
+    #[arg(long = "checkpoint", value_name = "CHECKPOINT")]
+    pub checkpoint: Option<String>,
+
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
 
@@ -57,8 +62,13 @@ pub struct CreateArgs {
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let box_options = args.to_box_options(global)?;
-    let rt = global.create_runtime()?;
+    let (box_options, rt) = match args.checkpoint.as_deref() {
+        Some(checkpoint) => {
+            let rt = crate::commands::checkpoint::runtime(global)?;
+            (args.checkpoint_box_options(checkpoint, global)?, rt)
+        }
+        None => (args.to_box_options(global)?, global.create_runtime()?),
+    };
 
     let litebox = rt.create(box_options, args.management.name.clone()).await?;
     println!("{}", litebox.id());
@@ -103,12 +113,51 @@ impl CreateArgs {
         Ok(options)
     }
 
+    /// Options for a box created from a checkpoint.
+    ///
+    /// The server restores the saved settings and accepts no overrides, so any
+    /// other create option is an error. This compares against what a bare
+    /// `create --checkpoint` yields rather than listing flags, which stays
+    /// correct as flags are added. The CLI's own defaults, such as detach,
+    /// differ from `BoxOptions::default()`, so the result is rebuilt from it.
+    fn checkpoint_box_options(
+        &self,
+        checkpoint: &str,
+        global: &GlobalFlags,
+    ) -> anyhow::Result<BoxOptions> {
+        use clap::Parser;
+        let bare = crate::cli::Cli::try_parse_from(["boxlite", "create", "--checkpoint", checkpoint])?;
+        let crate::cli::Commands::Create(bare) = bare.command else {
+            unreachable!("`create` parses to the create command");
+        };
+        let requested = serde_json::to_value(self.to_box_options(global)?)?;
+        if requested != serde_json::to_value(bare.to_box_options(global)?)? {
+            anyhow::bail!(
+                "a box created from --checkpoint inherits its saved settings; \
+                 only --name may accompany it"
+            );
+        }
+        Ok(BoxOptions {
+            rootfs: RootfsSpec::Checkpoint(checkpoint.to_owned()),
+            ..Default::default()
+        })
+    }
+
     fn rootfs_spec(&self) -> anyhow::Result<RootfsSpec> {
-        match (self.image.as_ref(), self.rootfs.as_ref()) {
-            (Some(image), None) => Ok(RootfsSpec::Image(image.clone())),
-            (None, Some(path)) => Ok(RootfsSpec::RootfsPath(path.clone())),
-            (None, None) => anyhow::bail!("provide IMAGE or --rootfs PATH"),
-            (Some(_), Some(_)) => anyhow::bail!("provide either IMAGE or --rootfs PATH, not both"),
+        match (
+            self.image.as_ref(),
+            self.rootfs.as_ref(),
+            self.checkpoint.as_ref(),
+        ) {
+            (Some(image), None, None) => Ok(RootfsSpec::Image(image.clone())),
+            (None, Some(path), None) => Ok(RootfsSpec::RootfsPath(path.clone())),
+            (None, None, Some(checkpoint)) => Ok(RootfsSpec::Checkpoint(checkpoint.clone())),
+            (None, None, None) => {
+                anyhow::bail!("provide IMAGE, --rootfs PATH or --checkpoint CHECKPOINT")
+            }
+            _ => anyhow::bail!(
+                "provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT"
+            ),
         }
     }
 }
@@ -194,7 +243,10 @@ mod tests {
             .to_box_options(&cli.global)
             .expect_err("missing source must be rejected");
 
-        assert!(err.to_string().contains("IMAGE or --rootfs"));
+        assert!(
+            err.to_string()
+                .contains("provide IMAGE, --rootfs PATH or --checkpoint")
+        );
     }
 
     #[test]
@@ -209,7 +261,7 @@ mod tests {
             .to_box_options(&cli.global)
             .expect_err("competing sources must be rejected");
 
-        assert!(err.to_string().contains("either IMAGE or --rootfs"));
+        assert!(err.to_string().contains("provide only one of IMAGE"));
     }
 
     #[test]

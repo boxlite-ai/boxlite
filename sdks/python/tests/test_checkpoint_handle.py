@@ -100,34 +100,37 @@ async def test_checkpoint_native_rest_management_and_box_creation(checkpoint_ser
         "failed",
         "archive upload failed",
     )
-    created = await checkpoints.import_box("checkpoint-1", "worker")
+    assert not hasattr(checkpoints, "import_box")
+    created = await runtime.create(
+        boxlite.BoxOptions(checkpoint="checkpoint-1"), name="worker"
+    )
     assert (created.id, created.name) == ("target-1", "worker")
-    recovered = await checkpoints.import_box("checkpoint-1", box_id="target-1")
-    assert recovered.id == "target-1"
     await checkpoints.remove("checkpoint-1", True)
     await checkpoints.remove("checkpoint-1")
     await checkpoints.remove("checkpoint-1", False)
     await checkpoints.create("source-1")
-    await checkpoints.import_box("checkpoint-1")
+    await runtime.create(boxlite.BoxOptions(checkpoint="checkpoint-1"))
+    for overridden in (
+        boxlite.BoxOptions(checkpoint="checkpoint-1", cpus=2),
+        boxlite.BoxOptions(checkpoint="checkpoint-1", image="alpine:latest"),
+        boxlite.BoxOptions(checkpoint="checkpoint-1", rootfs_path="/tmp/rootfs"),
+    ):
+        with pytest.raises(Exception):
+            await runtime.create(overridden)
     assert requests == [
         ("POST", "/v1/checkpoints", {"source_box_id": "source-1", "name": "base"}),
         ("GET", "/v1/checkpoints", None),
         ("GET", "/v1/checkpoints/checkpoint-1", None),
         (
             "POST",
-            "/v1/boxes/import",
+            "/v1/boxes",
             {"checkpoint_id": "checkpoint-1", "name": "worker"},
-        ),
-        (
-            "POST",
-            "/v1/boxes/import",
-            {"checkpoint_id": "checkpoint-1", "box_id": "target-1"},
         ),
         ("DELETE", "/v1/checkpoints/checkpoint-1?force=true", None),
         ("DELETE", "/v1/checkpoints/checkpoint-1", None),
         ("DELETE", "/v1/checkpoints/checkpoint-1", None),
         ("POST", "/v1/checkpoints", {"source_box_id": "source-1"}),
-        ("POST", "/v1/boxes/import", {"checkpoint_id": "checkpoint-1"}),
+        ("POST", "/v1/boxes", {"checkpoint_id": "checkpoint-1"}),
     ]
 
 
@@ -135,11 +138,9 @@ def test_checkpoint_sync_bridge_returns_managed_box_handles(checkpoint_server):
     url, requests = checkpoint_server
     with boxlite.SyncBoxlite.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
         assert runtime.checkpoints.list()[0].id == "checkpoint-1"
-        target = runtime.checkpoints.import_box("checkpoint-1", "worker")
+        target = runtime.create(
+            boxlite.BoxOptions(checkpoint="checkpoint-1"), name="worker"
+        )
         assert isinstance(target, boxlite.SyncBox)
         assert target.id == "target-1"
-        assert (
-            runtime.checkpoints.import_box("checkpoint-1", box_id=target.id).id
-            == target.id
-        )
     assert requests[1][2] == {"checkpoint_id": "checkpoint-1", "name": "worker"}

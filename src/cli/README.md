@@ -168,22 +168,23 @@ boxlite --url https://api.example.com checkpoint create source --name dev-base
 boxlite --url https://api.example.com checkpoint list
 boxlite --url https://api.example.com checkpoint get dev-base
 
-# Saved execution settings are inherited; configuration overrides are refused.
-boxlite --url https://api.example.com checkpoint import dev-base --name worker
-
-# Replace an idle stopped or failed box, preserving its public Box ID.
-boxlite --url https://api.example.com checkpoint import dev-base --box worker
+# Saved execution settings are inherited; only --name may accompany --checkpoint.
+boxlite --url https://api.example.com create --checkpoint dev-base --name worker
 boxlite --url https://api.example.com checkpoint delete dev-base
 ```
 
-A capture can initially report `creating`; wait for `ready` before import.
-Capture never automatically stops a Box. Name and replacement target are
-mutually exclusive. Deleting a checkpoint leaves previously imported boxes
-intact; `--force` tolerates absence and never bypasses active use.
+A capture can initially report `creating`; wait for `ready` before use.
+Capture never automatically stops a Box. `create --checkpoint` refuses an image,
+`--rootfs` and every other create option before sending a request. Deleting a
+checkpoint leaves boxes created from it intact; `--force` tolerates absence and
+never bypasses active use.
 
-Storage, capture coordination, and replacement retries belong to the server.
+A checkpoint is a rootfs source for `create`, beside an image or `--rootfs`, so
+the `checkpoint` subcommands only manage checkpoints. The CLI and SDKs do not
+replace an existing box from a checkpoint; remove the box and create a new one.
+
+Storage and capture coordination belong to the server.
 The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
-The CLI uses the runtime checkpoint handle for management and REST imports.
 The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
 Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
 management routes. Existing binary archive export/import remains available.

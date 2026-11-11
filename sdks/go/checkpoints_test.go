@@ -78,28 +78,23 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	if err != nil || detail.ID != captured.ID || detail.State != "failed" || detail.ErrorReason != "archive upload failed" {
 		t.Fatalf("get: %+v %v", detail, err)
 	}
-	created, err := checkpoints.ImportBox(ctx, "checkpoint-1", "worker", "")
+	created, err := runtime.Create(ctx, "", WithCheckpoint("checkpoint-1"), WithName("worker"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer created.Close()
-	if created.ID() != "target-1" || created.Name() != "worker" {
-		t.Fatalf("created: %s %q", created.ID(), created.Name())
+	if created.ID() != "target-1" {
+		t.Fatalf("created: %s", created.ID())
 	}
-	recovered, err := checkpoints.ImportBox(ctx, "checkpoint-1", "", created.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recovered.Close()
-	if recovered.ID() != created.ID() || recovered.Name() != "worker" {
-		t.Fatalf("recovered: %s %q", recovered.ID(), recovered.Name())
+	if _, err := runtime.Create(ctx, "", WithCheckpoint("checkpoint-1"), WithCPUs(2)); !IsInvalidArgument(err) {
+		t.Fatalf("override must be refused: %v", err)
 	}
 	for _, force := range []bool{false, true} {
 		if err := checkpoints.Remove(ctx, "checkpoint-1", force); err != nil {
 			t.Fatal(err)
 		}
 	}
-	unnamed, err := checkpoints.ImportBox(ctx, "checkpoint-1", "", "")
+	unnamed, err := runtime.Create(ctx, "", WithCheckpoint("checkpoint-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +113,10 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		{"POST", "/v1/checkpoints", map[string]any{"source_box_id": "source-1", "name": "base"}},
 		{"GET", "/v1/checkpoints", nil},
 		{"GET", "/v1/checkpoints/checkpoint-1", nil},
-		{"POST", "/v1/boxes/import", map[string]any{"checkpoint_id": "checkpoint-1", "name": "worker"}},
-		{"POST", "/v1/boxes/import", map[string]any{"checkpoint_id": "checkpoint-1", "box_id": "target-1"}},
+		{"POST", "/v1/boxes", map[string]any{"checkpoint_id": "checkpoint-1", "name": "worker"}},
 		{"DELETE", "/v1/checkpoints/checkpoint-1", nil},
 		{"DELETE", "/v1/checkpoints/checkpoint-1?force=true", nil},
-		{"POST", "/v1/boxes/import", map[string]any{"checkpoint_id": "checkpoint-1"}},
+		{"POST", "/v1/boxes", map[string]any{"checkpoint_id": "checkpoint-1"}},
 		{"POST", "/v1/checkpoints", map[string]any{"source_box_id": "source-1"}},
 	}
 	if len(requests) != len(expected)+1 || !reflect.DeepEqual(requests[:len(expected)], expected) {
@@ -143,25 +137,21 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 		if _, err := checkpoints.Create(ctx, key, ""); !IsInvalidArgument(err) {
 			t.Fatalf("create %q: %v", key, err)
 		}
-		if _, err := checkpoints.ImportBox(ctx, key, "", ""); !IsInvalidArgument(err) {
-			t.Fatalf("create box %q: %v", key, err)
-		}
 		if err := checkpoints.Remove(ctx, key, true); !IsInvalidArgument(err) {
 			t.Fatalf("remove %q: %v", key, err)
 		}
 	}
-	for _, target := range []string{"target", "bad\x00suffix"} {
-		if _, err := checkpoints.ImportBox(ctx, "base", "conflicting-name", target); !IsInvalidArgument(err) {
-			t.Fatalf("conflicting import target %q: %v", target, err)
+	for _, config := range []*boxConfig{{checkpoint: "base"}, {checkpoint: "base", rootfsPath: "/tmp"}} {
+		image := "alpine:latest"
+		if config.rootfsPath != "" {
+			image = ""
+		}
+		if _, err := buildCOptions(image, config); err == nil {
+			t.Fatalf("checkpoint with another rootfs source must fail: %+v", config)
 		}
 	}
 	if _, err := checkpoints.List(ctx); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("closed list: %v", err)
-	}
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, err := checkpoints.ImportBox(cancelled, "base", "worker", ""); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled: %v", err)
 	}
 }
 
@@ -177,10 +167,6 @@ func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {
 		{"get", func(ctx context.Context, c *Checkpoints, key string) error { _, err := c.Get(ctx, key); return err }},
 		{"list", func(ctx context.Context, c *Checkpoints, _ string) error { _, err := c.List(ctx); return err }},
 		{"remove", func(ctx context.Context, c *Checkpoints, key string) error { return c.Remove(ctx, key, false) }},
-		{"import", func(ctx context.Context, c *Checkpoints, key string) error {
-			_, err := c.ImportBox(ctx, key, "", "")
-			return err
-		}},
 	}
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {

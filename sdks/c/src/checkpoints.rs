@@ -11,11 +11,10 @@ use boxlite::{BoxliteError, BoxliteResult, BoxliteRuntime, CheckpointInfo};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::archive::TokioRuntimeDropGuard;
-use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxRemoveBoxCb, CCheckpointInfoCb, CCheckpointListCb, CRuntimeImportCb, EventQueue,
-    OwnedFfiPtr, RuntimeEvent, push_event,
+    CBoxRemoveBoxCb, CCheckpointInfoCb, CCheckpointListCb, EventQueue, OwnedFfiPtr,
+    RuntimeEvent, push_event,
 };
 use crate::info::{free_raw_slice, into_raw_slice};
 use crate::{CBoxliteError, CBoxliteRuntime};
@@ -267,57 +266,6 @@ pub unsafe extern "C" fn boxlite_checkpoint_remove(
             }
         })
     }
-}
-
-/// Queue checkpoint import. Name and box_id may be null but are mutually exclusive.
-/// A non-null box_id replaces an idle target; the callback owns the Box handle.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_checkpoint_import_box(
-    runtime: *mut CBoxliteRuntime,
-    key: *const c_char,
-    name: *const c_char,
-    box_id: *const c_char,
-    cb: CRuntimeImportCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    let cb = crate::unwrap_cb_or_return!(cb, out_error);
-    let key = input_or_return!(unsafe { required(key) }, out_error);
-    let name = input_or_return!(unsafe { optional(name) }, out_error);
-    let box_id = input_or_return!(unsafe { optional(box_id) }, out_error);
-    let user_data = user_data as usize;
-    unsafe {
-        submit(
-            runtime,
-            out_error,
-            move |runtime, tokio_rt, queue| async move {
-                let result = runtime
-                    .checkpoints()
-                    .import_box(&key, name, box_id.as_deref())
-                    .await
-                    .map(|handle| boxed_result(handle, tokio_rt, queue));
-                RuntimeEvent::RuntimeImport {
-                    cb,
-                    user_data,
-                    result,
-                }
-            },
-        )
-    }
-}
-
-fn boxed_result(
-    handle: boxlite::LiteBox,
-    tokio_rt: Arc<TokioRuntime>,
-    queue: Arc<EventQueue>,
-) -> OwnedFfiPtr<BoxHandle> {
-    let box_id = handle.id().clone();
-    OwnedFfiPtr::new(Box::new(BoxHandle {
-        handle: Arc::new(handle),
-        box_id,
-        tokio_rt,
-        queue,
-    }))
 }
 
 unsafe fn submit<F>(
@@ -616,7 +564,7 @@ mod tests {
         std::thread::scope(|scope| {
             let server = scope.spawn(move || {
                 let mut requests = Vec::new();
-                while requests.len() < 8 {
+                while requests.len() < 7 {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     let (mut stream, _) = loop {
                         match listener.accept() {
@@ -654,7 +602,7 @@ mod tests {
                     let info = serde_json::json!({"id":"checkpoint-1","name":"base","source_box_id":"source-1","created_at":"2026-11-06T00:00:00Z","size_bytes":4096,"state":"ready"});
                     let (status, response) = if path.ends_with("/missing") {
                         (404, serde_json::json!({"message":"Checkpoint not found"}))
-                    } else if path == "/v1/boxes/import" {
+                    } else if path == "/v1/boxes" {
                         (200, serde_json::json!({"box_id":"target-1","name":"worker","status":"stopped","created_at":"2026-11-06T00:00:00Z","updated_at":"2026-11-06T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}))
                     } else if method == "GET" && path == "/v1/checkpoints" {
                         (200, serde_json::json!({"checkpoints":[info]}))
@@ -685,7 +633,6 @@ mod tests {
             let source = CString::new("source-1").unwrap();
             let key = CString::new("checkpoint-1").unwrap();
             let name = CString::new("worker").unwrap();
-            let target = CString::new("target-1").unwrap();
             let mut drain = |runtime: &mut RuntimeHandle| {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 loop {
@@ -744,25 +691,26 @@ mod tests {
                     BoxliteErrorCode::Ok
                 );
                 assert_eq!(drain(&mut runtime), (BoxliteErrorCode::Ok, "1".into()));
-                for (name, target) in [(name.as_ptr(), ptr::null()), (ptr::null(), target.as_ptr())]
-                {
-                    assert_eq!(
-                        boxlite_checkpoint_import_box(
-                            &mut runtime,
-                            key.as_ptr(),
-                            name,
-                            target,
-                            Some(checkpoint_box_reply),
-                            data,
-                            ptr::null_mut()
-                        ),
-                        BoxliteErrorCode::Ok
-                    );
-                    assert_eq!(
-                        drain(&mut runtime),
-                        (BoxliteErrorCode::Ok, "target-1:worker".into())
-                    );
-                }
+                let options = Box::into_raw(Box::new(crate::options::OptionsHandle {
+                    options: boxlite::BoxOptions::default(),
+                    name: None,
+                }));
+                crate::options::boxlite_options_set_checkpoint(options, key.as_ptr());
+                crate::options::boxlite_options_set_name(options, name.as_ptr());
+                assert_eq!(
+                    crate::box_handle::boxlite_create_box(
+                        &mut runtime,
+                        options,
+                        Some(checkpoint_box_reply),
+                        data,
+                        ptr::null_mut()
+                    ),
+                    BoxliteErrorCode::Ok
+                );
+                assert_eq!(
+                    drain(&mut runtime),
+                    (BoxliteErrorCode::Ok, "target-1:worker".into())
+                );
                 assert_eq!(
                     boxlite_checkpoint_remove(
                         &mut runtime,
@@ -800,16 +748,12 @@ mod tests {
                 requests[1].2,
                 serde_json::json!({"source_box_id":"source-1"})
             );
-            assert_eq!(requests[4].1, "/v1/boxes/import");
+            assert_eq!(requests[4].1, "/v1/boxes");
             assert_eq!(
                 requests[4].2,
                 serde_json::json!({"checkpoint_id":"checkpoint-1","name":"worker"})
             );
-            assert_eq!(
-                requests[5].2,
-                serde_json::json!({"checkpoint_id":"checkpoint-1","box_id":"target-1"})
-            );
-            assert_eq!(requests[6].1, "/v1/checkpoints/checkpoint-1?force=true");
+            assert_eq!(requests[5].1, "/v1/checkpoints/checkpoint-1?force=true");
         });
     }
 }

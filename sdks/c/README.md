@@ -9,29 +9,29 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 ## Managed checkpoints
 
-Checkpoint import belongs to the checkpoint handle, separate from archive import.
-The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
-checkpoint import requests through REST. The runtime facade owns the shared
-checkpoint backend; native archive import and provision remain unchanged.
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
 
 The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-`boxlite_checkpoint_create`, `list`, `get`, `remove` and `import_box` require a
+`boxlite_checkpoint_create`, `list`, `get` and `remove` require a
 REST runtime and use its existing post-and-drain event queue. Local runtimes
 deliver an unsupported-operation error through the same callback queue.
-Import accepts optional name and box_id; they are mutually exclusive. A non-null
-box_id replaces the selected target; otherwise import creates a new Box.
+To create a Box from a checkpoint, call `boxlite_options_set_checkpoint` on the
+options and pass them to `boxlite_create_box`. Only the name may accompany it.
 Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
 or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
-`boxlite_free_checkpoint_list`. List entries belong to the list. Import
-callbacks own a Box handle, released with `boxlite_box_free`, which does not
-delete the native Box. Error pointers are borrowed during callback dispatch.
+`boxlite_free_checkpoint_list`. List entries belong to the list. Error
+pointers are borrowed during callback dispatch.
 
 Cloud capture may initially report `creating`; wait for `ready` before use.
-New imports and replacements inherit all saved execution settings, and replacement
-preserves the public Box ID. Force removal ignores absence and never bypasses active use.
-Storage and replacement coordination belong to the server. Existing native archive
+A Box created from a checkpoint inherits all saved execution settings; any other
+option fails the create with an invalid-argument error.
+Force removal ignores absence and never bypasses active use.
+Storage belongs to the server. Existing native archive
 export/import remains available.
 `boxlite_box_name` returns an owned name string, released with
 `boxlite_free_string`, or null for an unnamed Box.

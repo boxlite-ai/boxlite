@@ -310,7 +310,6 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         "checkpoint",
         &[
             box_command_scope("create", &[]),
-            box_command_scope("import", &[]),
             box_command_scope("list", &[]),
             box_command_scope("get", &[]),
             box_command_scope("delete", &[]),
