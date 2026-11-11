@@ -983,9 +983,11 @@ mod container_id_path_tests {
             "a retry repeated command effects"
         );
         assert_eq!(first.execution_id, second.execution_id);
+        keyed_execution_retries_after_workdir_is_created().await;
     }
 
-    #[tokio::test]
+    // Share the installed reaper runtime with the counter regression. A second
+    // Tokio test would retain a global reaper whose original runtime has ended.
     async fn keyed_execution_retries_after_workdir_is_created() {
         use boxlite_shared::ExecRequest;
         let directory = tempfile::tempdir().unwrap();
