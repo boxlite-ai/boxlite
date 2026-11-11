@@ -698,8 +698,15 @@ prototype-only method receivers before the agent operation runs.
 These receiver tests exercise napi-rs callback unwrapping. They do not exercise
 the generated `FromNapiRef` and `FromNapiMutRef` conversions flagged by CodeQL,
 so passing them does not establish that those pointer alerts are false positives.
-The conversions are generated in the locked
-[napi-rs backend](https://github.com/napi-rs/napi-rs/blob/5ed87dd7e930961e9273f95cd0ed77c2da967bc1/crates/backend/src/codegen/struct.rs#L112-L146).
+The locked
+[napi-rs backend 7.0.0](https://github.com/napi-rs/napi-rs/blob/f89400d99b136c5c8a27818654b91256832b5bd6/crates/backend/src/codegen/struct.rs#L168-L242)
+checks `napi_unwrap`, validates the napi8 class tag, and registers a native borrow
+before constructing either reference. The matching
+[napi 3.16.1 runtime](https://github.com/napi-rs/napi-rs/blob/417375ad5ef1d8cb4c49edf13d2cc6c0204bb5b1/crates/napi/src/bindgen_runtime/native_borrow.rs#L688-L696)
+rejects a null native pointer during borrow acquisition; its error propagates
+before dereference. When reviewing an alert, compare its expanded conversion
+path against these exact locked sources, including the guards between pointer
+initialization and dereference.
 
 ## License
 
