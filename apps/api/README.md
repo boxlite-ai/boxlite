@@ -247,6 +247,8 @@ New Box creation validates and locks its checkpoint before insertion, then
 writes checkpoint coordination after the Box exists, all in the same admission
 transaction. The checkpoint migration creates these separate tables without
 adding columns to `box`; unrelated Box-only fixtures do not need that migration.
+Fixtures exercising lifecycle synchronization or deletion must register
+`BoxCheckpointState` and create its table, even when no checkpoint is active.
 The transaction tests inject a failure after the Box write and before operation
 completion; they verify rollback and concurrent replay against PostgreSQL.
 
