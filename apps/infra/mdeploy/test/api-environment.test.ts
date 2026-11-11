@@ -18,6 +18,38 @@ const assemble = (environment: Record<string, string | undefined>, declaration =
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
 
 for (const home of ['aws', 'gcp'] as const) {
+  for (const enabled of [undefined, 'false', 'true']) {
+    test(`${home} delivers checkpoint admission ${enabled ?? '(unset)'} through the stage API group`, () => {
+      const path = new URL('../../mstage.env.json', import.meta.url)
+      const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+      const required = Object.fromEntries(
+        declared.envSelectGroup
+          .api!.filter((name) => !declared.envOptional.api!.includes(name))
+          .map((name) => [name, 'fixture']),
+      )
+      const selected = valuesOfGroup({
+        group: 'api',
+        groups: declared.envSelectGroup,
+        optional: declared.envOptional.api,
+        where: path.pathname,
+        values: { ...required, ...(enabled === undefined ? {} : { CHECKPOINTS_ENABLED: enabled }) },
+      })
+      const { environment, secrets } = apiEnvironmentFrom({
+        environment: { ...base, ...selected },
+        declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+        region: home === 'aws' ? 'us-east-1' : 'us-east1',
+        stage: 'dev',
+        home,
+      })
+      assert.equal(environment.CHECKPOINTS_ENABLED, enabled)
+      assert.equal(Object.hasOwn(environment, 'CHECKPOINTS_ENABLED'), enabled !== undefined)
+      assert.equal(Object.hasOwn(secrets, 'CHECKPOINTS_ENABLED'), false)
+    })
+  }
+}
+
+
+for (const home of ['aws', 'gcp'] as const) {
   for (const minimum of [undefined, '1', '3', '63']) {
     test(`${home} delivers the platform subdomain minimum ${minimum ?? '(unset)'} from the stage group`, () => {
       const path = new URL('../../mstage.env.json', import.meta.url)
