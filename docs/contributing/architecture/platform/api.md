@@ -592,6 +592,12 @@ without the keyed RPC reject the operation. Keyed and ordinary execution request
 share activity preparation: activity-store failures are logged rather than
 rejecting execution, and a response-lifetime heartbeat prevents AutoStop during
 long startup requests. The heartbeat ends on response completion, close or error.
+The dedicated lock pool retries initialization after a transient connection failure;
+it bounds each API process to four active keyed requests and returns retryable 503
+when full. This is shared process capacity, not a tenant fairness guarantee.
+Keyed runner HTTPS calls follow the existing runner proxy certificate policy and
+do not follow redirects. An older guest's missing keyed RPC returns an unsupported
+operation error and never falls back to starting an unkeyed command.
 
 Resource permissions are enforced per route. A box mutation — create, start,
 stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an

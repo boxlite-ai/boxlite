@@ -128,6 +128,9 @@ impl ExecutionInterface {
                     tonic::Code::ResourceExhausted => {
                         BoxliteError::ResourceExhausted(status.message().into())
                     }
+                    tonic::Code::Unimplemented => {
+                        BoxliteError::Unsupported(status.message().into())
+                    }
                     _ => status.into(),
                 })?
                 .into_inner()

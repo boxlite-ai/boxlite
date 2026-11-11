@@ -26,6 +26,7 @@ impl Drop for CancelOnDrop {
 }
 
 struct RecordingExecutionService {
+    unkeyed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     waits: mpsc::UnboundedSender<WaitCall>,
     attaches: mpsc::UnboundedSender<(String, oneshot::Receiver<()>)>,
 }
@@ -33,10 +34,18 @@ struct RecordingExecutionService {
 #[tonic::async_trait]
 impl ExecutionService for RecordingExecutionService {
     async fn exec(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+        self.unkeyed_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Err(Status::unimplemented("exec is not used by these tests"))
     }
 
-    async fn exec_keyed(&self, _: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
+    async fn exec_keyed(
+        &self,
+        request: Request<ExecRequest>,
+    ) -> Result<Response<ExecResponse>, Status> {
+        if request.get_ref().program == "unsupported" {
+            return Err(Status::unimplemented("keyed execution is unavailable"));
+        }
         Ok(Response::new(ExecResponse {
             execution_id: "keyed".into(),
             ..Default::default()
@@ -101,6 +110,7 @@ impl ExecutionService for RecordingExecutionService {
 }
 
 struct RpcFixture {
+    unkeyed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     interface: ExecutionInterface,
     waits: mpsc::UnboundedReceiver<WaitCall>,
     attaches: mpsc::UnboundedReceiver<(String, oneshot::Receiver<()>)>,
@@ -113,7 +123,9 @@ impl RpcFixture {
         let address = listener.local_addr().unwrap();
         let (waits_tx, waits) = mpsc::unbounded_channel();
         let (attaches_tx, attaches) = mpsc::unbounded_channel();
+        let unkeyed_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let service = RecordingExecutionService {
+            unkeyed_calls: unkeyed_calls.clone(),
             waits: waits_tx,
             attaches: attaches_tx,
         };
@@ -134,6 +146,7 @@ impl RpcFixture {
             .await
             .unwrap();
         Self {
+            unkeyed_calls,
             interface: ExecutionInterface::new(channel),
             waits,
             attaches,
@@ -158,6 +171,29 @@ async fn within_deadline<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(2), future)
         .await
         .expect("execution RPC did not complete before test deadline")
+}
+
+#[tokio::test]
+async fn keyed_unsupported_guest_returns_typed_error_without_unkeyed_fallback() {
+    let mut fixture = RpcFixture::new().await;
+    let result = fixture
+        .interface
+        .exec(
+            BoxCommand::new("unsupported").idempotency_key("internal.deadline"),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(BoxliteError::Unsupported(message)) if message == "keyed execution is unavailable")
+    );
+    assert_eq!(
+        fixture
+            .unkeyed_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(fixture.waits.try_recv().is_err());
+    assert!(fixture.attaches.try_recv().is_err());
 }
 
 #[tokio::test]

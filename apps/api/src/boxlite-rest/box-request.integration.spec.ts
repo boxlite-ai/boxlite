@@ -77,6 +77,22 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
     await database.query('TRUNCATE box_request, box_last_activity, box')
   })
 
+  it('retries lock-pool initialization after a transient database failure', async () => {
+    const service = new BoxRequestService(database)
+    const initialize = jest.spyOn(DataSource.prototype, 'initialize')
+    initialize.mockRejectedValueOnce(new Error('database temporarily unavailable'))
+    const create = jest.fn(async () => ({ id: 'recovered' }))
+    try {
+      await expect(service.run(scope, randomUUID(), {}, create)).rejects.toThrow('database temporarily unavailable')
+      initialize.mockRestore()
+      await expect(service.run(scope, randomUUID(), {}, create)).resolves.toEqual({ id: 'recovered' })
+      expect(create).toHaveBeenCalledTimes(1)
+    } finally {
+      initialize.mockRestore()
+      await service.onModuleDestroy().catch(() => {})
+    }
+  })
+
   it.each(['fresh', 'warm'])('recovers %s ownership after crashing before response persistence', async (path) => {
     const key = randomUUID()
     const value = box(path === 'warm' ? BOX_WARM_POOL_UNASSIGNED_ORGANIZATION : organizationId)

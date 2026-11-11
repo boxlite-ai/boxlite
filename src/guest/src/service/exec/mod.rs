@@ -23,8 +23,10 @@ pub(in crate::service) mod executor;
 mod output;
 pub(crate) mod process_instance;
 pub(in crate::service) mod registry;
-// Preserve tonic RPC errors without allocating another box on each refusal.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "tonic::Status is the RPC error type for keyed execution refusals"
+)]
 pub(crate) mod requests;
 pub(in crate::service) mod state;
 mod timeout;

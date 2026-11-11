@@ -1,6 +1,11 @@
 jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn(), fixRequestBody: jest.fn() }))
 
 import { createServer, Server } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AddressInfo } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
@@ -101,6 +106,45 @@ describeDatabase('keyed execution proxy with PostgreSQL and HTTP boundary', () =
     )
     return res
   }
+
+  it('uses the existing runner proxy TLS policy for keyed HTTPS calls', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'runner-tls-'))
+    const key = join(directory, 'key.pem')
+    const cert = join(directory, 'cert.pem')
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-keyout',
+        key,
+        '-out',
+        cert,
+        '-days',
+        '1',
+        '-subj',
+        '/CN=localhost',
+      ],
+      { stdio: 'ignore' },
+    )
+    const secure = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) })
+    secure.on('request', (...args) => server.emit('request', ...args))
+    const original = base
+    try {
+      await new Promise<void>((resolve) => secure.listen(0, '127.0.0.1', resolve))
+      base = `https://127.0.0.1:${(secure.address() as AddressInfo).port}`
+      const result = await call(randomUUID())
+      expect(result.json).toHaveBeenCalledWith({ execution_id: 'guest-id' })
+      expect(starts).toBe(1)
+    } finally {
+      base = original
+      await new Promise<void>((resolve) => secure.close(() => resolve()))
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
 
   it('replays the recorded execution without another runner start and rejects payload changes', async () => {
     const key = randomUUID()

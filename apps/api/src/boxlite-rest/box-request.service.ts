@@ -45,13 +45,19 @@ export class BoxRequestService implements OnModuleDestroy {
     // own transaction. Bound admission before checkout, including initialization.
     const options = this.dataSource.options
     if (options.type !== 'postgres') throw new Error('Box request persistence requires PostgreSQL')
-    return (this.locks ??= new DataSource({
+    if (this.locks) return this.locks
+    const initializing = new DataSource({
       ...options,
       poolSize: 4,
       extra: { ...this.dataSource.options.extra, max: 4 },
       migrationsRun: false,
       synchronize: false,
-    }).initialize())
+    }).initialize()
+    this.locks = initializing
+    void initializing.catch(() => {
+      if (this.locks === initializing) this.locks = undefined
+    })
+    return initializing
   }
 
   async run<T>(
