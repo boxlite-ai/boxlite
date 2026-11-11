@@ -445,7 +445,26 @@ jobs:
           set -o pipefail
           export PYTHONPATH="${PWD}/scripts/ci${PYTHONPATH:+:${PYTHONPATH}}"
           export PYTEST_ADDOPTS="-p pr2524_network_probe"
-          make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
+          {
+            make runtime:debug
+            mkdir -p /tmp/pr2524-rpc-observed
+            before=$(find /tmp/pr2524-rpc-observed -name rpc-error.txt | wc -l)
+            result=0
+            for attempt in 1 2; do
+              echo "Rust diagnostic attempt ${attempt}"
+              make test:integration:rust SETUP_DONE=1 || result=1
+              after=$(find /tmp/pr2524-rpc-observed -name rpc-error.txt | wc -l)
+              if (( after > before )); then break; fi
+            done
+            for attempt in {1..10}; do
+              echo "Network diagnostic attempt ${attempt}"
+              if ! make test:integration:python SETUP_DONE=1 FILTER=test_network_policy_live_traffic_and_restart; then
+                result=1
+                break
+              fi
+            done
+            exit "$result"
+          } 2>&1 | tee "${LOG_DIR}/integration.log"
 
       - name: Capture diagnostic host state
         if: always()

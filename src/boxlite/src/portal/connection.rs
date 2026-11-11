@@ -91,6 +91,25 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
             eprintln!("[PR2524-DIAG] {details} evidence={}", directory.display());
             let _ = std::fs::create_dir_all(&directory);
             let _ = std::fs::write(directory.join("rpc-error.txt"), details);
+            let mut observations = String::new();
+            for sample in 0..101 {
+                let timestamp = std::time::SystemTime::now();
+                let metadata = std::fs::metadata(&diagnostic_path);
+                let table = std::fs::read_to_string("/proc/net/unix").unwrap_or_default();
+                let bound = table
+                    .lines()
+                    .filter(|line| line.ends_with(diagnostic_path.to_string_lossy().as_ref()))
+                    .collect::<Vec<_>>();
+                observations.push_str(&format!(
+                    "sample={sample} time={timestamp:?} metadata={metadata:?} bound={bound:?}\n"
+                ));
+                if metadata.is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            eprintln!("[PR2524-DIAG] socket observations: {observations}");
+            let _ = std::fs::write(directory.join("socket-observations.txt"), observations);
             if let Some(parent) = diagnostic_path.parent() {
                 let real = std::fs::canonicalize(parent).or_else(|_| std::fs::read_link(parent));
                 if let Ok(sockets) = real {
