@@ -50,10 +50,14 @@ impl ExecutionRequests {
                 request.env.iter().collect::<BTreeMap<_, _>>(),
                 &request.workdir,
                 request.timeout_ms,
-                request
-                    .tty
-                    .as_ref()
-                    .map(|tty| (tty.rows, tty.cols, tty.x_pixels, tty.y_pixels)),
+                request.tty.as_ref().map(|tty| {
+                    let modes: Vec<_> = tty
+                        .modes
+                        .iter()
+                        .map(|mode| (mode.opcode, mode.value))
+                        .collect();
+                    (tty.rows, tty.cols, tty.x_pixels, tty.y_pixels, modes)
+                }),
                 &request.user,
             ))
             .map_err(|_| Status::invalid_argument("invalid execution payload"))?,
@@ -177,6 +181,7 @@ mod tests {
         // startup result through the same reservation/retention machinery.
         let payload = ExecRequest {
             execution_id: Some("forbidden".into()),
+            tty: Some(Default::default()),
             ..Default::default()
         };
         let response = requests
@@ -184,6 +189,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.error.unwrap().reason, "invalid_argument");
+        let mut changed = payload.clone();
+        changed.tty.as_mut().unwrap().modes.push(Default::default());
+        let replay = requests
+            .execute_at(&server, &key, changed, now)
+            .await
+            .unwrap();
+        assert_eq!(replay.error.unwrap().reason, "idempotency_mismatch");
         assert_eq!(requests.entries.lock().await.len(), 1);
         let new_key = format!("new.{}", now + 2000);
         requests
