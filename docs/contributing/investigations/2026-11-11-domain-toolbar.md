@@ -70,18 +70,20 @@ checks covered search, opening/canceling revoke confirmation, and clearing no ma
 ## Compact Boxes overview
 
 Three StatCards made the overview 101px tall, with an additional 24px below.
-Only Boxes now uses an inline description list: Total, Running and Stopped with
-18px tabular numerals, quiet labels, and horizontal separators. Repeated captions,
-dot-matrix numerals and LIVE decoration are removed from this view. Shared
-StatCard remains unchanged. The overview still uses independent organization
-counts and appears only from ten Boxes onward; it does not summarize the current
-filtered page. Unknown counts retain their existing placeholder.
+Boxes now uses a connected three-cell description list: Total boxes, Running and
+Stopped, with 24px tabular values below small labels. Decorative 18px thin-line
+icons use existing brand, success and muted tokens. Short separators and a faint
+neutral gradient give the strip hierarchy without heavy card outlines. Shared
+StatCard remains unchanged. Independent organization counts and the ten-Box
+threshold remain; unknown counts retain their existing placeholder.
 
-A browser geometry assertion failed before this change at 1440px (101.05px
-height). The unchanged assertion passed after: 50px at 1280/1440/1920px, without
-horizontal overflow. Including the reduced margin, the toolbar and list move up
-59px. Two invariant tests preserve the 9/10 threshold independently of list rows;
-these check unchanged behavior, rather than reproducing the height defect.
+The original 101.05px height was measured in a real 1440px mock viewport. The
+final refined layout measures 66px at 1280/1440/1920px in both light and dark
+themes, without horizontal overflow. Including reduced bottom spacing, the
+list moves up about 43px relative to the original cards. The earlier 50px plain
+strip was replaced with this intentional visual refinement; the final desktop
+height check uses a 72px ceiling. Two invariant tests preserve the 9/10 threshold
+independently of list rows.
 
 The combined Domains, Boxes and Keys suites passed 33 tests. Targeted ESLint has
 zero errors; five existing non-null-assertion warnings remain in Boxes tests.
@@ -89,3 +91,5 @@ Temporary populated mock fixtures were restored after desktop screenshots.
 
 ![Boxes overview before](assets/boxes-summary/before.png)
 ![Boxes overview after](assets/boxes-summary/after.png)
+
+![Refined overview in light theme](assets/boxes-summary/after-light.png)
