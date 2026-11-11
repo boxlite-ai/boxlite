@@ -99,8 +99,9 @@ func (s sdkExecutionSource) attach(ctx context.Context, id string, stdout, stder
 }
 
 type ExecManager struct {
-	mu    sync.RWMutex
-	execs map[string]*ManagedExec
+	keyedStarts sync.Mutex
+	mu          sync.RWMutex
+	execs       map[string]*ManagedExec
 
 	// Reaping policy (Phase 4.1). Read on every cleanup tick; written only
 	// by NewExecManager (env parsing) or SetReapingForTest. Guarded by
@@ -126,6 +127,7 @@ type ManagedExec struct {
 	TTY             bool
 	created         time.Time
 	recovered       bool
+	ownsCleanup     bool
 	streamExecution execHandle
 
 	// handleMu serializes all operations on `execution` and `stdinW`
@@ -239,6 +241,31 @@ func (b *streamBus) Write(p []byte) (int, error) {
 	}
 	b.mu.Unlock()
 	return len(p), nil
+}
+
+func (m *ExecManager) adoptKeyed(ctx context.Context, source executionSource, exec *ManagedExec, execution execHandle, id string) (string, error) {
+	exec.ID = id
+	exec.execution = execution
+	exec.recovered = true
+	exec.ownsCleanup = true
+	// Acquire streams once before the completion watcher closes controls;
+	// short commands can already be terminal when startup returns.
+	if _, err := m.attach(ctx, source, exec); err != nil {
+		// Startup identity outlives ordinary execution/output retention.
+		// Expired observation cannot turn a successful replay into failure.
+		var observation *boxlite.Error
+		if boxlite.IsNotFound(err) || (errors.As(err, &observation) && observation.Code == boxlite.ErrSessionReaped) {
+			execution.Close()
+			return id, nil
+		}
+		execution.Close()
+		return "", err
+	}
+	m.mu.Lock()
+	m.execs[id] = exec
+	m.mu.Unlock()
+	go m.watchRecovered(exec)
+	return id, nil
 }
 
 // Subscribe registers a new fan-out subscriber. The returned channel
@@ -366,16 +393,22 @@ func (m *ExecManager) Stop() {
 // as more fields are added (env, workdir, timeout joined command/args/tty
 // in this commit).
 type StartOptions struct {
-	Command    string
-	Args       []string
-	Env        map[string]string
-	WorkingDir string
-	Timeout    time.Duration
-	TTY        bool
-	User       string
+	IdempotencyKey    string
+	ExpectedStartedAt int64
+	Command           string
+	Args              []string
+	Env               map[string]string
+	WorkingDir        string
+	Timeout           time.Duration
+	TTY               bool
+	User              string
 }
 
 func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
+	if opts.IdempotencyKey != "" {
+		m.keyedStarts.Lock()
+		defer m.keyedStarts.Unlock()
+	}
 	now := time.Now()
 	exec := &ManagedExec{
 		ID:        "",
@@ -398,18 +431,32 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 	// in one mutex-guarded operation. Subscribers attached before any
 	// Write observe the backlog snapshot on Subscribe.
 	execution, err := bx.StartExecution(ctx, opts.Command, opts.Args, &boxlite.ExecutionOptions{
-		TTY:        opts.TTY,
-		Stdout:     exec.stdoutBus,
-		Stderr:     exec.stderrBus,
-		Env:        opts.Env,
-		WorkingDir: opts.WorkingDir,
-		User:       opts.User,
-		Timeout:    opts.Timeout,
+		IdempotencyKey:    opts.IdempotencyKey,
+		ExpectedStartedAt: opts.ExpectedStartedAt,
+		TTY:               opts.TTY,
+		Stdout:            exec.stdoutBus,
+		Stderr:            exec.stderrBus,
+		Env:               opts.Env,
+		WorkingDir:        opts.WorkingDir,
+		User:              opts.User,
+		Timeout:           opts.Timeout,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to start execution: %w", err)
 	}
 	id := execution.ID()
+	// A guest replay can return a handle already managed here. Preserve its
+	// existing output readers and completion watcher rather than replacing it.
+	m.mu.Lock()
+	existing := m.execs[id]
+	m.mu.Unlock()
+	if existing != nil {
+		execution.Close()
+		return id, nil
+	}
+	if opts.IdempotencyKey != "" {
+		return m.adoptKeyed(ctx, sdkExecutionSource{box: bx}, exec, sdkExec{inner: execution}, id)
+	}
 	exec.ID = id
 	handle := sdkExec{inner: execution}
 	exec.execution = handle
@@ -753,7 +800,7 @@ func (m *ExecManager) evaluateExec(now time.Time, e *ManagedExec, reconnectGrace
 
 	// Merely discovering an existing session must not adopt the server's
 	// orphan/lifetime policy: the session may be the box's main command.
-	if e.recovered {
+	if e.recovered && !e.ownsCleanup {
 		e.attachMu.Lock()
 		pendingKill := e.ReapingKill
 		e.attachMu.Unlock()

@@ -6,6 +6,7 @@
 
 import { Controller, Get } from '@nestjs/common'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { IDEMPOTENCY_KEY_LIFETIME } from './box-request.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
@@ -16,6 +17,7 @@ export class BoxliteConfigController {
   getConfig() {
     return {
       capabilities: {
+        idempotency_key_lifetime: IDEMPOTENCY_KEY_LIFETIME,
         privileged_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,

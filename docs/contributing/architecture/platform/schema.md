@@ -471,6 +471,26 @@ box read returns, and nothing else.
 `(runnerId, state)` · `(organizationId)` · `(region)` ·
 `(cpu, mem, disk, gpu)` · `(authToken)` · `(image)`.
 
+### `box_request`
+
+Durable replay ledger for hosted box creation and execution startup. `scope`
+encodes organization, user, operation, optional box and UUID key; it is the
+primary key. `hash` stores canonical JSON SHA-256 without raw request contents.
+`token` is a random UUID allocated per accepted request. `boxId` binds either the
+created box or the execution VM generation. `response` stores successful JSON.
+`expiresAt` is fixed at acceptance plus 24 hours; retries never extend it.
+
+A connection-owned PostgreSQL advisory lock serializes each scope through a
+separate four-connection pool; busy admission returns 503 without starving
+business transactions. Each request considers at most 100 expired rows for
+cleanup and skips keys locked by an active owner. Fresh box
+insertion and warm assignment update `boxId` in their own resource transaction,
+so rollback removes both effects. Responses can be saved after startup and
+recovered after process failure. Execution tokens carry the same fixed deadline;
+expired guest requests fail rather than respawn. At expiry the next request for
+that scope replaces the row and receives a new token. Quota refusal before
+resource association removes the unused row immediately.
+
 ### `runner`
 
 A host machine. Roughly half the columns are live telemetry the scheduler

@@ -23,6 +23,7 @@ import {
   ForbiddenException,
   HttpCode,
   HttpStatus,
+  HttpException,
   ParseIntPipe,
   Post,
   Query,
@@ -51,6 +52,8 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { BoxRequestService } from './box-request.service'
+import axios from 'axios'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -110,6 +113,7 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
+    private readonly boxRequests?: BoxRequestService,
   ) {}
 
   @All(':boxId/exec')
@@ -128,6 +132,46 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    const key = req.headers?.['idempotency-key']
+    if (req.method === 'POST' && key !== undefined) {
+      let box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+      if (!box) throw new NotFoundException(`Box ${boxId} not found`)
+      req[AUDIT_TARGET_ID] = box.id
+      this.recordProxiedOperation('box.exec', box, requestContext(req), res)
+      await this.boxService.updateLastActivityAt(box.id, new Date())
+      const scope = [authContext.organizationId, authContext.userId, 'startExecution', box.id]
+      const value = Array.isArray(key) ? key.join(',') : key
+      const result = await this.boxRequests.run(scope, value, req.body, async (_bind, generation, associate) => {
+        if (!generation && box.autoResume) {
+          await this.autoResume.ensureReady(box.id, authContext.organization)
+          box = await this.boxService.findOneByIdOrName(box.id, authContext.organizationId)
+        }
+        const runner = await this.runnerService.findOne(box.runnerId)
+        if (!runner) throw new NotFoundException(`Runner for box ${boxId} not found`)
+        const base = runner.apiUrl || runner.proxyUrl
+        if (!base) throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
+        const headers = { Authorization: `Bearer ${runner.apiKey}` }
+        const info = await axios.get(`${base}/v1/boxes/${encodeURIComponent(box.id)}/exec-generation`, {
+          headers,
+          timeout: 10000,
+          validateStatus: () => true,
+        })
+        if (info.status !== 200) throw new HttpException(info.data, info.status)
+        if (generation && generation !== info.data.generation) {
+          throw new ConflictException('The original execution VM is unavailable; refusing to repeat the command')
+        }
+        const token = await associate(info.data.generation)
+        const response = await axios.post(`${base}/v1/boxes/${encodeURIComponent(box.id)}/exec`, req.body, {
+          headers: { ...headers, 'Idempotency-Key': token, 'X-Boxlite-Exec-Generation': info.data.generation },
+          timeout: 300000,
+          validateStatus: () => true,
+        })
+        if (response.status !== 201) throw new HttpException(response.data, response.status)
+        return response.data
+      })
+      res.status(201).json(result)
+      return
+    }
     return this.proxyToRunner(
       authContext,
       boxId,

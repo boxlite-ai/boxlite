@@ -115,6 +115,7 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  bindRequest?: import('../../boxlite-rest/box-request.service').BindBoxRequest
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -312,7 +313,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options.maxCreatedBoxes)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options)
           }
         }
       }
@@ -384,10 +385,10 @@ export class BoxService {
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
         return createBoxDto.name
-          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
+          ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.bindRequest)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.boxRepository.insert(box, options.maxCreatedBoxes)
+              return this.boxRepository.insert(box, options.maxCreatedBoxes, options.bindRequest)
             })
       })
 
@@ -416,7 +417,7 @@ export class BoxService {
     createBoxDto: CreateBoxDto,
     organization: Organization,
     ctx: Context,
-    maxCreatedBoxes?: number,
+    options: BoxCreationOptions,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
@@ -457,12 +458,12 @@ export class BoxService {
       ? await this.boxRepository.update(warmPoolBox.id, {
           updateData: { ...updateData, name: createBoxDto.name },
           entity: warmPoolBox,
-          maxCreatedBoxes,
+          ...options,
         })
       : await persistWithGeneratedBoxName(warmPoolBox.id, (name) =>
           this.boxRepository.update(warmPoolBox.id, {
             updateData: { ...updateData, name },
-            maxCreatedBoxes,
+            ...options,
           }),
         )
 

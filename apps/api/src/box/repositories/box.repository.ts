@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import type { BindBoxRequest } from '../../boxlite-rest/box-request.service'
 import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
@@ -160,7 +161,7 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
-  async insert(box: Box, maxCreatedBoxes?: number): Promise<Box> {
+  async insert(box: Box, maxCreatedBoxes?: number, bindRequest?: BindBoxRequest): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
       box.createdAt = now
@@ -175,6 +176,7 @@ export class BoxRepository extends BaseRepository<Box> {
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
+      await bindRequest?.(entityManager, box.id)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
     })
 
@@ -217,7 +219,11 @@ export class BoxRepository extends BaseRepository<Box> {
    *
    * @returns `void` because a raw update is performed.
    */
-  async update(id: string, params: { updateData: Partial<Box>; maxCreatedBoxes?: number }, raw: true): Promise<void>
+  async update(
+    id: string,
+    params: { updateData: Partial<Box>; maxCreatedBoxes?: number; bindRequest?: BindBoxRequest },
+    raw: true,
+  ): Promise<void>
   /**
    * @param id - The ID of the box to update.
    * @param params.updateData - The partial data to update.
@@ -227,15 +233,15 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   async update(
     id: string,
-    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number },
+    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number; bindRequest?: BindBoxRequest },
     raw?: false,
   ): Promise<Box>
   async update(
     id: string,
-    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number },
+    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number; bindRequest?: BindBoxRequest },
     raw = false,
   ): Promise<Box | void> {
-    const { updateData, entity, maxCreatedBoxes } = params
+    const { updateData, entity, maxCreatedBoxes, bindRequest } = params
 
     if (raw) {
       await this.repository.update(id, updateData)
@@ -268,6 +274,7 @@ export class BoxRepository extends BaseRepository<Box> {
       if (!result.affected) {
         throw new BoxConflictError()
       }
+      await bindRequest?.(entityManager, box.id)
       box.updatedAt = new Date()
 
       if (previousBox.state !== box.state || previousBox.organizationId !== box.organizationId) {

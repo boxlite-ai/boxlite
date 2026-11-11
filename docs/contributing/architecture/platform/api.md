@@ -455,6 +455,27 @@ is exhausted, requests return HTTP 429 with `Retry-After-authenticated` before
 catalog changes or registry credential operations run; switching API surfaces
 does not reset it.
 
+`POST /boxes` and `POST /boxes/{boxId}/exec` accept a UUID `Idempotency-Key`.
+Keys are scoped to organization, authenticated user and operation (also box for
+exec). During the 24-hour window advertised by `/v1/config`, matching payloads
+replay the original successful JSON response; changed payloads return 422 and
+an overlapping request returns 409. The window starts when the request is
+accepted and replay does not extend it. An expired key starts a new request.
+For example, a creation rejected by the box quota can succeed with the same key
+after capacity is released; replaying that success at full quota returns the
+original box. Authorization checks still apply to replays.
+
+The PostgreSQL request ledger binds fresh creation and warm-pool assignment in
+the resource transaction, so an API crash after creation recovers that box.
+Keyed execution uses a random internal token carrying the fixed deadline and
+binds retries to one running VM generation. The guest retains startup results
+independently of process/output retention, rejects expired tokens and safely
+reclaims expired completed request entries. Unresolved startup remains counted;
+a guest holds at most 4096 unexpired or unresolved requests and rejects new work
+at capacity. An uncertain execution cannot resume a replacement VM. This does
+not guarantee exactly-once external effects across VM termination; old guests
+without the keyed RPC reject the operation.
+
 Resource permissions are enforced per route. A box mutation — create, start,
 stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an
 attach ticket, and the network routes — requires `write:boxes`; deleting a box requires

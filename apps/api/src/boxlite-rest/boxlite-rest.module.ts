@@ -25,6 +25,7 @@ import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
+import { BoxRequestService } from './box-request.service'
 
 @Module({
   imports: [
@@ -50,7 +51,7 @@ import { AuditModule } from '../audit/audit.module'
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService, BoxRequestService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

@@ -113,6 +113,29 @@ func TestInventoryRecoveryDoesNotReapAnExistingSession(t *testing.T) {
 	}
 }
 
+func TestKeyedStartupRetainsOrphanAndLifetimeCleanup(t *testing.T) {
+	for _, lifetime := range []bool{false, true} {
+		manager := newQuietManager(t)
+		handle := &stubExecHandle{}
+		execution := registerStub(t, manager, "keyed", handle)
+		execution.recovered = true
+		execution.ownsCleanup = true
+		manager.SetReapingForTest(time.Second, time.Second, time.Hour)
+		age := 2 * time.Second
+		if lifetime {
+			age = 2 * time.Hour
+		}
+		manager.runCleanupOnce(execution.created.Add(age))
+		signals, killed := handle.snapshot()
+		if lifetime && killed != 1 {
+			t.Fatalf("keyed startup escaped lifetime cap: %d", killed)
+		}
+		if !lifetime && len(signals) != 1 {
+			t.Fatalf("keyed startup escaped orphan escalation: %v", signals)
+		}
+	}
+}
+
 type inventoryExecHandle struct {
 	stubExecHandle
 	done chan struct{}
@@ -124,8 +147,9 @@ func (h *inventoryExecHandle) Wait(context.Context) (int, error) {
 }
 
 type inventoryExecutionSource struct {
-	entries []sdk.ExecutionInfo
-	handle  *inventoryExecHandle
+	entries     []sdk.ExecutionInfo
+	handle      *inventoryExecHandle
+	attachError error
 }
 
 func (s *inventoryExecutionSource) list(context.Context) ([]sdk.ExecutionInfo, error) {
@@ -137,7 +161,26 @@ func (s *inventoryExecutionSource) get(context.Context, string) (execHandle, err
 }
 
 func (s *inventoryExecutionSource) attach(context.Context, string, io.Writer, io.Writer) (execHandle, io.Writer, error) {
+	if s.attachError != nil {
+		return nil, nil, s.attachError
+	}
 	return nil, nil, errors.New("control recovery must not acquire output")
+}
+
+func TestKeyedReplayReturnsIdentityAfterOutputRetentionExpires(t *testing.T) {
+	for _, code := range []sdk.ErrorCode{sdk.ErrNotFound, sdk.ErrSessionReaped, sdk.ErrAlreadyExists} {
+		manager := newQuietManager(t)
+		source := &inventoryExecutionSource{attachError: &sdk.Error{Code: code, Message: "output unavailable"}}
+		exec := &ManagedExec{Done: make(chan struct{}), stdoutBus: newStreamBus(1024), stderrBus: newStreamBus(1024)}
+		id, err := manager.adoptKeyed(context.Background(), source, exec, &stubExecHandle{}, "original")
+		if code == sdk.ErrAlreadyExists {
+			if err == nil {
+				t.Fatal("reader conflict must stay explicit")
+			}
+		} else if err != nil || id != "original" {
+			t.Fatalf("lost retained startup identity: id=%q err=%v", id, err)
+		}
+	}
 }
 
 func TestResolveReplacesRetainedMainOnlyWhenLiveAgain(t *testing.T) {
