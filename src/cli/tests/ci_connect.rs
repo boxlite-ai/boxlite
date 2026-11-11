@@ -2,7 +2,7 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header::CONTENT_LENGTH},
     routing::{delete, post},
 };
 use serde_json::json;
@@ -24,20 +24,44 @@ struct Scenario {
     deletes: Arc<AtomicUsize>,
 }
 
-async fn start(State(s): State<Scenario>) -> Json<serde_json::Value> {
-    Json(
-        json!({"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "verification_uri":"https://github.com/login/device", "user_code":"TEST-CODE",
-        "interval": if s.expired {60} else {1}, "expires_at": if s.expired {"2000-01-01T00:00:00Z"} else {"2099-01-01T00:00:00Z"}}),
+/// Mirrors gateways that answer 411 to a POST declaring no length.
+fn post_status(headers: &HeaderMap) -> StatusCode {
+    if headers.contains_key(CONTENT_LENGTH) {
+        StatusCode::OK
+    } else {
+        StatusCode::LENGTH_REQUIRED
+    }
+}
+async fn start(
+    State(s): State<Scenario>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        post_status(&headers),
+        Json(
+            json!({"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "verification_uri":"https://github.com/login/device", "user_code":"TEST-CODE",
+            "interval": if s.expired {60} else {1}, "expires_at": if s.expired {"2000-01-01T00:00:00Z"} else {"2099-01-01T00:00:00Z"}}),
+        ),
     )
 }
-async fn poll(State(s): State<Scenario>) -> Json<serde_json::Value> {
+async fn poll(
+    State(s): State<Scenario>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<serde_json::Value>) {
     s.polled.notify_one();
-    Json(json!({"status":"pending", "interval":1}))
+    (
+        post_status(&headers),
+        Json(json!({"status":"pending", "interval":1})),
+    )
 }
-async fn cancel(State(s): State<Scenario>) -> (StatusCode, Json<serde_json::Value>) {
+async fn cancel(
+    State(s): State<Scenario>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<serde_json::Value>) {
     s.deletes.fetch_add(1, Ordering::SeqCst);
     (
-        if s.cancellation == "error" {
+        // A bodiless DELETE must stay without a declared length.
+        if s.cancellation == "error" || headers.contains_key(CONTENT_LENGTH) {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
             StatusCode::OK
@@ -107,6 +131,11 @@ async fn exercise(cancellation: &'static str, expired: bool) -> String {
     let output = child.wait_with_output().unwrap();
     server.abort();
     let _ = server.await;
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        !stderr.contains("HTTP 411"),
+        "bodiless poll declared no Content-Length: {stderr}"
+    );
     assert!(
         finished,
         "CLI ignored transaction expiry while waiting for the next poll"
@@ -116,7 +145,7 @@ async fn exercise(cancellation: &'static str, expired: bool) -> String {
         1,
         "cancellation did not reach the API"
     );
-    String::from_utf8(output.stderr).unwrap()
+    stderr
 }
 
 #[tokio::test]

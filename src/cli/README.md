@@ -45,6 +45,9 @@ The command requires BoxLite organization ownership and GitHub installation owne
 An API key needs `write:boxes` and `delete:boxes`. Current and future App-selected
 repositories follow the binding. A conflicting binding is rejected rather than replaced.
 
+The authorization poll is a POST without a body, so the CLI declares `Content-Length: 0` on it.
+Some gateways answer a POST without a length with HTTP 411 before it reaches the API.
+
 After connecting, use `runs-on: boxlite` for the configured worker defaults or
 `runs-on: boxlite-2vcpu-4gbmem-10gbdisk` for 2 vCPU, 4 GiB RAM and 10 GiB disk.
 Both hosted and standalone execution enforce the backend's resource and quota
