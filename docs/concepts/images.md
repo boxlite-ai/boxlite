@@ -79,6 +79,43 @@ retry later. A registry that answers, for example that the image does not exist,
 reported as an error. `images().pull()` answers from the cache first and does not re-check
 a cached tag.
 
+## Removing local images
+
+Use Rust's `images.remove_by_id("1f8c03c8f5e5")` to reclaim an unwanted local image by manifest ID.
+Full lowercase SHA-256 IDs and unambiguous hexadecimal prefixes are accepted.
+Every untagged cache reference to that manifest is removed across repositories.
+An explicit digest reference does not prevent deletion.
+
+| Condition | Outcome |
+| --- | --- |
+| Any tag references the manifest | Refused; the error lists the tags |
+| Any existing box depends on it | Refused; the error lists box IDs, including stopped and configured boxes |
+| Cache data is shared with a retained image | Shared configuration, layers and disk caches remain |
+| A pull, image handle or box initialization holds the cache | Refused as busy; release the handle or finish the operation, then retry |
+| The selected runtime uses REST | Unsupported; local cache data is untouched |
+
+Recorded box manifest digests protect their exact build.
+Legacy or uninitialized boxes without a recorded digest conservatively protect matching repositories, including unqualified registry-search names.
+Missing dependency metadata preserves cache contents whose ownership cannot be established.
+
+Reclamation covers unused manifests, configurations, compressed and extracted layers.
+Pure image disk caches are also reclaimed when no retained build shares their layer key and no boxes exist.
+When boxes exist, pure disk caches remain because their backing chains can outlive image-index records.
+Versioned guest bases, snapshots and local-bundle caches keep their existing lifecycle.
+
+The result reports allocated bytes removed, including zero when files are absent or data remains shared.
+It accounts for sparse files and hardlinks; filesystem snapshots and reflinks may defer physical free-space changes.
+The value therefore does not promise an equal change in the filesystem's global free-space counter.
+
+Eligibility errors leave the target intact.
+Filesystem and SQLite updates are not one atomic transaction: an I/O failure can leave the target cache incomplete.
+Retry removal, or pull the image again to restore missing data; retained images and protected boxes keep their data.
+
+Results contain the resolved full image ID, removed references and reclaimed bytes.
+
+The existing name-based `remove` operation still forgets references and retains cache bytes.
+Dashboard deletion removes an organization catalog entry and leaves runner cache bytes in place.
+
 ## Registry tags and catalog aliases
 
 A registry tag is an upstream name for a manifest digest. A BoxLite alias is
@@ -106,4 +143,4 @@ REST runtimes return Unsupported without sending a request.
 Pulls, image objects, box creation, and initialization retain shared cache access.
 Image-object clones and detached extraction workers also retain the runtime home lock.
 Release all consumers before reopening that home in another runtime.
-The removal result and error contracts are available for the local reclamation backend.
+Use `images.remove_by_id()` to reclaim an eligible local image; see [removal semantics](#removing-local-images).

@@ -132,6 +132,11 @@ impl ImageStore {
         Arc::clone(&self.inner.read().await.storage)
     }
 
+    pub(super) async fn removal_cache(&self) -> super::removal::RemovalCache {
+        let inner = self.inner.read().await;
+        super::removal::RemovalCache::new(inner.index.clone(), Arc::clone(&inner.storage))
+    }
+
     /// Compute cache directory for a local OCI bundle.
     ///
     /// Returns an isolated cache path based on bundle path and manifest digest.

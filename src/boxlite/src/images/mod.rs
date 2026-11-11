@@ -6,6 +6,7 @@ mod image_disk;
 pub(crate) mod image_registry_proxy;
 mod manager;
 mod object;
+mod removal;
 mod storage;
 mod store;
 mod system_trust;
