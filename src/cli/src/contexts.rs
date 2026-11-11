@@ -8,7 +8,12 @@ use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Cli, Commands, GlobalFlags};
-use crate::credentials::{CredentialStore, DEFAULT_PROFILE, Profile};
+use crate::credentials::{CredentialStore, DEFAULT_PROFILE, EMBEDDED_CONTEXT, Profile};
+
+/// Built-in contexts exist without stored credentials.
+fn is_built_in(name: &str) -> bool {
+    name == DEFAULT_PROFILE || name == EMBEDDED_CONTEXT
+}
 
 #[derive(Args, Debug)]
 pub struct ContextArgs {
@@ -86,9 +91,18 @@ pub fn initialize(cli: &mut Cli) -> Result<()> {
         None // Auth may recreate missing credentials; show/use must permit recovery.
     } else {
         let profile = store.load_named(&name)?;
-        if profile.is_none() && name != DEFAULT_PROFILE {
+        if profile.is_none() && !is_built_in(&name) {
             bail!(
                 "context `{name}` not found; log in with --context {name}, or use `boxlite context use default`"
+            );
+        }
+        // A login stored before the name was reserved keeps routing to its
+        // server: silently switching it to the embedded runtime would move
+        // workloads without the user asking.
+        if profile.is_some() && name == EMBEDDED_CONTEXT {
+            eprintln!(
+                "Warning: context `{EMBEDDED_CONTEXT}` is reserved for the embedded runtime, but a stored login still uses it. \
+                 Move it with `boxlite --context NAME auth login --url URL`, then `boxlite --context {EMBEDDED_CONTEXT} auth logout`."
             );
         }
         profile
@@ -110,7 +124,7 @@ pub fn execute(args: ContextArgs, global: &GlobalFlags) -> Result<()> {
             if name.is_empty() || name.chars().any(char::is_control) {
                 bail!("context name must be nonempty and contain no control characters");
             }
-            if name != DEFAULT_PROFILE && store.load_named(&name)?.is_none() {
+            if !is_built_in(&name) && store.load_named(&name)?.is_none() {
                 bail!(
                     "context `{name}` not found; create it with `boxlite --context {name} auth login`"
                 );
@@ -146,7 +160,9 @@ pub fn execute(args: ContextArgs, global: &GlobalFlags) -> Result<()> {
         }
         ContextCommand::Ls { quiet } => {
             let mut profiles = store.load_all()?;
-            profiles.entry(DEFAULT_PROFILE.to_string()).or_default();
+            for built_in in [DEFAULT_PROFILE, EMBEDDED_CONTEXT] {
+                profiles.entry(built_in.to_string()).or_default();
+            }
             if !quiet {
                 println!("{:<24} ENDPOINT", "NAME");
             }

@@ -240,7 +240,9 @@ remain supported. Login saves credentials but does not change the current contex
 
 `boxlite context use default` restores the pre-context configuration: a URL
 override or existing `default` credentials select REST; otherwise commands use
-the embedded runtime. Context selection is stored separately in
+the embedded runtime. `boxlite context use embedded` always selects the embedded
+runtime, including after a `default` login; `auth login` cannot store
+credentials under that name. Context selection is stored separately in
 `<BOXLITE_HOME>/cli.toml`. See [context selection and precedence](../../docs/reference/cli/README.md#boxlite-context)
 for URL overrides and missing contexts.
 
