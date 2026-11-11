@@ -115,6 +115,7 @@ func TestInvalidContext(t *testing.T) {
 	cases := map[string]func(*SecretContext){
 		"bad org":             func(s *SecretContext) { s.OrganizationID = "bad" },
 		"bad secret":          func(s *SecretContext) { s.SecretID = strings.Repeat("g", 36) },
+		"bad uuid hex":        func(s *SecretContext) { s.SecretID = "00000000-0000-0000-0000-00000000000g" },
 		"bad uuid delimiter":  func(s *SecretContext) { s.SecretID = "00000000_0000-0000-0000-000000000002" },
 		"zero version":        func(s *SecretContext) { s.Version = 0 },
 		"large version":       func(s *SecretContext) { s.Version = 1 << 31 },

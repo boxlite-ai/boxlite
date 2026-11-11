@@ -64,9 +64,8 @@ func (c *Cipher) Encrypt(ctx context.Context, identity SecretContext, plaintext 
 	}
 	dek := make([]byte, 32)
 	defer clear(dek)
-	if _, err := rand.Read(dek); err != nil {
-		return Envelope{}, ErrProviderUnavailable
-	}
+	// Go 1.25 rand.Read fills the buffer or terminates the process.
+	rand.Read(dek)
 	sealed, err := seal(dek, plaintext, valueAAD)
 	if err != nil {
 		return Envelope{}, err

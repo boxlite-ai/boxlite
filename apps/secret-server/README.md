@@ -105,7 +105,9 @@ without a guarantee that every Go runtime copy is erased.
 
 Each DEK encrypts one value. The environment master key wraps many DEKs; Go's
 random-nonce GCM limit is 2^32 encryptions per key across all uses. There is no MVP
-usage counter.
+usage counter. DEK generation uses Go 1.25's
+[`crypto/rand.Read`](https://pkg.go.dev/crypto/rand@go1.25.4#Read): it fills the buffer
+or terminates the process on entropy failure; it cannot return a provider error.
 
 Master-key rotation is not supported yet. Once encrypted data exists, do not change
 `SECRET_MASTER_KEY_ID` or `SECRET_MASTER_KEY_BASE64`: changing the ID makes existing
@@ -139,7 +141,15 @@ through `make coverage:go` with the race detector and `GOWORK=off`. It uploads
 Tests cover real environment-key encryption, tampering, policy canonicalization,
 key selection, provider errors, cancellation, and concurrent use. An internal test
 checks the envelope format's rewrap compatibility; it does not expose rotation to callers.
+Boundary tests reject malformed UUID hex and non-AES-256 keys, and cancel at
+explicit context checkpoints after cryptographic operations to verify that no
+result is released. These checkpoints avoid timing-dependent sleeps.
 Fuzzing covers malformed envelope decoding; it is not a cryptographic proof.
+
+Go reports statement coverage; Codecov also distinguishes partially covered source
+lines, so a passing statement percentage does not imply passing patch coverage.
+The uint32 framing overflow guards remain in place; tests do not allocate multi-GiB
+inputs merely to exercise those guards.
 
 This is a new contract with no equivalent on the base branch. Full-revert defect
 proof is not applicable; positive, negative, and boundary tests exercise the new code.
