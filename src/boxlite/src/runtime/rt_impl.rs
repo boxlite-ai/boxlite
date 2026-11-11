@@ -1875,14 +1875,6 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         self.0.import_box(archive, name).await
     }
 
-    async fn prepare_import(
-        &self,
-        archive: BoxArchive,
-        options: super::ImportOptions,
-    ) -> BoxliteResult<super::PreparedImport> {
-        super::import::prepare_import(Arc::clone(&self.0), archive, options).await
-    }
-
     fn shutdown_sync(&self) {
         self.0.shutdown_sync();
     }

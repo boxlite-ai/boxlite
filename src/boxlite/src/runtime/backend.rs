@@ -67,16 +67,6 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
-    async fn prepare_import(
-        &self,
-        _archive: BoxArchive,
-        _options: super::ImportOptions,
-    ) -> BoxliteResult<super::PreparedImport> {
-        Err(BoxliteError::Unsupported(
-            "archive preparation requires a native runtime".into(),
-        ))
-    }
-
     /// Synchronous shutdown for atexit/Drop contexts.
     /// Default no-op (REST backend doesn't manage local processes).
     fn shutdown_sync(&self) {}

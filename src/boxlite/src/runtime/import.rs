@@ -1,10 +1,7 @@
 //! Box import from `.boxlite` archives.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-
-use serde::{Deserialize, Serialize};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -21,177 +18,6 @@ use crate::runtime::options::{
 use crate::runtime::rt_impl::RuntimeImpl;
 use crate::runtime::types::BoxStatus;
 
-/// Optional configuration changes applied to an imported box, without rewriting
-/// the source archive. Ordinary import uses the defaults and needs no image pull.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ImportOptions {
-    pub image: Option<String>,
-    /// Set a key to its value, or remove it with `None`.
-    pub env: BTreeMap<String, Option<String>>,
-    /// Check runtime feature opt-ins, readable boot assets and OCI image config.
-    /// This may access the network; it does not guarantee a later boot succeeds.
-    pub preflight_startup: bool,
-}
-
-/// Source metadata, before any import configuration overrides.
-#[derive(Clone, Debug, Serialize)]
-pub struct ImportArchiveInfo {
-    pub version: u32,
-    pub box_options: Option<BoxOptions>,
-    pub has_disk_checksum: bool,
-}
-
-/// Owns validated disks until commit or drop. No box exists before commit.
-/// The source archive can be removed after preparation returns successfully.
-pub struct PreparedImport {
-    runtime: Arc<RuntimeImpl>,
-    directory: tempfile::TempDir,
-    staging_dir: PathBuf,
-    options: BoxOptions,
-    info: ImportArchiveInfo,
-}
-
-impl PreparedImport {
-    pub fn info(&self) -> &ImportArchiveInfo {
-        &self.info
-    }
-
-    /// Consume the staged disks, creating one stopped box with a new native ID.
-    /// Failure consumes this owner too; it never removes an existing box.
-    pub async fn commit(self, name: Option<String>) -> BoxliteResult<LiteBox> {
-        ensure_live(&self.runtime)?;
-        let t0 = std::time::Instant::now();
-        let litebox = self.runtime
-            // Archives do not carry a resolved image record; boot rebuilds it.
-            .provision_box(self.staging_dir, name, self.options, BoxStatus::Stopped, None)
-            .await?;
-        drop(self.directory);
-        tracing::info!(
-            box_id = %litebox.id(),
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Imported box from archive"
-        );
-        Ok(litebox)
-    }
-}
-
-/// Extract and validate once, keeping the installed disks in owned staging.
-pub(crate) async fn prepare_import(
-    runtime: Arc<RuntimeImpl>,
-    archive: BoxArchive,
-    overrides: ImportOptions,
-) -> BoxliteResult<PreparedImport> {
-    ensure_live(&runtime)?;
-    let archive_path = archive.path().to_path_buf();
-    if !archive_path.exists() {
-        return Err(BoxliteError::NotFound(format!(
-            "Archive not found: {}",
-            archive_path.display()
-        )));
-    }
-    let layout = runtime.layout.clone();
-    let preflight_startup = overrides.preflight_startup;
-    // The blocking task owns the directory throughout extraction and disk moves.
-    // Cancelling the await cannot release files while that task still uses them.
-    let (directory, staging_dir, options, info) = tokio::task::spawn_blocking(move || {
-        let (manifest, directory) = extract_and_validate(&archive_path, &layout)?;
-        let mut options = options_from_manifest(&manifest, archive.import_policy())?;
-        apply_overrides(&mut options, overrides)?;
-        if preflight_startup && let Some(kernel) = &options.advanced.kernel {
-            for path in std::iter::once(&kernel.path).chain(kernel.initramfs.iter()) {
-                let asset = std::fs::File::open(path).map_err(|error| {
-                    BoxliteError::Config(format!(
-                        "import boot asset {} is not readable: {error}",
-                        path.display()
-                    ))
-                })?;
-                if !asset.metadata()?.is_file() {
-                    return Err(BoxliteError::Config(format!(
-                        "import boot asset {} must be a regular file",
-                        path.display()
-                    )));
-                }
-            }
-        }
-        let staging_dir = directory.path().join("staging");
-        install_disks(directory.path(), &staging_dir)?;
-        let info = ImportArchiveInfo {
-            version: manifest.version,
-            box_options: manifest.box_options,
-            has_disk_checksum: !manifest.container_disk_checksum.is_empty(),
-        };
-        Ok::<_, BoxliteError>((directory, staging_dir, options, info))
-    })
-    .await
-    .map_err(|error| {
-        BoxliteError::Internal(format!("Import preparation task failed: {error}"))
-    })??;
-    if preflight_startup {
-        runtime
-            .experimental_features
-            .require_for_options(&options)?;
-        if let RootfsSpec::Image(image) = &options.rootfs {
-            runtime
-                .image_manager
-                .pull(image)
-                .await?
-                .load_config()
-                .await?;
-        }
-    }
-    Ok(PreparedImport {
-        runtime,
-        directory,
-        staging_dir,
-        options,
-        info,
-    })
-}
-
-fn ensure_live(runtime: &RuntimeImpl) -> BoxliteResult<()> {
-    if runtime.shutdown_token.is_cancelled() {
-        return Err(BoxliteError::Stopped(
-            "Cannot import box: runtime has been shut down".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn apply_overrides(options: &mut BoxOptions, overrides: ImportOptions) -> BoxliteResult<()> {
-    if overrides.image.is_none() && overrides.env.is_empty() {
-        return Ok(());
-    }
-    if let Some(image) = overrides.image {
-        if image.is_empty() || image.contains('\0') {
-            return Err(BoxliteError::InvalidArgument(
-                "import image must be nonempty and contain no NUL".into(),
-            ));
-        }
-        options.rootfs = RootfsSpec::Image(image);
-    }
-    for (key, value) in &overrides.env {
-        if key.is_empty()
-            || key.contains(['=', '\0'])
-            || value.as_ref().is_some_and(|value| value.contains('\0'))
-        {
-            return Err(BoxliteError::InvalidArgument(
-                "invalid import environment override".into(),
-            ));
-        }
-    }
-    options
-        .env
-        .retain(|(key, _)| !overrides.env.contains_key(key));
-    options.env.extend(
-        overrides
-            .env
-            .into_iter()
-            .filter_map(|(key, value)| value.map(|value| (key, value))),
-    );
-    options.sanitize()
-}
-
 /// Import a box from a `.boxlite` archive.
 ///
 /// Creates a new box with a new ID from archived disk images and
@@ -201,10 +27,48 @@ pub(crate) async fn import_box(
     archive: BoxArchive,
     name: Option<String>,
 ) -> BoxliteResult<LiteBox> {
-    prepare_import(Arc::clone(runtime), archive, ImportOptions::default())
-        .await?
-        .commit(name)
+    let t0 = std::time::Instant::now();
+    let archive_path = archive.path().to_path_buf();
+    if !archive_path.exists() {
+        return Err(BoxliteError::NotFound(format!(
+            "Archive not found: {}",
+            archive_path.display()
+        )));
+    }
+
+    // Phase 1: Extract and validate archive (blocking I/O).
+    let layout = runtime.layout.clone();
+    let (manifest, temp_dir) =
+        tokio::task::spawn_blocking(move || extract_and_validate(&archive_path, &layout))
+            .await
+            .map_err(|e| {
+                BoxliteError::Internal(format!("Import extraction task panicked: {}", e))
+            })??;
+
+    let options = options_from_manifest(&manifest, archive.import_policy())?;
+
+    // Phase 2: Validate disks and install into a staging directory (blocking I/O).
+    // The staging dir lives inside temp_dir; provision_box will rename it.
+    let staging_dir = temp_dir.path().join("staging");
+    let temp_path = temp_dir.path().to_path_buf();
+    let staging_clone = staging_dir.clone();
+    tokio::task::spawn_blocking(move || install_disks(&temp_path, &staging_clone))
         .await
+        .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
+
+    let litebox = runtime
+        // An archive carries the box's options but not what its image resolved
+        // to, so an imported box has no record until one is rebuilt.
+        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
+        .await?;
+
+    tracing::info!(
+        box_id = %litebox.id(),
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+        "Imported box from archive"
+    );
+
+    Ok(litebox)
 }
 
 /// Read the persisted configuration, falling back to the v1/v2 image field.
@@ -414,9 +278,6 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
         ))),
     }
 }
-
-#[cfg(test)]
-mod prepared_tests;
 
 #[cfg(test)]
 mod tests {

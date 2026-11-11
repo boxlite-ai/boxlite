@@ -26,6 +26,5 @@ pub use checkpoints::{CheckpointHandle, CheckpointInfo, CheckpointState};
 pub use core::BoxliteRuntime;
 pub use domains::{Domain, DomainHandle, DomainList, DomainTarget};
 pub use images::ImageHandle;
-pub use import::{ImportArchiveInfo, ImportOptions, PreparedImport};
 pub use registries::{NewRegistryCredential, RegistryCredential, RegistryHandle};
 pub use volumes::VolumeHandle;

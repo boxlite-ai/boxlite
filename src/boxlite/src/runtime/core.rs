@@ -406,16 +406,6 @@ impl BoxliteRuntime {
         CheckpointHandle::new(self.checkpoint_backend.as_ref().map(Arc::clone))
     }
 
-    /// Validate and stage an archive without creating a box (local runtimes only).
-    /// The returned owner commits the same disks without reading the source again.
-    pub async fn prepare_import(
-        &self,
-        archive: BoxArchive,
-        options: super::ImportOptions,
-    ) -> BoxliteResult<super::PreparedImport> {
-        self.backend.prepare_import(archive, options).await
-    }
-
     // ========================================================================
     // SHUTDOWN OPERATIONS
     // ========================================================================

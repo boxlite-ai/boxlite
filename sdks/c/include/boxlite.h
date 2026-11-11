@@ -173,8 +173,6 @@ typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
 
-typedef struct PreparedImportHandle PreparedImportHandle;
-
 // Opaque handle to a REST runtime's registry logins, released with
 // `boxlite_registry_free`.
 typedef struct RegistryHandle RegistryHandle;
@@ -260,18 +258,13 @@ typedef struct CAgentEventsOptions {
   const char *after;
 } CAgentEventsOptions;
 
+// Box export completion.
+typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
+
 typedef struct RuntimeHandle CBoxliteRuntime;
-
-typedef struct PreparedImportHandle CPreparedImport;
-
-// Owns validated import staging until commit or explicit release.
-typedef void (*CPrepareImportCb)(CPreparedImport*, CBoxliteError*, void*);
 
 // Runtime import completion.
 typedef void (*CRuntimeImportCb)(CBoxHandle*, CBoxliteError*, void*);
-
-// Box export completion.
-typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
 typedef struct OptionsHandle CBoxliteOptions;
 
@@ -1083,32 +1076,6 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // Release only the local handle. Does not close an agent or interrupt a turn.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
-
-// Extract and validate an archive without creating a box. Optional JSON uses
-// ImportOptions (image, env values or null to remove keys, preflight_startup).
-// The callback owns its prepared handle. Keep the source until completion.
-enum BoxliteErrorCode boxlite_runtime_prepare_import(CBoxliteRuntime *runtime,
-                                                     const char *archive_path,
-                                                     const char *options_json_or_null,
-                                                     CPrepareImportCb cb,
-                                                     void *user_data,
-                                                     CBoxliteError *out_error);
-
-// Borrow source metadata JSON until this owner is freed; null returns null.
-const char *boxlite_prepared_import_info_json(const CPreparedImport *handle);
-
-// Commit already validated staging without rereading the source. Synchronous
-// rejection keeps staging available; accepted work consumes it exactly once.
-// The owner may be freed after this function returns; the task owns the disks.
-enum BoxliteErrorCode boxlite_prepared_import_commit(CPreparedImport *handle,
-                                                     const char *name_or_null,
-                                                     CRuntimeImportCb cb,
-                                                     void *user_data,
-                                                     CBoxliteError *out_error);
-
-// Release uncommitted staging or the consumed wrapper; never deletes a box.
-// Null is accepted. Serialize freeing with calls that access the same pointer.
-void boxlite_prepared_import_free(CPreparedImport *handle);
 
 // Submit a box export.
 //

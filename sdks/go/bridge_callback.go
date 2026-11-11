@@ -93,31 +93,6 @@ func freeBoxliteStringPayload(value **C.char) {
 	freeBoxliteString(*value)
 }
 
-func freePrepareImportPayload(value **C.CPreparedImport) {
-	if value != nil && *value != nil {
-		C.boxlite_prepared_import_free(*value)
-	}
-}
-
-//export goBoxliteOnPrepareImport
-func goBoxliteOnPrepareImport(archive *C.CPreparedImport, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
-	h := ptrToHandle(userData)
-	if h == 0 {
-		freePrepareImportPayload(&archive)
-		return
-	}
-	if !claimOrFreePayload(h, &archive, freePrepareImportPayload) {
-		return
-	}
-	defer h.Delete()
-	ch, ok := h.Value().(chan handleResult[*C.CPreparedImport])
-	if !ok {
-		freePrepareImportPayload(&archive)
-		return
-	}
-	ch <- handleResult[*C.CPreparedImport]{value: archive, err: errorFromCError(errPtr)}
-}
-
 //export goBoxliteOnCreateBox
 func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)

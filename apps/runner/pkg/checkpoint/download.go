@@ -15,7 +15,7 @@ import (
 )
 
 // DownloadedArchive owns one import attempt's source file. Keep it until native
-// preparation finishes; each attempt has a distinct private staging directory.
+// import finishes; each attempt has a distinct private staging directory.
 type DownloadedArchive struct {
 	Path      string
 	Artifact  Artifact
@@ -25,7 +25,7 @@ type DownloadedArchive struct {
 func (d *DownloadedArchive) Close() error { return os.RemoveAll(d.directory) }
 
 // Download owns cloud integrity checks. Native import subsequently validates
-// archive members, disks and configuration before target removal.
+// archive members, disks and configuration before publishing a replacement.
 func (a Artifacts) Download(ctx context.Context, record Artifact, importJobID string, store storage.ArchiveStore) (_ *DownloadedArchive, err error) {
 	if err := validateReference(record.Reference); err != nil {
 		return nil, err

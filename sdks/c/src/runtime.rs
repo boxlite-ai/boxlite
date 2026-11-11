@@ -610,11 +610,6 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CBoxHandle>(result, user_data, cb),
-            RuntimeEvent::PrepareImport {
-                cb,
-                user_data,
-                result,
-            } => dispatch_handle_event::<crate::CPreparedImport>(result, user_data, cb),
             RuntimeEvent::StartBox {
                 cb,
                 user_data,

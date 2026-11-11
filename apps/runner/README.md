@@ -712,25 +712,32 @@ SHA-256 mismatches and link destinations are rejected and staging is removed.
 Runner owns these cloud metadata checks and the pinned-image/platform-identity
 policy; native runtime has no checkpoint-specific archive preparer.
 
-`IMPORT_CHECKPOINT` follows download/SHA verification → generic `PrepareImport`
-→ remove predecessor → `PreparedImport.Commit`. Native preflight reuses existing
-manifest, configuration and disk validation, with startup dependency checks enabled;
-runner then rejects incomplete source configuration, host rootfs, volumes, mounts
-and secrets before removal. The prepared owner holds the validated disk staging,
-so commit neither repacks nor extracts the archive again.
+`IMPORT_CHECKPOINT` downloads and verifies SHA-256, imports a candidate under an
+operation-specific native name, publishes its public-to-native identity mapping,
+and only then removes the predecessor. Import failures retain the original Box.
 
-The download remains owned until preparation finishes, and prepared staging stays
-owned until commit finishes. Recovery removes the predecessor after preflight. The
-request identifies a stable operation and a monotonically increasing target
-sequence, independently of individual job attempts. Its journal lives under
-`<BOXLITE_HOME_DIR>/work/checkpoint-operations/` and is keyed by the public box ID.
-Ordinary create, start, stop, destroy and archive operations use the same target
-lease. Accepted native work finishes under that lease after its caller cancels;
-canceling a queued lock acquisition has no effect.
+Runner streams the archive to a temporary plain tar, changing only the first
+manifest member's pinned image and six platform environment keys. It copies
+the remaining tar bytes unchanged, preserving GNU sparse members. It performs
+no separate disk validation or startup preflight; the existing native import
+owns archive extraction and validation. This adds one stream read and temporary
+write, without extracting disk files or recompressing them.
 
-Retries reconcile the recorded predecessor and accepted native IDs before
-downloading or importing again. Import failure after removal leaves the target
-reserved for retry; preflight failure permits the original box to start.
+The download and adapted tar stay owned until native import finishes. The
+request carries a stable operation and monotonically increasing target sequence,
+independently of job attempts. The existing journal under
+`<BOXLITE_HOME_DIR>/work/checkpoint-operations/` publishes the identity mapping
+with an atomic file replacement and directory synchronization. All runner
+lookups and BoxSync use that mapping, including after process restart; candidates
+and obsolete predecessors are hidden from public inventory.
+
+Import retries first look up the deterministic candidate name, so a lost native
+receipt does not duplicate the import. Publication failure never removes the old
+Box. Cleanup failure leaves both disks and a retryable journal; retry removes the
+predecessor without downloading or importing again. Accepted work keeps the target
+lease after caller cancellation. These guarantees cover import failures and process
+restarts, while native disk persistence retains the existing import contract.
+
 Ordinary create invalidates the previous checkpoint operation before changing
 the target. Explicit destroy durably retires the public target before native
 destruction, even when no import has arrived yet; all delayed checkpoint imports

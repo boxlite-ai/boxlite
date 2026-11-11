@@ -51,17 +51,10 @@ type NativeBox struct {
 	PID   int
 }
 
-// PreparedArchive owns validated import staging until Import actually returns,
-// including when the original caller cancelled. Close never removes a box.
-type PreparedArchive interface {
-	Close() error
-}
-
 type RecoveryBackend interface {
 	Lookup(context.Context, string) (*NativeBox, error)
-	Prepare(context.Context, *DownloadedArchive, map[string]string) (PreparedArchive, error)
 	Remove(context.Context, string) error
-	Import(context.Context, PreparedArchive, string) (string, error)
+	Import(context.Context, *DownloadedArchive, map[string]string, string) (string, error)
 }
 
 type RestoreResult struct {
@@ -70,7 +63,7 @@ type RestoreResult struct {
 	NativeID    string `json:"nativeId"`
 }
 
-// Restorer composes transfer and preflight with main's existing Remove/Import.
+// Restorer imports a candidate before publishing it and removing its predecessor.
 // Lifecycle calls sharing Operations cannot run inside the replacement window.
 type Restorer struct {
 	Operations Operations
@@ -122,7 +115,7 @@ func (r Restorer) Restore(ctx context.Context, request RestoreRequest, attemptID
 	case completed := <-done:
 		return completed.result, completed.err
 	case <-ctx.Done():
-		// The worker owns the target, download and prepared staging until native
+		// The worker owns the target and download until native
 		// work and its journal update complete. No orphan cleanup removes it.
 		return RestoreResult{}, ctx.Err()
 	}
@@ -146,21 +139,26 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 				return RestoreResult{}, fmt.Errorf("checkpoint operation changed or was invalidated")
 			}
 		} else {
-			record = nil
+			if record.Stage != "accepted" && record.Stage != "invalidated" && record.Stage != "preparing" {
+				return RestoreResult{}, fmt.Errorf("previous checkpoint operation has unfinished work")
+			}
+			record = &restoreRecord{Version: 1, Request: request, Stage: "preparing", PublishedID: record.PublishedID}
 		}
 	}
 	current, err := r.Backend.Lookup(ctx, request.Target)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	if record == nil {
+	if record == nil || record.Stage == "preparing" && record.PredecessorID == "" {
 		if request.Mode == "create" && current != nil {
 			return RestoreResult{}, fmt.Errorf("checkpoint create target already exists")
 		}
 		if request.Mode == "recover" && current == nil {
 			return RestoreResult{}, fmt.Errorf("checkpoint recovery target does not exist")
 		}
-		record = &restoreRecord{Version: 1, Request: request, Stage: "preparing"}
+		if record == nil {
+			record = &restoreRecord{Version: 1, Request: request, Stage: "preparing"}
+		}
 		if current != nil {
 			record.PredecessorID = current.ID
 		}
@@ -169,12 +167,8 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 			return RestoreResult{}, fmt.Errorf("accepted checkpoint target was replaced or removed")
 		}
 		return result(*record), nil
-	} else if record.Stage == "importing" && current != nil && current.ID != record.PredecessorID {
-		// Import committed before the process could persist its receipt. Every
-		// ordinary runner create/destroy invalidates this journal under the
-		// same target lease before changing the name, making adoption safe.
-		record.AcceptedID, record.Stage = current.ID, "accepted"
-		return result(*record), lease.write(*record)
+	} else if record.Stage == "removing" {
+		return r.finish(ctx, lease, record)
 	}
 	if current != nil {
 		if current.ID != record.PredecessorID {
@@ -187,41 +181,60 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 	if err := lease.write(*record); err != nil {
 		return RestoreResult{}, err
 	}
-	download, err := r.Artifacts.Download(ctx, request.Archive, attemptID, r.Store)
+	// The deterministic candidate name reconciles a native commit whose receipt
+	// was lost. The public target still points at its predecessor at this stage.
+	candidateName := "checkpoint-" + request.OperationID
+	candidate, err := r.Backend.Lookup(ctx, candidateName)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	defer func() { err = errors.Join(err, download.Close()) }()
-	prepared, err := r.Backend.Prepare(ctx, download, request.PlatformEnv)
-	if err != nil {
-		return RestoreResult{}, err
-	}
-	defer func() { err = errors.Join(err, prepared.Close()) }()
-	if current != nil {
-		record.Stage = "removing"
+	if candidate == nil {
+		download, downloadErr := r.Artifacts.Download(ctx, request.Archive, attemptID, r.Store)
+		if downloadErr != nil {
+			return RestoreResult{}, downloadErr
+		}
+		defer func() { err = errors.Join(err, download.Close()) }()
+		record.Stage = "importing"
 		if err := lease.write(*record); err != nil {
 			return RestoreResult{}, err
 		}
-		if err := r.Backend.Remove(ctx, current.ID); err != nil {
-			// Do not infer that an error preserved the old box. A retry looks
-			// up the actual native state before deciding whether to remove.
-			return RestoreResult{}, fmt.Errorf("checkpoint target removal failed: %w", err)
+		nativeID, importErr := r.Backend.Import(ctx, download, request.PlatformEnv, candidateName)
+		if importErr != nil {
+			return RestoreResult{}, fmt.Errorf("checkpoint import failed; original box retained: %w", importErr)
 		}
+		candidate = &NativeBox{ID: nativeID, State: "stopped"}
 	}
-	record.Stage = "importing"
-	if err := lease.write(*record); err != nil {
-		return RestoreResult{}, err
-	}
-	nativeID, err := r.Backend.Import(ctx, prepared, request.Target)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint import failed; archive retained for retry: %w", err)
-	}
-	if nativeID == "" || nativeID == record.PredecessorID {
+	if candidate.ID == "" || candidate.ID == record.PredecessorID || candidate.PID != 0 || candidate.State != "stopped" {
 		return RestoreResult{}, fmt.Errorf("checkpoint import returned an invalid native identity")
 	}
-	record.AcceptedID, record.Stage = nativeID, "accepted"
+	// Publish only a completed import. If synchronization fails after rename,
+	// retries read the actual record; no error path here removes the predecessor.
+	record.AcceptedID, record.PublishedID, record.Stage = candidate.ID, candidate.ID, "removing"
 	if err := lease.write(*record); err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint imported as %s but completion recording failed: %w", nativeID, err)
+		return RestoreResult{}, fmt.Errorf("checkpoint imported as %s but completion recording failed: %w", candidate.ID, err)
+	}
+	return r.finish(ctx, lease, record)
+}
+
+func (r Restorer) finish(ctx context.Context, lease *TargetLease, record *restoreRecord) (RestoreResult, error) {
+	current, err := r.Backend.Lookup(ctx, record.Request.Target)
+	if err != nil || current == nil || current.ID != record.AcceptedID {
+		return RestoreResult{}, fmt.Errorf("published checkpoint target is unavailable: %w", err)
+	}
+	if record.PredecessorID != "" {
+		previous, err := r.Backend.Lookup(ctx, record.PredecessorID)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+		if previous != nil {
+			if err := r.Backend.Remove(ctx, record.PredecessorID); err != nil {
+				return RestoreResult{}, fmt.Errorf("checkpoint predecessor cleanup failed: %w", err)
+			}
+		}
+	}
+	record.Stage = "accepted"
+	if err := lease.write(*record); err != nil {
+		return RestoreResult{}, fmt.Errorf("checkpoint completion recording failed: %w", err)
 	}
 	return result(*record), nil
 }

@@ -35,11 +35,11 @@ func (n restoreBoundaryBackend) Remove(ctx context.Context, id string) error {
 	return n.recoveryNative.Remove(ctx, id)
 }
 
-func (n restoreBoundaryBackend) Import(ctx context.Context, prepared PreparedArchive, target string) (string, error) {
+func (n restoreBoundaryBackend) Import(ctx context.Context, source *DownloadedArchive, env map[string]string, target string) (string, error) {
 	if n.importID != nil {
 		return *n.importID, nil
 	}
-	id, err := n.recoveryNative.Import(ctx, prepared, target)
+	id, err := n.recoveryNative.Import(ctx, source, env, target)
 	if n.afterImport != nil {
 		if err := n.afterImport(); err != nil {
 			return "", err
@@ -87,7 +87,7 @@ func TestCheckpointRestoreRejectsInvalidAdmissionWithoutNativeEffects(t *testing
 			if _, err := r.Restore(ctx, request, attempt); err == nil {
 				t.Fatal("invalid replacement was admitted")
 			}
-			if native.prepares != 0 || native.removes != 0 || native.imports != 0 {
+			if native.removes != 0 || native.imports != 0 {
 				t.Fatal("rejected admission changed native state")
 			}
 		})
@@ -139,7 +139,7 @@ func TestCheckpointRestoreReportsNativeBoundaryFailures(t *testing.T) {
 				if !strings.Contains(err.Error(), "completion recording failed") || native.current == nil || native.imports != 1 {
 					t.Fatalf("accepted native result was lost: %v", err)
 				}
-			} else if scenario != "empty-id" && scenario != "reused-id" && native.imports != 0 {
+			} else if scenario != "empty-id" && scenario != "reused-id" && scenario != "remove" && native.imports != 0 {
 				t.Fatal("a rejected preflight reached native import")
 			}
 		})
@@ -151,7 +151,7 @@ func TestCheckpointRestoreRejectsChangedTargetsAndAcceptedReceipts(t *testing.T)
 		t.Run(map[bool]string{false: "pending", true: "accepted"}[accepted], func(t *testing.T) {
 			r, request, native, _ := recoveryHarness(t)
 			if !accepted {
-				native.preflightErr = errors.New("preflight unavailable")
+				native.importErr = errors.New("preflight unavailable")
 			}
 			_, err := r.Restore(t.Context(), request, uuid.NewString())
 			if accepted && err != nil {
@@ -160,13 +160,16 @@ func TestCheckpointRestoreRejectsChangedTargetsAndAcceptedReceipts(t *testing.T)
 			if !accepted && err == nil {
 				t.Fatal("failed preflight succeeded")
 			}
+			if accepted {
+				delete(native.candidates, "checkpoint-"+request.OperationID)
+			}
 			native.current = &NativeBox{ID: uuid.NewString(), State: "stopped"}
-			native.preflightErr = nil
-			removes, imports, prepares := native.removes, native.imports, native.prepares
+			native.importErr = nil
+			removes, imports := native.removes, native.imports
 			if _, err := r.Restore(t.Context(), request, uuid.NewString()); err == nil {
 				t.Fatal("replacement adopted another native Box")
 			}
-			if native.removes != removes || native.imports != imports || native.prepares != prepares {
+			if native.removes != removes || native.imports != imports {
 				t.Fatal("changed target reached destructive work")
 			}
 		})

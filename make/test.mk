@@ -635,7 +635,7 @@ test\:unit\:go:
 	@$(MAKE) dev:go
 	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
 
-# Native Go archive preparation and round-trip tests require a supported host.
+# Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
 test\:integration\:go: dev\:go
 	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
@@ -699,6 +699,10 @@ test\:apps\:github-ci-runner: _ensure-apps-deps
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
 	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:integration\:runner
+test\:integration\:runner: dev\:go
+	@cd apps/runner && go test -count=1 -tags boxlite_dev,boxlite_integration ./pkg/boxlite $(GOTEST_FILTER)
 
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)

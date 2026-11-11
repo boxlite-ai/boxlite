@@ -98,7 +98,7 @@ coverage\:go: dev\:go
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
 
-# Archive preparation does not boot a VM, but the production constructor still
+# Native archive import/export does not boot a VM, but the production constructor still
 # requires a supported host. The Linux native-binding job enables KVM first.
 coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
 	@mkdir -p target/coverage
@@ -112,7 +112,7 @@ coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
 		-o "$(PROJECT_ROOT)/target/coverage/checkpoint-native.test" \
 		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-checkpoint-native.out" \
-		-run '^TestPreparedImport' ./integration/archive
+		-run '^TestCheckpointNative' ./integration/archive
 
 coverage\:python: _ensure-python-deps
 	@mkdir -p target/coverage/python

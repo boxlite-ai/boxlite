@@ -19,7 +19,7 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (s
 	}
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
-	info, err := c.runtime.GetInfo(ctx, boxId)
+	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
 		return "", "", err
 	}
@@ -111,7 +111,7 @@ func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error
 // reads through the runtime rather than the handle cache so it sees boxes this
 // process never created — an imported box after a runner restart, for one.
 func (c *Client) boxPresent(ctx context.Context, boxId string) (bool, error) {
-	if _, err := c.runtime.GetInfo(ctx, boxId); err != nil {
+	if _, err := c.nativeBoxInfo(ctx, boxId); err != nil {
 		if boxlite.IsNotFound(err) {
 			return false, nil
 		}

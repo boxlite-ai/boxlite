@@ -4,8 +4,9 @@
 package boxlite
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -137,7 +138,7 @@ func TestCheckpointClientOrdinaryImportUsesNativePresenceAndCachesSuccess(t *tes
 				wantImports = 0
 			}
 			if imports != wantImports {
-				t.Fatalf("native import count: got %d, want %d", imports, wantImports)
+				t.Fatalf("native import count: got %d, want %d; result: %v", imports, wantImports, err)
 			}
 		})
 	}
@@ -216,7 +217,7 @@ func TestCheckpointClientLifecycleUsesNativeRESTUnderTargetLease(t *testing.T) {
 					wantNative = 0
 				}
 				if nativeCalls != wantNative {
-					t.Fatalf("native lifecycle calls: got %d, want %d", nativeCalls, wantNative)
+					t.Fatalf("native lifecycle calls: got %d, want %d; result: %v", nativeCalls, wantNative, err)
 				}
 			})
 		}
@@ -264,6 +265,13 @@ func TestCheckpointNativeAdapterLookupAndRemoval(t *testing.T) {
 				}
 			}
 			client.boxes["target"] = &sdk.Box{}
+			if status == http.StatusOK {
+				cached, err := client.runtime.Get(t.Context(), "native-target")
+				if err != nil {
+					t.Fatal(err)
+				}
+				client.boxes["target"] = cached
+			}
 			err = native.Remove(t.Context(), "native-target")
 			_, retained := client.boxes["target"]
 			if status == http.StatusOK {
@@ -277,19 +285,7 @@ func TestCheckpointNativeAdapterLookupAndRemoval(t *testing.T) {
 	}
 }
 
-// The SDK integration suite checks native staging ownership; this adapter
-// fixture checks target forwarding, errors and cache publication.
-type stagedTestImport struct {
-	runtime *sdk.Runtime
-	path    string
-}
-
-func (s stagedTestImport) Close() error { return nil }
-func (s stagedTestImport) Commit(ctx context.Context, target string) (*sdk.Box, error) {
-	return s.runtime.Import(ctx, s.path, target)
-}
-
-func TestCheckpointNativeAdapterImportAndPreflight(t *testing.T) {
+func TestCheckpointNativeAdapterImport(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -298,40 +294,54 @@ func TestCheckpointNativeAdapterImportAndPreflight(t *testing.T) {
 					_, _ = io.WriteString(w, `{"capabilities":{"import_enabled":true}}`)
 					return
 				}
-				if r.Method != http.MethodPost || r.URL.Path != "/v1/boxes/import" || r.URL.Query().Get("name") != "target" {
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/boxes/import" || r.URL.Query().Get("name") != "checkpoint-test" {
 					t.Errorf("unexpected import request: %s %s", r.Method, r.URL)
 				}
-				data, err := io.ReadAll(r.Body)
-				if err != nil || string(data) != "checkpoint bytes" {
-					t.Errorf("import lost the prepared bytes: %q %v", data, err)
+				reader := tar.NewReader(r.Body)
+				header, err := reader.Next()
+				if err != nil || header.Name != "manifest.json" {
+					t.Errorf("adapted archive: %#v %v", header, err)
+					return
+				}
+				data, err := io.ReadAll(reader)
+				if err != nil || !bytes.Contains(data, []byte(`["BOXLITE_BOX_ID","target"]`)) {
+					t.Errorf("missing target identity: %s %v", data, err)
 				}
 				if fail {
 					w.WriteHeader(http.StatusConflict)
 					_, _ = io.WriteString(w, `{"error":{"code":"invalid_state","message":"import rejected"}}`)
 					return
 				}
-				_, _ = io.WriteString(w, checkpointWireBox("native-target", "target", "stopped", "alpine:latest"))
+				_, _ = io.WriteString(w, checkpointWireBox("native-target", "checkpoint-test", "stopped", "alpine:latest"))
 			})
-			path := filepath.Join(t.TempDir(), "prepared.boxlite")
-			if err := os.WriteFile(path, []byte("checkpoint bytes"), 0600); err != nil {
+			path := filepath.Join(t.TempDir(), "source.boxlite")
+			var archive bytes.Buffer
+			writer := tar.NewWriter(&archive)
+			manifest := []byte(`{"version":3,"image":"alpine:old","box_options":{"env":[],"rootfs":{"Image":"alpine:old"}}}`)
+			if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0600, Size: int64(len(manifest))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Write(manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, archive.Bytes(), 0600); err != nil {
 				t.Fatal(err)
 			}
 			native := nativeCheckpointRecovery{client: client, target: "target"}
-			if _, err := native.Import(t.Context(), stagedTestImport{client.runtime, path}, "another-target"); err == nil {
-				t.Fatal("adapter accepted a different target")
-			}
-			id, err := native.Import(t.Context(), stagedTestImport{client.runtime, path}, "target")
+			source := &checkpoint.DownloadedArchive{Path: path, Artifact: checkpoint.Artifact{PinnedImage: "alpine@sha256:" + strings.Repeat("a", 64)}}
+			id, err := native.Import(t.Context(), source, map[string]string{"BOXLITE_BOX_ID": "target"}, "checkpoint-test")
 			if fail {
-				if err == nil || len(client.boxes) != 0 {
-					t.Fatalf("failed import cached a handle: %q %v", id, err)
+				if err == nil {
+					t.Fatal("failed import reported success")
 				}
-			} else if err != nil || id != "native-target" || client.boxes["target"] == nil {
-				t.Fatalf("accepted import was not cached: %q %v", id, err)
+			} else if err != nil || id != "native-target" {
+				t.Fatalf("candidate import: %q %v", id, err)
 			}
-			_, err = native.Prepare(t.Context(), &checkpoint.DownloadedArchive{Path: path, Artifact: checkpoint.Artifact{SHA256: strings.Repeat("a", 64), PinnedImage: "alpine@sha256:" + strings.Repeat("b", 64)}}, map[string]string{"BOXLITE_BOX_ID": "target"})
-			var sdkError *sdk.Error
-			if !errors.As(err, &sdkError) || sdkError.Code != sdk.ErrUnsupported {
-				t.Fatalf("REST preflight must refuse local file preparation: %v", err)
+			if len(client.boxes) != 0 {
+				t.Fatal("unpublished candidate entered the public cache")
 			}
 		})
 	}

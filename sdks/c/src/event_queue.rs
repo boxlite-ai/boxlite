@@ -115,12 +115,6 @@ pub type CRuntimeImportCb =
 pub(crate) type CRuntimeImportFn =
     extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void);
 
-/// Owns validated import staging until commit or explicit release.
-pub type CPrepareImportCb =
-    Option<extern "C" fn(*mut crate::CPreparedImport, *mut crate::CBoxliteError, *mut c_void)>;
-pub(crate) type CPrepareImportFn =
-    extern "C" fn(*mut crate::CPreparedImport, *mut crate::CBoxliteError, *mut c_void);
-
 /// Box start completion.
 pub type CBoxStartBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxStartBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
@@ -442,11 +436,6 @@ pub enum RuntimeEvent {
         cb: CRuntimeImportFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<crate::CBoxHandle>, BoxliteError>,
-    },
-    PrepareImport {
-        cb: CPrepareImportFn,
-        user_data: usize,
-        result: Result<OwnedFfiPtr<crate::CPreparedImport>, BoxliteError>,
     },
     StartBox {
         cb: CBoxStartBoxFn,

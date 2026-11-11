@@ -434,6 +434,18 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		return "", "", err
 	}
 	defer operation.Close()
+	if err := operation.CheckIdle(); err != nil {
+		return "", "", err
+	}
+	candidate, err := operation.UnpublishedCandidate()
+	if err != nil {
+		return "", "", err
+	}
+	if candidate != "" {
+		if err := c.runtime.ForceRemove(ctx, candidate); err != nil && !boxlite.IsNotFound(err) {
+			return "", "", err
+		}
+	}
 	if err := operation.Invalidate(); err != nil {
 		return "", "", err
 	}
@@ -539,7 +551,20 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// failing with "already exists", which the API would surface as a 400.
 	// The created flag (new vs adopted) is irrelevant here: either way the box
 	// now exists locally and the job can proceed, so it is discarded.
-	bx, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	id, err := c.nativeBoxID(boxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	var bx *boxlite.Box
+	if id != boxDto.Id {
+		bx, err = c.runtime.Get(ctx, id)
+	}
+	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
+		if err := operation.ClearPublished(); err != nil {
+			return "", "", err
+		}
+		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
@@ -679,8 +704,14 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 	ctx = context.WithoutCancel(ctx)
 	c.forgetBox(boxId)
 
-	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {
+	ids, err := operation.NativeTargets()
+	if err != nil {
 		return err
+	}
+	for _, id := range ids {
+		if err := c.runtime.ForceRemove(ctx, id); err != nil && !boxlite.IsNotFound(err) {
+			return err
+		}
 	}
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
@@ -737,7 +768,7 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 // and eviction cannot free the old one (see evictBox), so the runner would
 // accumulate dead handles for as long as it ran.
 func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error) {
-	info, err := c.runtime.GetInfo(ctx, boxId)
+	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
 		if boxlite.IsNotFound(err) {
 			return models.BoxInfo{BoxState: enums.BoxStateUnknown}, nil
@@ -851,7 +882,7 @@ func (c *Client) BoxMetrics(ctx context.Context, boxId string) (*boxlite.BoxMetr
 
 // ListInfo returns info for all boxes managed by this runtime.
 func (c *Client) ListInfo(ctx context.Context) ([]boxlite.BoxInfo, error) {
-	return c.runtime.ListInfo(ctx)
+	return c.listPublicBoxes(ctx)
 }
 
 // GetBox retrieves a box handle from cache or fetches it from the runtime.
@@ -893,7 +924,11 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 		c.evictBox(boxId, cached)
 	}
 
-	bx, err := c.runtime.Get(ctx, boxId)
+	id, err := c.nativeBoxID(boxId)
+	if err != nil {
+		return nil, err
+	}
+	bx, err := c.runtime.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("box %s not found: %w", boxId, err)
 	}

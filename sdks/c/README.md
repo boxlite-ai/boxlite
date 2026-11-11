@@ -27,7 +27,7 @@ Cloud capture may initially report `creating`; wait for `ready` before use.
 New imports and replacements inherit all saved execution settings, and replacement
 preserves the public Box ID. Force removal ignores absence and never bypasses active use.
 Storage and replacement coordination belong to the server. Existing native archive
-export/import and the runner's archive preparation helper remain available.
+export/import remains available.
 `boxlite_box_name` returns an owned name string, released with
 `boxlite_free_string`, or null for an unnamed Box.
 
@@ -949,27 +949,6 @@ make
 ---
 
 ## Memory Management
-
-### Prepared imports
-
-`boxlite_runtime_prepare_import` reuses native import validation and returns an
-owned `CPreparedImport` through the drain queue. No box is created or removed.
-Optional JSON accepts `image`, `env` values (null removes a key), and
-`preflight_startup`; startup checks may pull image configuration and default off.
-
-`boxlite_prepared_import_info_json` borrows the original version, box options and
-checksum-presence metadata until the owner is freed. After successful preparation,
-the source file can be deleted: `boxlite_prepared_import_commit` submits the same
-validated staging without extracting or repacking another archive.
-
-Synchronous rejection preserves staging; accepted commit consumes it once, even
-if the callback is abandoned. After submission returns, the wrapper can be freed
-with `boxlite_prepared_import_free`; accepted work owns the disks independently.
-Freeing an uncommitted owner removes staging and never deletes the source or a box.
-
-Serialize freeing with any call using the same pointer. Callback-owned box handles
-and borrowed errors follow ordinary import's rules. This utility is local-only;
-cloud SHA-256 and identity policy stay in runner, while checkpoints use REST.
 
 ### Rules
 

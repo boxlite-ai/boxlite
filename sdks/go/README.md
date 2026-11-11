@@ -167,35 +167,6 @@ server's untrusted-upload policy.
 Export and Import never delete the archive. The caller owns its retention and
 must explicitly remove it when it is no longer needed.
 
-`rt.PrepareImport` runs ordinary archive extraction, manifest/configuration,
-checksum and disk validation without creating a box. It returns a local-only
-`PreparedImport`; `Commit` consumes its staging directly, without repacking or
-reading the source again. REST runtimes return unsupported without sending paths.
-
-```go
-prepared, err := rt.PrepareImport(ctx, "/tmp/saved.boxlite", boxlite.ImportOptions{})
-if err != nil {
-	log.Fatal(err)
-}
-defer prepared.Close()
-restored, err := prepared.Commit(ctx, "restored")
-```
-
-`Info()` exposes original archive metadata before overrides. `ImportOptions`
-can replace the image and set or remove environment keys (`nil` removes a key).
-`PreflightStartup: true` additionally checks runtime feature opt-ins, readable
-kernel assets and image configuration; it may pull the image. Ordinary `Import`
-keeps this check disabled and retains its existing offline behavior.
-
-`Close()` releases uncommitted staging and never deletes a committed box. Invalid
-arguments, canceled admission or synchronous rejection preserve the owner;
-accepted `Commit` consumes it once, even if the caller stops waiting. `Commit`
-and `Close` serialize access, so an accepted task retains the disks independently.
-
-Cancellation stops waiting for preparation and frees a late successful result.
-Keep the source until preparation actually completes; after successful preparation
-it can be deleted. Cloud metadata integrity and identity policy belong to runner.
-
 ### Runtime Image Management
 
 `rt.Images()` holds the images a runtime can boot from: the local cache on a
@@ -466,27 +437,15 @@ make dev:go
 # Run hosted unit and REST tests
 make test:unit:go
 
-# Run native archive preparation and round-trip tests on a VM-capable host
+# Run native archive import/export tests on a VM-capable host
 make test:integration:go
 ```
 
-Native checkpoint archive tests use the production runtime constructor, which
-validates KVM or Hypervisor.framework even when preparation does not start a VM.
-They run in the `boxlite_integration` archive suite through the shared SDK
-integration target and the VM-capable E2E workflow. Their ownership,
-cancellation, late-completion cleanup and native import assertions stay enabled.
-Hosted unit coverage continues to run checkpoint REST and argument tests.
-The Linux native-binding coverage job also enables KVM and runs the existing
-archive preparation ownership/cancellation cases through
-`make coverage:go:checkpoint`. It uploads the Go profile with the native binding
-reports; the full archive round-trip remains in the VM integration suite.
-The collector links Rust's instrumented library and matching LLVM profile
-runtime. A coverage-only integration test entry point flushes native counters
-before Go exits, so the report includes the C ABI archive preparation path.
-LLVM collection builds the C library in the collector's Cargo target directory
-before compiling the tagged Go tests.
-The flush helper explicitly initializes `LLVM_PROFILE_FILE` handling, including
-when the Go executable has not run LLVM's native startup hook.
+Native archive import/export tests use the production runtime constructor and
+require a VM-capable host, even when the test does not start a VM.
+The Linux native-binding coverage job runs the no-VM import/export cases through
+`make coverage:go:checkpoint` and flushes the instrumented native counters before
+Go exits. Full VM archive round-trips remain in the integration suite.
 
 ## License
 

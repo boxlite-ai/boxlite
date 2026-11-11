@@ -17,7 +17,6 @@ extern void goBoxliteOnBoxExport(char *archive_path, CBoxliteError *err, void *u
 extern void goBoxliteOnRuntimeImport(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnCheckpointInfo(CCheckpointInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnCheckpointList(CCheckpointList *list, CBoxliteError *err, void *ud);
-extern void goBoxliteOnPrepareImport(CPreparedImport *archive, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnStartBox(CBoxliteError *err, void *ud);
@@ -62,7 +61,6 @@ CBoxStderrCb cbStderr(void) { return (CBoxStderrCb)goBoxliteOnStderr; }
 CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
 
 CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox; }
-CPrepareImportCb cbPrepareImport(void) { return (CPrepareImportCb)goBoxliteOnPrepareImport; }
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
 }

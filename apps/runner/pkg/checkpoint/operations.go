@@ -86,14 +86,14 @@ func (l *TargetLease) Close() error {
 	return err
 }
 
-// CheckIdle prevents a failed destructive replacement from being mistaken for
-// an ordinary stopped box. Recovery retry or explicit create/destroy owns it.
+// CheckIdle keeps predecessor cleanup serialized with ordinary lifecycle calls.
+// An import failure leaves its old target available while a retry is pending.
 func (l *TargetLease) CheckIdle() error {
 	record, err := l.read()
 	if err != nil {
 		return err
 	}
-	if record != nil && record.Stage != "preparing" && record.Stage != "accepted" && record.Stage != "invalidated" {
+	if record != nil && record.Stage != "preparing" && record.Stage != "importing" && record.Stage != "accepted" && record.Stage != "invalidated" {
 		return fmt.Errorf("box has unfinished checkpoint operation %s at %s", record.Request.OperationID, record.Stage)
 	}
 	return nil
@@ -113,7 +113,15 @@ func (l *TargetLease) Invalidate() error {
 // Retire fences even a create job that has never reached this runner. Public
 // Box IDs are not reused after deletion; migration cleanup uses Invalidate.
 func (l *TargetLease) Retire() error {
-	return l.write(restoreRecord{Version: 1, Request: RestoreRequest{Target: l.target}, Stage: "invalidated", Retired: true})
+	record, err := l.read()
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		record = &restoreRecord{Version: 1, Request: RestoreRequest{Target: l.target}}
+	}
+	record.Stage, record.Retired = "invalidated", true
+	return l.write(*record)
 }
 
 type restoreRecord struct {
@@ -123,6 +131,90 @@ type restoreRecord struct {
 	Stage         string         `json:"stage"`
 	PredecessorID string         `json:"predecessorId,omitempty"`
 	AcceptedID    string         `json:"acceptedId,omitempty"`
+	PublishedID   string         `json:"publishedId,omitempty"`
+}
+
+// Resolve reads one atomically published journal without reacquiring a target
+// lease; lifecycle callers may already hold it. An absent journal uses the
+// original native name, so boxes created before checkpoints remain unchanged.
+func (o Operations) Resolve(target string) (string, error) {
+	digest := sha256.Sum256([]byte(target))
+	lease := TargetLease{path: filepath.Join(o.Root, hex.EncodeToString(digest[:])+".json"), target: target}
+	record, err := lease.read()
+	if err != nil {
+		return "", err
+	}
+	if record != nil && record.PublishedID != "" {
+		return record.PublishedID, nil
+	}
+	return target, nil
+}
+
+// Bindings provides the public identities for ListInfo/BoxSync. Candidates
+// without a published mapping are deliberately absent from the result.
+func (o Operations) Bindings() (map[string]string, error) {
+	paths, err := filepath.Glob(filepath.Join(o.Root, "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	bindings := make(map[string]string)
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var record restoreRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return nil, err
+		}
+		id, err := o.Resolve(record.Request.Target)
+		if err != nil {
+			return nil, err
+		}
+		if id != record.Request.Target {
+			bindings[record.Request.Target] = id
+		}
+	}
+	return bindings, nil
+}
+
+// NativeTargets retains cleanup identities across explicit invalidation or
+// retirement, including a candidate committed before its receipt was written.
+func (l *TargetLease) NativeTargets() ([]string, error) {
+	record, err := l.read()
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{l.target}
+	if record != nil {
+		if record.PublishedID != "" {
+			ids = append(ids, record.PublishedID)
+		}
+		if record.PredecessorID != "" {
+			ids = append(ids, record.PredecessorID)
+		}
+		if record.Request.OperationID != "" {
+			ids = append(ids, "checkpoint-"+record.Request.OperationID)
+		}
+	}
+	return ids, nil
+}
+
+func (l *TargetLease) ClearPublished() error {
+	record, err := l.read()
+	if err != nil || record == nil || record.PublishedID == "" {
+		return err
+	}
+	record.PublishedID = ""
+	return l.write(*record)
+}
+
+func (l *TargetLease) UnpublishedCandidate() (string, error) {
+	record, err := l.read()
+	if err != nil || record == nil || record.Stage != "importing" {
+		return "", err
+	}
+	return "checkpoint-" + record.Request.OperationID, nil
 }
 
 func (l *TargetLease) read() (*restoreRecord, error) {
