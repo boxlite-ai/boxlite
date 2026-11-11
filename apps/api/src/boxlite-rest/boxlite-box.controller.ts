@@ -164,9 +164,14 @@ export class BoxliteBoxController {
   async listBoxes(
     @AuthContext() authContext: OrganizationAuthContext,
     @Query() page: BoxPageQuery,
+    @Param('prefix') prefix?: string,
   ): Promise<ListBoxesResponseDto> {
     const organizationId = authContext.organizationId
-    if (!organizationId) {
+    if (
+      !organizationId ||
+      authContext.organization?.id !== organizationId ||
+      (prefix && prefix !== 'default' && prefix !== organizationId)
+    ) {
       throw new BadRequestException('A resolved organization is required to list boxes')
     }
     const boxes = await this.boxService.findInventory(organizationId, {
