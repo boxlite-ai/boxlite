@@ -530,6 +530,10 @@ pub(crate) struct PyBoxOptions {
     pub(crate) image: Option<String>,
     #[pyo3(get, set)]
     pub(crate) rootfs_path: Option<String>,
+    /// REST-managed checkpoint to create from. The box inherits the saved
+    /// settings, so every other option must be left unset.
+    #[pyo3(get, set)]
+    pub(crate) checkpoint: Option<String>,
     #[pyo3(get, set)]
     pub(crate) cpus: Option<f64>,
     #[pyo3(get, set)]
@@ -538,7 +542,7 @@ pub(crate) struct PyBoxOptions {
     pub(crate) disk_size_gb: Option<u64>,
     #[pyo3(get, set)]
     pub(crate) working_dir: Option<String>,
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub(crate) env: Vec<(String, String)>,
     pub(crate) volumes: Vec<PyVolumeSpec>,
     #[pyo3(get, set)]
@@ -581,12 +585,14 @@ pub(crate) struct PyBoxOptions {
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
 
     /// Secrets to inject into outbound HTTPS requests via MITM proxy.
-    #[pyo3(get, set)]
+    #[pyo3(get)]
     pub(crate) secrets: Vec<PySecret>,
+    collection_options_supplied: bool,
 }
 
 #[pymethods]
 impl PyBoxOptions {
+    /// Normalize omitted collections while retaining explicitly supplied empty lists.
     #[new]
     #[pyo3(signature = (
         image=None,
@@ -595,10 +601,10 @@ impl PyBoxOptions {
         memory_mib=None,
         disk_size_gb=None,
         working_dir=None,
-        env=vec![],
-        volumes=vec![],
+        env=None,
+        volumes=None,
         network=None,
-        ports=vec![],
+        ports=None,
         auto_remove=None,
         auto_stop=None,
         auto_delete=None,
@@ -609,7 +615,8 @@ impl PyBoxOptions {
         user=None,
         tty=None,
         advanced=None,
-        secrets=vec![],
+        secrets=None,
+        checkpoint=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -619,10 +626,10 @@ impl PyBoxOptions {
         memory_mib: Option<u32>,
         disk_size_gb: Option<u64>,
         working_dir: Option<String>,
-        env: Vec<(String, String)>,
-        volumes: Vec<PyVolumeSpec>,
+        env: Option<Vec<(String, String)>>,
+        volumes: Option<Vec<PyVolumeSpec>>,
         network: Option<PyNetworkSpec>,
-        ports: Vec<PyPortSpec>,
+        ports: Option<Vec<PyPortSpec>>,
         auto_remove: Option<bool>,
         auto_stop: Option<u32>,
         auto_delete: Option<u32>,
@@ -633,19 +640,24 @@ impl PyBoxOptions {
         user: Option<String>,
         tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
-        secrets: Vec<PySecret>,
+        secrets: Option<Vec<PySecret>>,
+        checkpoint: Option<String>,
     ) -> Self {
+        let collection_options_supplied =
+            env.is_some() || volumes.is_some() || ports.is_some() || secrets.is_some();
         Self {
+            collection_options_supplied,
             image,
             rootfs_path,
+            checkpoint,
             cpus,
             memory_mib,
             disk_size_gb,
             working_dir,
-            env,
-            volumes,
+            env: env.unwrap_or_default(),
+            volumes: volumes.unwrap_or_default(),
             network,
-            ports,
+            ports: ports.unwrap_or_default(),
             auto_remove,
             auto_stop,
             auto_delete,
@@ -656,8 +668,22 @@ impl PyBoxOptions {
             user,
             tty,
             advanced,
-            secrets,
+            secrets: secrets.unwrap_or_default(),
         }
+    }
+
+    /// Record explicitly assigned lists even when they are empty.
+    #[setter]
+    fn set_env(&mut self, env: Vec<(String, String)>) {
+        self.collection_options_supplied = true;
+        self.env = env;
+    }
+
+    /// A supplied empty secret list must not silently inherit checkpoint secrets.
+    #[setter]
+    fn set_secrets(&mut self, secrets: Vec<PySecret>) {
+        self.collection_options_supplied = true;
+        self.secrets = secrets;
     }
 
     fn __repr__(&self) -> String {
@@ -675,8 +701,35 @@ impl PyBoxOptions {
 impl TryFrom<PyBoxOptions> for BoxOptions {
     type Error = boxlite::BoxliteError;
 
+    /// Validate optional input presence before applying the core defaults.
     #[allow(deprecated)]
     fn try_from(py_opts: PyBoxOptions) -> Result<Self, Self::Error> {
+        if py_opts.checkpoint.is_some()
+            && (py_opts.collection_options_supplied
+                || py_opts.cpus.is_some()
+                || py_opts.memory_mib.is_some()
+                || py_opts.disk_size_gb.is_some()
+                || py_opts.working_dir.is_some()
+                || py_opts.network.is_some()
+                || py_opts.auto_remove.is_some()
+                || py_opts.auto_stop.is_some()
+                || py_opts.auto_delete.is_some()
+                || py_opts.auto_resume.is_some()
+                || py_opts.detach.is_some()
+                || py_opts.tty.is_some()
+                || py_opts.entrypoint.is_some()
+                || py_opts.cmd.is_some()
+                || py_opts.user.is_some()
+                || py_opts.advanced.is_some()
+                || !py_opts.env.is_empty()
+                || !py_opts.volumes.is_empty()
+                || !py_opts.ports.is_empty()
+                || !py_opts.secrets.is_empty())
+        {
+            return Err(Self::Error::InvalidArgument(
+                "a box created from a checkpoint inherits its saved settings; leave every other option unset".into(),
+            ));
+        }
         if let Some(cpus) = py_opts.cpus {
             boxlite::runtime::cpu_count::CpuCount::new(cpus)?;
         }
@@ -691,9 +744,15 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
 
-        // Convert image/rootfs_path to RootfsSpec
-        let rootfs = match &py_opts.rootfs_path {
-            Some(path) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
+        // Convert image/rootfs_path/checkpoint to RootfsSpec
+        let rootfs = match (&py_opts.checkpoint, &py_opts.rootfs_path) {
+            (Some(_), _) if py_opts.image.is_some() || py_opts.rootfs_path.is_some() => {
+                return Err(boxlite::BoxliteError::InvalidArgument(
+                    "checkpoint cannot be combined with image or rootfs_path".into(),
+                ));
+            }
+            (Some(checkpoint), _) => RootfsSpec::Checkpoint(checkpoint.clone()),
+            (None, Some(path)) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
             _ => {
                 let image = py_opts
                     .image
@@ -1188,8 +1247,10 @@ mod tests {
     /// doesn't need it).
     fn py_box_options_with_advanced(advanced: PyAdvancedBoxOptions) -> PyBoxOptions {
         PyBoxOptions {
+            collection_options_supplied: false,
             image: None,
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -1216,8 +1277,10 @@ mod tests {
     /// field the reference server forwards into `boxlite.BoxOptions(**kwargs)`.
     fn py_box_options_with_tty(tty: Option<bool>) -> PyBoxOptions {
         PyBoxOptions {
+            collection_options_supplied: false,
             image: None,
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -1456,13 +1519,13 @@ mod tests {
     }
     #[test]
     fn fractional_cpus_python_conversion() {
-        for cores in [0.01, 0.125, 1.5, 2.0] {
+        for cores in [0.125, 0.126, 1.5, 2.0] {
             let mut options = py_box_options_with_tty(None);
             options.cpus = Some(cores);
             let core = BoxOptions::try_from(options).unwrap();
             assert_eq!(core.cpus, Some(cores));
         }
-        for cores in [0.0, -0.5, 0.009, 0.1255, f64::NAN, f64::INFINITY] {
+        for cores in [0.0, -0.5, 0.124, 0.1255, f64::NAN, f64::INFINITY] {
             let mut options = py_box_options_with_tty(None);
             options.cpus = Some(cores);
             assert!(BoxOptions::try_from(options).is_err(), "{cores}");

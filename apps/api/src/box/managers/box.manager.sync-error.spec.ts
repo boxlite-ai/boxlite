@@ -18,24 +18,36 @@ const BOX = {
 
 function makeManager(startFailure: Error) {
   const boxRepository = {
-    findOneOrFail: jest.fn().mockResolvedValue({ ...BOX }),
+    findWithCheckpointState: jest.fn().mockResolvedValue({ box: { ...BOX }, checkpointState: null }),
     updateWhere: jest.fn().mockResolvedValue(undefined),
   }
   const imagePullFailureService = { reasonFor: jest.fn().mockResolvedValue('explained') }
+  const start = { run: jest.fn().mockRejectedValue(startFailure) }
   const manager = new BoxManager(
     boxRepository as never,
     {} as never,
     {} as never,
     { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn().mockResolvedValue(undefined) } as never,
-    { run: jest.fn().mockRejectedValue(startFailure) } as never,
+    start as never,
     {} as never,
     {} as never,
     imagePullFailureService as never,
   )
-  return { manager, boxRepository, imagePullFailureService }
+  return { manager, boxRepository, imagePullFailureService, start }
 }
 
 describe('BoxManager sync errors', () => {
+  it('does not start a replacement while checkpoint coordination owns the Box', async () => {
+    const { manager, boxRepository, start } = makeManager(new Error('must not start'))
+    boxRepository.findWithCheckpointState.mockResolvedValue({
+      box: { ...BOX },
+      checkpointState: { boxId: BOX.id, activeJobId: 'checkpoint-job', sequence: 1 },
+    } as never)
+    await manager.syncInstanceState(BOX.id)
+    expect(start.run).not.toHaveBeenCalled()
+    expect(boxRepository.updateWhere).not.toHaveBeenCalled()
+  })
+
   /**
    * A runner that pulls while it answers the create call, rather than in a
    * job, fails the call itself, and this is where that failure is recorded.

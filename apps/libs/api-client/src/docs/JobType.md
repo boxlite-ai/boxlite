@@ -22,6 +22,12 @@ The type of the job
 
 * `DISCARD_EXPORTED_BOX` (value: `'DISCARD_EXPORTED_BOX'`)
 
+* `EXPORT_CHECKPOINT` (value: `'EXPORT_CHECKPOINT'`)
+
+* `UPLOAD_CHECKPOINT` (value: `'UPLOAD_CHECKPOINT'`)
+
+* `IMPORT_CHECKPOINT` (value: `'IMPORT_CHECKPOINT'`)
+
 * `UNKNOWN_DEFAULT_OPEN_API` (value: `'11184809'`)
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

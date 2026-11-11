@@ -36,9 +36,12 @@ async def test_network_policy_live_traffic_and_restart(shared_runtime):
     )
     box_id = box.id
 
-    async def probe():
+    # Re-enabling can leave guest ARP resolution waiting for its next retry.
+    # Allowed probes get a recovery budget; denied probes retain one second.
+    async def probe(timeout=1):
         execution = await box.exec(
-            "wget", ["-q", "-T", "1", "-O", "-", f"http://192.168.127.254:{port}/"]
+            "wget",
+            ["-q", "-T", str(timeout), "-O", "-", f"http://192.168.127.254:{port}/"],
         )
         stdout = "".join([chunk async for chunk in execution.stdout()])
         stderr = "".join([chunk async for chunk in execution.stderr()])
@@ -55,15 +58,15 @@ async def test_network_policy_live_traffic_and_restart(shared_runtime):
         await box.start()
         pid = (await box.info()).state.pid
         assert pid is not None
-        assert await probe()
+        assert await probe(timeout=5)
         await replace(rules=["example.invalid"])
         assert not await probe()
         await replace(rules=["192.168.127.254"])
-        assert await probe()
+        assert await probe(timeout=5)
         await replace("disabled")
         assert not await probe()
         await replace()
-        assert await probe()
+        assert await probe(timeout=5)
         assert (await box.info()).state.pid == pid
 
         await replace(rules=["example.invalid"])
@@ -82,7 +85,7 @@ async def test_network_policy_live_traffic_and_restart(shared_runtime):
         assert (await box.info()).network.outbound.allow_net == ["example.invalid"]
         assert not await probe()
         await replace()
-        assert await probe()
+        assert await probe(timeout=5)
         await replace("disabled")
         await box.stop()
         box = await shared_runtime.get(box_id)
@@ -90,7 +93,7 @@ async def test_network_policy_live_traffic_and_restart(shared_runtime):
         assert (await box.info()).network.outbound.mode == "disabled"
         assert not await probe()
         await replace()
-        assert await probe()
+        assert await probe(timeout=5)
     finally:
         await shared_runtime.remove(box_id, force=True)
         server.close()

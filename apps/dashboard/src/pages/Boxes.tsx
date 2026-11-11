@@ -5,6 +5,8 @@ import { ResourceFilter } from '@/components/ResourceLayout'
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
+import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { OrganizationSuspendedError } from '@/api/errors'
 import { AsciiButton, StatCard } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
@@ -63,6 +65,8 @@ import { QueryKey, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { generatePath, useNavigate, useSearchParams } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import { getBoxDisplayName } from '@/lib/box-identity'
 import { toast } from 'sonner'
 
 // Below this many boxes the table already provides the fleet summary.
@@ -70,6 +74,7 @@ const FLEET_THRESHOLD = 10
 
 /** Lists and filters paginated Boxes, with organization-wide fleet counts and permission-gated lifecycle actions. */
 const Boxes: React.FC = () => {
+  usePageTitle('Boxes')
   const api = useApi()
   const { boxApi } = api
   const { user } = useAuth()
@@ -82,6 +87,9 @@ const Boxes: React.FC = () => {
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const checkpointCapabilities = useCheckpointCapabilities()
+  const [checkpointSource, setCheckpointSource] = useState<{ box: Box; organizationId: string } | null>(null)
+  useEffect(() => setCheckpointSource(null), [selectedOrganization?.id])
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
   const updateOnboardingProgress = useCallback(
@@ -255,6 +263,8 @@ const Boxes: React.FC = () => {
   // Delete Box Dialog
 
   const [boxToDelete, setBoxToDelete] = useState<string | null>(null)
+  const deleteDialogBox = boxesData?.items.find((item) => item.id === boxToDelete)
+  const deleteDialogBoxName = deleteDialogBox ? getBoxDisplayName(deleteDialogBox) : (boxToDelete ?? '')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const performBoxStateOptimisticUpdate = useCallback(
@@ -380,7 +390,7 @@ const Boxes: React.FC = () => {
     try {
       if (!selectedOrganization?.id) throw new Error('Missing organization')
       await startBoxViaBoxApi(api, selectedOrganization.id, id)
-      toast.success(`Starting box with ID: ${id}`)
+      toast.success(`Starting ${boxToStart ? getBoxDisplayName(boxToStart) : id}…`)
       await markAllBoxQueriesAsStale()
     } catch (error) {
       handleApiError(error, 'Failed to start box', {
@@ -441,7 +451,7 @@ const Boxes: React.FC = () => {
       if (!selectedOrganization?.id) throw new Error('Missing organization')
       await stopBoxViaBoxApi(api, selectedOrganization.id, id)
       toast.success(
-        `Stopping box with ID: ${id}`,
+        `Stopping ${boxToStop ? getBoxDisplayName(boxToStop) : id}…`,
         boxToStop?.autoDelete !== undefined && boxToStop.autoDelete > 0
           ? {
               description: `This box will be deleted automatically in ${formatLifecycleSeconds(boxToStop.autoDelete)} unless it is started again.`,
@@ -477,7 +487,7 @@ const Boxes: React.FC = () => {
       setShowDeleteDialog(false)
       removeBoxFromCache(id)
 
-      toast.success(`Deleting box with ID: ${id}`)
+      toast.success(`Deleting ${boxToDelete ? getBoxDisplayName(boxToDelete) : id}…`)
 
       await markAllBoxQueriesAsStale()
     } catch (error) {
@@ -712,12 +722,13 @@ const Boxes: React.FC = () => {
       <div className="resource-page-header flex items-end justify-between">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Boxes</h1>
-          <p className="mt-2 text-body leading-relaxed text-muted-foreground">
-            Create Boxes to run agentic workloads and apps in isolated environments.{' '}
+          {/* A wrapping flex row: when the link drops to its own line it starts at the text edge. */}
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 text-body leading-relaxed text-muted-foreground">
+            <span>Create Boxes to run agentic workloads and apps in isolated environments.</span>
             <button
               type="button"
               onClick={() => navigate(RoutePath.QUICKSTART)}
-              className="ml-2 inline text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+              className="inline-flex min-h-6 items-center text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
             >
               First time here? Follow Quickstart →
             </button>
@@ -760,6 +771,11 @@ const Boxes: React.FC = () => {
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
         <BoxTable
+          onCreateCheckpoint={
+            checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
+              ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
+              : undefined
+          }
           boxIsLoading={boxIsLoading}
           boxStateIsTransitioning={boxStateIsTransitioning}
           handleStart={handleStart}
@@ -793,6 +809,13 @@ const Boxes: React.FC = () => {
         />
       </div>
 
+      {checkpointSource && checkpointSource.organizationId === selectedOrganization?.id && (
+        <CheckpointCreateDialog
+          key={`${checkpointSource.organizationId}:${checkpointSource.box.id}`}
+          box={checkpointSource.box}
+          onClose={() => setCheckpointSource(null)}
+        />
+      )}
       {boxToDelete && (
         <AlertDialog
           open={showDeleteDialog}
@@ -805,9 +828,9 @@ const Boxes: React.FC = () => {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Confirm Box Deletion</AlertDialogTitle>
+              <AlertDialogTitle>{`Delete “${deleteDialogBoxName}”?`}</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete this box? This action cannot be undone.
+                The Box and everything on its disk are removed. This cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -817,7 +840,7 @@ const Boxes: React.FC = () => {
                 onClick={() => handleDelete(boxToDelete)}
                 disabled={boxIsLoading[boxToDelete]}
               >
-                {boxIsLoading[boxToDelete] ? 'Deleting...' : 'Delete'}
+                {boxIsLoading[boxToDelete] ? 'Deleting…' : 'Delete'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

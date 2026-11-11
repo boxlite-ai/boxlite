@@ -3,8 +3,8 @@
 //! Boots an alpine box on `boxlite-vmm` through the runtime and asserts how far
 //! it gets: the kernel mounts the guest root disk and runs `boxlite-guest` as
 //! PID 1. The box cannot become ready yet: the native engine has no vsock,
-//! virtio-fs or virtio-net device, so the agent exits, the kernel panics into
-//! a reset, and `start` fails. Each device that lands moves the pinned stop
+//! virtio-fs or virtio-net device, so the ready notification fails and `start`
+//! times out. Each device that lands moves the pinned stop
 //! point until `start` succeeds.
 //!
 //! Run with `make test:integration:vmm:native`: it needs `/dev/kvm`,
@@ -28,14 +28,17 @@ const PROGRESS: &[&str] = &[
     "Run /boxlite/bin/boxlite-guest as init process",
     "[guest] T+0ms: agent starting",
     "BoxLite Guest Agent starting",
+    "init bootstrap completed",
+    "kernel hardening applied",
+    "zygote started",
+    "tmpfs mounted",
+    "loopback ready",
 ];
 
-/// Where the boot stops today, in order: the agent still expects `init.krun`
-/// to have mounted `/proc`, so its sysctl hardening fails, it exits, and the
-/// kernel panics because PID 1 died. The PID 1 bootstrap moves this line.
+/// CID_ANY can listen without a vsock transport; connecting to the host cannot.
 const STOP: &[&str] = &[
-    "Failed to set guest sysctl fs.protected_hardlinks=1 via /proc/sys/fs/protected_hardlinks",
-    "Kernel panic - not syncing: Attempted to kill init!",
+    "server bound (vsock:2695)",
+    "Failed to connect to notify vsock",
 ];
 
 fn native_runtime(home: &PerTestBoxHome) -> BoxliteRuntime {
@@ -98,6 +101,8 @@ async fn first_box_runs_boxlite_guest_as_pid_1_on_the_ext4_root() {
         "the kernel did not mount the guest root"
     );
     assert_in_order(&console, STOP);
+    assert!(!console.contains("Kernel panic"), "console:\n{console}");
+    assert!(error.to_string().contains("timed out"), "{error}");
 
     let _ = bx.stop().await;
     let _ = runtime.remove(bx.id().as_str(), true).await;

@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "boxlite",
  "cbindgen",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-cli"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-guest"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -692,6 +692,7 @@ dependencies = [
  "bytes",
  "clap",
  "futures",
+ "hyper-util",
  "libcontainer",
  "nix 0.29.0",
  "oci-spec 0.9.0",
@@ -700,6 +701,7 @@ dependencies = [
  "rtnetlink",
  "russh",
  "russh-sftp",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tempfile",
@@ -708,6 +710,7 @@ dependencies = [
  "tokio-util",
  "tokio-vsock",
  "tonic",
+ "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -716,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-hypervisor"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
@@ -725,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -740,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "boxlite",
  "futures",
@@ -753,7 +756,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "futures",
  "proptest",
@@ -771,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shim"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -804,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-vmm"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bitflags 2.11.1",
  "boxlite-hypervisor",
@@ -842,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "num_cpus",
 ]
@@ -1665,7 +1668,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "num_cpus",
 ]
@@ -3116,14 +3119,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "num_cpus",

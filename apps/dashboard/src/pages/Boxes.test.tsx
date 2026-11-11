@@ -272,7 +272,7 @@ describe('Boxes page, empty account', () => {
 
     // The page is still a Boxes page: its own heading and its create dialog
     // survive an empty account, rather than being replaced by a panel.
-    expect(document.body.textContent).toContain('No boxes yet.')
+    expect(document.body.textContent).toContain('No Boxes yet.')
     expect(document.querySelector('h1')?.textContent).toBe('Boxes')
     // The create affordance still belongs to the page, not to the empty state.
     expect(document.querySelector('[data-testid="create-box-dialog"]')).not.toBeNull()
@@ -315,7 +315,7 @@ describe('Boxes page, empty account', () => {
 
     // The page owns the confirmation, so arming it from a row must open the
     // page's dialog rather than deleting outright.
-    expect(document.body.textContent).toContain('Confirm Box Deletion')
+    expect(document.body.textContent).toContain('Delete “')
   })
 
   it('renders an empty table rather than guessing while the list is still loading', () => {

@@ -170,6 +170,9 @@ export class Organization {
   })
   boxLimitedNetworkEgress: boolean
 
+  @Column({ type: 'boolean', default: false })
+  nestedVirtualizationEnabled = false
+
   @CreateDateColumn({
     type: 'timestamp with time zone',
   })

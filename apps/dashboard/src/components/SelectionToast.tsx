@@ -34,7 +34,7 @@ export function SelectionToast({
     >
       <div className="bg-background text-foreground border border-border rounded-lg shadow-lg pl-3 pr-1 py-1 flex items-center justify-between gap-4">
         <div className="flex items-center gap-1">
-          <div className="text-sm tabular-nums whitespace-nowrap">
+          <div className="text-body tabular-nums whitespace-nowrap">
             {pluralize(selectedCount, 'item', 'items')} selected
           </div>
           <Button variant="ghost" size="icon-sm" onClick={onClearSelection}>
@@ -45,7 +45,7 @@ export function SelectionToast({
 
         <Button variant="ghost" size="sm" className="h-8" onClick={onActionClick}>
           <TrashIcon className="size-3.5" />
-          <span className="text-sm">{actionLabel}</span>
+          <span className="text-body">{actionLabel}</span>
         </Button>
       </div>
     </motion.div>

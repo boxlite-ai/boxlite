@@ -22,6 +22,10 @@ import type { RunnerServiceHealth } from './runner-service-health';
 
 export interface RunnerHealthcheck {
     /**
+     * Runner runtime authorizes nested virtualization
+     */
+    'nestedVirtualizationEnabled'?: boolean;
+    /**
      * Runner preserves the guest privileged creation option
      */
     'supportsPrivileged'?: boolean;

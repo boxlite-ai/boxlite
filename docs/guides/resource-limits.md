@@ -73,7 +73,7 @@ Fractional allocations round up only the guest topology; information queries ret
 They do not reserve physical cores or guarantee latency.
 Integer allocations add no new cgroup requirement and continue working on macOS.
 
-**Range:** `0.01` to `16`, in increments of `0.001`, with the bundled guest kernel.
+**Range:** `0.125` to `16`, in increments of `0.001`, with the bundled guest kernel.
 Zero, negatives, non-finite values, and excessive precision are rejected.
 A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
 Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
@@ -88,8 +88,9 @@ Boot and device I/O also consume this budget; very small allocations can hit exi
 
 | Condition | Behavior |
 | --- | --- |
-| Execution host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; REST applies these requirements to the server; rootless operation needs CPU delegation |
-| Quota write failure | Startup fails before guest execution |
+| Execution host requirements | Linux and an enabled jailer; REST applies these requirements to the server |
+| Enforcement requirements | A writable cgroup v2 CPU controller for the Box's cgroup; rootless operation needs CPU delegation |
+| Quota write failure | Logged at error level; the Box starts with `ceil(cpus)` vCPUs and no bandwidth limit |
 | Membership failure | Existing best-effort joining remains; a Box can start without the requested quota taking effect |
 | Local macOS execution | Fractional values return `Unsupported` |
 | macOS REST client | Can request fractional CPUs from a supporting Linux server; the client needs no local cgroup support |
@@ -122,7 +123,9 @@ A successful fractional create must return exactly the requested allocation.
 Missing, rounded, or changed values produce an `Unsupported` error containing the created Box ID; inspect or remove that Box before retrying.
 The SDK never retries creation by rounding or dropping the value; ordinary HTTP failures retain their original error classification.
 Other features may still use `/config`.
-This feature does not add fractional scheduling, capacity accounting, or billing to BoxLite Cloud; older Cloud servers may reject fractional values.
+BoxLite Cloud accepts `cpus` from `0.125` to `16` in increments of `0.001`, subject to the organization's per-Box limit.
+The dashboard's Custom CPU input accepts three decimal places and adjusts by `0.1`; invalid input blocks creation.
+Older Cloud servers may reject fractional values.
 
 **Compatibility (breaking change):** `Box.cpus` responses may contain fractions that older integer-only clients cannot decode, including in list responses.
 Follow the [client migration steps](../reference/README.md#unreleased-fractional-cpu-allocation-breaking-change) before creating fractional Boxes in shared environments.

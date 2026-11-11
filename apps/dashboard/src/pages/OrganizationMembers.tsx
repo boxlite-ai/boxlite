@@ -155,7 +155,7 @@ const OrganizationMembers: React.FC = () => {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">Manage organization members and pending invitations.</p>
+        <p className="text-body text-muted-foreground">Manage organization members and pending invitations.</p>
         {authenticatedUserIsOwner && (
           <CreateOrganizationInvitationDialog className="ml-auto" onCreateInvitation={handleCreateInvitation} />
         )}

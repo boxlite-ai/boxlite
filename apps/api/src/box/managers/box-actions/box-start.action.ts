@@ -20,6 +20,8 @@ import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 
+import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
+
 @Injectable()
 export class BoxStartAction extends BoxAction {
   protected readonly logger = new Logger(BoxStartAction.name)
@@ -85,7 +87,17 @@ export class BoxStartAction extends BoxAction {
     const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    await runnerAdapter.createBox(box, image, metadata)
+    await runnerAdapter.createBox(
+      box,
+      image,
+      metadata,
+      await resolveNestedVirtualization(
+        box.organizationId,
+        this.organizationService,
+        runnerAdapter,
+        this.configService.getOrThrow('runnerHealthTimeout') * 1000,
+      ),
+    )
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
     return SYNC_AGAIN

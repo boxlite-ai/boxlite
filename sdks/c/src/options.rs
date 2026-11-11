@@ -11,6 +11,41 @@ use crate::{CBoxliteError, CBoxliteOptions};
 pub struct OptionsHandle {
     pub options: BoxOptions,
     pub name: Option<String>,
+    pub(crate) checkpoint_override: bool,
+    pub(crate) checkpoint_selected: bool,
+}
+
+impl OptionsHandle {
+    /// Preserve setter presence until create, including explicitly set defaults.
+    pub(crate) fn validate_checkpoint(&self) -> boxlite::BoxliteResult<()> {
+        if self.checkpoint_selected && !matches!(self.options.rootfs, RootfsSpec::Checkpoint(_)) {
+            return Err(boxlite::BoxliteError::InvalidArgument(
+                "checkpoint cannot be combined with another rootfs source".into(),
+            ));
+        }
+        let RootfsSpec::Checkpoint(key) = &self.options.rootfs else {
+            return Ok(());
+        };
+        if key.is_empty() {
+            return Err(boxlite::BoxliteError::InvalidArgument(
+                "checkpoint must be nonempty valid UTF-8".into(),
+            ));
+        }
+        if self.checkpoint_override {
+            return Err(boxlite::BoxliteError::InvalidArgument(
+                "a box created from a checkpoint inherits its saved settings; only name may be set"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Record caller intent before a setter can normalize or ignore its input.
+unsafe fn mark_checkpoint_override(opts: *mut CBoxliteOptions) {
+    if let Some(options) = unsafe { opts.as_mut() } {
+        options.checkpoint_override = true;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -27,7 +62,26 @@ pub unsafe extern "C" fn boxlite_options_set_rootfs_path(
     opts: *mut CBoxliteOptions,
     path: *const c_char,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_rootfs_path(opts, path)
+}
+
+/// Create the box from a REST-managed checkpoint instead of the image.
+///
+/// The box inherits the checkpoint's saved settings, so every other option
+/// must stay unset; only the name may accompany it. Local runtimes fail the
+/// create with an unsupported error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_checkpoint(
+    opts: *mut CBoxliteOptions,
+    checkpoint: *const c_char,
+) {
+    if let Some(options) = unsafe { opts.as_mut() } {
+        options.checkpoint_selected = true;
+        // The invalid selector keeps create from falling back to the image.
+        options.options.rootfs =
+            RootfsSpec::Checkpoint(unsafe { c_str_to_string(checkpoint) }.unwrap_or_default());
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -37,11 +91,13 @@ pub unsafe extern "C" fn boxlite_options_set_name(opts: *mut CBoxliteOptions, na
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cpus: f64) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_cpus(opts, cpus)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_memory(opts: *mut CBoxliteOptions, memory_mib: c_int) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_memory(opts, memory_mib)
 }
 
@@ -50,6 +106,7 @@ pub unsafe extern "C" fn boxlite_options_set_disk_size_gb(
     opts: *mut CBoxliteOptions,
     disk_size_gb: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_disk_size_gb(opts, disk_size_gb)
 }
 
@@ -58,11 +115,13 @@ pub unsafe extern "C" fn boxlite_options_set_workdir(
     opts: *mut CBoxliteOptions,
     workdir: *const c_char,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_workdir(opts, workdir)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_user(opts: *mut CBoxliteOptions, user: *const c_char) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_user(opts, user)
 }
 
@@ -72,6 +131,7 @@ pub unsafe extern "C" fn boxlite_options_add_env(
     key: *const c_char,
     val: *const c_char,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_add_env(opts, key, val)
 }
 
@@ -86,6 +146,7 @@ pub unsafe extern "C" fn boxlite_options_add_bind_mount(
     guest_path: *const c_char,
     read_only: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_add_bind_mount(opts, host_path, guest_path, read_only)
 }
 
@@ -105,6 +166,7 @@ pub unsafe extern "C" fn boxlite_options_add_managed_volume(
     guest_path: *const c_char,
     read_only: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_add_managed_volume(opts, managed_volume, guest_path, read_only)
 }
 
@@ -132,16 +194,19 @@ pub unsafe extern "C" fn boxlite_options_add_port(
     protocol: BoxlitePortProtocol,
     host_ip: *const c_char,
 ) -> BoxliteErrorCode {
+    unsafe { mark_checkpoint_override(opts) };
     options_add_port(opts, host_port, guest_port, protocol, host_ip)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_enabled(opts: *mut CBoxliteOptions) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_network_enabled(opts)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_disabled(opts: *mut CBoxliteOptions) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_network_disabled(opts)
 }
 
@@ -161,6 +226,7 @@ pub unsafe extern "C" fn boxlite_options_add_network_allow(
     opts: *mut CBoxliteOptions,
     host: *const c_char,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_add_network_allow(opts, host)
 }
 
@@ -168,6 +234,7 @@ pub unsafe extern "C" fn boxlite_options_add_network_allow(
 /// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_inbound_enabled(opts: *mut CBoxliteOptions) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_network_inbound_enabled(opts)
 }
 
@@ -176,6 +243,7 @@ pub unsafe extern "C" fn boxlite_options_set_network_inbound_enabled(opts: *mut 
 /// inbound direction.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_inbound_disabled(opts: *mut CBoxliteOptions) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_network_inbound_disabled(opts)
 }
 
@@ -188,12 +256,14 @@ pub unsafe extern "C" fn boxlite_options_add_secret(
     hosts: *const *const c_char,
     hosts_count: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_add_secret(opts, name, value, placeholder, hosts, hosts_count)
 }
 
 /// Deprecated: use `boxlite_options_set_auto_delete_interval`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_auto_remove(opts: *mut CBoxliteOptions, val: c_int) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_auto_remove(opts, val)
 }
 
@@ -206,6 +276,7 @@ pub unsafe extern "C" fn boxlite_options_set_auto_stop_interval(
     opts: *mut CBoxliteOptions,
     seconds: u32,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_auto_stop_interval(opts, seconds)
 }
 
@@ -218,6 +289,7 @@ pub unsafe extern "C" fn boxlite_options_set_auto_delete_interval(
     opts: *mut CBoxliteOptions,
     seconds: u32,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_auto_delete_interval(opts, seconds)
 }
 
@@ -230,6 +302,7 @@ pub unsafe extern "C" fn boxlite_options_set_auto_resume_enabled(
     opts: *mut CBoxliteOptions,
     val: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_auto_resume_enabled(opts, val)
 }
 
@@ -253,6 +326,7 @@ pub unsafe fn options_set_auto_resume_enabled(handle: *mut OptionsHandle, val: c
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, val: c_int) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_detach(opts, val)
 }
 
@@ -271,6 +345,7 @@ pub unsafe extern "C" fn boxlite_options_set_advanced(
     opts: *mut CBoxliteOptions,
     advanced_opts: *const crate::CAdvancedBoxOptions,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     if opts.is_null() || advanced_opts.is_null() {
         return;
     }
@@ -285,6 +360,7 @@ pub unsafe extern "C" fn boxlite_options_set_entrypoint(
     args: *const *const c_char,
     argc: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_entrypoint(opts, args, argc)
 }
 
@@ -294,6 +370,7 @@ pub unsafe extern "C" fn boxlite_options_set_cmd(
     args: *const *const c_char,
     argc: c_int,
 ) {
+    unsafe { mark_checkpoint_override(opts) };
     options_set_cmd(opts, args, argc)
 }
 
@@ -302,6 +379,7 @@ pub unsafe extern "C" fn boxlite_options_free(opts: *mut CBoxliteOptions) {
     options_free(opts)
 }
 
+/// Allocate image options without counting the initial source as a checkpoint override.
 pub unsafe fn options_new(
     image: *const c_char,
     out_opts: *mut *mut OptionsHandle,
@@ -327,6 +405,8 @@ pub unsafe fn options_new(
                 ..Default::default()
             },
             name: None,
+            checkpoint_override: false,
+            checkpoint_selected: false,
         });
 
         *out_opts = Box::into_raw(handle);

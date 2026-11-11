@@ -7,6 +7,41 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 
+## Managed checkpoints
+
+Execution setters are rejected even when they set defaults, such as
+`boxlite_options_set_detach(opts, 0)`, before or after checkpoint selection.
+Null, empty or invalid UTF-8 checkpoint input returns `InvalidArgument` from
+create; it never falls back to the constructor's image. A synchronous refusal
+leaves the options handle owned by the caller.
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
+The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+`boxlite_checkpoint_create`, `list`, `get` and `remove` require a
+REST runtime and use its existing post-and-drain event queue. Local runtimes
+deliver an unsupported-operation error through the same callback queue.
+To create a Box from a checkpoint, call `boxlite_options_set_checkpoint` on the
+options and pass them to `boxlite_create_box`. Only the name may accompany it.
+Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
+or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
+`boxlite_free_checkpoint_list`. List entries belong to the list. Error
+pointers are borrowed during callback dispatch.
+
+Cloud capture may initially report `creating`; wait for `ready` before use.
+A Box created from a checkpoint inherits all saved execution settings; any other
+option fails the create with an invalid-argument error.
+Force removal ignores absence and never bypasses active use.
+Storage belongs to the server. Existing native archive
+export/import remains available.
+`boxlite_box_name` returns an owned name string, released with
+`boxlite_free_string`, or null for an unnamed Box.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -470,6 +505,12 @@ void boxlite_runtime_free(CBoxliteRuntime* runtime);
 ```
 
 #### Box Lifecycle
+
+Nested virtualization is a creation option:
+`boxlite_advanced_options_set_nested_virtualization(advanced, 1)` requires runtime
+experimental authorization. Attach the advanced options before create; runtime
+saves the existing BoxConfig. `boxlite_start_box` retains its original signature
+and uses saved configuration. Passing `0` selects an ordinary new Box.
 
 ```c
 // Create box (auto-started)
@@ -1386,6 +1427,8 @@ cargo build -p boxlite-c
 See `sdks/c/tests/` for the test suite.
 
 - `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- Rust FFI tests borrowing runtime out-pointers should use `runtime.as_ref().expect(...)` at the borrow site, making the non-null precondition explicit to static analysis. Keep the allocation alive through the reference's last use, then free the runtime; a null check alone does not establish pointer validity.
+- `make test:unit:ffi FILTER=checkpoint` exercises checkpoint create/list/get/import/remove through loopback HTTP and the real post-and-drain queue, including callback-owned metadata, Box handles and errors. Native binding coverage runs these Rust FFI tests alongside the C executable tests; no VM is needed.
 - `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
 - `FREE_STR_CALLS` counts string frees across the whole test process. A Rust test that frees a counted FFI payload, or reads the counter, must hold `FREE_STR_LOCK` for as long as it does so, even if it never reads the counter. Without the lock, plain `cargo test` threads count its frees in another test's delta. nextest's process-per-test runs hide this.

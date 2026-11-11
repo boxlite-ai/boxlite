@@ -23,6 +23,7 @@ import type { RunnerServiceInfo } from './runner-service-info';
 export interface RunnerInfoResponseDTO {
     'appVersion'?: string;
     'metrics'?: RunnerMetrics;
+    'nestedVirtualizationEnabled'?: boolean;
     'serviceHealth'?: Array<RunnerServiceInfo>;
     'supportsPrivileged'?: boolean;
 }

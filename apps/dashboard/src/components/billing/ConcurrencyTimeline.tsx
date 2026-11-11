@@ -56,9 +56,7 @@ export function ConcurrencyTimeline() {
       <SectionTitle
         title="Concurrency Timeline"
         right={
-          limit != null ? (
-            <span className="font-mono text-[10px] text-muted-foreground">limit = {limit}</span>
-          ) : undefined
+          limit != null ? <span className="font-mono text-meta text-muted-foreground">limit = {limit}</span> : undefined
         }
       />
       <Panel>
@@ -137,7 +135,7 @@ export function ConcurrencyTimeline() {
                 />
               </LineChart>
             </ChartContainer>
-            <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+            <p className="mt-2 font-mono text-meta text-muted-foreground">
               Daily snapshots from compute-bearing usage periods · the plan limit is informational; excess starts are
               not rejected yet
             </p>

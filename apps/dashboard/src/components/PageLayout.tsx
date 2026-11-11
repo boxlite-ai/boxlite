@@ -26,10 +26,7 @@ function PageHeader({ className, children, ...props }: ComponentProps<'header'>)
 function PageTitle({ className, children, ...props }: ComponentProps<'h1'>) {
   return (
     <h1
-      className={cn(
-        'text-[11px] font-medium uppercase tracking-[0.18em] leading-none text-muted-foreground',
-        className,
-      )}
+      className={cn('text-meta font-medium uppercase tracking-[0.18em] leading-none text-muted-foreground', className)}
       {...props}
     >
       {children}
@@ -38,7 +35,7 @@ function PageTitle({ className, children, ...props }: ComponentProps<'h1'>) {
 }
 
 function PageDescription({ className, ...props }: ComponentProps<'p'>) {
-  return <p className={cn('text-sm text-muted-foreground', className)} {...props} />
+  return <p className={cn('text-body text-muted-foreground', className)} {...props} />
 }
 
 function PageBanner({ className, children, ...props }: ComponentProps<'div'>) {

@@ -89,7 +89,7 @@ export function CostOverTime() {
               <button
                 key={mode}
                 onClick={() => setView(mode)}
-                className={`-ml-px border border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[1px] transition-colors first:ml-0 ${
+                className={`-ml-px border border-border px-3 py-1.5 font-mono text-meta uppercase tracking-[1px] transition-colors first:ml-0 ${
                   view === mode
                     ? 'relative z-10 border-border-selected bg-background font-semibold text-foreground'
                     : 'text-muted-foreground hover:text-foreground'
@@ -132,7 +132,7 @@ export function CostOverTime() {
           <div className="px-[22px] py-5">
             <div className="mb-3 flex flex-wrap items-center gap-4">
               {Object.entries(chartConfig).map(([key, { label, color }]) => (
-                <span key={key} className="inline-flex items-center gap-1.5 font-mono text-[12px]">
+                <span key={key} className="inline-flex items-center gap-1.5 font-mono text-meta">
                   <span className="size-[9px] shrink-0" style={{ background: color }} />
                   <span className="text-foreground">{label}</span>
                 </span>
@@ -212,7 +212,7 @@ export function CostOverTime() {
         ) : (
           <div className="max-h-[240px] overflow-y-auto px-[22px] py-4">
             <div
-              className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+              className={`${ROW} border-b border-border pb-2 font-mono text-label uppercase tracking-[1px] text-muted-foreground`}
             >
               <span>Hour</span>
               <span className="text-right">Quota</span>
@@ -222,7 +222,7 @@ export function CostOverTime() {
             {hours.map((p) => (
               <div
                 key={p.time}
-                className={`${ROW} border-b border-border/40 py-[11px] font-mono text-[12px] transition-colors hover:bg-muted/30`}
+                className={`${ROW} border-b border-border/40 py-[11px] font-mono text-meta transition-colors hover:bg-muted/30`}
               >
                 <span className="text-foreground">{shortHour(p.time)}</span>
                 <span
