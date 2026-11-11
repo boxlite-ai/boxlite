@@ -227,7 +227,7 @@ describe('VolumeService filestore volumes', () => {
   it('creates a filestore volume READY, without consulting object storage', async () => {
     const { service } = createService(null)
 
-    const volume = await service.create(organization, { name: 'nfs-data', instance: 'ml-scratch' })
+    const volume = await service.create(organization, { name: 'nfs-data', instance: 'ml-scratch' }, Context.user())
 
     expect(volume.state).toBe(VolumeState.READY)
     expect(volume.instance).toBe('ml-scratch')
@@ -236,7 +236,9 @@ describe('VolumeService filestore volumes', () => {
   it('still rejects a duplicate name among filestore volumes', async () => {
     const { service } = createService({ id: 'existing', name: 'nfs-data', state: VolumeState.READY, instance: 'ml-scratch' })
 
-    await expect(service.create(organization, { name: 'nfs-data', instance: 'ml-scratch' })).rejects.toThrow(
+    await expect(
+      service.create(organization, { name: 'nfs-data', instance: 'ml-scratch' }, Context.user()),
+    ).rejects.toThrow(
       'already exists',
     )
   })
@@ -244,7 +246,7 @@ describe('VolumeService filestore volumes', () => {
   it('sends a filestore volume through the same async delete path as buckets', async () => {
     const { service, volumeRepository } = createService({ id: 'volume-1', name: 'nfs-data', state: VolumeState.READY, instance: 'ml-scratch' })
 
-    await service.delete('volume-1')
+    await service.delete('volume-1', Context.user())
 
     expect(volumeRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'volume-1', state: VolumeState.PENDING_DELETE }),
@@ -257,6 +259,6 @@ describe('VolumeService filestore volumes', () => {
       [{ id: 'box-1', name: 'my-box' }],
     )
 
-    await expect(service.delete('volume-1')).rejects.toThrow('in use by one or more boxes')
+    await expect(service.delete('volume-1', Context.user())).rejects.toThrow('in use by one or more boxes')
   })
 })
