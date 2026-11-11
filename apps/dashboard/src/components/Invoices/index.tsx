@@ -72,7 +72,7 @@ function invoiceAmount(invoice: Invoice): string {
  */
 export function InvoicesTable({ data, loading }: InvoicesTableProps) {
   if (loading) {
-    return <div className="border-b border-border/40 py-[13px] font-mono text-[13px]">Loading...</div>
+    return <div className="border-b border-border/40 py-[13px] font-mono text-body">Loading...</div>
   }
 
   if (data.length === 0) {

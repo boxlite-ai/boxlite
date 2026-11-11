@@ -37,7 +37,9 @@ import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlite-ai/api-client'
 import { useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { copyToClipboard } from '@/lib/copy-text'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 // Must match CreateVolumeDto.VOLUME_NAME_PATTERN on the server, including
 // its two-character minimum (`+`, not `*`): a one-character name is
@@ -51,7 +53,9 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 // buttons under it — and every `fr` column drifted further apart the further
 // right it sat. The last column is therefore fixed, and this string exists
 // once so the two can no longer diverge.
-const ROW_GRID = 'grid grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-center gap-3'
+// `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own
+// box instead of squeezing names down to a letter.
+const ROW_GRID = 'grid min-w-[760px] grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-center gap-3'
 
 // Transitional states read as `warn` rather than blending in with the healthy
 // ones: a volume stuck in `pending_delete` is exactly the leak this page exists
@@ -78,6 +82,7 @@ const STATE_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'idle'> = {
 // to the volume's id before persisting it (box.service.ts).
 /** Lists persistent volumes and gates creation, mounting, and deletion by member permissions and volume state. */
 const Volumes: React.FC = () => {
+  usePageTitle('Volumes')
   const queryClient = useQueryClient()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   // Volume state changes arrive over the notification socket; keep the
@@ -200,7 +205,7 @@ const Volumes: React.FC = () => {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-auto">
         <div className={cn(ROW_GRID, 'resource-list-head', showEmpty && 'hidden')}>
           <span>Name</span>
           <span>Volume ID</span>
@@ -232,28 +237,26 @@ const Volumes: React.FC = () => {
               <div className={cn(ROW_GRID, 'resource-list-row')}>
                 <span className="flex min-w-0 items-center gap-3">
                   <HardDrive className="size-6 shrink-0 text-muted-foreground" />
-                  <span className="resource-name">{volume.name}</span>
+                  <span className="resource-name" title={volume.name}>
+                    {volume.name}
+                  </span>
                 </span>
                 <button
                   type="button"
                   onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(volume.id)
-                      toast.success('Volume ID copied')
-                    } catch {
-                      toast.error('Could not copy to clipboard')
-                    }
+                    if (await copyToClipboard(volume.id)) toast.success('Volume ID copied')
+                    else toast.error('Could not copy to clipboard')
                   }}
                   title="Copy volume ID"
-                  className="truncate text-left font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+                  className="min-h-6 truncate text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {volume.id}
                 </button>
                 <span title={statusDetail} className={statusDetail ? 'cursor-help' : undefined}>
                   <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
                 </span>
-                <span className="font-mono text-[12px] text-muted-foreground">{timeAgo(volume.createdAt)}</span>
-                <span className="font-mono text-[12px] text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
+                <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.createdAt)}</span>
+                <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
                 {/* Space is tight, so only the promoted action keeps a
                         label; destroy is the app's established icon treatment
                         (and a little harder to hit by accident that way). */}
@@ -304,7 +307,7 @@ const Volumes: React.FC = () => {
           <EmptyState />
         ) : (
           rows.length === 0 && (
-            <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-[12px] text-muted-foreground">
+            <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-meta text-muted-foreground">
               <span>No volume matches “{filter.trim()}”</span>
               <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
                 Clear filter
@@ -317,12 +320,12 @@ const Volumes: React.FC = () => {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
-            <DialogTitle>New volume</DialogTitle>
+            <DialogTitle>New Volume</DialogTitle>
           </DialogHeader>
           <FormDialogBody>
             {/* Nothing else here says what a volume is — the payload is just a
                 name — and this dialog is where someone meets the concept. */}
-            <p className="mb-[5px] font-mono text-[11.5px] leading-relaxed text-muted-foreground">
+            <p className="mb-[5px] font-mono text-meta leading-relaxed text-muted-foreground">
               Storage that outlives a box. Mount it into a box to read and write; the data stays once that box is gone,
               and another box can mount it later.
             </p>
@@ -394,7 +397,7 @@ const Volumes: React.FC = () => {
             {/* Deliberately not the uppercase label treatment used elsewhere:
                 the match is case-sensitive, so rendering the name in any case
                 but its own tells the user to type something that will fail. */}
-            <label htmlFor="volume-delete-confirm" className="font-mono text-[11px] text-muted-foreground">
+            <label htmlFor="volume-delete-confirm" className="font-mono text-meta text-muted-foreground">
               Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
             </label>
             <input
@@ -407,7 +410,7 @@ const Volumes: React.FC = () => {
               autoComplete="off"
               spellCheck={false}
               aria-label="Confirm volume name"
-              className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-[13px] text-foreground outline-none focus:border-destructive"
+              className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-body text-foreground outline-none focus:border-destructive"
             />
           </div>
           <AlertDialogFooter>

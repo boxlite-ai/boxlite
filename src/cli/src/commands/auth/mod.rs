@@ -37,6 +37,11 @@ pub async fn run(args: AuthArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let profile = global.resolved_context();
     let store = global.credential_store();
     match args.command {
+        AuthCommand::Login(_) if profile == crate::credentials::EMBEDDED_CONTEXT => {
+            anyhow::bail!(
+                "context `{profile}` is reserved for the embedded runtime; log in under another name with `boxlite --context NAME auth login`"
+            )
+        }
         AuthCommand::Login(a) => login::run(a, &profile, &store).await,
         AuthCommand::Logout(a) => logout::run(a, &profile, &store).await,
         AuthCommand::Status => status::run(global, &store),

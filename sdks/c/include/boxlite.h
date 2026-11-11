@@ -287,6 +287,33 @@ typedef void (*CBoxRemoveBoxCb)(CBoxliteError*, void*);
 // Box start completion.
 typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 
+// Callback-owned checkpoint metadata. Release with boxlite_free_checkpoint_info.
+typedef struct CCheckpointInfo {
+  char *id;
+  char *name;
+  char *source_box_id;
+  char *created_at;
+  uint64_t size_bytes;
+  // Lowercase creating, ready, failed, or deleting.
+  char *state;
+  // Null unless the server reports a failure reason.
+  char *error_reason;
+} CCheckpointInfo;
+
+// Entries belong to this list; release once with boxlite_free_checkpoint_list.
+typedef struct CCheckpointList {
+  struct CCheckpointInfo *items;
+  int count;
+} CCheckpointList;
+
+// On success, the recipient owns metadata and frees it with
+// boxlite_free_checkpoint_info. Error pointers live only during dispatch.
+typedef void (*CCheckpointInfoCb)(struct CCheckpointInfo*, CBoxliteError*, void*);
+
+// On success, the recipient owns the entire list and frees it with
+// boxlite_free_checkpoint_list; entries must not be freed individually.
+typedef void (*CCheckpointListCb)(struct CCheckpointList*, CBoxliteError*, void*);
+
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 
@@ -849,6 +876,11 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Set nested virtualization for a new box. Runtime experimental authorization
+// is checked by create; the value is saved with the existing BoxConfig.
+enum BoxliteErrorCode boxlite_advanced_options_set_nested_virtualization(CAdvancedBoxOptions *opts,
+                                                                         int enabled);
+
 // Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
 // Copies the path; invalid input leaves the previous option unchanged.
 enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
@@ -1116,7 +1148,44 @@ enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle,
 
 char *boxlite_box_id(CBoxHandle *handle);
 
+// Return an owned name string, or null for an unnamed/invalid handle.
+// Release the returned string with boxlite_free_string.
+char *boxlite_box_name(CBoxHandle *handle);
+
 void boxlite_box_free(CBoxHandle *handle);
+
+void boxlite_free_checkpoint_info(struct CCheckpointInfo *info);
+
+void boxlite_free_checkpoint_list(struct CCheckpointList *list);
+
+// Queue capture; name may be null. Runtime, source and callback must be valid.
+enum BoxliteErrorCode boxlite_checkpoint_create(CBoxliteRuntime *runtime,
+                                                const char *source,
+                                                const char *name,
+                                                CCheckpointInfoCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+// Queue metadata lookup by ID or name. All inputs except out_error are required.
+enum BoxliteErrorCode boxlite_checkpoint_get(CBoxliteRuntime *runtime,
+                                             const char *key,
+                                             CCheckpointInfoCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
+// Queue listing. Runtime and callback must be valid; user_data is opaque.
+enum BoxliteErrorCode boxlite_checkpoint_list(CBoxliteRuntime *runtime,
+                                              CCheckpointListCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Queue deletion; force only ignores absence. Completion has no owned payload.
+enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteRuntime *runtime,
+                                                const char *key,
+                                                int force,
+                                                CBoxRemoveBoxCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
@@ -1676,6 +1745,13 @@ enum BoxliteErrorCode boxlite_options_new(const char *image,
                                           CBoxliteError *out_error);
 
 void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
+
+// Create the box from a REST-managed checkpoint instead of the image.
+//
+// The box inherits the checkpoint's saved settings, so every other option
+// must stay unset; only the name may accompany it. Local runtimes fail the
+// create with an unsupported error.
+void boxlite_options_set_checkpoint(CBoxliteOptions *opts, const char *checkpoint);
 
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
 

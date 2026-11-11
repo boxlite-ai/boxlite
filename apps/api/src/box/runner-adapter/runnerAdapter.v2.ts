@@ -17,6 +17,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
+import { RunnerState } from '../enums/runner-state.enum'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -27,6 +28,9 @@ import { BoxRepository } from '../repositories/box.repository'
 export class RunnerAdapterV2 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV2.name)
   private runner: Runner
+
+  @InjectRepository(Runner)
+  private readonly runnerRepository: Repository<Runner>
 
   constructor(
     private readonly boxRepository: BoxRepository,
@@ -44,7 +48,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   }
 
   async runnerInfo(_signal?: AbortSignal): Promise<RunnerInfo> {
-    throw new Error('runnerInfo is not supported for V2 runners')
+    // Admission must observe a revoked report even if the runner lookup was cached.
+    const report = await this.runnerRepository.findOne({ where: { id: this.runner.id }, cache: false })
+    _signal?.throwIfAborted()
+    const age = Date.now() - (report?.lastChecked?.getTime() ?? NaN)
+    const fresh = report?.state === RunnerState.READY && age >= 0 && age <= 60_000
+    return {
+      nestedVirtualizationEnabled: fresh && report.nestedVirtualizationEnabled === true,
+    }
   }
 
   async boxInfo(boxId: string): Promise<RunnerBoxInfo> {
@@ -117,6 +128,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     box: Box,
     image: string,
     metadata?: { [key: string]: string },
+    nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
     if (!image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
@@ -125,9 +137,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
-
     const payload = {
       id: box.id,
+      ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
       image,
       osUser: box.osUser,
       cpuQuota: box.cpu,

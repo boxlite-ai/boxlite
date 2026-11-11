@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
  * Vertices (64×64): top face A(32,10) B(54,22) C(32,34) D(10,22); the two
  * visible side faces hang from D–C–B down to D'(10,44) C'(32,56) B'(54,44).
  */
-export type CubeState = 'empty' | 'building' | 'disposable' | 'persistent' | 'reachable' | 'error' | 'stopped'
+export type CubeState = 'empty' | 'building' | 'disposable' | 'persistent' | 'reachable' | 'error' | 'stopped' | 'ci'
 
 const TOP = 'M32 10L54 22L32 34L10 22Z'
 const LEFT = 'M10 22L32 34L32 56L10 44Z'
@@ -109,6 +109,10 @@ export function BoxCube({
             </>
           )}
           {detailed && state === 'persistent' && <circle cx="32" cy="45" r="2.2" fill={brand} />}
+          {detailed && state === 'ci' && (
+            // A play mark follows the right face's perspective: a Box executing a job.
+            <path d="M39 35L48 36L39 45Z" fill={brand} />
+          )}
         </>
       )}
     </svg>

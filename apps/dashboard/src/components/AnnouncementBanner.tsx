@@ -20,13 +20,13 @@ export function AnnouncementBanner({ text, learnMoreUrl, onDismiss }: Announceme
         <div className="flex items-center justify-start flex-1 gap-4 md:gap-3">
           <Info className="h-4 w-4 flex-shrink-0" />
           <div className="flex items-center gap-4 md:gap-3">
-            <p className="text-sm font-medium">{text}</p>
+            <p className="text-body font-medium">{text}</p>
             {learnMoreUrl && (
               <a
                 href={learnMoreUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-sm font-medium underline whitespace-nowrap hover:text-primary-foreground/80"
+                className="inline-flex items-center gap-1 text-body font-medium underline whitespace-nowrap hover:text-primary-foreground/80"
               >
                 Learn More
               </a>

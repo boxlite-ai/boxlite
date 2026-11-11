@@ -1,0 +1,159 @@
+/*
+ * Copyright 2026 BoxLite AI
+ * SPDX-License-Identifier: AGPL-3.0
+ */
+
+import { useState } from 'react'
+import { AsciiButton } from './ascii'
+import { useQuery } from '@tanstack/react-query'
+import { Box, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { toast } from 'sonner'
+import { useCreateCheckpointMutation } from '@/hooks/mutations/useCreateCheckpointMutation'
+import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
+import { useCheckpointBoxesQuery } from '@/hooks/queries/useCheckpointBoxesQuery'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useApi } from '@/hooks/useApi'
+import { queryKeys } from '@/hooks/queries/queryKeys'
+import {
+  isCheckpointBoxIdle,
+  isCheckpointNameValid,
+  checkpointErrorMessage,
+  CHECKPOINT_POLL_INTERVAL,
+} from '@/lib/checkpoints'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
+
+export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: () => void }) {
+  const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
+  const boxes = useCheckpointBoxesQuery(!box)
+  const { boxApi } = useApi()
+  const source = useQuery({
+    queryKey: queryKeys.boxes.detail(selectedOrganization?.id ?? '', box?.id ?? ''),
+    queryFn: async () => (await boxApi.getBox(box?.id ?? '', selectedOrganization?.id)).data,
+    enabled: !!box && !!selectedOrganization,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchInterval: CHECKPOINT_POLL_INTERVAL,
+  })
+  const create = useCreateCheckpointMutation()
+  const capabilities = useCheckpointCapabilities()
+  const [name, setName] = useState('')
+  const [boxId, setBoxId] = useState(box?.id ?? '')
+  const eligible = (box ? (source.data ? [source.data] : []) : (boxes.data ?? [])).filter(isCheckpointBoxIdle)
+  const nameValid = !name.trim() || isCheckpointNameValid(name.trim())
+  const permitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const canSubmit =
+    permitted &&
+    capabilities.data?.checkpoints_enabled &&
+    nameValid &&
+    eligible.some((item) => item.id === boxId) &&
+    !create.isPending &&
+    (box ? !source.isError && !source.isFetching : !boxes.isError)
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !create.isPending) onClose()
+      }}
+    >
+      <DialogContent className="flex max-h-[92svh] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-[540px]">
+        <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
+          <DialogTitle className="text-section font-bold tracking-[-0.3px]">New Checkpoint</DialogTitle>
+        </DialogHeader>
+        <form
+          className="flex min-h-0 flex-1 flex-col"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!canSubmit) return
+            create.mutate(
+              { boxId, name, organizationId: selectedOrganization?.id },
+              {
+                onSuccess: (checkpoint) => {
+                  toast.success(`Creating checkpoint ${checkpoint.name}`)
+                  onClose()
+                },
+              },
+            )
+          }}
+        >
+          <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
+            <DialogDescription className="font-mono text-meta leading-relaxed">
+              Save a box’s disk and execution settings. The checkpoint stays available after its source box is deleted.
+            </DialogDescription>
+            <label className="flex flex-col gap-[9px]">
+              <span className="font-mono text-meta font-medium text-foreground">Source Box</span>
+              <select
+                aria-label="Source box"
+                value={boxId}
+                onChange={(event) => setBoxId(event.target.value)}
+                disabled={!!box || create.isPending}
+                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-body text-foreground outline-none focus:border-brand"
+              >
+                <option value="">Select a box</option>
+                {eligible.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name || item.id} · {item.disk} GiB
+                  </option>
+                ))}
+              </select>
+            </label>
+            {(box ? source.isLoading : boxes.isLoading) && <p role="status">Loading boxes…</p>}
+            {(box ? source.isError : boxes.isError) && (
+              <p role="alert">
+                Could not load boxes.{' '}
+                <button type="button" onClick={() => void (box ? source.refetch() : boxes.refetch())}>
+                  Retry
+                </button>
+              </p>
+            )}
+            {(box ? source.isSuccess : boxes.isSuccess) && eligible.length === 0 && (
+              <p className="text-body text-muted-foreground">
+                No eligible boxes. Stop a box without volumes or secrets before creating a checkpoint.
+              </p>
+            )}
+            <label className="flex flex-col gap-[9px]">
+              <span className="font-mono text-meta font-medium text-foreground">Name</span>
+              <input
+                aria-label="Checkpoint name"
+                maxLength={128}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={create.isPending}
+                aria-invalid={!nameValid}
+                aria-describedby="checkpoint-name-hint"
+                placeholder="my-new-checkpoint"
+                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-body text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
+              />
+              <span id="checkpoint-name-hint" className="font-mono text-meta leading-relaxed text-muted-foreground">
+                Leave blank to generate a name.
+              </span>
+            </label>
+            {create.error && (
+              <p role="alert" className="font-mono text-meta text-destructive">
+                {checkpointErrorMessage(create.error)}
+              </p>
+            )}
+          </div>
+          <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
+            <AsciiButton
+              type="button"
+              onClick={onClose}
+              disabled={create.isPending}
+              className="border border-border px-[18px] py-[11px] text-body font-medium transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:py-[10px]"
+            >
+              Cancel
+            </AsciiButton>
+            <AsciiButton
+              variant="primary"
+              type="submit"
+              disabled={!canSubmit}
+              className="bg-primary px-5 py-[11px] text-body font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
+            >
+              {create.isPending ? 'Creating…' : 'Create Checkpoint'}
+            </AsciiButton>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}

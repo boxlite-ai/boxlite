@@ -24,8 +24,11 @@ definitions:
           type: string
         type: array
       cpuQuota:
-        minimum: 1
-        type: integer
+        description: CPU allocation in cores (0.125–16), in increments of 0.001; omitted
+          means 1.
+        maximum: 16
+        minimum: 0.125
+        type: number
       entrypoint:
         items:
           type: string
@@ -50,6 +53,10 @@ definitions:
         additionalProperties:
           type: string
         type: object
+      nestedVirtualization:
+        description: Requires explicit authorization on the Runner process; omitted
+          means off.
+        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -137,8 +144,11 @@ definitions:
   RecoverBoxDTO:
     properties:
       cpuQuota:
-        minimum: 1
-        type: integer
+        description: CPU allocation in cores (0.125–16), in increments of 0.001; omitted
+          means 1.
+        maximum: 16
+        minimum: 0.125
+        type: number
       env:
         additionalProperties:
           type: string
@@ -201,6 +211,8 @@ definitions:
         type: string
       metrics:
         $ref: '#/definitions/RunnerMetrics'
+      nestedVirtualizationEnabled:
+        type: boolean
       serviceHealth:
         items:
           $ref: '#/definitions/RunnerServiceInfo'

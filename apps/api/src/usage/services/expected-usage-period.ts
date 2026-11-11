@@ -45,10 +45,8 @@ export const BOX_STATES_BILLING_DISK_ONLY: BoxState[] = [BoxState.STOPPING, BoxS
 // box whose state moved between the scan and the repair — and there the period
 // it would close is a drifted one it was picked up to correct anyway.
 
-// Box resources are integers, while usage-period resources are double
-// precision. Normal writes therefore compare exactly; this tolerance is a
-// defensive guard for non-canonical period rows, preventing an immaterial
-// fractional difference from causing an unnecessary close/reopen split.
+// CPU allocations and usage periods use double precision. This tolerance
+// prevents immaterial floating-point differences from splitting a period.
 const RESOURCE_EPSILON = 1e-6
 
 /**

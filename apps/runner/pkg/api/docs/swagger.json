@@ -595,8 +595,10 @@
           }
         },
         "cpuQuota": {
-          "type": "integer",
-          "minimum": 1
+          "description": "CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.",
+          "type": "number",
+          "maximum": 16,
+          "minimum": 0.125
         },
         "entrypoint": {
           "type": "array",
@@ -632,6 +634,10 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "nestedVirtualization": {
+          "description": "Requires explicit authorization on the Runner process; omitted means off.",
+          "type": "boolean"
         },
         "organizationId": {
           "description": "Nullable for backward compatibility",
@@ -742,8 +748,10 @@
       "required": ["errorReason", "osUser", "outboundEnabled"],
       "properties": {
         "cpuQuota": {
-          "type": "integer",
-          "minimum": 1
+          "description": "CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.",
+          "type": "number",
+          "maximum": 16,
+          "minimum": 0.125
         },
         "env": {
           "type": "object",
@@ -825,6 +833,9 @@
         },
         "metrics": {
           "$ref": "#/definitions/RunnerMetrics"
+        },
+        "nestedVirtualizationEnabled": {
+          "type": "boolean"
         },
         "serviceHealth": {
           "type": "array",

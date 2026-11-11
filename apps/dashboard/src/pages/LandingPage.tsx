@@ -53,11 +53,11 @@ const LandingPage: React.FC = () => {
           <div className="text-center">
             <h1
               id="signed-out-title"
-              className="font-display text-[30px] font-semibold leading-tight tracking-tight text-foreground"
+              className="font-display text-page font-semibold leading-tight tracking-tight text-foreground"
             >
               You’re signed out.
             </h1>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">Sign in to continue.</p>
+            <p className="mt-3 text-body leading-6 text-muted-foreground">Sign in to continue.</p>
             <AsciiButton variant="primary" onClick={signIn} className="mt-8 h-11 w-full justify-center gap-2 px-4">
               Sign in
               <ArrowRightIcon className="size-4" aria-hidden="true" />

@@ -43,6 +43,39 @@ Do not store passwords or API keys in this declaration: CI carries it as a varia
 AWS account identity comes from resolved credentials. GCP project identity is declared explicitly.
 `promoteFrom` does not copy configuration or promote artifacts during an ordinary deploy.
 
+## First account registration
+
+Turnstile protection is opt-in: an absent or blank `TURNSTILE_SITEKEY` keeps automatic local
+registration and requires no widget settings. To enable it, create a Cloudflare Managed widget
+for the actual Dashboard hostname. The API must reach `challenges.cloudflare.com`; the site does
+not need Cloudflare CDN proxying. Auth0 continues to authenticate Google, GitHub and email users.
+
+| API setting | Required/default | Delivery |
+| --- | --- | --- |
+| `TURNSTILE_SITEKEY` | Optional; nonempty enables protection | Ordinary API configuration; public through `/config` when enabled |
+| `TURNSTILE_SECRET_KEY` | Required when enabled | Server-side secret |
+| `TURNSTILE_EXPECTED_HOSTNAMES` | Required when enabled; comma-separated hostnames without scheme, port or path | Ordinary API configuration; private to the API |
+| `TURNSTILE_TIMEOUT_MS` | Positive integer milliseconds; `5000` | Optional API configuration |
+
+The API validates enabled widget settings at startup. `/config` exposes only `turnstile.sitekey`
+and the fixed `turnstile.action=signup`; hostname allowlists, timeout and secret remain server-side.
+When disabled, `/config` omits `turnstile` and the Dashboard uses the ordinary authenticated flow.
+Changes take effect after the API restarts, without rebuilding the Dashboard to change the sitekey.
+
+mdeploy declares the widget settings as optional in `env.selectGroup.api` and marks
+`TURNSTILE_SECRET_KEY` in `env.selectGroup.secret`. Seed the credential in the target cloud's
+secret store, then write its JSON reference with `mstage env set --json` using the
+[secret-reference procedure](../mstage/README.md#secret-references). Accepted examples are
+`{"address":"arn:aws:secretsmanager:REGION:ACCOUNT:secret:NAME"}` and
+`{"address":"projects/PROJECT/secrets/NAME/versions/VERSION"}`. ECS resolves the reference through
+its secret channel; Cloud Run uses `secretKeyRef`. The credential must not be a plaintext API
+environment value. Confirm runtime access to the referenced secret before rolling out the API.
+
+With no sitekey, mdeploy omits all widget settings and does not inject an unused secret reference.
+For the legacy SST path, enabling protection requires the stage-scoped `TURNSTILE_SECRET_KEY` via `sst secret set`, using
+stdin for the value. Its ordinary settings belong in the bootstrap `.env`/stage configuration;
+the secret does not. Use `.env.example` for the names and defaults.
+
 ## Runner sizing
 
 `deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
@@ -99,6 +132,11 @@ Groups in `mstage.env.json` define what each consumer may receive:
 | `proxy` | Proxy authentication and telemetry settings |
 | `otel-collector` | Collector authentication |
 | `runner` | Runner telemetry overrides |
+
+`CHECKPOINTS_ENABLED` is an optional `api` key. After deploying a compatible runner,
+store `CHECKPOINTS_ENABLED=true` and redeploy the API to enable managed checkpoints.
+The API group forwards this value on AWS and GCP; an omitted key or `false` keeps
+admission disabled. Changing the stage store alone does not update an existing API revision.
 
 An array group makes every key required. An object distinguishes `required` from `optional`.
 Missing required values fail before deployment. Optional values enable features only when supplied.

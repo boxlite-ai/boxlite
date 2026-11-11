@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**nestedVirtualizationEnabled** | **boolean** | Runner runtime authorizes nested virtualization | [optional] [default to undefined]
 **supportsPrivileged** | **boolean** | Runner preserves the guest privileged creation option | [optional] [default to undefined]
 **metrics** | [**RunnerHealthMetrics**](RunnerHealthMetrics.md) | Runner metrics | [optional] [default to undefined]
 **serviceHealth** | [**Array&lt;RunnerServiceHealth&gt;**](RunnerServiceHealth.md) | Health status of individual services on the runner | [optional] [default to undefined]
@@ -19,6 +20,7 @@ Name | Type | Description | Notes
 import { RunnerHealthcheck } from './api';
 
 const instance: RunnerHealthcheck = {
+    nestedVirtualizationEnabled,
     supportsPrivileged,
     metrics,
     serviceHealth,

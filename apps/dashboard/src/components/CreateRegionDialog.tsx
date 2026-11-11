@@ -155,7 +155,7 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
                 }}
                 placeholder="us-east-1"
               />
-              <p className="text-sm text-muted-foreground mt-1 pl-1">
+              <p className="text-body text-muted-foreground mt-1 pl-1">
                 Region name must contain only letters, numbers, underscores, periods, and hyphens.
               </p>
             </div>
@@ -170,7 +170,7 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
                 }}
                 placeholder="https://proxy.example.com"
               />
-              <p className="text-sm text-muted-foreground mt-1 pl-1">
+              <p className="text-body text-muted-foreground mt-1 pl-1">
                 (Optional) URL of the custom proxy for this region
               </p>
             </div>

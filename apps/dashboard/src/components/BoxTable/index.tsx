@@ -5,14 +5,28 @@
  */
 
 import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { isCheckpointBoxIdle } from '@/lib/checkpoints'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel, getBoxRouteId } from '@/lib/box-identity'
+import { copyToClipboard } from '@/lib/copy-text'
+import { toast } from 'sonner'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { OrganizationRolePermissionsEnum, Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
-import { Check, Container, Copy, Loader2, MoreHorizontal, Square, Play, RotateCcw, Trash2 } from '@/components/ui/icon'
+import {
+  Check,
+  Container,
+  Copy,
+  Loader2,
+  MoreHorizontal,
+  Square,
+  Plus,
+  Play,
+  RotateCcw,
+  Trash2,
+} from '@/components/ui/icon'
 import { useState } from 'react'
 import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
@@ -77,17 +91,19 @@ function CopyNameButton({ name, className }: { name: string; className?: string 
     <button
       type="button"
       title="Copy name"
+      aria-label="Copy name"
       onClick={(e) => {
         e.stopPropagation()
-        try {
-          navigator.clipboard?.writeText(name)
-        } catch {
-          /* clipboard may be unavailable */
-        }
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1300)
+        void copyToClipboard(name).then((ok) => {
+          if (!ok) {
+            toast.error('Could not copy to clipboard')
+            return
+          }
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1300)
+        })
       }}
-      className={`shrink-0 text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className ?? ''}`}
+      className={`inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className ?? ''}`}
     >
       {copied ? <Check className="size-[13px]" style={{ color: STATUS.running }} /> : <Copy className="size-[13px]" />}
     </button>
@@ -96,10 +112,10 @@ function CopyNameButton({ name, className }: { name: string; className?: string 
 
 function Quota({ label, value, unit }: { label: string; value: number; unit: string }) {
   return (
-    <span className="inline-flex items-baseline gap-[5px] font-mono text-[11px]">
-      <span className="text-[9px] tracking-[0.5px] text-muted-foreground">{label}</span>
+    <span className="inline-flex items-baseline gap-[5px] font-mono text-meta">
+      <span className="text-meta tracking-[0.5px] text-muted-foreground">{label}</span>
       <span>{value}</span>
-      <span className="text-[9px] text-muted-foreground">{unit}</span>
+      <span className="text-meta text-muted-foreground">{unit}</span>
     </span>
   )
 }
@@ -117,6 +133,7 @@ export function BoxTable({
   handleStart,
   handleStop,
   handleDelete,
+  onCreateCheckpoint,
   onRowClick,
   pagination,
   pageCount,
@@ -149,6 +166,12 @@ export function BoxTable({
     const stoppable = isStoppable(box)
     const recoverable = isRecoverable(box)
     const transitioning = isTransitioning(box)
+    const canCheckpoint =
+      writePermitted &&
+      onCreateCheckpoint &&
+      isCheckpointBoxIdle(box) &&
+      !boxIsLoading[box.id] &&
+      !boxStateIsTransitioning[box.id]
 
     return (
       <>
@@ -197,7 +220,7 @@ export function BoxTable({
             <Loader2 className={`${iconClassName} animate-spin`} strokeWidth={1.3} />
           </AsciiButton>
         )}
-        {deletePermitted && (
+        {(deletePermitted || canCheckpoint) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <AsciiButton size="icon" aria-label="More" className={buttonClassName} type="button" title="More">
@@ -205,13 +228,20 @@ export function BoxTable({
               </AsciiButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">
-              <DropdownMenuItem
-                className="cursor-pointer text-destructive focus:text-destructive"
-                onClick={() => handleDelete(box.id)}
-              >
-                <Trash2 className="size-4" />
-                Delete
-              </DropdownMenuItem>
+              {canCheckpoint && (
+                <DropdownMenuItem onClick={() => onCreateCheckpoint?.(box)}>
+                  <Plus className="size-4" /> Checkpoint
+                </DropdownMenuItem>
+              )}
+              {deletePermitted && (
+                <DropdownMenuItem
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                  onClick={() => handleDelete(box.id)}
+                >
+                  <Trash2 className="size-4" />
+                  Delete
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -221,7 +251,7 @@ export function BoxTable({
 
   const emptyState = (
     <ResourceEmptyState
-      title={hasFilter ? 'No matching Boxes' : 'No boxes yet.'}
+      title={hasFilter ? 'No matching Boxes' : 'No Boxes yet.'}
       icon={<Container className="size-6" />}
       description={
         hasFilter
@@ -274,7 +304,6 @@ export function BoxTable({
                 const st = statusOf(box)
                 const name = getBoxDisplayName(box)
                 const busy = boxIsLoading[box.id]
-                const transitioning = boxStateIsTransitioning[box.id]
 
                 return (
                   <div
@@ -285,7 +314,7 @@ export function BoxTable({
                     }}
                     className={`group grid ${GRID} resource-list-row items-center ${
                       onRowClick ? 'cursor-pointer' : ''
-                    } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
+                    } ${busy ? 'pointer-events-none' : ''}`}
                   >
                     {/* the box: its shape drawn, then its name */}
                     <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
@@ -308,7 +337,7 @@ export function BoxTable({
                     </span>
 
                     {/* box id */}
-                    <span className="truncate font-mono text-[11px] text-muted-foreground">
+                    <span className="truncate font-mono text-meta text-muted-foreground">
                       {getBoxPublicIdLabel(box)}
                     </span>
 
@@ -342,9 +371,8 @@ export function BoxTable({
             : data.map((box) => {
                 const st = statusOf(box)
                 const name = getBoxDisplayName(box)
-                const created = getRelativeTimeString(box.createdAt).relativeTimeString.toUpperCase()
+                const created = getRelativeTimeString(box.createdAt).relativeTimeString
                 const busy = boxIsLoading[box.id]
-                const transitioning = boxStateIsTransitioning[box.id]
 
                 return (
                   <div
@@ -362,18 +390,18 @@ export function BoxTable({
                     }}
                     className={`w-full border border-border bg-background p-4 text-left transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:ring-2 focus-visible:ring-brand/35 ${
                       onRowClick ? 'cursor-pointer' : ''
-                    } ${busy ? 'pointer-events-none opacity-70' : ''} ${transitioning ? 'animate-pulse' : ''}`}
+                    } ${busy ? 'pointer-events-none' : ''}`}
                   >
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <span className="min-w-0">
                         <span className="flex min-w-0 items-center gap-2 font-semibold">
-                          <span style={{ color: 'hsl(var(--brand))' }} className="text-[10px]">
+                          <span style={{ color: 'hsl(var(--brand))' }} className="text-meta">
                             ▸
                           </span>
                           <span className="truncate">{name}</span>
                           <CopyNameButton name={name} />
                         </span>
-                        <span className="mt-1 block truncate font-mono text-[11px] text-muted-foreground">
+                        <span className="mt-1 block truncate font-mono text-meta text-muted-foreground">
                           {getBoxPublicIdLabel(box)}
                         </span>
                       </span>
@@ -382,14 +410,12 @@ export function BoxTable({
 
                     <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">
                       <Quota label="CPU" value={box.cpu} unit="vCPU" />
-                      <Quota label="RAM" value={box.memory} unit="GB" />
-                      <Quota label="DISK" value={box.disk} unit="GB" />
+                      <Quota label="RAM" value={box.memory} unit="GiB" />
+                      <Quota label="DISK" value={box.disk} unit="GiB" />
                     </div>
 
                     <div className="mt-3 flex items-center justify-between gap-3">
-                      <span className="font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                        Created {created}
-                      </span>
+                      <span className="font-mono text-meta text-muted-foreground">Created {created}</span>
                       <span className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                         {renderActions(box, 'size-10', 'size-4')}
                       </span>

@@ -21,10 +21,10 @@ use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 // The runtime is cloned into the task,
 // and this guard will drop that clone when the task completes.
 // "an Arc<Runtime> will prevent the runtime from shutting down." according to: https://docs.rs/tokio/latest/tokio/runtime/struct.Runtime.html#sharing
-struct TokioRuntimeDropGuard(Option<Arc<TokioRuntime>>);
+pub(crate) struct TokioRuntimeDropGuard(Option<Arc<TokioRuntime>>);
 
 impl TokioRuntimeDropGuard {
-    fn new(runtime: Arc<TokioRuntime>) -> Self {
+    pub(crate) fn new(runtime: Arc<TokioRuntime>) -> Self {
         Self(Some(runtime))
     }
 }

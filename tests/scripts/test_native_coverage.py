@@ -1,6 +1,7 @@
 """Exercise the native coverage collector across SDK working directories."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ COLLECTOR = Path(__file__).resolve().parents[2] / "scripts/test/coverage-binding
 BUILD_TOOL = """#!/usr/bin/env python3
 import os
 from pathlib import Path
+import shlex
 import sys
 
 root = Path(os.environ["COVERAGE_TEST_ROOT"])
@@ -44,10 +46,32 @@ if tool == "make":
             (target_dir() / "python-gate").write_text(
                 os.environ.get("BOXLITE_REQUIRE_NATIVE", "")
             )
+        elif target == "coverage:go:checkpoint":
+            (target_dir() / "go-link-flags").write_text(
+                os.environ.get("CGO_LDFLAGS", "")
+            )
+            (root / "target/coverage").mkdir(parents=True, exist_ok=True)
+            (root / "target/coverage/checkpoint-native.test").touch()
 elif tool == "rustc":
-    print("host: aarch64-apple-darwin")
+    if args == ["--print", "target-libdir"]:
+        library_dir = root / "rustlib"
+        library_dir.mkdir(exist_ok=True)
+        (library_dir / "libprofiler_builtins-fixture.rlib").touch()
+        print(library_dir)
+    else:
+        print("host: aarch64-apple-darwin")
+elif tool == "llvm-cov":
+    assert args[:2] == ["export", "-format=lcov"]
+    profile = Path(args[2].removeprefix("-instr-profile="))
+    assert profile == target_dir() / "native.profdata" and profile.is_file()
+    binary = root / "target/coverage/checkpoint-native.test"
+    assert Path(args[3]) == binary and binary.is_file()
+    print("SF:" + str(binary))
+elif args[:2] == ["llvm-cov", "show-env"]:
+    print("export CARGO_LLVM_COV_TARGET_DIR=" + shlex.quote(str(target_dir())))
 elif args[:2] == ["llvm-cov", "report"]:
     destination = target_dir()
+    (destination / "report-flags").write_text(os.environ.get("LLVM_COV_FLAGS", ""))
     objects = [destination / (sdk + ".o") for sdk in ("python", "node", "c")]
     missing = [obj.name for obj in objects if not obj.is_file()]
     if missing:
@@ -55,10 +79,167 @@ elif args[:2] == ["llvm-cov", "report"]:
         sys.exit(1)
     report = Path(args[args.index("--output-path") + 1])
     report.write_text("\\n".join("SF:" + str(obj) for obj in objects))
+    (destination / "native.profdata").touch()
 """
 
 
 class NativeCoveragePathsTest(unittest.TestCase):
+    def test_native_go_coverage_works_without_an_ordinary_dev_archive(self):
+        import json
+
+        repo = COLLECTOR.parents[2]
+        boundary_tool = '''#!/usr/bin/env python3
+import json, os, shlex, sys
+from pathlib import Path
+
+root = Path(os.environ["NATIVE_MAKE_ROOT"])
+args = sys.argv[1:]
+tool = Path(sys.argv[0]).name
+target = Path(os.environ["CARGO_TARGET_DIR"])
+if not target.is_absolute():
+    target = root / target
+library = target / "debug/libboxlite.a"
+entry = {"tool": tool, "args": args}
+if tool == "rustc":
+    library_dir = root / "profile runtime"
+    library_dir.mkdir(exist_ok=True)
+    (library_dir / "libprofiler_builtins-fixture.rlib").write_text("profile runtime")
+    print(library_dir)
+elif tool == "cargo":
+    library.parent.mkdir(parents=True, exist_ok=True)
+    library.write_text("native library produced by Cargo")
+elif tool == "bash":
+    selected = root / args[-1]
+    entry.update(library=str(selected), exists=selected.is_file())
+elif tool == "go" and args[0] == "test":
+    selected = Path(os.environ["CGO_LDFLAGS"])
+    if args[-1].endswith("/internal/nativeprofile"):
+        selected = Path(shlex.split(os.environ["CGO_LDFLAGS"])[0])
+    entry.update(library=str(selected), exists=selected.is_file())
+    for value in args:
+        if value.startswith("-coverprofile="):
+            Path(value.split("=", 1)[1]).write_text(selected.read_text())
+with (root / "calls.jsonl").open("a") as output:
+    output.write(json.dumps(entry) + "\\n")
+'''
+        for absolute in (False, True):
+            with self.subTest(absolute=absolute), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch).resolve() / "clean workspace"
+                (root / "sdks/go").mkdir(parents=True)
+                tools = root / "bin"
+                tools.mkdir()
+                for name in ("cargo", "go", "bash", "rustc"):
+                    executable = tools / name
+                    executable.write_text(boundary_tool)
+                    executable.chmod(0o755)
+                target = Path(scratch).resolve() / "external target" if absolute else Path("instrumented target")
+                resolved_target = target if absolute else root / target
+                library = resolved_target / "debug/libboxlite.a"
+                (root / "Makefile").write_text(
+                    "SHELL := /bin/bash\n"
+                    f"PROJECT_ROOT := {root}\n"
+                    f"SCRIPT_DIR := {repo / 'scripts'}\n"
+                    f"include {repo / 'make/dev.mk'}\n"
+                    f"include {repo / 'make/coverage.mk'}\n"
+                )
+                result = subprocess.run(
+                    ["make", "coverage:go:checkpoint", "SETUP_DONE=1"],
+                    cwd=root,
+                    env={**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                         "NATIVE_MAKE_ROOT": str(root), "CARGO_TARGET_DIR": str(target),
+                         "CARGO_LLVM_COV": "1", "CGO_LDFLAGS": str(library)},
+                    capture_output=True, text=True, timeout=15, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+                self.assertFalse((root / "target/debug/libboxlite.a").exists())
+                rewrites = [call for call in calls if call["tool"] == "bash"]
+                self.assertTrue(all(call["exists"] for call in rewrites), rewrites)
+                native_tests = [call for call in calls if call["tool"] == "go" and call["args"][-1] == "./integration/archive"]
+                self.assertEqual(len(native_tests), 1)
+                self.assertTrue(native_tests[0]["exists"], native_tests[0])
+                self.assertIn("-tags=boxlite_dev,boxlite_integration,boxlite_coverage", native_tests[0]["args"])
+                self.assertEqual((root / "target/coverage/go-checkpoint-native.out").read_text(), library.read_text())
+
+    def test_sdk_integration_keeps_native_go_archives_in_the_vm_workflow(self):
+        import json
+
+        suites = COLLECTOR.parents[2] / "make/test.mk"
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            recorder = root / "record-make"
+            recorder.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                'with open(os.environ["SDK_SUITE_LOG"], "a") as log:\n'
+                '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+            )
+            recorder.chmod(0o755)
+            (root / "Makefile").write_text(f"include {suites}\n")
+            log = root / "sdk-suites.jsonl"
+            result = subprocess.run(
+                ["make", "test:integration:sdk", "SETUP_DONE=1", f"MAKE={recorder}"],
+                cwd=root,
+                env={**os.environ, "SDK_SUITE_LOG": str(log)},
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertIn(
+                ["test:integration:go", "SETUP_DONE=1"],
+                calls,
+                "native Go archive tests must run through the VM integration entry point",
+            )
+
+    def test_core_coverage_runs_the_no_vm_checkpoint_cli_binary(self):
+        import json
+
+        coverage = COLLECTOR.parents[2] / "make/coverage.mk"
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            tools = root / "bin"
+            tools.mkdir()
+            cargo = tools / "cargo"
+            cargo.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                'with open(os.environ["CARGO_ARGV_LOG"], "a") as log:\n'
+                '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+            )
+            cargo.chmod(0o755)
+            (root / "Makefile").write_text(f"include {coverage}\n")
+            log = root / "cargo.jsonl"
+            env = {
+                **os.environ,
+                "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                "CARGO_ARGV_LOG": str(log),
+            }
+            result = subprocess.run(
+                ["make", "coverage:lcov"],
+                check=False,
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            cli_calls = [args for args in calls if "boxlite-cli" in args]
+            self.assertTrue(cli_calls, "no CLI coverage invocation")
+            self.assertTrue(
+                any(
+                    args[index : index + 2] == ["--test", "checkpoint"]
+                    for args in cli_calls
+                    for index in range(len(args) - 1)
+                ),
+                "the existing checkpoint CLI HTTP tests must contribute coverage",
+            )
+            self.assertTrue(all("--tests" not in args for args in cli_calls))
+
     def run_collector(self, override, gate_required=False):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch).resolve() / "repository with spaces"
@@ -67,7 +248,7 @@ class NativeCoveragePathsTest(unittest.TestCase):
             shutil.copy2(COLLECTOR, collector)
             tools = root / "bin"
             tools.mkdir()
-            for name in ("cargo", "make", "rustc"):
+            for name in ("cargo", "make", "rustc", "llvm-cov"):
                 executable = tools / name
                 executable.write_text(BUILD_TOOL)
                 executable.chmod(0o755)
@@ -114,10 +295,40 @@ class NativeCoveragePathsTest(unittest.TestCase):
                 else expected / "make-invocations.jsonl"
             )
             node_runs = []
+            ffi_runs = []
+            go_archive_runs = []
             for line in invocations_path.read_text().splitlines():
                 argv = json.loads(line)
                 if "test:integration:node" in argv:
                     node_runs.append(argv)
+                if "test:unit:ffi" in argv:
+                    ffi_runs.append(argv)
+                if "coverage:go:checkpoint" in argv:
+                    go_archive_runs.append(argv)
+            self.assertTrue(
+                ffi_runs, "Rust C ABI tests must contribute native coverage"
+            )
+            self.assertEqual(
+                len(go_archive_runs),
+                1,
+                "native Go archive ownership must contribute coverage",
+            )
+            go_link_flags = shlex.split((expected / "go-link-flags").read_text())
+            self.assertEqual(
+                go_link_flags[0],
+                str(expected / "debug/libboxlite.a"),
+                "Go callers must link the instrumented native archive first",
+            )
+            self.assertEqual(
+                go_link_flags[1],
+                str(root / "rustlib/libprofiler_builtins-fixture.rlib"),
+                "CGO must link Rust's matching coverage profile runtime",
+            )
+            self.assertIn(
+                "SF:" + str(root / "target/coverage/checkpoint-native.test"),
+                (root / "target/coverage/native-sdk/go-lcov.info").read_text(),
+                "Go native coverage must use the retained test executable",
+            )
             self.assertTrue(node_runs, str(invocations_path))
             for argv in node_runs:
                 filters = [a for a in argv if a.startswith("FILTER=")]
@@ -131,6 +342,8 @@ class NativeCoveragePathsTest(unittest.TestCase):
                     "native box privilege metadata",
                     "box.ssh over a REST transport",
                     "SimpleBox.ssh over a REST transport",
+                    "checkpoint native methods reject an unwrapped receiver",
+                    "checkpoint native REST calls preserve configuration inheritance and result identity",
                 ):
                     self.assertRegex(suite, pattern)
                 for vm_suite in (

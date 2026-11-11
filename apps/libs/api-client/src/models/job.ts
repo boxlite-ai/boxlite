@@ -67,6 +67,7 @@ export const JobResourceTypeEnum = {
     BOX: 'BOX',
     ARTIFACT: 'ARTIFACT',
     BACKUP: 'BACKUP',
+    CHECKPOINT: 'CHECKPOINT',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

@@ -25,6 +25,8 @@ import { AddImageCatalog1787100000000 } from '../../migrations/pre-deploy/178710
 import { ReplaceBoxNetworkFlags1791000000000 } from '../../migrations/pre-deploy/1791000000000-replace-box-network-flags-migration'
 import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1791000000000-drop-box-network-flags-migration'
 import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
+import { AddNestedVirtualizationAllowlist1793870400000 } from '../../migrations/pre-deploy/1793870400000-add-nested-virtualization-allowlist-migration'
+import { FractionalBoxCpus1794405600000 } from '../../migrations/pre-deploy/1794405600000-fractional-box-cpus-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -276,6 +278,15 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new ReplaceBoxNetworkFlags1791000000000().up(queryRunner)
       await new DropBoxNetworkFlags1791000000000().up(queryRunner)
       await new AddGuestPrivileged1792540800000().up(queryRunner)
+      await new AddNestedVirtualizationAllowlist1793870400000().up(queryRunner)
+      await queryRunner.startTransaction()
+      try {
+        await new FractionalBoxCpus1794405600000().up(queryRunner)
+        await queryRunner.commitTransaction()
+      } catch (error) {
+        await queryRunner.rollbackTransaction()
+        throw error
+      }
     } finally {
       await queryRunner.release()
     }
@@ -780,6 +791,26 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     await openPeriod()
 
     await expect(openPeriod()).rejects.toThrow(/box_usage_periods_one_open_period_per_box_idx/)
+  })
+
+  it.each([0.125, 1.001])('carries %s CPUs from the stored box through the ledger and export', async (cpu) => {
+    await insertBox({ state: BoxState.STARTED, cpu })
+    const service = serviceForPersistedBox(true)
+    await service.reconcileUsagePeriods()
+    const [opened] = await openPeriods()
+    expect(opened.cpu).toBe(cpu)
+
+    // Age the production-created period so the normal rollover/archive jobs settle it.
+    await periods.update(opened.id, { startAt: new Date(Date.now() - 2 * DAY_MS) })
+    await service.closeAndReopenUsagePeriods()
+    expect((await openPeriods())[0].cpu).toBe(cpu)
+    await periods.update(opened.id, { endAt: new Date(Date.now() - DAY_MS) })
+    await service.archiveUsagePeriods()
+
+    const [archived] = await archives.find()
+    const [exported] = await outboxes.find()
+    expect(archived.cpu).toBe(cpu)
+    expect(exported.payload.cpu).toBe(String(cpu))
   })
 
   describe('usage export outbox', () => {

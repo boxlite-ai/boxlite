@@ -291,6 +291,15 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
+    pub async fn get_with_query<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> BoxliteResult<T> {
+        self.send_json(self.http.get(self.url(path)).query(query))
+            .await
+    }
+
     pub async fn get_root<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
         let builder = self.http.get(self.url_root(path));
         self.send_json(builder).await

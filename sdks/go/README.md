@@ -16,6 +16,44 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ## Usage
 
+### Managed checkpoints
+
+Only `WithName` may accompany `WithCheckpoint`, including when another option
+has its default value: `WithDetach(false)` and `WithMemory(0)` reject before
+creating native options. An explicitly empty checkpoint selector also rejects.
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
+The source must be stopped before `Create`; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get` and
+`Remove`, each taking a context. The handle follows its runtime's
+lifetime and needs no separate close. Captured archives survive source deletion.
+
+```go
+checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
+if err != nil { return err }
+worker, err := runtime.Create(ctx, "", boxlite.WithCheckpoint(checkpoint.ID), boxlite.WithName("worker"))
+if err != nil { return err }
+defer worker.Close()
+```
+
+Pass an empty image with `WithCheckpoint`; combining it with an image or
+`WithRootfsPath` returns an error.
+
+Cloud capture may report `creating`; query until `ready` before use. A box created
+from a checkpoint inherits all saved execution settings; any other option is
+refused with an invalid-argument error. `Remove(ctx, key, true)` ignores absence
+only. Local runtime checkpoint operations return an unsupported-operation error.
+Storage belongs to the server. Existing native archive
+export/import and the runner's archive preparation helper remain available.
+
+### Create a box
+
 ```go
 package main
 
@@ -405,10 +443,30 @@ Build from source (requires Rust toolchain):
 # From the project root
 make dev:go
 
-# Run tests
-cd sdks/go && go test -tags boxlite_dev -v ./...
+# Run hosted unit and REST tests
+make test:unit:go
+
+# Run native archive import/export tests on a VM-capable host
+make test:integration:go
 ```
+
+Native archive import/export tests use the production runtime constructor and
+require a VM-capable host, even when the test does not start a VM.
+The Linux native-binding coverage job runs the no-VM import/export cases through
+`make coverage:go:checkpoint` and flushes the instrumented native counters before
+Go exits. Full VM archive round-trips remain in the integration suite.
 
 ## License
 
 Apache-2.0
+
+### Nested virtualization at creation
+
+Configure `AdvancedBoxOptions.SetNestedVirtualization(true)` and pass the handle
+through `WithAdvancedOptions` to create a nested Box. The runtime must explicitly
+authorize `nested-virtualization` using `WithExperimentalFeatures`. The existing
+runtime create operation saves the option; `Box.Start(ctx)` keeps that saved value.
+
+Runner reads its feature ENV at startup and chooses this creation option only for
+eligible Cloud requests on supported hosts. This adds no start options or change
+to default local creation. Changing organization policy affects future creates.

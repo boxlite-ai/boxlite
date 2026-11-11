@@ -115,11 +115,26 @@ pub unsafe extern "C" fn boxlite_box_id(handle: *mut CBoxHandle) -> *mut c_char 
     box_id(handle)
 }
 
+/// Return an owned name string, or null for an unnamed/invalid handle.
+/// Release the returned string with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_name(handle: *mut CBoxHandle) -> *mut c_char {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe { &*handle }
+        .handle
+        .name()
+        .and_then(|name| CString::new(name).ok())
+        .map_or(ptr::null_mut(), CString::into_raw)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
     box_free(handle)
 }
 
+/// Validate caller options before transferring ownership to asynchronous create.
 unsafe fn create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
@@ -137,6 +152,10 @@ unsafe fn create_box(
             return BoxliteErrorCode::InvalidArgument;
         }
         let cb = crate::unwrap_cb_or_return!(cb, out_error);
+        if let Err(error) = (*opts).validate_checkpoint() {
+            write_error(out_error, error);
+            return BoxliteErrorCode::InvalidArgument;
+        }
 
         // Security is applied to the options object directly by the
         // enable/disable setters (two-state, nothing to validate), so there is
@@ -179,6 +198,7 @@ unsafe fn create_box(
     }
 }
 
+/// Refuse checkpoint overrides before adopting a named Box or transferring options.
 unsafe fn get_or_create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
@@ -196,6 +216,10 @@ unsafe fn get_or_create_box(
             return BoxliteErrorCode::InvalidArgument;
         }
         let cb = crate::unwrap_cb_or_return!(cb, out_error);
+        if let Err(error) = (*opts).validate_checkpoint() {
+            write_error(out_error, error);
+            return BoxliteErrorCode::InvalidArgument;
+        }
 
         let runtime_ref = &*runtime;
         let opts_handle = Box::from_raw(opts);

@@ -350,7 +350,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => decrease?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     await flush()
 
-    expect(input.value).toBe('3')
+    expect(input.value).toBe('3.9')
     expect(document.body.textContent).not.toContain('support@boxlite.ai')
   })
 
@@ -384,6 +384,29 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => createButton?.click())
     await flush()
   }
+
+  it.each(['0.125', '0.126', '0.5', '1.001', '1.5'])('submits fractional CPU %s without rounding', async (value) => {
+    await renderOpen()
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="value"]')!
+    await act(async () => typeInto(input, value))
+    await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    await submit()
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: expect.objectContaining({ cpu: Number(value) }) }),
+    )
+  })
+
+  it.each(['0', '-1', '0.124', '0.1251', 'abc'])(
+    'blocks invalid CPU text %s instead of submitting the saved CPU',
+    async (value) => {
+      await renderOpen()
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="value"]')!
+      await act(async () => typeInto(input, value))
+      await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+      expect(button('Create Box').disabled).toBe(true)
+      expect(mutationMocks.createBox).not.toHaveBeenCalled()
+    },
+  )
 
   describe('subscribed Cloud resource limits', () => {
     beforeEach(() => {
@@ -1139,7 +1162,9 @@ describe('CreateBoxDialog trigger slot', () => {
    * Checks whether the dialog is currently open by looking for its title text.
    */
   function dialogIsOpen() {
-    return [...document.querySelectorAll('*')].some((el) => el.textContent === 'Create a box for your agent')
+    return [...document.querySelectorAll('*')].some(
+      (el) => el.getAttribute('data-slot') === 'dialog-title' && el.textContent === 'New Box',
+    )
   }
 
   it('opens on the supplied control and returns focus there after Cancel', async () => {

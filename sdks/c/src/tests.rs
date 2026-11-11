@@ -10,7 +10,9 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod checkpoint_options;
 mod kernel;
+mod nested_virtualization;
 
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}
 extern "C" fn noop_image_pull_cb(
@@ -56,6 +58,10 @@ unsafe fn new_test_runtime_handle(prefix: &str) -> (*mut crate::runtime::Runtime
         panic!("runtime_new failed with {code:?}: {err_msg}");
     }
 
+    assert!(
+        !runtime.is_null(),
+        "boxlite_runtime_new returned null runtime pointer"
+    );
     (runtime, home_dir)
 }
 

@@ -26,7 +26,7 @@ export function QuickstartRecipeHeader({
   const publishing = !recipe.command
   if (preview.inline)
     return publishing ? (
-      <div className="mb-6 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+      <div className="mb-6 flex flex-wrap gap-x-5 gap-y-2 text-meta text-muted-foreground">
         {CODING_AGENT_MARKS.map(({ label, Mark }) => (
           <span key={label} className="inline-flex items-center gap-2">
             <Mark className="size-4" />
@@ -43,7 +43,7 @@ export function QuickstartRecipeHeader({
       <div
         role="group"
         aria-label="Quickstart action"
-        className="grid grid-cols-2 border-b border-border font-display text-sm"
+        className="grid grid-cols-2 border-b border-border font-display text-body"
       >
         {[
           { id: 'code-execution', label: 'Run code', selected: !publishing },
@@ -67,15 +67,17 @@ export function QuickstartRecipeHeader({
           </button>
         ))}
       </div>
-      <DialogTitle className={compact ? 'sr-only' : 'mt-5 text-left font-display text-xl font-semibold tracking-tight'}>
+      <DialogTitle
+        className={compact ? 'sr-only' : 'mt-5 text-left font-display text-section font-semibold tracking-tight'}
+      >
         {publishing ? recipe.title : 'Run your first command.'}
       </DialogTitle>
-      <DialogDescription className={compact ? 'sr-only' : 'mt-2 text-left font-display text-sm leading-relaxed'}>
+      <DialogDescription className={compact ? 'sr-only' : 'mt-2 text-left font-display text-body leading-relaxed'}>
         {publishing
           ? recipe.description
           : 'Create a Box, run a command, and read its output. Start with a simple Hello World.'}
       </DialogDescription>
-      <p className="mt-4 border-l-2 border-brand/60 pl-3 font-display text-xs leading-relaxed text-muted-foreground">
+      <p className="mt-4 border-l-2 border-brand/60 pl-3 font-display text-meta leading-relaxed text-muted-foreground">
         <span className="text-foreground">You’ll get: </span>
         {statusOnly
           ? 'Execution status and exit code. Choose an SDK or CLI to read this task’s output.'

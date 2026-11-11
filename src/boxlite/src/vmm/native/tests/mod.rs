@@ -23,6 +23,7 @@ use crate::vmm::{
     VmmKind, native::Native,
 };
 
+mod guest_boot;
 mod m1_initramfs;
 
 #[test]
