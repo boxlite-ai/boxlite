@@ -39,7 +39,7 @@ func TestCheckpointCallbacksRefuseMissingStaleAndWrongReceivers(t *testing.T) {
 	}
 }
 
-func TestCheckpointCallbackEmptySuccessIsRejectedByMetadataAndBoxDecoders(t *testing.T) {
+func TestCheckpointCallbackEmptySuccessIsRejectedByMetadataDecoder(t *testing.T) {
 	runtime := &Runtime{closing: make(chan struct{})}
 	metadata := checkpointCallbackChannel(goBoxliteOnCheckpointInfo)
 	handle := registerHandleForDispatch(cgo.NewHandle(metadata))
@@ -47,13 +47,5 @@ func TestCheckpointCallbackEmptySuccessIsRejectedByMetadataAndBoxDecoders(t *tes
 	info, err := checkpointInfoResult(context.Background(), runtime, metadata, handle)
 	if info != nil || err == nil {
 		t.Fatalf("empty native metadata was accepted: %#v %v", info, err)
-	}
-	imported := checkpointCallbackChannel(goBoxliteOnRuntimeImport)
-	handle = registerHandleForDispatch(cgo.NewHandle(imported))
-	goBoxliteOnRuntimeImport(nil, nil, handleToPtr(handle))
-	completed := <-imported
-	box, err := checkpointBoxFromHandle(runtime, completed.value)
-	if box != nil || err == nil {
-		t.Fatalf("empty native Box was accepted: %#v %v", box, err)
 	}
 }

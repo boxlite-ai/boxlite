@@ -156,6 +156,10 @@ boxlite images
 
 ## Checkpoint management
 
+Only `--name` may accompany `create --checkpoint` among creation flags.
+Explicit defaults such as `--auto-delete 0` and `--network enabled` also reject;
+global connection options remain available.
+
 Checkpoints are managed by the selected REST server. Local runtimes return
 an unsupported-operation error. Each checkpoint captures a stopped box's disk
 and execution configuration, survives source deletion, and can create multiple
@@ -168,25 +172,28 @@ boxlite --url https://api.example.com checkpoint create source --name dev-base
 boxlite --url https://api.example.com checkpoint list
 boxlite --url https://api.example.com checkpoint get dev-base
 
-# Saved execution settings are inherited; configuration overrides are refused.
-boxlite --url https://api.example.com import --checkpoint dev-base --name worker
-
-# Replace an idle stopped or failed box, preserving its public Box ID.
-boxlite --url https://api.example.com import --checkpoint dev-base --box worker
+# Saved execution settings are inherited; only --name may accompany --checkpoint.
+boxlite --url https://api.example.com create --checkpoint dev-base --name worker
 boxlite --url https://api.example.com checkpoint delete dev-base
 ```
 
-A capture can initially report `creating`; wait for `ready` before import.
-Capture never automatically stops a Box. Name and replacement target are
-mutually exclusive. Deleting a checkpoint leaves previously imported boxes
-intact; `--force` tolerates absence and never bypasses active use.
+A capture can initially report `creating`; wait for `ready` before use.
+Capture never automatically stops a Box. `create --checkpoint` refuses an image,
+`--rootfs` and every other create option before sending a request. Deleting a
+checkpoint leaves boxes created from it intact; `--force` tolerates absence and
+never bypasses active use.
 
-Storage, capture coordination, and replacement retries belong to the server.
+A checkpoint is a rootfs source for `create`, beside an image or `--rootfs`, so
+the `checkpoint` subcommands only manage checkpoints. The CLI and SDKs do not
+replace an existing box from a checkpoint; remove the box and create a new one.
+
+Storage and capture coordination belong to the server.
 The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
+The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
 Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
 management routes. Existing binary archive export/import remains available.
-The cloud runner validates downloaded archives through its separate native
-archive helper before using ordinary native import; this creates no local
+The cloud runner verifies the downloaded artifact SHA before ordinary native
+import, which owns archive validation; this creates no local
 checkpoint catalog or recovery records.
 
 ## Connecting to a remote server
@@ -238,7 +245,9 @@ remain supported. Login saves credentials but does not change the current contex
 
 `boxlite context use default` restores the pre-context configuration: a URL
 override or existing `default` credentials select REST; otherwise commands use
-the embedded runtime. Context selection is stored separately in
+the embedded runtime. `boxlite context use embedded` always selects the embedded
+runtime, including after a `default` login; `auth login` cannot store
+credentials under that name. Context selection is stored separately in
 `<BOXLITE_HOME>/cli.toml`. See [context selection and precedence](../../docs/reference/cli/README.md#boxlite-context)
 for URL overrides and missing contexts.
 

@@ -88,8 +88,9 @@ Boot and device I/O also consume this budget; very small allocations can hit exi
 
 | Condition | Behavior |
 | --- | --- |
-| Execution host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; REST applies these requirements to the server; rootless operation needs CPU delegation |
-| Quota write failure | Startup fails before guest execution |
+| Execution host requirements | Linux and an enabled jailer; REST applies these requirements to the server |
+| Enforcement requirements | A writable cgroup v2 CPU controller for the Box's cgroup; rootless operation needs CPU delegation |
+| Quota write failure | Logged at error level; the Box starts with `ceil(cpus)` vCPUs and no bandwidth limit |
 | Membership failure | Existing best-effort joining remains; a Box can start without the requested quota taking effect |
 | Local macOS execution | Fractional values return `Unsupported` |
 | macOS REST client | Can request fractional CPUs from a supporting Linux server; the client needs no local cgroup support |

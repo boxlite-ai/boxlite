@@ -127,7 +127,7 @@ const LinkedAccount = ({ provider }: { provider: AccountProvider }) => {
           {provider.isPrimary && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Badge variant="outline" className="gap-1 text-xs">
+                <Badge variant="outline" className="gap-1 text-meta">
                   <ShieldCheck className="h-3 w-3" />
                   Primary
                 </Badge>
@@ -138,7 +138,7 @@ const LinkedAccount = ({ provider }: { provider: AccountProvider }) => {
             </Tooltip>
           )}
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           {provider.isPrimary
             ? `This is your primary account used for authentication.`
             : `Your ${provider.displayName} account is linked as a secondary login method.`}

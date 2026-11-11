@@ -30,7 +30,7 @@ export function BoxFullscreenShell({ boxId, title, copyValue, children }: BoxFul
         <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={handleBack} aria-label="Back">
           <ArrowLeft className="size-4" />
         </Button>
-        <h1 className="min-w-0 truncate text-sm font-medium">{title || boxId || 'Box'}</h1>
+        <h1 className="min-w-0 truncate text-body font-medium">{title || boxId || 'Box'}</h1>
         {copyValue && <CopyButton value={copyValue} tooltipText="Copy" size="icon-xs" />}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>

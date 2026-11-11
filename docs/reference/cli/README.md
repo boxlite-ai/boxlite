@@ -222,7 +222,7 @@ and [`boxlite auth whoami`](#boxlite-auth-whoami) for the full command surface.
 
 | Command | Behavior |
 |---------|----------|
-| `boxlite context use NAME` | Save the current context for subsequent commands. Validates that a named context exists; `default` always exists. |
+| `boxlite context use NAME` | Save the current context for subsequent commands. Validates that a named context exists; `default` and `embedded` always exist. |
 | `boxlite context show` | Print the effective name, including flag and environment overrides. Does not validate credentials or contact the server. |
 | `boxlite context ls` | List names and endpoints; mark the effective context with `*`. Alias: `list`. `-q` / `--quiet` prints names only. |
 
@@ -253,6 +253,28 @@ Existing remote default logins therefore keep working. `local` is an ordinary
 user-defined name. A missing named context fails before a workload starts, without
 falling back to the embedded runtime. Logout removes credentials but keeps the
 selection; log in again or explicitly `context use default` to recover.
+
+`embedded` is a built-in context that always selects the embedded runtime. It is
+always listed, and `context use embedded` works in any home, so the embedded
+runtime stays reachable after a login stored under `default`:
+
+```bash
+boxlite auth login --url https://<your-server>   # stored under `default`
+boxlite context ls
+# NAME                     ENDPOINT
+# default *                https://<your-server>
+# embedded                 embedded
+boxlite context use embedded
+boxlite list                       # embedded runtime
+```
+
+`auth login` refuses the name `embedded`, and `BOXLITE_API_KEY` has no effect on
+it. It follows the precedence above like any named context: explicit
+`--context embedded` ignores `BOXLITE_REST_URL`, while a saved selection ranks
+below a nonempty one. A login stored under `embedded` by an earlier CLI keeps
+targeting its server and prints a warning on each workload command. Log in under
+another name, then run `boxlite --context embedded auth logout`; from then on
+`embedded` selects the embedded runtime.
 
 Preferences and credentials share the `--home` / `BOXLITE_HOME` directory.
 `cli.toml` stores only the current name; `credentials.toml` retains the compatible

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{BoxliteError, BoxliteResult, LiteBox};
+use crate::{BoxliteError, BoxliteResult};
 
 /// Metadata for a checkpoint whose complete archive has been published.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,11 +42,12 @@ pub(crate) trait CheckpointBackend: Send + Sync {
     async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>>;
     async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo>;
     async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()>;
-    async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox>;
-    async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox>;
 }
 
 /// Checkpoint management through a REST server; local runtimes return Unsupported.
+///
+/// Using a checkpoint is a box operation: create a box from one with
+/// `RootfsSpec::Checkpoint`.
 #[derive(Clone)]
 pub struct CheckpointHandle {
     backend: Option<Arc<dyn CheckpointBackend>>,
@@ -95,42 +96,14 @@ impl CheckpointHandle {
         self.backend()?.remove(key, force).await
     }
 
-    /// Import into a new box, or replace an idle target selected by `box_id`.
-    /// Name and target are mutually exclusive. Replacement preserves the public identity.
-    /// Import retains the checkpoint archive for subsequent uses.
-    pub async fn import_box(
-        &self,
-        key: &str,
-        name: Option<String>,
-        box_id: Option<&str>,
-    ) -> BoxliteResult<LiteBox> {
-        checked_name(key)?;
-        if name.is_some() && box_id.is_some() {
-            return Err(BoxliteError::InvalidArgument(
-                "name and box_id are mutually exclusive".into(),
-            ));
-        }
-        if let Some(target) = box_id {
-            if target.is_empty() || target.contains('\0') {
-                return Err(BoxliteError::InvalidArgument(
-                    "import target must be a box ID or name".into(),
-                ));
-            }
-            self.backend()?.recover_box(key, target).await
-        } else {
-            if let Some(name) = &name {
-                checked_name(name)?;
-            }
-            self.backend()?.create_box(key, name).await
-        }
-    }
-
     fn backend(&self) -> BoxliteResult<&dyn CheckpointBackend> {
-        self.backend.as_deref().ok_or_else(|| {
-            BoxliteError::Unsupported("checkpoints are only implemented for REST runtimes".into())
-        })
+        self.backend
+            .as_deref()
+            .ok_or_else(|| BoxliteError::Unsupported(UNSUPPORTED_ON_LOCAL.into()))
     }
 }
+
+pub(crate) const UNSUPPORTED_ON_LOCAL: &str = "checkpoints are only implemented for REST runtimes";
 
 pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
     if name.is_empty()

@@ -36,7 +36,7 @@ async function renderDialog(permissions = [CreateApiKeyPermissionsEnum.WRITE_BOX
       />,
     )
   })
-  await act(async () => button('Create Key').click())
+  await act(async () => button('New API key').click())
 }
 
 async function enterName() {
@@ -65,7 +65,7 @@ afterEach(() => {
 describe('CreateApiKeyDialog shared button interactions', () => {
   it('submits the external form once, copies the returned key, and closes with Done', async () => {
     await renderDialog()
-    expect(button('Create').disabled).toBe(true)
+    expect(button('Create API key').disabled).toBe(true)
     await enterName()
 
     let finishCreate!: (result: { value: string }) => void
@@ -75,7 +75,7 @@ describe('CreateApiKeyDialog shared button interactions', () => {
           finishCreate = resolve
         }),
     )
-    await act(async () => button('Create').click())
+    await act(async () => button('Create API key').click())
     expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
       organizationId: 'org-1',
       name: 'agent-key',
@@ -107,8 +107,8 @@ describe('CreateApiKeyDialog shared button interactions', () => {
   it('keeps creation disabled when no permissions are available', async () => {
     await renderDialog([])
     await enterName()
-    expect(button('Create').disabled).toBe(true)
-    await act(async () => button('Create').click())
+    expect(button('Create API key').disabled).toBe(true)
+    await act(async () => button('Create API key').click())
     expect(mocks.create).not.toHaveBeenCalled()
   })
 })

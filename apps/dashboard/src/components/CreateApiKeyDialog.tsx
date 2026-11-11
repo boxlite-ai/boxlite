@@ -91,9 +91,9 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <AsciiButton variant="primary" title="Create Key" className={className}>
+        <AsciiButton variant="primary" title="New API key" className={className}>
           <Plus className="size-4" />
-          Create Key
+          New API key
         </AsciiButton>
       </DialogTrigger>
 
@@ -102,13 +102,13 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
           <>
             <DialogHeader>
               <DialogTitle>API Key Created</DialogTitle>
-              <DialogDescription className="text-[13px] leading-relaxed text-muted-foreground">
+              <DialogDescription className="text-body leading-relaxed text-muted-foreground">
                 Copy your key now. For security, you won&apos;t be able to see it again.
               </DialogDescription>
             </DialogHeader>
             <FormDialogBody>
               <div className="flex items-center gap-3 border border-brand bg-card px-4 py-[14px]">
-                <span className="flex-1 break-all font-mono text-[13px] text-brand">{revealKey}</span>
+                <span className="flex-1 break-all font-mono text-body text-brand">{revealKey}</span>
                 <AsciiButton variant="primary" type="button" onClick={() => copy(revealKey)}>
                   {keyCopied ? 'Copied' : 'Copy'}
                 </AsciiButton>
@@ -123,8 +123,8 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Create New API Key</DialogTitle>
-              <DialogDescription className="text-[13px] text-muted-foreground">
+              <DialogTitle>New API key</DialogTitle>
+              <DialogDescription className="text-body text-muted-foreground">
                 Create a key with your available API permissions.
               </DialogDescription>
             </DialogHeader>
@@ -133,7 +133,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
               <div className="space-y-5">
                 {/* name */}
                 <div className="flex flex-col gap-[10px]">
-                  <div className="form-field-label">Key Name</div>
+                  <div className="form-field-label">Name</div>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -149,7 +149,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       className={cn(
-                        'flex items-center gap-[11px] border border-border bg-card h-10 px-3 font-mono text-[13px] outline-none data-[state=open]:border-brand',
+                        'flex items-center gap-[11px] border border-border bg-card h-10 px-3 font-mono text-body outline-none data-[state=open]:border-brand',
                         expiryIdx === 0 ? 'text-muted-foreground' : 'text-foreground',
                       )}
                     >
@@ -158,7 +158,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent
                       align="start"
-                      className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
+                      className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-meta"
                     >
                       {EXPIRY_OPTS.map((opt, i) => (
                         <DropdownMenuItem
@@ -171,15 +171,15 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  <div className="text-[12px] text-muted-foreground">Optional expiration date for the API key.</div>
+                  <div className="text-meta text-muted-foreground">Optional expiration date for the API key.</div>
                 </div>
 
                 {/* info */}
                 <div className="flex gap-3 border border-brand/25 bg-brand/[0.06] px-[18px] py-4">
                   <Info className="mt-0.5 size-[17px] shrink-0 text-brand" strokeWidth={2} />
                   <div>
-                    <div className="text-[13px] font-semibold text-brand">API access</div>
-                    <div className="mt-[5px] text-[12.5px] leading-relaxed text-muted-foreground">
+                    <div className="text-body font-semibold text-brand">API access</div>
+                    <div className="mt-[5px] text-meta leading-relaxed text-muted-foreground">
                       {availablePermissions.includes(CreateApiKeyPermissionsEnum.WRITE_MEMBERS)
                         ? 'This key includes member and invitation management. Use the API or SDK to create a key with fewer permissions.'
                         : 'This key includes your available resource permissions. Use the API or SDK to select fewer permissions.'}
@@ -199,7 +199,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                 form="create-api-key-form"
                 disabled={!name.trim() || submitting || !organizationId || availablePermissions.length === 0}
               >
-                {submitting ? 'Creating…' : 'Create'}
+                {submitting ? 'Creating…' : 'Create API key'}
               </AsciiButton>
             </DialogFooter>
           </>

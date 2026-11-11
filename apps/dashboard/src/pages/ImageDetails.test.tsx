@@ -243,7 +243,7 @@ describe('starting a box', () => {
   it('starts a box at the image’s first tag', async () => {
     await renderPage()
 
-    await act(async () => button('New box')?.click())
+    await act(async () => button('New Box')?.click())
 
     expect(state.newBoxImage).toBe('quay.io/acme/app:latest')
   })
@@ -252,7 +252,7 @@ describe('starting a box', () => {
   it('starts a box pinned to one version’s digest', async () => {
     await renderPage()
 
-    const versionButton = document.querySelector<HTMLButtonElement>('button[title="New box pinned to this digest"]')
+    const versionButton = document.querySelector<HTMLButtonElement>('button[title="New Box pinned to this digest"]')
     await act(async () => versionButton?.click())
 
     expect(state.newBoxImage).toBe(`quay.io/acme/app@${DIGEST_NEW}`)
@@ -262,8 +262,8 @@ describe('starting a box', () => {
     state.deniedPermissions = [OrganizationRolePermissionsEnum.WRITE_BOXES]
     await renderPage()
 
-    expect(button('New box')).toBeUndefined()
-    expect(document.querySelector('button[title="New box pinned to this digest"]')).toBeNull()
+    expect(button('New Box')).toBeUndefined()
+    expect(document.querySelector('button[title="New Box pinned to this digest"]')).toBeNull()
   })
 })
 
@@ -352,7 +352,7 @@ describe('a built-in image', () => {
     state.image = BUILT_IN_IMAGE
     await renderPage()
 
-    await act(async () => button('New box')?.click())
+    await act(async () => button('New Box')?.click())
 
     expect(state.newBoxImage).toBe('python')
   })

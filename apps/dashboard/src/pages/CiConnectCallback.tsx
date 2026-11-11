@@ -69,7 +69,7 @@ export default function CiConnectCallback() {
       >
         Back to Connects
       </Link>
-      <h1 className="font-display text-2xl font-semibold">Connect GitHub CI</h1>
+      <h1 className="font-display text-page font-semibold">Connect GitHub CI</h1>
       {!view && !failed && <p role="status">Verifying GitHub authorization…</p>}
       {storageFailed && (
         <div role="alert">

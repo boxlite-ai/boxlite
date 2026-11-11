@@ -19,6 +19,7 @@ import { BoxDto } from '../box/dto/box.dto'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { McpDelegation } from '../auth/mcp-delegation'
@@ -78,6 +79,7 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
       providers: [
         { provide: BoxService, useValue: service },
         { provide: BoxStateWaiterService, useValue: {} },
+        { provide: CheckpointRecoverService, useValue: {} },
         { provide: CommerceBoxLimitService, useValue: {} },
       ],
     })

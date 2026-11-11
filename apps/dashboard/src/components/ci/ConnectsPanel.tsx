@@ -120,10 +120,10 @@ export function ConnectsPanel() {
       )}
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full min-w-[680px] text-left text-body">
-          <thead className="border-b border-border font-mono text-label uppercase text-muted-foreground">
+          <thead className="border-b border-border font-mono text-meta text-muted-foreground">
             <tr>
               {['GitHub account', 'Type', 'Listener', 'Private repositories', 'Actions'].map((title) => (
-                <th key={title} className="px-2 pb-2 font-normal last:text-right">
+                <th key={title} className="px-2 pb-2 font-medium last:text-right">
                   {title}
                 </th>
               ))}
@@ -167,7 +167,6 @@ export function ConnectsPanel() {
                       <AsciiButton
                         size="sm"
                         type="button"
-                        className="uppercase"
                         disabled={busy}
                         title={`Update connection to ${connection.github_account}`}
                         onClick={() => {

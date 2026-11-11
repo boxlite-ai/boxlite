@@ -7,25 +7,35 @@ and `SimpleBox.agents`, including synchronous wrappers, grouped options and erro
 
 ## Managed checkpoints
 
+Checkpoint settings must be omitted, including explicit defaults such as
+`detach=False`, `tty=False`, or `advanced=AdvancedBoxOptions(privileged=False)`.
+Explicit empty `env`, `volumes`, `ports`, or `secrets` lists also reject.
+Omitted collection arguments default to `None` and normalize to empty lists;
+ordinary image creation continues accepting empty lists.
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
 The source must be stopped before `create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
 On REST runtimes, `runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
-`get(key)`, `remove(key, force=False)` and
-`import_box(key, name=None, *, box_id=None)`. `SyncBoxlite.checkpoints` exposes the same operations
-synchronously. These independent archives survive source deletion.
+`get(key)` and `remove(key, force=False)`. `SyncBoxlite.checkpoints` exposes the same
+operations synchronously. These independent archives survive source deletion.
 
 ```python
 checkpoint = await runtime.checkpoints.create("source", "dev-base")
-worker = await runtime.checkpoints.import_box(checkpoint.id, "worker")
+worker = await runtime.create(BoxOptions(checkpoint=checkpoint.id), name="worker")
 ```
 
-New imports and replacements inherit all saved execution settings; they accept no
-configuration overrides. `import_box(key, box_id=target)` requires an idle stopped or failed
-target and preserves the public Box ID. A cloud capture can initially report
+A box created from a checkpoint inherits all saved execution settings. Setting any
+other `BoxOptions` field, including `image` or `rootfs_path`, raises an
+invalid-argument error before a request is sent. A cloud capture can initially report
 `creating`; query it until `ready` before use. Force removal only ignores absence.
-Storage and replacement coordination belong to the server. Local runtime checkpoint
-operations raise an unsupported-operation error.
+Storage belongs to the server. Local runtime checkpoint operations, including
+`create` with a checkpoint, raise an unsupported-operation error.
 See [CLI lifecycle details](../../src/cli/README.md#checkpoint-management).
 
 ## Overview

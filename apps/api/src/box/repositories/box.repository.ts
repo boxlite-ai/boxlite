@@ -301,7 +301,6 @@ export class BoxRepository extends BaseRepository<Box> {
     organizationId: string,
     maxCreatedBoxes: number | undefined,
     persist: (entityManager: EntityManager) => Promise<T>,
-    existingBoxId?: string,
   ): Promise<T> {
     if (maxCreatedBoxes === undefined) {
       return this.dataSource.transaction(persist)
@@ -314,7 +313,6 @@ export class BoxRepository extends BaseRepository<Box> {
         where: {
           organizationId,
           state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
-          ...(existingBoxId ? { id: Not(existingBoxId) } : {}),
         },
       })
       if (currentCount >= maxCreatedBoxes) {
@@ -323,16 +321,6 @@ export class BoxRepository extends BaseRepository<Box> {
 
       return persist(entityManager)
     })
-  }
-
-  /** Count a recovery target once while admitting its pending replacement. */
-  async withCheckpointRestoreAdmission<T>(
-    organizationId: string,
-    boxId: string,
-    maxCreatedBoxes: number | undefined,
-    persist: (manager: EntityManager) => Promise<T>,
-  ): Promise<T> {
-    return this.withCreationAdmission(organizationId, maxCreatedBoxes, persist, boxId)
   }
 
   /** Read lifecycle state and ownership in one snapshot, without changing ordinary Box projections. */

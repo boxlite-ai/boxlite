@@ -73,13 +73,19 @@ impl<'a> ShimSpawner<'a> {
         if !security.jailer_enabled {
             return Err(BoxliteError::Engine("CPU limit requires the jailer".into()));
         }
-        crate::jailer::cgroup::set_cpu_max(self.box_id, limit, &security.resource_limits).map_err(
-            |error| {
-                BoxliteError::Engine(format!(
-                    "cannot apply CPU limit before starting VM: {error}"
-                ))
-            },
-        )
+        // Best-effort, like cgroup setup and membership: a host without a
+        // delegated CPU controller must still be able to start the Box.
+        if let Err(error) =
+            crate::jailer::cgroup::set_cpu_max(self.box_id, limit, &security.resource_limits)
+        {
+            tracing::error!(
+                box_id = %self.box_id,
+                cpus = limit.cores(),
+                error = %error,
+                "Cannot apply CPU limit; starting the Box without a CPU bandwidth limit"
+            );
+        }
+        Ok(())
     }
 
     /// Grant the confined shim the host files libkrun probes before enabling
@@ -268,7 +274,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn fractional_cpus_requires_quota_write_before_start() {
+    fn fractional_cpus_quota_write_failure_does_not_block_start() {
         let layout = test_layout();
         let mut options = BoxOptions::default();
         options.advanced.security.jailer_enabled = false;
@@ -281,7 +287,7 @@ mod tests {
         let limited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
         assert!(
             limited.apply_cpu_quota().is_err(),
-            "disabled jailer must fail closed"
+            "disabled jailer still rejects a fractional allocation"
         );
         options.advanced.security.jailer_enabled = true;
         let limited = ShimSpawner::new(
@@ -291,8 +297,8 @@ mod tests {
             &options,
         );
         assert!(
-            limited.apply_cpu_quota().is_err(),
-            "absent cgroup must fail closed"
+            limited.apply_cpu_quota().is_ok(),
+            "a failed cpu.max write must not block start"
         );
     }
 

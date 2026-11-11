@@ -1,5 +1,53 @@
 # BoxLite application API catalog
 
+## Organization nested virtualization allowlist (RC)
+
+System administrators control this Cloud creation rollout through the organization
+allowlist. Runner captures `BOXLITE_EXPERIMENTAL` at startup and reports nesting
+only when authorized and supported by the host. Local runtime and start behavior
+retain main's contract.
+
+| Current organization policy | Current Runner capability | New Box |
+| --- | --- | --- |
+| Disabled | Any | Ordinary; no capability request |
+| Enabled | Confirmed true | Configure nested virtualization at creation |
+| Enabled | False, missing, stale, invalid, failed or timed out | Ordinary |
+
+`GET` and `PUT /api/admin/organizations/{organizationId}/nested-virtualization`
+read or replace `{ "enabled": true }`. Both require a system administrator JWT
+or Admin API key. Organization owners and ordinary organization keys cannot grant
+permission. PUT requires a strict boolean and rejects unknown properties.
+Unknown organizations return 404; audit records identify the target organization
+and administrator. Other organization writers update only their owned fields.
+
+At actual create dispatch, including UNKNOWN-state creation replay, the API reads
+current uncached organization policy and checks the selected Runner under the
+health deadline. Failed organization reads remain errors; capability discovery
+failures choose an ordinary creation. Allowlisted creates bypass ordinary warm VMs.
+
+V0 reads live `/info`; V2 reads the uncached authenticated heartbeat and requires
+READY state with a report at most 60 seconds old. Runner rechecks authorization
+and Linux KVM support before selecting new-box options. Guest privilege is independent.
+
+The standard C/Go AdvancedBoxOptions setter configures the existing runtime
+`advanced.nested_virtualization` option. Runtime create already persists BoxConfig;
+no new persistence interface or Cloud Box column is added. Creation replay adopts
+saved configuration without requesting a nesting upgrade; runtime's general reuse
+compatibility rules remain unchanged.
+
+Start takes no new options or nesting parameter. It uses the saved Box configuration
+without querying organization policy. For example, enabling the organization does
+not upgrade an existing ordinary Box on stop/start; disabling it does not downgrade
+an existing nested Box. Future creates use the new policy. A previously nested Box
+may fail to start if its assigned host later cannot provide the saved capability.
+
+The C start ABI, Rust default start, Go Start(ctx), CLI and other SDKs retain their
+original behavior. Recovery and migration gain no new nesting guarantee; archive
+migration remains incomplete. Deploy organization and Runner capability migrations
+before the compatible API and workers, then enable selected organizations.
+
+## Interface inventory
+
 This catalog lists the interfaces registered by the applications in this
 directory. It covers HTTP, WebSocket, CONNECT, OTLP, health, static-asset, and
 outbound event interfaces; each entry names the owning service and what the
@@ -38,7 +86,7 @@ The inventory is implementation-grounded:
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including clone, binary archive import/export,
 and runtime-wide metrics. `GET /v1/config` reports those archive capabilities as
-disabled. Checkpoint capture and JSON checkpoint import are a separate capability:
+disabled. Checkpoint capture and box creation from a checkpoint are a separate capability:
 `checkpoints_enabled` requires both `CHECKPOINTS_ENABLED=true` and a configured
 checkpoint archive prefix. Private tunnels are enabled; clients check that
 capability before every private prepare.
@@ -570,7 +618,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Checkpoints and checkpoint import</b> · 5 routes</summary>
+<summary><b>Checkpoints</b> · 5 routes</summary>
 
 | Method | Path | What it does |
 | ------ | ---- | ------------ |
@@ -578,23 +626,23 @@ organization membership.
 | `GET` | `/v1[/{prefix}]/checkpoints` | Lists organization checkpoints; accepts `pageToken` or `page_token`, and returns `next_page_token`. |
 | `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state and optional `error_reason`. |
 | `DELETE` | `/v1[/{prefix}]/checkpoints/{key}` | Deletes an unused checkpoint; `force=true` tolerates an already absent checkpoint, but active capture/use returns `409`; returns `204`. |
-| `POST` | `/v1[/{prefix}]/boxes/import` | Imports a checkpoint into a new Box (`201`) or replaces a specified Box (`200`). |
+| `POST` | `/v1[/{prefix}]/boxes` | With `checkpoint_id`, creates a Box from a checkpoint; returns `201`. |
 
-Import requires JSON: `{"checkpoint_id":"base","name":"child"}` creates a Box;
-`{"checkpoint_id":"base","box_id":"existing"}` replaces an existing Box while
-preserving its public cloud ID. `name` and `box_id` are mutually exclusive.
-Ordinary Box creation accepts no checkpoint selector, and there is no standalone
-checkpoint recover route. Binary archive upload is not supported by this hosted route.
+Ordinary Box creation takes the checkpoint: `{"checkpoint_id":"base","name":"child"}`
+creates a Box that inherits the saved settings. `checkpoint_id` excludes `image` and
+`rootfs_path`, and any field other than `name` returns `400`. There is no
+`/boxes/import` route on the hosted service and no way to replace an existing Box
+from a checkpoint.
 
 Capture requires a stopped, idle source; callers stop the Box and wait for
 `stopped` first. Other states return `409`; capture never automatically stops a Box.
 The runner checks again under its source-operation lock before native export.
 
-Capture, import, and deletion require `write:boxes`; reads require organization
-membership. Turning off checkpoint admission leaves reads, deletion, and already
-accepted work available. Import waits for the requested Box state; a failure after
-admission includes `boxId`, which clients query before considering another import.
-See [checkpoint capture and import](../../../../apps/api/README.md#checkpoint-capture)
+Capture, creation from a checkpoint, and deletion require `write:boxes`; reads require
+organization membership. Turning off checkpoint admission leaves reads, deletion, and
+already accepted work available. Creation waits for the Box to start; a failure after
+admission includes `boxId`, which clients query before considering another create.
+See [checkpoint capture and use](../../../../apps/api/README.md#checkpoint-capture)
 for storage and lifecycle details.
 
 </details>

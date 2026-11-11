@@ -26,6 +26,8 @@ pub(crate) struct ErrorResponse {
 pub(crate) struct FlatErrorResponse {
     pub message: String,
     pub code: Option<String>,
+    #[serde(rename = "boxId")]
+    pub box_id: Option<String>,
 }
 
 impl FlatErrorResponse {
@@ -35,8 +37,14 @@ impl FlatErrorResponse {
     /// arrive as a server fault, and hid the HTTP status from the mapper for
     /// good: the status-driven fallback was unreachable behind it.
     pub(crate) fn into_error_model(self) -> ErrorModel {
+        // Every language binding and the CLI preserve the message, while their
+        // existing error ABIs have no structured field for an admitted Box ID.
+        let message = match self.box_id {
+            Some(box_id) => format!("{} (boxId: {box_id})", self.message),
+            None => self.message,
+        };
         ErrorModel {
-            message: self.message,
+            message,
             error_type: "HttpError".to_string(),
             code: self.code.unwrap_or_default(),
             request_id: None,
@@ -162,6 +170,9 @@ impl CreateBoxRequest {
         let (image, rootfs_path) = match &options.rootfs {
             RootfsSpec::Image(img) => (Some(img.clone()), None),
             RootfsSpec::RootfsPath(path) => (None, Some(path.clone())),
+            // `RestRuntime::create` sends a checkpoint source as its own
+            // minimal request and never reaches this conversion.
+            RootfsSpec::Checkpoint(_) => (None, None),
         };
 
         let env = if options.env.is_empty() {

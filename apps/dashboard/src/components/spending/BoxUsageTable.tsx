@@ -125,7 +125,7 @@ export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading })
               ))
             : paginatedData.map((box, index) => (
                 <TableRow key={box.boxId ?? `row-${index}`}>
-                  <TableCell className="font-mono text-sm">
+                  <TableCell className="font-mono text-body">
                     <div className="flex items-center gap-2 group/copy-button">
                       <span className="truncate max-w-[200px]">{box.boxId}</span>
                       {box.boxId && <CopyButton value={box.boxId} tooltipText="Copy box ID" size="icon-xs" autoHide />}
@@ -154,10 +154,10 @@ export const BoxUsageTable: React.FC<BoxUsageTableProps> = ({ data, isLoading })
               ))}
             </SelectContent>
           </Select>
-          <div className="text-sm text-muted-foreground">{sortedData.length} total item(s)</div>
+          <div className="text-body text-muted-foreground">{sortedData.length} total item(s)</div>
         </div>
         <div className="flex items-center gap-4">
-          <div className="text-sm font-medium text-muted-foreground">
+          <div className="text-body font-medium text-muted-foreground">
             Page {pageIndex + 1} of {pageCount}
           </div>
           <div className="flex items-center space-x-2">

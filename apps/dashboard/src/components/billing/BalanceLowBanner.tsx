@@ -98,7 +98,7 @@ function BalanceWarningBanner({
       <div className={cn('flex flex-col gap-1', contained && 'min-w-0')}>
         <span
           className={cn(
-            'flex items-center gap-2 font-mono text-[12px] font-semibold',
+            'flex items-center gap-2 font-mono text-meta font-semibold',
             contained && 'items-start',
             destructive ? 'text-destructive' : 'text-warning',
           )}
@@ -109,14 +109,14 @@ function BalanceWarningBanner({
           />
           {title(formatAmount(balanceCents))}
         </span>
-        <span className={cn('font-mono text-[11px] text-muted-foreground', contained && 'break-words')}>
+        <span className={cn('font-mono text-meta text-muted-foreground', contained && 'break-words')}>
           {detail(warning)}
         </span>
       </div>
       {onAction && (
         <button
           className={cn(
-            'border px-4 py-2 font-mono text-[12px] transition-colors',
+            'border px-4 py-2 font-mono text-meta transition-colors',
             destructive
               ? 'border-destructive/60 text-destructive hover:bg-destructive/10'
               : 'border-warning/60 text-warning hover:bg-warning/10',

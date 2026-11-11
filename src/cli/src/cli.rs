@@ -552,6 +552,33 @@ where
     let command_path = selected_command_path(&matches);
     let scope = command_scope(&command_path).expect("parsed command must have a declared scope");
 
+    // Check presence before FromArgMatches or option normalization can erase
+    // explicit defaults. Global connection flags are independent of settings.
+    if let Some(("create", create)) = matches.subcommand()
+        && create.get_one::<String>("checkpoint").is_some()
+        && create.ids().any(|id| {
+            parser.find_subcommand("create").is_some_and(|command| {
+                command
+                    .get_arguments()
+                    .any(|argument| argument.get_id() == id)
+            }) && !matches!(id.as_str(), "checkpoint" | "name")
+                && !GlobalOption::ALL
+                    .iter()
+                    .any(|option| option.id() == id.as_str())
+                && create.value_source(id.as_str()) == Some(ValueSource::CommandLine)
+        })
+    {
+        let message = if ["image", "rootfs"]
+            .iter()
+            .any(|id| create.value_source(id) == Some(ValueSource::CommandLine))
+        {
+            "provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT"
+        } else {
+            "a box created from --checkpoint inherits its saved settings; only --name may accompany it"
+        };
+        return Err(parser.error(ErrorKind::ArgumentConflict, message));
+    }
+
     if let Some(option) = GlobalOption::ALL.iter().copied().find(|option| {
         !scope.allows(*option)
             && matches.value_source(option.id()) == Some(ValueSource::CommandLine)
@@ -757,7 +784,7 @@ pub enum Commands {
     Create(crate::commands::create::CreateArgs),
     /// Manage disk checkpoints on the selected REST server.
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
-    /// Import an archive or checkpoint; optionally replace an existing box.
+    /// Import a .boxlite archive into a new box.
     Import(crate::commands::import::ImportArgs),
 
     /// List boxes

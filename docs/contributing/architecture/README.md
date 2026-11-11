@@ -93,6 +93,30 @@ with the box and rechecked on every local start. The VMM exposes virtualization
 extensions to the guest, then the guest agent grants only its `/dev/kvm` device
 to the OCI workload.
 
+### Reader/writer locks
+
+`LockGuard::new_async` and `ReadLockGuard::new_async` retry nonblocking acquisition
+every 10ms with Tokio sleep. Cancelling a pending waiter must not release the
+current owner's lock. Dropping an acquired guard releases its lock; process exit
+also releases file locks when the last owning descriptor closes. Neither blocking
+nor asynchronous acquisition promises fairness.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=lock::` for the lock contract
+checks. Blocking tests acknowledge a failed acquisition before checking that the
+waiter cannot acquire until release. Cancellation checks probe read and write
+exclusion before releasing the owner. Reexecuted child processes independently
+open the manager and verify shared readers, writer exclusion, and exit release;
+control messages and deadlines bound the scenario, and cleanup kills/reaps children.
+
+The errno fixtures exercise real fatal kernel errors. Separate child-process tests
+interrupt blocking read/write acquisition with handled signals without `SA_RESTART`,
+verify that waiters remain excluded, then release the owner and verify acquisition.
+This covers blocking `EINTR` retries, not nonblocking `EINTR` injection: no
+deterministic local-filesystem trigger for the latter is established on macOS or
+Linux.
+See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)
+and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/flock.2).
+
 ### ShimController
 
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate
@@ -123,6 +147,16 @@ gRPC-based communication layer between host and guest.
 - `GuestSession`: High-level facade for service interfaces
 - `Connection`: Lazy gRPC channel management
 - Service interfaces: `GuestInterface`, `ContainerInterface`, `ExecutionInterface`
+
+Guest-ready confirms the guest agent's listener, while libkrun initializes the
+host Unix listener asynchronously. The portal attempts to connect immediately,
+then retries missing or refused sockets with asynchronous backoff from 10 ms to
+100 ms, bounded by the existing 30-second connection timeout.
+
+Other connection errors return immediately. A socket that never becomes
+connectable reaches the timeout; the retry covers connection establishment and
+does not replay RPCs. Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=portal::connection`
+for delayed-listener, timeout, and permanent-error regressions.
 
 ### Guest agent
 
@@ -394,13 +428,43 @@ host runtime, the shim, and the guest agent.
 - Single `RwLock` protects all mutable runtime state
 - Metrics use `AtomicU64` for lock-free updates
 
-### Single lock design
+### Runtime state lock
 
-BoxLite uses one `RwLock` for all mutable state:
+BoxLite uses an `RwLock` for shared runtime state:
 
 - Eliminates nested locking complexity
 - Simplifies reasoning about concurrency
 - Filesystem lock prevents multiple runtimes using same `BOXLITE_HOME`
+
+### Per-entity reader/writer locks
+
+`src/boxlite/src/lock/` provides locks identified by persisted `LockId` values.
+`FileLockManager` uses shared/exclusive `flock` locks across processes;
+`InMemoryLockManager` supplies the same read/write compatibility for tests within
+one process. Different lock IDs are independent.
+
+| Mode | Manual acquisition/release | RAII guard | Compatibility |
+| --- | --- | --- | --- |
+| Read | `read_lock` / `read_unlock`; `try_read_lock` | `ReadLockGuard` | Multiple readers may coexist. |
+| Write | `lock` / `unlock`; `try_lock` | `LockGuard` | Excludes readers and other writers. |
+
+Retrieve a separate handle for every concurrent acquisition, even for the same
+ID: cloning an `Arc<dyn Locker>` shares the file descriptor and lock ownership.
+For example, retrieve two handles to hold two read guards; dropping either guard
+then leaves the other reader protected. Nested acquisition and read-to-write
+upgrades are unsupported. Blocking acquisition is synchronous; fairness is not
+guaranteed.
+
+Blocking and nonblocking file-lock acquisition retry interrupted calls (`EINTR`)
+without changing the requested mode. Nonblocking acquisition returns `false` only
+for contention (`EWOULDBLOCK`/`EAGAIN`); other OS errors panic with their details.
+Async guards propagate those failures instead of treating them as a reason to keep
+polling.
+
+Existing boot and outbound-policy changes still acquire exclusive guards. Shared
+read support alone does not coordinate lifecycle and disk operations that use
+other locks. Custom `Locker` implementations inherit exclusive fallback read
+methods unless they implement shared reads themselves.
 
 ### Async design
 
