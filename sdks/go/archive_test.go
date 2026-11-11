@@ -573,7 +573,7 @@ func newArchiveImportServer(t *testing.T, started chan<- struct{}, release <-cha
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/config":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"capabilities":{"import_enabled":true,"export_enabled":true}}`)
+			_, _ = io.WriteString(w, apiVersionConfig(t))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/boxes/source-box":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{
@@ -614,7 +614,7 @@ func newArchiveExportServer(t *testing.T, started chan<- struct{}, release <-cha
 			}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/config":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"capabilities":{"export_enabled":true}}`)
+			_, _ = io.WriteString(w, apiVersionConfig(t))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/boxes/source-box/export":
 			startOnce.Do(func() { close(started) })
 			<-release

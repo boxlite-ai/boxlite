@@ -70,6 +70,10 @@ Update these together when preparing a release:
 - `sdks/python/pyproject.toml`: `project.version`.
 - `sdks/node/package.json` and `package-lock.json`: package version and lockfile root versions.
 - Root `package.json`: the `@boxlite-ai/boxlite` dependency range.
+- Run `make finalize:openapi BASE=origin/main` after the bump; commit the OpenAPI
+  version and generated API identity/rules, then run `make check:openapi:release`.
+  Only `next-release` requirements acquire the new release; `unplanned` and previously
+  assigned requirements stay unchanged. The workspace must advance beyond the base.
 
 Select Cargo lock entries by package name: third-party dependencies can share the
 old version number. `boxlite-test-utils` keeps its independent version. The Go release

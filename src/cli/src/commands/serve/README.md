@@ -115,7 +115,7 @@ All paths are relative to the server root (e.g. `http://localhost:8100`).
 
 | Method | Path                 | Handler               | Description                        |
 |--------|----------------------|-----------------------|------------------------------------|
-| GET    | `/v1/config`         | `config::get_config`  | Capability discovery (always public) |
+| GET    | `/v1/config`         | `config::get_config`  | Product version and legacy flags (always public) |
 | GET    | `/v1/me`             | `me::get_me`          | Identity of the calling credential |
 
 **Auth.** With `--api-key <KEY>` (or `$BOXLITE_SERVE_API_KEY`) set, every

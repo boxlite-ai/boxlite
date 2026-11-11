@@ -527,13 +527,13 @@ test('passes explicit management API endpoints into the API service', () => {
   assert.match(apiService, /OIDC_MANAGEMENT_API_TOKEN_URL: process\.env\.OIDC_MANAGEMENT_API_TOKEN_URL/)
 })
 
-test('reports the canonical workspace release unless VERSION overrides it', () => {
+test('keeps deployment release selection separate from the image API identity', () => {
   assert.match(liveConfig, /const workspaceVersion = readWorkspaceVersion\(\)/)
   assert.match(liveConfig, /resolvePublicDeploymentConfig\(process\.env, workspaceVersion\)/)
   assert.match(liveConfig, /proxyTemplateUrl, releaseVersion \} = deploymentConfig/)
 
   const apiService = configSection('const api = new sst.aws.Service(', '// Assumed by the Api task role')
-  assert.match(apiService, /VERSION: releaseVersion,/)
+  assert.doesNotMatch(apiService, /^\s*VERSION:/m, 'the deployed image owns its API identity')
 })
 
 test('the Api deploys either a published image or a build of the deployed checkout', () => {

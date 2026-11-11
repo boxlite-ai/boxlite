@@ -158,7 +158,9 @@ lifecycle tests cover database rollback.
 ## Guest Docker privilege
 
 REST creation accepts `advanced.privileged` (default false) and advertises
-`privileged_enabled` in `/v1/config`. The option is stored on the Box and
+`privileged_enabled` in `/v1/config` for older SDKs. New SDKs check the
+OpenAPI minimum against `api_version`, sourced from the deployed `VERSION`,
+just like the `X-BoxLite-Api-Version` header. The option is stored on the Box and
 forwarded by both runner adapters on creation and by v0 recovery. Subsequent
 starts reuse the runtime's persisted guest settings. The
 pre-deploy migration initializes existing Boxes to false. Privileged requests
@@ -633,3 +635,13 @@ Run `make test:apps:api TEST_FILES='attach-audit.*spec|audit-write-deadline.*spe
 for real local WebSocket lifecycle and authentication tests.
 See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
 for backfill limits and index details.
+
+## API release identity
+
+`GET /v1/config` reports the generated API identity bundled with this source, unless
+`VERSION` is explicitly supplied. Cloud publication passes that same identity to the
+image; deployment must not overwrite it with the deployment tool's workspace version.
+Direct Docker builds and local API runs use the bundled value when `VERSION` is absent.
+Development identities match pending SDK rules exactly; release preparation replaces
+`next-release` with the chosen product version. `unplanned` stays explicitly unsupported.
+See [version declarations and release finalization](../../docs/reference/README.md#adding-an-operation-or-request-field).

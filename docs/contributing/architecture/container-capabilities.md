@@ -54,25 +54,24 @@ the resolved type and cannot reinterpret the policy.
 Every versioned boundary negotiates capability support before a policy can be
 silently dropped:
 
-- A remote SDK re-reads `linux_capabilities_enabled` from `GET /v1/config`
-  (uncached) immediately before creating a box with a custom policy, so a
-  server rollback cannot be masked by a stale discovery cache.
+- A remote SDK checks the OpenAPI minimum release for `advanced.capabilities`
+  against `api_version` from `GET /v1/config`. Discovery is shared for the client
+  lifetime without TTL; recreate the client after server upgrades. Rollbacks and
+  rolling upgrades are outside this contract. See [version checks](../../reference/README.md#sdk-server-version-checks).
 - A BoxLite host requires the guest to report version 0.9.8 or newer from
   Ping before sending the nested policy. Guest rootfs images are cached per
   version and reused, so an older guest can outlive its release; it would
   decode the new field as unknown proto and drop it.
 
-A stale server or too-old guest therefore fails closed. Boundaries that do
+A server below the declared minimum or a too-old guest therefore fails closed. Boundaries that do
 not carry a custom policy are unaffected: ordinary create, get, and list keep
 working against any server version. Inspection does not report the policy —
 it is create-time configuration, not box state.
 
-The cloud control plane does not carry the policy yet. `boxlite serve` and the
-reference server are the server side of the contract above. The hosted API
-does not advertise `linux_capabilities_enabled`, so a BoxLite client refuses
-to send a policy to it — the gate is on the client, not the server. A client
-that skips that negotiation and posts `advanced` anyway has the field
-dropped, because the hosted API does not reject unknown properties.
+The cloud control plane rejects custom policies explicitly in
+`AdvancedBoxOptionsDto`; version compatibility does not override deployment
+support. `boxlite serve` and the reference server carry the policy to the
+runtime. Existing capability advertisements remain for older SDK consumers.
 
 Named `get_or_create` on the local runtime refuses to adopt an existing box
 whose capability policy differs from the requested one, so reuse cannot

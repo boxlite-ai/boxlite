@@ -515,7 +515,20 @@ test\:unit\:gvproxy:
 # directory needs python-dotenv, fastapi and pydantic, which no setup target
 # here installs — discovering the whole directory would fail this suite on
 # every checkout that does not intend to run the server.
-test\:unit\:openapi:
+generate\:openapi:
+	@python3 openapi/generate_version_rules.py
+
+finalize\:openapi:
+	@python3 openapi/generate_version_rules.py --finalize --base "$$BASE"
+
+check\:openapi\:release:
+	@python3 openapi/generate_version_rules.py --check --release --tag "$$RELEASE_TAG"
+
+check\:openapi:
+	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
+
+test\:unit\:openapi: check\:openapi
+	@python3 -m unittest discover -s openapi/tests -v
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
@@ -667,6 +680,10 @@ test\:apps\:infra: _ensure-infra-deps
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
+
+test\:apps\:mbuild: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mbuild
+	@cd apps/infra && npm run --silent test:mbuild
 
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."

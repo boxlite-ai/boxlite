@@ -442,7 +442,7 @@ mod tests {
                     let reply = if head.starts_with("GET /v1/boxes/box1 ") {
                         r#"{"box_id":"box1","status":"running","created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z","image":"alpine","cpus":1,"memory_mib":256}"#.to_string()
                     } else if head.starts_with("GET /v1/config ") {
-                        r#"{"capabilities":{"private_tunnels_enabled":true}}"#.to_string()
+                        serde_json::json!({"api_version":boxlite::api_version(),"capabilities":{"private_tunnels_enabled":true}}).to_string()
                     } else if head.starts_with("POST /v1/boxes/box1/network/tunnel?port=3000 ") {
                         let private = body.contains(r#""isPublic":false"#);
                         bodies.send(body).unwrap();
