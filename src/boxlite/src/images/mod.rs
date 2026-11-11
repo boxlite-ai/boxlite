@@ -1,6 +1,7 @@
 mod archive;
 mod blob_source;
 mod config;
+mod id;
 mod image_disk;
 pub(crate) mod image_registry_proxy;
 mod manager;
@@ -16,19 +17,14 @@ pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
 pub use object::{ImageObject, ResolvedImage};
 
-/// Cache and registry fixtures for tests of code that pulls through an
-/// [`ImageManager`], so they exercise the real store rather than a stand-in.
+/// Real cache fixtures shared by core, CLI and binding tests.
+#[cfg(any(test, feature = "test-support"))]
+#[path = "tests/support.rs"]
+pub mod test_support;
+
 #[cfg(test)]
-pub(crate) mod test_support {
-    use super::ImageManager;
-
-    pub(crate) use super::store::tests::registry_answering;
-
-    /// Put a build in `images`' cache under `image_ref`, as a pull leaves it.
-    pub(crate) async fn seed_cached_build(images: &ImageManager, image_ref: &str, digest: &str) {
-        super::store::tests::seed_cached_build(images.store(), image_ref, digest).await;
-    }
-}
+#[path = "tests/id_contracts.rs"]
+mod id_contracts;
 
 use oci_client::Reference;
 

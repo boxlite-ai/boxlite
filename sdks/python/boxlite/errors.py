@@ -6,6 +6,7 @@ Provides a hierarchy of exceptions for different failure modes.
 
 __all__ = [
     "AlreadyExistsError",
+    "AmbiguousImageIdError",
     "BoxliteError",
     "ConfigError",
     "DatabaseError",
@@ -13,6 +14,8 @@ __all__ = [
     "ExecError",
     "ExecutionError",
     "ImageError",
+    "ImageHasTagsError",
+    "ImageUsedByBoxesError",
     "InternalError",
     "InvalidArgumentError",
     "InvalidStateError",
@@ -65,10 +68,10 @@ class _NativeError(BoxliteError, RuntimeError):
     """
     A failure the native runtime reported.
 
-    Each subclass is one class of `BoxliteError::http()`
+    Each subclass is one class of `BoxliteError::native()`
     (src/shared/src/errors.rs), named as it names it, and `code` is the
-    machine code it gives — the same one a REST server answers with. Also a
-    `RuntimeError`, because that is what every native failure was raised as
+    machine code it gives. Local cache removal has finer categories than HTTP.
+    Also a `RuntimeError`, because that is what every native failure was raised as
     before these classes existed.
     """
 
@@ -121,6 +124,24 @@ class ImageError(_NativeError):
     """An image could not be pulled or read."""
 
     code = "image_pull_failed"
+
+
+class AmbiguousImageIdError(_NativeError):
+    """A local image ID prefix matches multiple manifests."""
+
+    code = "ambiguous_image_id"
+
+
+class ImageHasTagsError(_NativeError):
+    """Tag references prevent local image removal; the message lists them."""
+
+    code = "image_has_tags"
+
+
+class ImageUsedByBoxesError(_NativeError):
+    """Existing boxes prevent removal; the message lists their IDs."""
+
+    code = "image_used_by_boxes"
 
 
 class ExecutionError(_NativeError):

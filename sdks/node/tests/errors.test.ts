@@ -168,7 +168,7 @@ describe("Error Hierarchy", () => {
 });
 
 // The prefix each variant's Display starts with and the code
-// `BoxliteError::http()` gives it, read out of the Rust source so `errorCode`
+// `BoxliteError::native()` gives it (falling back to http()), read from source so `errorCode`
 // is checked against what the runtime emits rather than against a copy.
 const RUST_ERRORS = readFileSync(
   new URL("../../../src/shared/src/errors.rs", import.meta.url),
@@ -189,6 +189,12 @@ function runtimeVariants(): Array<{
       codes.set(variant[1], arm[2]);
     }
   }
+  const native = RUST_ERRORS.slice(RUST_ERRORS.indexOf("pub fn native("));
+  for (const arm of native.matchAll(
+    /Self::(\w+)\(_\)\s*=>\s*\{?\s*\("\w+",\s*"(\w+)"\)/g,
+  )) {
+    codes.set(arm[1], arm[2]);
+  }
   return [...RUST_ERRORS.matchAll(/#\[error\("([^"]*)"\)\]\s*(\w+)/g)].map(
     ([, display, name]) => ({
       name,
@@ -201,10 +207,10 @@ function runtimeVariants(): Array<{
 describe("errorCode", () => {
   test("reads the code of every failure the runtime reports", () => {
     const variants = runtimeVariants();
-    expect(variants).toHaveLength(21);
+    expect(variants).toHaveLength(24);
 
     for (const { name, display, code } of variants) {
-      expect(code, `${name} has no arm in http()`).toBeDefined();
+      expect(code, `${name} has no native error classification`).toBeDefined();
       expect(errorCode(new Error(`${display}detail`)), name).toBe(code);
     }
   });

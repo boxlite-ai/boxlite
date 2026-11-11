@@ -95,3 +95,15 @@ existing boxes unchanged; neither operation updates the upstream registry.
 Registry credentials are managed through `runtime.images.registries` in Python
 and Node, `runtime.images()?.registries()?` in Rust and `images.Registries()` in
 Go. Embedded runtimes use their configured image registry logins instead.
+
+## Cache access and local IDs
+
+`images.resolve_ids()` resolves a batch against one raw local cache snapshot.
+Each input returns its own full manifest ID or an invalid, unknown, or ambiguous-ID error.
+Repeated references to one manifest count as one match; explicit digest references are included.
+REST runtimes return Unsupported without sending a request.
+
+Pulls, image objects, box creation, and initialization retain shared cache access.
+Image-object clones and detached extraction workers also retain the runtime home lock.
+Release all consumers before reopening that home in another runtime.
+The removal result and error contracts are available for the local reclamation backend.
