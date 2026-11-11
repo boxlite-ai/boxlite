@@ -27,7 +27,9 @@ func createDtoWithUnknownFilestore(id string) dto.CreateBoxDTO {
 		Id:              id,
 		OutboundEnabled: &outbound,
 		Volumes: []dto.VolumeDTO{
-			{Filestore: &dto.FilestoreRef{Instance: "not-in-registry"}},
+			// A well-formed volume id: the helper probes the later failure
+			// (unknown instance), so the volume id guard must admit it.
+			{VolumeId: "vol-probe", Filestore: &dto.FilestoreRef{Instance: "not-in-registry"}},
 		},
 	}
 }
