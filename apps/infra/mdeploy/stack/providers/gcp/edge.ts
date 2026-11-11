@@ -96,6 +96,7 @@ export const gcpEdgeProvider =
     runnerServiceAccount,
     zoneId,
     dependsOn,
+    proxyAddress,
   }: {
     project: string
     host: Extract<WorkloadHost, { cloud: 'gcp'; runtime: 'gke' }>
@@ -106,6 +107,8 @@ export const gcpEdgeProvider =
     runnerServiceAccount: $util.Output<string>
     zoneId: string
     dependsOn: any[]
+    /** Shared with API custom-domain DNS validation and TLS probes. */
+    proxyAddress: $util.Output<string>
   }): EdgeProvider =>
   (request: EdgeRequest): Edge => {
     const name = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })
@@ -593,7 +596,6 @@ export const gcpEdgeProvider =
 
     // These logical names are unchanged, so the IP, certificate map binding and
     // DNS records stay in place while only ProxyBackend changes its group.
-    const address = new gcp.compute.GlobalAddress('ProxyAddress', { name, project })
     const sslProxy = new gcp.compute.TargetSSLProxy('ProxyTargetSslProxy', {
       name,
       project,
@@ -606,7 +608,7 @@ export const gcpEdgeProvider =
       loadBalancingScheme: 'EXTERNAL_MANAGED',
       ipProtocol: 'TCP',
       portRange: '443',
-      ipAddress: address.address,
+      ipAddress: proxyAddress,
       target: sslProxy.id,
     })
 
@@ -634,7 +636,7 @@ export const gcpEdgeProvider =
       zoneId,
       name: request.domain,
       type: 'A',
-      content: address.address,
+      content: proxyAddress,
       proxied: false,
       ttl: 60,
     })
@@ -642,7 +644,7 @@ export const gcpEdgeProvider =
       zoneId,
       name: `*.${request.domain}`,
       type: 'A',
-      content: address.address,
+      content: proxyAddress,
       proxied: false,
       ttl: 60,
     })
@@ -694,7 +696,7 @@ export const gcpEdgeProvider =
         zoneId: appZoneId,
         name: `*.${appDomain}`,
         type: 'A',
-        content: address.address,
+        content: proxyAddress,
         proxied: false,
         ttl: 60,
       })

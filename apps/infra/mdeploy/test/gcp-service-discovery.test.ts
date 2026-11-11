@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
 import { apiEnvironmentFrom } from '../src/api-environment.ts'
-import { gcpApiProvider } from '../stack/providers/gcp/api.ts'
+import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
 import { gcpCollectorProvider } from '../stack/providers/gcp/collector.ts'
 import { gcpRegistryProxyProvider } from '../stack/providers/gcp/registry-proxy.ts'
 import { recordServices } from './service-recording.ts'
+
+process.env.MSTAGE_CONFIG ??= fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url))
 
 export const platformServices = (stage: string, apiEnvironment: Record<string, string> = {}) =>
   recordServices('boxlite-app', stage, () => {
@@ -19,16 +22,22 @@ export const platformServices = (stage: string, apiEnvironment: Record<string, s
       subnetwork: 'sub',
       egressSubnetwork: 'egress',
     }
-    gcpApiProvider({
+    const providers = gcpStackProviders({
+      stage,
       project: 'boxlite-dev-project',
       region: 'us-east5',
       zone: 'us-east5-a',
+      appShort: 'bl-app',
       domain: 'stage.boxlite.ai',
-      dashboardDomain: null,
-      callers: [],
       zoneId: 'zone',
-      network: output('network'),
-      runnerAccount: output('runner@example.com'),
+      artifactsBucket: 'artifacts',
+      volumePrefix: 'boxlite-volume',
+    })
+    providers.api({
+      network: {
+        binding: { cloud: 'gcp', network: output('network') },
+        placementFor: () => placement,
+      } as any,
       dependencies: {
         placement,
         waitFor: [],
@@ -107,7 +116,6 @@ for (const reserved of [undefined, 'retired.example.test']) {
       CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project',
       CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: 'customer-map',
       CUSTOM_DOMAIN_TRAFFIC_HOST: 'proxy.stage.example.test',
-      CUSTOM_DOMAIN_EDGE_IPS: '192.0.2.10,192.0.2.11',
       ...(reserved ? { CUSTOM_DOMAIN_RESERVED_SUFFIXES: reserved } : {}),
     }
     const delivered = apiEnvironmentFromStore(settings)
@@ -122,6 +130,10 @@ for (const reserved of [undefined, 'retired.example.test']) {
       )
       assert.equal(Object.hasOwn(delivered.secrets, name), false)
     }
+    assert.equal(
+      String(envs.find((entry: { name: string }) => entry.name === 'CUSTOM_DOMAIN_EDGE_IPS')?.value),
+      'ProxyAddress:address',
+    )
     assert.equal(service.args.template.scaling.minInstanceCount, 1)
     assert.equal(container.resources.cpuIdle, false)
     assert.deepEqual(container.ports, { name: 'http1', containerPort: 3000 })
@@ -136,6 +148,19 @@ for (const reserved of [undefined, 'retired.example.test']) {
     assert.equal(String(grant.args.role), 'CustomDomainRuntimeRole')
   })
 }
+
+test('GCP replaces a stale stored edge IP with its reserved proxy address', () => {
+  const resources = platformServices('stage', {
+    CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project',
+    CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: 'customer-map',
+    CUSTOM_DOMAIN_TRAFFIC_HOST: 'proxy.stage.example.test',
+    CUSTOM_DOMAIN_EDGE_IPS: '192.0.2.99',
+  })
+  const envs = resources.find((resource) => resource.logical === 'Api')!.args.template.containers[0].envs.toJSON()
+  const entries = envs.filter((entry: { name: string }) => entry.name === 'CUSTOM_DOMAIN_EDGE_IPS')
+  assert.equal(entries.length, 1)
+  assert.equal(String(entries[0].value), 'ProxyAddress:address')
+})
 
 test('an unconfigured stage needs no custom-domain IAM or always-on API', () => {
   const delivered = apiEnvironmentFromStore({})

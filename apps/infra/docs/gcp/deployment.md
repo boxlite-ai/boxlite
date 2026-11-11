@@ -78,19 +78,28 @@ For locks, refresh or removal, follow [shared recovery](../deployment.md#recover
 
 ## Customer domain HTTPS
 
-API domain onboarding requires all four settings below. Supply them as
+API domain onboarding requires the first three settings below. Supply them as
 plain values in the stage's API environment group; do not put them only in a local
 shell or the secrets-reference channel.
 The manifest declares these as optional API values: an unconfigured environment
-stays disabled, while an enabled environment must supply all four together.
+stays disabled, while an enabled environment must supply all three together.
 
 | Setting | Required value |
 | --- | --- |
 | `CUSTOM_DOMAIN_GCP_PROJECT` | Project containing the proxy's Certificate Manager resources |
 | `CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP` | Existing global map ID attached to the proxy TargetSSLProxy; an ID, not a resource URL |
 | `CUSTOM_DOMAIN_TRAFFIC_HOST` | Stable public hostname resolving to the proxy's reserved entry IPs, e.g. the existing proxy root |
-| `CUSTOM_DOMAIN_EDGE_IPS` | Comma-separated fixed entry IPs, at most four; used for DNS comparison and TLS probes |
+| `CUSTOM_DOMAIN_EDGE_IPS` | Automatically supplied from the stack's reserved proxy address; any stored value is overridden on GCP |
 | `CUSTOM_DOMAIN_RESERVED_SUFFIXES` | Optional comma-separated additional platform namespaces, including retired platform suffixes |
+
+The GCP bundle shares the existing `ProxyAddress` resource between the API,
+proxy forwarding rule and DNS records. For example, when that resource resolves
+to `192.0.2.10`, the API receives `CUSTOM_DOMAIN_EDGE_IPS=192.0.2.10` without a
+stored IP setting or a DNS lookup. Pulumi tracks the resource dependency during
+both first deployment and updates; the resource's logical and physical names stay
+unchanged. The API still validates this runtime setting and uses it for DNS
+comparison and TLS probes. Deploy this infrastructure change before removing an
+existing stored value; older deployment code still needs it.
 
 Choose the workflow branch containing both the environment declarations and the
 custom-domain GCP provider. The workflow's `ref` input chooses application artifacts;
@@ -107,7 +116,7 @@ grant map mutation. With the feature enabled, Cloud Run keeps at least one insta
 and allocates CPU outside requests so the reconciliation worker continues at idle.
 This changes idle cost. Every proxy receives the required `PROXY_DOMAIN` namespace;
 other valid customer hosts always use exact domain lookup.
-API onboarding still requires all GCP settings above.
+API onboarding still requires all three operator-supplied GCP settings above.
 IP-host `GET /health` remains available to GKE and load-balancer probes, while
 customer-host `/health` resolves to the customer's service.
 
