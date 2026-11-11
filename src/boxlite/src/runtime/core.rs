@@ -1,6 +1,5 @@
 //! High-level sandbox runtime structures.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -8,7 +7,7 @@ use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::checkpoints::{CheckpointBackend, CheckpointHandle, LocalCheckpoints};
+use crate::runtime::checkpoints::{CheckpointBackend, CheckpointHandle};
 use crate::runtime::images::ImageBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::registries::RegistryBackend;
@@ -61,7 +60,7 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
-    checkpoint_backend: Arc<dyn CheckpointBackend>,
+    checkpoint_backend: Option<Arc<dyn CheckpointBackend>>,
     /// Image capability — an `Arc` view of the same backend, local or REST.
     image_backend: Arc<dyn ImageBackend>,
     /// Named-volume capability — an `Arc` view of the same backend (local or
@@ -98,20 +97,18 @@ impl BoxliteRuntime {
     /// - Filesystem initialization fails
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
-        let directory = options.checkpoints_directory()?;
         let local = LocalRuntime(RuntimeImpl::new(options)?);
-        Ok(Self::from_local(local, directory))
+        Ok(Self::from_local(local))
     }
 
     pub(crate) fn new_with_experimental_features(
         options: BoxliteOptions,
         features: ExperimentalFeatures,
     ) -> BoxliteResult<Self> {
-        let directory = options.checkpoints_directory()?;
         let local = LocalRuntime(RuntimeImpl::new_with_experimental_features(
             options, features,
         )?);
-        Ok(Self::from_local(local, directory))
+        Ok(Self::from_local(local))
     }
 
     /// Build a local runtime without host validation, for tests on hosts without
@@ -119,9 +116,8 @@ impl BoxliteRuntime {
     /// hypervisor operations.
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_for_test(options: BoxliteOptions) -> BoxliteResult<Self> {
-        let directory = options.checkpoints_directory()?;
         let local = LocalRuntime(RuntimeImpl::new_for_test(options)?);
-        Ok(Self::from_local(local, directory))
+        Ok(Self::from_local(local))
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -129,21 +125,18 @@ impl BoxliteRuntime {
         options: BoxliteOptions,
         features: ExperimentalFeatures,
     ) -> BoxliteResult<Self> {
-        let directory = options.checkpoints_directory()?;
-        Ok(Self::from_local(
-            LocalRuntime(RuntimeImpl::initialize(options, features)?),
-            directory,
-        ))
+        Ok(Self::from_local(LocalRuntime(RuntimeImpl::initialize(
+            options, features,
+        )?)))
     }
 
-    fn from_local(local: LocalRuntime, directory: PathBuf) -> Self {
-        let checkpoint_backend = Arc::new(LocalCheckpoints::new(Arc::clone(&local.0), directory));
+    pub(super) fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Self {
             backend: backend_arc,
-            checkpoint_backend,
+            checkpoint_backend: None,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
@@ -181,7 +174,7 @@ impl BoxliteRuntime {
         let checkpoint_backend = Arc::clone(&rest_runtime) as Arc<dyn CheckpointBackend>;
         Ok(Self {
             backend: rest_runtime,
-            checkpoint_backend,
+            checkpoint_backend: Some(checkpoint_backend),
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
@@ -408,9 +401,21 @@ impl BoxliteRuntime {
         self.backend.import_box(archive, name).await
     }
 
-    /// Managed disk checkpoints, independent of their source box's lifetime.
+    /// REST-managed disk checkpoints. Operations return Unsupported on local runtimes.
     pub fn checkpoints(&self) -> CheckpointHandle {
-        CheckpointHandle::new(Arc::clone(&self.checkpoint_backend))
+        CheckpointHandle::new(self.checkpoint_backend.as_ref().map(Arc::clone))
+    }
+
+    /// Validate a downloaded cloud archive for the runner's native import path.
+    /// This does not create or manage local checkpoints.
+    pub async fn prepare_checkpoint_archive(
+        &self,
+        source: super::checkpoint_archive::CheckpointArchiveSource,
+        platform_env: Option<std::collections::BTreeMap<String, String>>,
+    ) -> BoxliteResult<super::checkpoint_archive::PreparedCheckpointArchive> {
+        self.backend
+            .prepare_checkpoint_archive(source, platform_env)
+            .await
     }
 
     // ========================================================================
@@ -624,6 +629,39 @@ mod tests {
         })
         .expect("local runtime");
         (runtime, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn local_checkpoint_operations_are_unsupported_without_creating_storage() {
+        let (runtime, home) = local_runtime();
+        let checkpoints = runtime.checkpoints();
+        let errors = [
+            checkpoints
+                .create("source", Some("base".into()))
+                .await
+                .err()
+                .expect("local checkpoint creation must fail"),
+            checkpoints.list().await.unwrap_err(),
+            checkpoints.get("base").await.unwrap_err(),
+            checkpoints.remove("base", false).await.unwrap_err(),
+            checkpoints.remove("base", true).await.unwrap_err(),
+            checkpoints
+                .import_box("base", Some("worker".into()), None)
+                .await
+                .err()
+                .expect("local checkpoint import must fail"),
+            checkpoints
+                .import_box("base", None, Some("target"))
+                .await
+                .err()
+                .expect("local checkpoint import must fail"),
+        ];
+        for error in errors {
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+            assert!(error.to_string().contains("REST runtimes"), "{error}");
+        }
+        assert!(!home.path().join("checkpoints").exists());
+        assert!(runtime.list_info().await.unwrap().is_empty());
     }
 
     #[tokio::test]

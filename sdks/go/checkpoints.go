@@ -23,7 +23,7 @@ type CheckpointInfo struct {
 	ErrorReason string
 }
 
-// Checkpoints manages local or organization-scoped checkpoints. Its lifetime
+// Checkpoints manages organization-scoped checkpoints through REST. Its lifetime
 // follows the parent Runtime; it allocates no separate native handle.
 type Checkpoints struct{ runtime *Runtime }
 

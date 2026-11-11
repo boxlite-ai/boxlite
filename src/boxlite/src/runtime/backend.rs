@@ -67,6 +67,16 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
+    async fn prepare_checkpoint_archive(
+        &self,
+        _source: super::checkpoint_archive::CheckpointArchiveSource,
+        _platform_env: Option<std::collections::BTreeMap<String, String>>,
+    ) -> BoxliteResult<super::checkpoint_archive::PreparedCheckpointArchive> {
+        Err(BoxliteError::Unsupported(
+            "archive preparation requires a native runtime".into(),
+        ))
+    }
+
     /// Synchronous shutdown for atexit/Drop contexts.
     /// Default no-op (REST backend doesn't manage local processes).
     fn shutdown_sync(&self) {}

@@ -1,4 +1,4 @@
-//! Managed checkpoints share the local and REST runtime capability.
+//! REST-managed checkpoints; local runtimes raise an unsupported error.
 
 use std::sync::Arc;
 

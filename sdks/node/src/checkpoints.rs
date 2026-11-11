@@ -1,4 +1,4 @@
-//! Managed disk checkpoints for local and REST runtimes.
+//! REST-managed disk checkpoints; local runtimes return Unsupported.
 
 use std::sync::Arc;
 

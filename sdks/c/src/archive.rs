@@ -8,7 +8,7 @@ use std::os::raw::{c_char, c_void};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use boxlite::runtime::checkpoints::{CheckpointArchiveSource, PreparedCheckpointArchive};
+use boxlite::runtime::checkpoint_archive::{CheckpointArchiveSource, PreparedCheckpointArchive};
 use boxlite::{BoxArchive, BoxliteError, ExportOptions};
 use tokio::runtime::Runtime as TokioRuntime;
 
@@ -91,14 +91,14 @@ pub unsafe extern "C" fn boxlite_runtime_prepare_checkpoint_archive(
         unsafe { write_error(out_error, error) };
         return code;
     }
-    let checkpoints = runtime.runtime.checkpoints();
+    let core = runtime.runtime.clone();
     let task_runtime = runtime.tokio_rt.clone();
     let queue = runtime.queue.clone();
     let user_data = user_data as usize;
     runtime.tokio_rt.spawn(async move {
         let _guard = TokioRuntimeDropGuard::new(task_runtime);
-        let result = checkpoints
-            .prepare_archive(source, env)
+        let result = core
+            .prepare_checkpoint_archive(source, env)
             .await
             .and_then(|archive| {
                 let path = archive_path_to_c_string(archive.path())?;

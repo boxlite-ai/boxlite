@@ -15,7 +15,7 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 The source must be stopped before `create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-The local and REST runtime's `checkpoints` handle exposes `create`, `list`,
+The REST runtime's `checkpoints` handle exposes `create`, `list`,
 `get`, `remove` and `importBox(key, name?, boxId?)` as promises. Checkpoints survive
 their source box and inherit its saved execution settings without overrides.
 
@@ -27,13 +27,9 @@ const worker = await runtime.checkpoints.importBox(checkpoint.id, "worker");
 Omit `boxId` to create a new Box; `name` and `boxId` are mutually exclusive.
 Cloud capture may initially report `creating`; query until `ready` before use.
 `importBox(checkpointId, undefined, targetId)` requires an idle stopped or failed target.
-Local replacement preserves the name and returns a new native ID; REST replacement
-preserves the public Box ID. `remove(key, true)` ignores absence only.
-Create local replacement targets with `autoDelete: 0` so stopping retains them.
-
-Local archives default to `<BOXLITE_HOME>/checkpoints`. Supply `checkpointsDir`
-in runtime options, or set `BOXLITE_CHECKPOINTS_DIR`; explicit options take
-precedence. REST runtimes use server storage.
+REST replacement preserves the public Box ID. `remove(key, true)` ignores
+absence only. Storage and replacement coordination belong to the server.
+Local runtime checkpoint operations reject with an unsupported-operation error.
 
 ## Features
 

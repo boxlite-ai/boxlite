@@ -372,7 +372,6 @@ export interface JsBoxOptions {
 
 export interface JsOptions {
   homeDir?: string;
-  checkpointsDir?: string;
   imageRegistries?: JsImageRegistry[];
 }
 

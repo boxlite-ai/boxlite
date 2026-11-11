@@ -1,7 +1,6 @@
-//! Checkpoint commands use the same management handle for local and REST.
+//! REST checkpoint commands use CheckpointHandle.
 
 use std::io::Write;
-use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use boxlite::{BoxliteRuntime, CheckpointInfo};
@@ -11,17 +10,8 @@ use tabled::Tabled;
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
 
-#[derive(Args, Debug, Default)]
-pub struct StorageArgs {
-    /// Local checkpoint directory; defaults to <BOXLITE_HOME>/checkpoints.
-    #[arg(long, global = true, value_name = "PATH")]
-    pub checkpoints_dir: Option<PathBuf>,
-}
-
 #[derive(Args, Debug)]
 pub struct CheckpointArgs {
-    #[command(flatten)]
-    pub storage: StorageArgs,
     #[command(subcommand)]
     pub command: CheckpointCommand,
 }
@@ -72,26 +62,17 @@ pub struct DeleteArgs {
     pub force: bool,
 }
 
-pub(crate) fn runtime(global: &GlobalFlags, storage: &StorageArgs) -> Result<BoxliteRuntime> {
-    if global.targets_rest()? {
-        if storage.checkpoints_dir.is_some() {
-            bail!("--checkpoints-dir is local; configure checkpoint storage on the server");
-        }
-        return global.create_runtime();
+pub(crate) fn runtime(global: &GlobalFlags) -> Result<BoxliteRuntime> {
+    if !global.targets_rest()? {
+        bail!(
+            "checkpoints are only implemented for REST runtimes; select a REST context or use --url"
+        );
     }
-    global.create_runtime_with_options(local_options(global, storage)?)
-}
-
-fn local_options(global: &GlobalFlags, storage: &StorageArgs) -> Result<boxlite::BoxliteOptions> {
-    let mut options = global.resolve_runtime_options()?;
-    if let Some(directory) = &storage.checkpoints_dir {
-        options.checkpoints_dir = Some(directory.clone());
-    }
-    Ok(options)
+    global.create_runtime()
 }
 
 pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
-    let rt = runtime(global, &args.storage)?;
+    let rt = runtime(global)?;
     let checkpoints = rt.checkpoints();
     match args.command {
         CheckpointCommand::Create(args) => {
@@ -164,43 +145,4 @@ fn table(writer: &mut dyn Write, infos: &[CheckpointInfo]) -> Result<()> {
         .collect();
     writeln!(writer, "{}", formatter::create_table(rows))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cli::{Cli, Commands};
-    use clap::Parser;
-
-    #[test]
-    fn checkpoint_storage_flag_overrides_the_loaded_configuration() {
-        let temporary = tempfile::tempdir().unwrap();
-        let config = temporary.path().join("config.json");
-        let home = temporary.path().join("runtime");
-        let explicit = temporary.path().join("explicit");
-        std::fs::write(
-            &config,
-            serde_json::to_vec(&serde_json::json!({
-                "home_dir": home, "checkpoints_dir": temporary.path().join("configured")
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let cli = Cli::try_parse_from([
-            "boxlite",
-            "--config",
-            config.to_str().unwrap(),
-            "checkpoint",
-            "--checkpoints-dir",
-            explicit.to_str().unwrap(),
-            "list",
-        ])
-        .unwrap();
-        let Commands::Checkpoint(args) = cli.command else {
-            panic!("expected checkpoint command");
-        };
-        let options = local_options(&cli.global, &args.storage).unwrap();
-        assert_eq!(options.home_dir, home);
-        assert_eq!(options.checkpoints_directory().unwrap(), explicit);
-    }
 }

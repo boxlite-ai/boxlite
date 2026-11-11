@@ -17,7 +17,6 @@ type RuntimeOption func(*runtimeConfig)
 
 type runtimeConfig struct {
 	homeDir              string
-	checkpointsDir       string
 	imageRegistries      []ImageRegistry
 	experimentalFeatures []string
 }
@@ -57,12 +56,6 @@ type ImageRegistry struct {
 // WithHomeDir sets the BoxLite data directory.
 func WithHomeDir(dir string) RuntimeOption {
 	return func(c *runtimeConfig) { c.homeDir = dir }
-}
-
-// WithCheckpointDir selects independent managed checkpoint storage. Empty uses
-// BOXLITE_CHECKPOINTS_DIR or the directory under the runtime home.
-func WithCheckpointDir(dir string) RuntimeOption {
-	return func(c *runtimeConfig) { c.checkpointsDir = dir }
 }
 
 // WithImageRegistry configures transport, TLS, search, and auth for a registry.

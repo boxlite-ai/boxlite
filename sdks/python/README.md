@@ -10,7 +10,7 @@ and `SimpleBox.agents`, including synchronous wrappers, grouped options and erro
 The source must be stopped before `create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-`runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
+On REST runtimes, `runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
 `get(key)`, `remove(key, force=False)` and
 `import_box(key, name=None, *, box_id=None)`. `SyncBoxlite.checkpoints` exposes the same operations
 synchronously. These independent archives survive source deletion.
@@ -22,16 +22,11 @@ worker = await runtime.checkpoints.import_box(checkpoint.id, "worker")
 
 New imports and replacements inherit all saved execution settings; they accept no
 configuration overrides. `import_box(key, box_id=target)` requires an idle stopped or failed
-target, preserves its name and returns a new native ID. REST replacement preserves
-the public Box ID. A cloud capture can initially report `creating`; query it
-until `ready` before use. Force removal only ignores absence.
-For a local target you intend to stop and replace, create it with
-`BoxOptions(auto_delete=0)` so stopping retains it.
-
-Local archives default to `<BOXLITE_HOME>/checkpoints`. Set
-`Options(checkpoints_dir="/data/checkpoints")` or `BOXLITE_CHECKPOINTS_DIR` to
-select another directory; explicit options take precedence. REST runtimes use
-server storage. See [CLI lifecycle details](../../src/cli/README.md#checkpoint-management).
+target and preserves the public Box ID. A cloud capture can initially report
+`creating`; query it until `ready` before use. Force removal only ignores absence.
+Storage and replacement coordination belong to the server. Local runtime checkpoint
+operations raise an unsupported-operation error.
+See [CLI lifecycle details](../../src/cli/README.md#checkpoint-management).
 
 ## Overview
 

@@ -1198,10 +1198,6 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
-        let _ownership = self
-            .runtime
-            .checkpoint_lifecycle
-            .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \

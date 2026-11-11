@@ -1,18 +1,8 @@
 //! Managed disk archives, independent of the source box and its snapshots.
 
-mod archive;
-mod catalog;
-mod lifecycle;
-mod local;
-pub use archive::PreparedCheckpointArchive;
-pub(crate) use lifecycle::{Lifecycle, RecoveryLease};
-pub(crate) use local::LocalCheckpoints;
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::{BoxliteError, BoxliteResult, LiteBox};
@@ -42,15 +32,6 @@ pub enum CheckpointState {
     Deleting,
 }
 
-/// Immutable archive identity supplied by checkpoint storage after download.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct CheckpointArchiveSource {
-    pub path: PathBuf,
-    /// Lowercase SHA-256 hex, optionally prefixed with `sha256:`.
-    pub sha256: String,
-    pub pinned_image: String,
-}
-
 #[allow(
     clippy::double_must_use,
     reason = "async_trait generates a must-use boxed future"
@@ -63,22 +44,12 @@ pub(crate) trait CheckpointBackend: Send + Sync {
     async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()>;
     async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox>;
     async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox>;
-
-    async fn prepare_archive(
-        &self,
-        _source: CheckpointArchiveSource,
-        _platform_env: Option<BTreeMap<String, String>>,
-    ) -> BoxliteResult<PreparedCheckpointArchive> {
-        Err(BoxliteError::Unsupported(
-            "checkpoint archive preparation requires a local runtime".into(),
-        ))
-    }
 }
 
-/// Runtime-wide checkpoint management for either local storage or a REST server.
+/// Checkpoint management through a REST server; local runtimes return Unsupported.
 #[derive(Clone)]
 pub struct CheckpointHandle {
-    backend: Arc<dyn CheckpointBackend>,
+    backend: Option<Arc<dyn CheckpointBackend>>,
 }
 
 impl std::fmt::Debug for CheckpointHandle {
@@ -88,11 +59,11 @@ impl std::fmt::Debug for CheckpointHandle {
 }
 
 impl CheckpointHandle {
-    pub(crate) fn new(backend: Arc<dyn CheckpointBackend>) -> Self {
+    pub(crate) fn new(backend: Option<Arc<dyn CheckpointBackend>>) -> Self {
         Self { backend }
     }
 
-    /// Capture the source box through its existing disk export operation.
+    /// Ask the REST server to capture a stopped source box.
     pub async fn create(
         &self,
         source: &str,
@@ -106,27 +77,26 @@ impl CheckpointHandle {
         if let Some(name) = &name {
             checked_name(name)?;
         }
-        self.backend.create(source, name).await
+        self.backend()?.create(source, name).await
     }
 
     pub async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>> {
-        self.backend.list().await
+        self.backend()?.list().await
     }
 
     pub async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo> {
         checked_name(key)?;
-        self.backend.get(key).await
+        self.backend()?.get(key).await
     }
 
     /// Force suppresses absence only, never an in-use or corrupt checkpoint.
     pub async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()> {
         checked_name(key)?;
-        self.backend.remove(key, force).await
+        self.backend()?.remove(key, force).await
     }
 
     /// Import into a new box, or replace an idle target selected by `box_id`.
-    /// Name and target are mutually exclusive. Local replacement preserves
-    /// the target name but assigns a new ID; REST keeps the public identity.
+    /// Name and target are mutually exclusive. Replacement preserves the public identity.
     /// Import retains the checkpoint archive for subsequent uses.
     pub async fn import_box(
         &self,
@@ -146,25 +116,19 @@ impl CheckpointHandle {
                     "import target must be a box ID or name".into(),
                 ));
             }
-            self.backend.recover_box(key, target).await
+            self.backend()?.recover_box(key, target).await
         } else {
             if let Some(name) = &name {
                 checked_name(name)?;
             }
-            self.backend.create_box(key, name).await
+            self.backend()?.create_box(key, name).await
         }
     }
 
-    /// Validate an archive and its pinned startup image before replacing a box.
-    /// The returned owner keeps a private derived archive alive for ordinary
-    /// import. Optional platform metadata may replace only reserved identity
-    /// keys; execution settings and other user variables are inherited.
-    pub async fn prepare_archive(
-        &self,
-        source: CheckpointArchiveSource,
-        platform_env: Option<BTreeMap<String, String>>,
-    ) -> BoxliteResult<PreparedCheckpointArchive> {
-        self.backend.prepare_archive(source, platform_env).await
+    fn backend(&self) -> BoxliteResult<&dyn CheckpointBackend> {
+        self.backend.as_deref().ok_or_else(|| {
+            BoxliteError::Unsupported("checkpoints are only implemented for REST runtimes".into())
+        })
     }
 }
 

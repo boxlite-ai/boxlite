@@ -21,7 +21,7 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 The source must be stopped before `Create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
-`runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`
 and `ImportBox(ctx, key, name, boxID)`, each taking a context. The handle follows its runtime's
 lifetime and needs no separate close. Captured archives survive source deletion.
 
@@ -37,15 +37,11 @@ Pass an empty `boxID` for a new Box; a nonempty `boxID` replaces that target.
 Name and target are mutually exclusive.
 
 Cloud capture may report `creating`; query until `ready` before use. New imports
-and replacements inherit all saved execution settings without overrides. Local
-replacement preserves the name and returns a new native ID; cloud replacement preserves
-the public Box ID. `Remove(ctx, key, true)` ignores absence only. Cancellation
-stops waiting; accepted native work continues under its ownership protection.
-Create local replacement targets with `WithAutoDeleteInterval(0)` so stopping retains them.
-
-Local storage defaults to `<BOXLITE_HOME>/checkpoints`. `WithCheckpointDir(path)`
-overrides `BOXLITE_CHECKPOINTS_DIR` and the default. REST storage belongs to the
-server. Existing archive export/import APIs retain their behavior.
+and replacements inherit all saved execution settings without overrides.
+Replacement preserves the public Box ID. `Remove(ctx, key, true)` ignores absence
+only. Local runtime checkpoint operations return an unsupported-operation error.
+Storage and replacement coordination belong to the server. Existing native archive
+export/import and the runner's archive preparation helper remain available.
 
 ### Create a box
 

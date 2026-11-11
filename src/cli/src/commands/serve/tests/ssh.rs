@@ -450,7 +450,6 @@ async fn serve_over(
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
         api_key: api_key.map(str::to_string),
-        checkpoint_operations: Default::default(),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),

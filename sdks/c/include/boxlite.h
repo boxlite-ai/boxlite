@@ -2140,16 +2140,6 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
 
-// Create a local runtime with an explicit checkpoint directory. Null directory
-// uses environment/default resolution; existing constructors keep their ABI.
-enum BoxliteErrorCode boxlite_runtime_new_with_checkpoint_directory(const char *home_dir,
-                                                                    const struct BoxliteImageRegistry *image_registries,
-                                                                    int image_registries_count,
-                                                                    const char *features,
-                                                                    const char *checkpoints_dir,
-                                                                    CBoxliteRuntime **out_runtime,
-                                                                    CBoxliteError *out_error);
-
 // Queue SSH configuration replacement. The caller's JSON is copied and
 // deserialized into the runtime's `SshConfig` at entry — a malformed or
 // non-UTF-8 body returns `InvalidArgument` with a constant message before

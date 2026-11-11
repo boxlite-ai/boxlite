@@ -163,9 +163,6 @@ func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) 
 	if _, err := checkpoints.ImportBox(cancelled, "base", "worker", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled: %v", err)
 	}
-	if _, err := NewRuntime(WithCheckpointDir("bad\x00directory")); !IsInvalidArgument(err) {
-		t.Fatalf("directory: %v", err)
-	}
 }
 
 func TestCheckpointManagementPropagatesBoundaryFailures(t *testing.T) {

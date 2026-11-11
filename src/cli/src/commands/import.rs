@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use std::path::PathBuf;
 
-use super::checkpoint::{StorageArgs, runtime};
+use super::checkpoint;
 use crate::cli::GlobalFlags;
 
 #[derive(Args, Debug)]
@@ -23,13 +23,11 @@ pub struct ImportArgs {
     /// Existing idle box to replace from a checkpoint.
     #[arg(long = "box", value_name = "ID", requires = "checkpoint")]
     pub box_id: Option<String>,
-    #[command(flatten)]
-    pub storage: StorageArgs,
 }
 
 pub async fn execute(args: ImportArgs, global: &GlobalFlags) -> Result<()> {
-    let rt = runtime(global, &args.storage)?;
     let bx = if let Some(key) = args.checkpoint {
+        let rt = checkpoint::runtime(global)?;
         rt.checkpoints()
             .import_box(&key, args.name, args.box_id.as_deref())
             .await?
@@ -37,6 +35,7 @@ pub async fn execute(args: ImportArgs, global: &GlobalFlags) -> Result<()> {
         let path = args
             .archive
             .expect("clap requires an archive or checkpoint");
+        let rt = global.create_runtime()?;
         rt.import_box(boxlite::BoxArchive::new(path), args.name)
             .await?
     };

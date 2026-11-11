@@ -120,8 +120,6 @@ pub type SharedRuntimeImpl = Arc<RuntimeImpl>;
 /// - Immutable fields: No lock needed - never change after creation
 /// - Atomic fields: Lock-free (RuntimeMetricsStorage uses AtomicU64)
 pub struct RuntimeImpl {
-    /// Name and native-ID ownership during checkpoint replacement.
-    pub(crate) checkpoint_lifecycle: super::checkpoints::Lifecycle,
     /// Coordination lock for multi-step atomic operations.
     /// Acquire this BEFORE accessing box_manager/image_manager
     /// when you need atomicity across multiple operations.
@@ -247,8 +245,6 @@ impl RuntimeImpl {
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
-        let checkpoint_lifecycle = super::checkpoints::Lifecycle::default();
-        checkpoint_lifecycle.register(options.checkpoints_directory()?);
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
             return Err(BoxliteError::Internal(format!(
@@ -355,7 +351,6 @@ impl RuntimeImpl {
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
-            checkpoint_lifecycle,
             sync_state: RwLock::new(SynchronizedState {
                 active_boxes_by_id: HashMap::new(),
                 active_boxes_by_name: HashMap::new(),
@@ -447,7 +442,6 @@ impl RuntimeImpl {
         name: Option<String>,
         reuse_existing: bool,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        let _ownership = self.checkpoint_lifecycle.read(None, name.as_deref())?;
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -664,24 +658,8 @@ impl RuntimeImpl {
 
     /// Remove a box completely by ID or name.
     pub fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
-        let _selector = self.checkpoint_lifecycle.deleting(Some(id_or_name), None)?;
-        let box_id = match self.resolve_id(id_or_name) {
-            Err(BoxliteError::NotFound(_)) if self.checkpoint_lifecycle.cancel(id_or_name)? => {
-                return Ok(());
-            }
-            result => result?,
-        };
-        let config = self
-            .box_manager
-            .box_by_id(&box_id)?
-            .map(|(config, _)| config);
-        let _ownership = self.checkpoint_lifecycle.deleting(
-            Some(box_id.as_ref()),
-            config.as_ref().and_then(|config| config.name.as_deref()),
-        )?;
-        self.remove_box(&box_id, force)?;
-        self.checkpoint_lifecycle.cancel(box_id.as_ref())?;
-        Ok(())
+        let box_id = self.resolve_id(id_or_name)?;
+        self.remove_box(&box_id, force)
     }
 
     // ========================================================================
@@ -1276,49 +1254,9 @@ impl RuntimeImpl {
         initial_status: BoxStatus,
         resolved_image: Option<crate::images::ResolvedImage>,
     ) -> BoxliteResult<LiteBox> {
-        let _ownership = self.checkpoint_lifecycle.read(None, name.as_deref())?;
-        self.provision_box_unlocked(
-            BoxIDMint::mint(),
-            staging_dir,
-            name,
-            options,
-            initial_status,
-            resolved_image,
-        )
-        .await
-    }
-
-    pub(crate) async fn provision_checkpoint_box(
-        self: &Arc<Self>,
-        staging_dir: std::path::PathBuf,
-        name: Option<String>,
-        options: BoxOptions,
-        import_id: BoxID,
-        ownership: &super::checkpoints::RecoveryLease,
-    ) -> BoxliteResult<LiteBox> {
-        ownership.check_name(name.as_deref())?;
-        self.provision_box_unlocked(
-            import_id,
-            staging_dir,
-            name,
-            options,
-            BoxStatus::Stopped,
-            None,
-        )
-        .await
-    }
-
-    async fn provision_box_unlocked(
-        self: &Arc<Self>,
-        box_id: BoxID,
-        staging_dir: std::path::PathBuf,
-        name: Option<String>,
-        options: BoxOptions,
-        initial_status: BoxStatus,
-        resolved_image: Option<crate::images::ResolvedImage>,
-    ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
+        let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
         let now = Utc::now();
 
@@ -1349,14 +1287,7 @@ impl RuntimeImpl {
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
 
-        let lock_id = match self.lock_manager.allocate() {
-            Ok(id) => id,
-            Err(error) => {
-                let _ = std::fs::remove_dir_all(&config.box_home);
-                config.sockets().remove();
-                return Err(error);
-            }
-        };
+        let lock_id = self.lock_manager.allocate()?;
         state.set_lock_id(lock_id);
 
         if let Err(e) = self.box_manager.add_box(&config, &state) {
@@ -1717,7 +1648,7 @@ impl RuntimeImpl {
     ///
     /// Checks both by name (if provided) and by ID. This prevents duplicate names
     /// even for boxes not yet persisted to database.
-    pub(super) fn get_or_create_box_impl(
+    fn get_or_create_box_impl(
         self: &Arc<Self>,
         config: BoxConfig,
         state: BoxState,
@@ -1942,6 +1873,14 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
         self.0.import_box(archive, name).await
+    }
+
+    async fn prepare_checkpoint_archive(
+        &self,
+        source: super::checkpoint_archive::CheckpointArchiveSource,
+        platform_env: Option<std::collections::BTreeMap<String, String>>,
+    ) -> BoxliteResult<super::checkpoint_archive::PreparedCheckpointArchive> {
+        super::checkpoint_archive::prepare(Arc::clone(&self.0), source, platform_env).await
     }
 
     fn shutdown_sync(&self) {
@@ -2430,53 +2369,6 @@ mod tests {
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
-    #[tokio::test]
-    async fn checkpoint_provision_removes_moved_disk_if_lock_allocation_fails() {
-        let (runtime, temporary) = create_test_runtime();
-        let id = BoxIDMint::mint();
-        let staging = temporary.path().join("staging");
-        std::fs::create_dir(&staging).unwrap();
-        std::fs::write(staging.join("marker"), b"archive disk").unwrap();
-        let saved_locks = temporary.path().join("saved-locks");
-        std::fs::rename(runtime.layout.locks_dir(), &saved_locks).unwrap();
-        let result = runtime
-            .provision_box_unlocked(
-                id.clone(),
-                staging,
-                Some("retry-target".into()),
-                BoxOptions::default(),
-                BoxStatus::Stopped,
-                None,
-            )
-            .await;
-        std::fs::rename(saved_locks, runtime.layout.locks_dir()).unwrap();
-        assert!(
-            result
-                .err()
-                .expect("lock allocation must fail")
-                .to_string()
-                .contains("failed to create lock file")
-        );
-        assert!(
-            !runtime.layout.boxes_dir().join(id.as_str()).exists(),
-            "failed import must release its canonical disk directory"
-        );
-        let retry = temporary.path().join("retry");
-        std::fs::create_dir(&retry).unwrap();
-        let imported = runtime
-            .provision_box_unlocked(
-                id.clone(),
-                retry,
-                Some("retry-target".into()),
-                BoxOptions::default(),
-                BoxStatus::Stopped,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(imported.id(), &id);
-    }
-
     fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
         let options = BoxliteOptions {
