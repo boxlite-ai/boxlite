@@ -3032,7 +3032,8 @@ mod tests {
                     }
                     let head = String::from_utf8(head).unwrap();
                     if head.starts_with("GET /v1/config ") {
-                        let body = r#"{"api_version":"0.12.0"}"#;
+                        let body = serde_json::json!({"api_version":crate::rest::api_version()})
+                            .to_string();
                         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                         continue;
                     }
@@ -3091,7 +3092,8 @@ mod tests {
                     }
                     let head = String::from_utf8(head).unwrap();
                     if head.starts_with("GET /v1/config ") {
-                        let body = r#"{"api_version":"0.12.0"}"#;
+                        let body = serde_json::json!({"api_version":crate::rest::api_version()})
+                            .to_string();
                         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
                     } else if head.starts_with("POST ") {
                         let length = head

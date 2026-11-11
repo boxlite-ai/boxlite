@@ -46,7 +46,7 @@ implementation currently serves all 35 paths:
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
 `GET /v1/config` reports `api_version`, using the server's product release
-number (the same numbering as SDK releases). Version compatibility does not
+number (the same numbering as SDK releases), with a generated development identity before finalization. Version compatibility does not
 promise that every deployment enables every operation. Servers still reject
 unsupported features and unauthorized requests explicitly. Existing discovery
 flags remain for older SDKs; new SDK checks use only the version.
@@ -74,64 +74,73 @@ their usual categories. Requested values are never silently omitted.
 
 ### Adding an operation or request field
 
-Declare the first release that will contain the feature, strictly above the
-version on the development base. For example, when developing on `0.12.0` for
-release `0.13.0`, a new operation declares:
-
-```yaml
-/{prefix}/boxes/{box_id}/diagnostics:
-  get:
-    operationId: getDiagnostics
-    x-boxlite-min-server-version: "0.13.0"
-    # parameters and responses follow the ordinary OpenAPI contract
-```
-
-For a new optional field whose contract already defines `false` as its default:
+Use `next-release` for an API or request field that will ship with the next product release.
+Set `info.version: next-release` too; contributors do not guess a future release number.
+Use `unplanned` when no supporting server release is known.
 
 ```yaml
 include_details:
   type: boolean
   default: false
-  x-boxlite-min-server-version: "0.13.0"
+  x-boxlite-min-server-version: next-release
   x-boxlite-version-check: non-default
 ```
 
-Omitted or `false` keeps the legacy request behavior; `true` requires `0.13.0`.
+Omitted or `false` preserves the legacy request; `true` triggers the rule.
 Use `present` when any supplied value requires support, including null, an empty
 string, or an empty object. Version annotations never add or change defaults.
-A future patch release does not necessarily contain a new feature, so declare
-its actual first release instead of accepting every server above the development version.
+An operation-level annotation applies to every request to that operation.
 
-1. Add the route or request property and its version declaration to `openapi/box.openapi.yaml`.
-2. Run `make setup:openapi` once in your Python environment, then `make generate:openapi`.
-3. Implement the ordinary SDK/server operation; no per-call compatibility hook is needed.
-4. Add real SDK request tests and run `make test:unit:openapi BASE=origin/main` plus the relevant SDK tests.
+| Minimum | Development behavior | Bump behavior |
+| --- | --- | --- |
+| `next-release` | Requires the identical generated development API identity | Replaced with the chosen release version |
+| `unplanned` | Returns `Unsupported`: not yet supported, before version discovery | Preserved unchanged |
+| Concrete SemVer | Requires that release or newer by SemVer precedence | Preserved unchanged |
 
-CI rejects stale generated data, new operations without future minima, and new
-reachable request properties/parameters without a future gate on themselves,
-a parent property, or their operation. Response-only/read-only additions do not
-need request gates. Previously released minima stay fixed as SDK versions advance.
-Unknown SDK routes fail locally instead of bypassing checks.
+Development identity is `<workspace-version>+dev.<SHA-256 of canonical OpenAPI>`.
+For example, a `0.12.0+dev.<digest>` SDK does not accept stable `0.12.0` or an
+unrelated newer release as proof of a pending feature; only the same full identity matches.
+This identifies the declared contract, not implementation correctness or authorization.
+A different contract, even a documentation edit, changes the digest.
+Numeric minima cannot exceed the workspace release, so exact development rules
+cannot hide a stricter released requirement. `unplanned` dominates all triggered rules.
+
+1. Add the operation or request field and its declaration to `openapi/box.openapi.yaml`.
+2. Run `make setup:openapi` once, then `make generate:openapi`.
+3. Add real SDK request tests; fixtures use the generated API identity rather than a guessed version.
+4. Run `make test:unit:openapi BASE=origin/main` and the relevant SDK tests.
+
+CI rejects stale generated rules/identity, ungated new operations and reachable
+request fields, malformed minima, and numeric requirements newer than the workspace.
+Response-only/read-only additions do not require request gates. Unknown SDK routes
+fail locally instead of bypassing checks.
 
 The generator supports local references, nested object properties, `allOf`,
 whole-property `present` checks, scalar `non-default` checks, and scalar query,
 header, and path parameters. Annotations inside arrays, maps, unions, parameter
-content, or non-JSON bodies fail generation; use an operation gate for those
-shapes. It does not validate general request schemas. Consumers use packaged
-rules and need no Python or YAML parser. Keep OpenAPI `info.version` aligned
-with the workspace version when publishing a release; CI checks this too.
+content, or non-JSON bodies fail generation; use an operation gate for those shapes.
+Consumers use packaged rules and need no Python or YAML parser.
 
-The initial migration uses `0.12.0`, the inspected source baseline, rather than
-claiming exact historical introduction releases:
+### Finalizing a release
 
-| Existing behavior | Version rule |
-| --- | --- |
-| Snapshot create/list/get/remove/restore | Operation minimum |
-| Clone, export, import | Operation minimum |
-| Custom Linux capability policy | `advanced.capabilities`, `present` |
-| Guest privilege | `advanced.privileged`, `non-default` (`false`) |
-| Per-execution user | `user`, `present` |
-| Private service tunnel | `isPublic`, `non-default` (`true`) |
+After the [workspace/SDK version bump](../contributing/development/building.md#release-version-alignment), run:
+
+```bash
+make finalize:openapi BASE=origin/main
+make check:openapi:release
+```
+
+The target requires a stable workspace version newer than the Git base. It replaces
+only `next-release` minima, sets `info.version` to that release, and regenerates
+`src/boxlite/src/rest/{version_rules,api_version}.json`. It preserves comments,
+previously assigned minima, and every `unplanned` declaration.
+Include those changes in the bump PR. Release checks refuse remaining `next-release`,
+stale artifacts, and mismatched release tags; `unplanned` remains valid and explicitly refused.
+SDK release workflows and cloud image release publication enforce these checks.
+
+The initial migration's snapshot, clone/export/import, capability policy,
+privilege, execution-user, and private-tunnel rules are `next-release`.
+They make no claim that released `0.12.0` supports the new compatibility contract.
 
 `{prefix}` is a deployment-defined routing slot, opaque to the client, published
 by a server as `Principal.path_prefix`. A single-tenant server may omit the

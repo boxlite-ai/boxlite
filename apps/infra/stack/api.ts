@@ -49,7 +49,6 @@ export function buildApi(input: ApiInputs) {
     foundation: { cluster, db, redis, storage },
     region: REGION,
     accountId,
-    releaseVersion,
     stackDomain,
     proxyDomain,
     proxyProtocol,
@@ -162,7 +161,6 @@ export function buildApi(input: ApiInputs) {
         PORT: String(PORTS.API),
         ENVIRONMENT: 'production',
         RUN_MIGRATIONS: 'true',
-        VERSION: releaseVersion,
         DEFAULT_REGION_ENFORCE_QUOTAS: 'false',
         DEFAULT_TEMPLATE: envOr('DEFAULT_TEMPLATE', 'boxlite/base'),
         // Box base images: the three *_IMAGE refs below are the built-in curated set

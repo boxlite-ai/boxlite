@@ -591,6 +591,7 @@ impl ApiClient {
         else {
             return Ok(());
         };
+        required.check_planned()?;
         let server = self
             .server_version
             .get_or_try_init(|| async {

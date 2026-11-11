@@ -14,3 +14,4 @@ pub mod options;
 pub(crate) mod runtime;
 pub(crate) mod types;
 mod version;
+pub use version::api_version;

@@ -518,6 +518,12 @@ test\:unit\:gvproxy:
 generate\:openapi:
 	@python3 openapi/generate_version_rules.py
 
+finalize\:openapi:
+	@python3 openapi/generate_version_rules.py --finalize --base "$$BASE"
+
+check\:openapi\:release:
+	@python3 openapi/generate_version_rules.py --check --release --tag "$$RELEASE_TAG"
+
 check\:openapi:
 	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
 
@@ -674,6 +680,10 @@ test\:apps\:infra: _ensure-infra-deps
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
+
+test\:apps\:mbuild: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mbuild
+	@cd apps/infra && npm run --silent test:mbuild
 
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."

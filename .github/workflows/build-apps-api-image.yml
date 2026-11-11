@@ -125,6 +125,21 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      - uses: ./.github/actions/setup-python
+        if: inputs.operation != 'promote'
+      - name: Validate API metadata
+        if: inputs.operation != 'promote'
+        env:
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: v${{ inputs.version }}
+        run: |
+          make setup:openapi
+          if [ "$OPERATION" = build ]; then
+            make check:openapi:release
+          else
+            make check:openapi
+          fi
+
       - name: Verify native AMD64 Docker
         shell: bash
         run: |
@@ -279,6 +294,7 @@ jobs:
           TARGET: ${{ steps.ecr.outputs.target }}
         run: |
           set -euo pipefail
+          VERSION=$(jq -er 'select(type == "string")' src/boxlite/src/rest/api_version.json)
           docker build --file apps/api/Dockerfile --build-arg "VERSION=$VERSION" --tag "$TARGET:$TAG" .
           docker push "$TARGET:$TAG"
 

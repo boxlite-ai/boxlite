@@ -8,8 +8,8 @@
  *   audit               nothing ships carrying a high-severity advisory. Runs
  *                       inside the loop so a re-publish that builds nothing is
  *                       not audited, and `promote` has no such step at all
- *   build, push         the commit is passed in as REVISION so the image can
- *                       name itself
+ *   build, push         the commit is passed as REVISION; artifacts with a
+ *                       versionFile also receive their API identity as VERSION
  *   scan gate           better a published image nobody may deploy than a
  *                       deployed image nobody scanned
  *
@@ -25,9 +25,10 @@
  */
 
 import { join, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { AuditConfig, BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
-import { addressFor, assertTag, type Registry } from './address.ts'
+import { addressFor, assertTag, RELEASE_VERSION, type Registry } from './address.ts'
 
 export class PublishError extends Error {
   constructor(message: string) {
@@ -609,6 +610,30 @@ export const publish = async ({
   clock?: Clock
 }): Promise<PublishOutcome[]> => {
   assertTag(tag)
+  const versions = new Map<string, string>()
+  for (const [artifact, declared] of Object.entries(config.artifacts)) {
+    if (!declared.versionFile) continue
+    const path = join(config.repository, declared.versionFile)
+    let version: unknown
+    try {
+      version = JSON.parse(readFileSync(path, 'utf8'))
+    } catch {
+      throw new PublishError(`Could not read the version JSON string at ${path}`)
+    }
+    if (
+      typeof version !== 'string' ||
+      !RELEASE_VERSION.test(`v${version.split('+')[0]}`) ||
+      !/^[0-9.]+(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version)
+    ) {
+      throw new PublishError(`${path} must contain a stable version, optionally with build metadata`)
+    }
+    if (tag.startsWith('v') && tag.slice(1, -41) !== version) {
+      throw new PublishError(
+        `Release image ${tag} does not match ${path} version ${version}; finalize the release first`,
+      )
+    }
+    versions.set(artifact, version)
+  }
   /*
    * Audited once, the first time a build is actually going to happen. Not up
    * front: a re-publish whose artifacts are all present builds nothing, and
@@ -643,7 +668,19 @@ export const publish = async ({
     log(`Building ${artifact} from ${dockerfile} as ${address}`)
     const built = await run(
       'docker',
-      ['build', '--platform', RUNTIME_PLATFORM, '--build-arg', `REVISION=${tag}`, '-f', dockerfile, '-t', address, context],
+      [
+        'build',
+        '--platform',
+        RUNTIME_PLATFORM,
+        '--build-arg',
+        `REVISION=${tag}`,
+        ...(versions.has(artifact) ? ['--build-arg', `VERSION=${versions.get(artifact)}`] : []),
+        '-f',
+        dockerfile,
+        '-t',
+        address,
+        context,
+      ],
       { echo: true },
     )
     // The exit code, not the output: docker already wrote the reason above.
