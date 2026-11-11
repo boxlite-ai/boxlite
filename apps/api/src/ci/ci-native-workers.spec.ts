@@ -23,6 +23,7 @@ import { CiNativeState } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'
 import { CiSettingsService } from './ci-settings.service'
 import { Box } from '../box/entities/box.entity'
+import { BoxCheckpointState } from '../box/entities/box-checkpoint-state.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
@@ -80,7 +81,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity],
+      entities: [Box, BoxLastActivity, BoxCheckpointState],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       extra: { options: `-c search_path=${schema},public` },
@@ -167,7 +168,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }
   })
   beforeEach(async () => {
-    await db.query('TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity')
+    await db.query(
+      'TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity,box_checkpoint_state',
+    )
     await db.query(
       `INSERT INTO ci_installation_binding VALUES($1,1,'github.com',$2,10,20,'owner','User',$3,$4,true,true,'ready')`,
       [binding, app, org, actor],

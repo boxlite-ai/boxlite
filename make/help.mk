@@ -36,7 +36,7 @@ help:
 	@echo "    make vmm:boot:host  - Build the same kernel with Linux host tools instead"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
-	@echo "    make build:apps:api  - Build and type-check the API for production"
+	@echo "    make build:apps:api  - Build API and validate production entity metadata"
 	@echo "    make build:apps:dashboard - Build and type-check the dashboard"
 
 	@echo "    make build:apps:api - Compile the production API"
@@ -92,6 +92,7 @@ help:
 	@echo "    make test:all:node          - Run all Node.js SDK tests"
 	@echo "    make test:unit:go           - Run Go SDK unit tests"
 	@echo "    make test:integration:go    - Run Go SDK archive round-trip test (requires VM, FILTER=<pattern>)"
+	@echo "    make test:integration:runner - Run runner native archive recovery tests (FILTER=<pattern>)"
 	@echo "    make test:all:go            - Run all Go SDK tests"
 	@echo "    make test:unit:c            - Run C SDK unit tests (no VM required)"
 	@echo "    make test:integration:c     - Run C SDK integration tests (requires VM)"

@@ -98,9 +98,12 @@ describe('DomainService.parseSubdomain', () => {
   )
 
   // `3000-abc.apps.example` would also parse as a legacy `<port>-<box>` host.
-  it.each(['3000-abc', '1-x', 'www', 'api', 'proxy', 'boxes', 'volumes'])('rejects %s as reserved', (value) => {
-    expect(() => service.parseSubdomain(value)).toThrow('reserved')
-  })
+  it.each(['3000-abc', '1-x', 'www', 'api', 'proxy', 'boxes', 'volumes', 'checkpoints'])(
+    'rejects %s as reserved',
+    (value) => {
+      expect(() => service.parseSubdomain(value)).toThrow('reserved')
+    },
+  )
 
   it('does not apply the minimum length: a held short name must stay bindable', () => {
     expect(service.parseSubdomain('ab')).toBe('ab')

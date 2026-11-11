@@ -9,12 +9,48 @@ import (
 	"os"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 )
+
+func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (string, string, error) {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return "", "", err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
+	info, err := c.nativeBoxInfo(ctx, boxId)
+	if err != nil {
+		return "", "", err
+	}
+	if info.State != boxlite.StateStopped {
+		return "", "", fmt.Errorf("checkpoint source must be stopped; stop the Box before creating a checkpoint")
+	}
+	digest := ""
+	if info.ResolvedImage != nil {
+		digest = info.ResolvedImage.ManifestDigest
+	}
+	pinned, err := checkpoint.PinImage(info.Image, digest)
+	if err != nil {
+		return "", "", err
+	}
+	archive, err := c.exportBox(ctx, boxId, destDir)
+	return archive, pinned, err
+}
 
 // ExportBox packs a box into a portable .boxlite archive inside destDir and
 // returns the archive path the runtime chose. The caller owns the file — the
 // runtime never deletes it.
 func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return "", err
+	}
+	defer operation.Close()
+	return c.exportBox(context.WithoutCancel(ctx), boxId, destDir)
+}
+
+func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, error) {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export directory %s: %w", destDir, err)
 	}
@@ -42,6 +78,12 @@ func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, 
 // would leave a second box holding the same disk. A box that is already present
 // therefore satisfies the job.
 func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	present, err := c.boxPresent(ctx, boxId)
 	if err != nil {
 		return err
@@ -69,7 +111,7 @@ func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error
 // reads through the runtime rather than the handle cache so it sees boxes this
 // process never created — an imported box after a runner restart, for one.
 func (c *Client) boxPresent(ctx context.Context, boxId string) (bool, error) {
-	if _, err := c.runtime.GetInfo(ctx, boxId); err != nil {
+	if _, err := c.nativeBoxInfo(ctx, boxId); err != nil {
 		if boxlite.IsNotFound(err) {
 			return false, nil
 		}

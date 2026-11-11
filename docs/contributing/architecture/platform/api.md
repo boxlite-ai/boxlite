@@ -36,10 +36,12 @@ The inventory is implementation-grounded:
   [`local-dex-env.mjs`](../../../../apps/scripts/local-dex-env.mjs).
 
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
-service does not currently register, including snapshots, clone, export,
-import, and runtime-wide metrics. They are intentionally absent below;
-`GET /v1/config` reports snapshots, clone, export, and import as disabled,
-and private tunnels as enabled; clients check that before every private prepare.
+service does not currently register, including clone, binary archive import/export,
+and runtime-wide metrics. `GET /v1/config` reports those archive capabilities as
+disabled. Checkpoint capture and JSON checkpoint import are a separate capability:
+`checkpoints_enabled` requires both `CHECKPOINTS_ENABLED=true` and a configured
+checkpoint archive prefix. Private tunnels are enabled; clients check that
+capability before every private prepare.
 
 ## Services at a glance
 
@@ -559,6 +561,36 @@ organization membership.
 | `DELETE` | `/v1[/{prefix}]/boxes/{boxId}`       | Destroys a box.                             |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/start` | Starts a box and waits until it is running. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/stop`  | Stops a box.                                |
+
+</details>
+
+<details>
+<summary><b>Checkpoints and checkpoint import</b> · 5 routes</summary>
+
+| Method | Path | What it does |
+| ------ | ---- | ------------ |
+| `POST` | `/v1[/{prefix}]/checkpoints` | Captures an independent disk archive from `source_box_id`, with an optional `name`; returns `201`. |
+| `GET` | `/v1[/{prefix}]/checkpoints` | Lists organization checkpoints; accepts `pageToken` or `page_token`, and returns `next_page_token`. |
+| `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state and optional `error_reason`. |
+| `DELETE` | `/v1[/{prefix}]/checkpoints/{key}` | Deletes an unused checkpoint; `force=true` tolerates an already absent checkpoint, but active capture/use returns `409`; returns `204`. |
+| `POST` | `/v1[/{prefix}]/boxes/import` | Imports a checkpoint into a new Box (`201`) or replaces a specified Box (`200`). |
+
+Import requires JSON: `{"checkpoint_id":"base","name":"child"}` creates a Box;
+`{"checkpoint_id":"base","box_id":"existing"}` replaces an existing Box while
+preserving its public cloud ID. `name` and `box_id` are mutually exclusive.
+Ordinary Box creation accepts no checkpoint selector, and there is no standalone
+checkpoint recover route. Binary archive upload is not supported by this hosted route.
+
+Capture requires a stopped, idle source; callers stop the Box and wait for
+`stopped` first. Other states return `409`; capture never automatically stops a Box.
+The runner checks again under its source-operation lock before native export.
+
+Capture, import, and deletion require `write:boxes`; reads require organization
+membership. Turning off checkpoint admission leaves reads, deletion, and already
+accepted work available. Import waits for the requested Box state; a failure after
+admission includes `boxId`, which clients query before considering another import.
+See [checkpoint capture and import](../../../../apps/api/README.md#checkpoint-capture)
+for storage and lifecycle details.
 
 </details>
 

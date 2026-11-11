@@ -133,6 +133,11 @@ Groups in `mstage.env.json` define what each consumer may receive:
 | `otel-collector` | Collector authentication |
 | `runner` | Runner telemetry overrides |
 
+`CHECKPOINTS_ENABLED` is an optional `api` key. After deploying a compatible runner,
+store `CHECKPOINTS_ENABLED=true` and redeploy the API to enable managed checkpoints.
+The API group forwards this value on AWS and GCP; an omitted key or `false` keeps
+admission disabled. Changing the stage store alone does not update an existing API revision.
+
 An array group makes every key required. An object distinguishes `required` from `optional`.
 Missing required values fail before deployment. Optional values enable features only when supplied.
 The exact key list lives in the manifest; avoid maintaining a second list in a runbook.

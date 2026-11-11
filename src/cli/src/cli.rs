@@ -306,6 +306,16 @@ const COMMAND_SCOPES: &[CommandScope] = &[
             children: &[],
         }],
     },
+    box_command_scope(
+        "checkpoint",
+        &[
+            box_command_scope("create", &[]),
+            box_command_scope("list", &[]),
+            box_command_scope("get", &[]),
+            box_command_scope("delete", &[]),
+        ],
+    ),
+    box_command_scope("import", &[]),
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -745,6 +755,10 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
+    /// Manage disk checkpoints on the selected REST server.
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
+    /// Import an archive or checkpoint; optionally replace an existing box.
+    Import(crate::commands::import::ImportArgs),
 
     /// List boxes
     #[command(visible_alias = "ls", visible_alias = "ps")]

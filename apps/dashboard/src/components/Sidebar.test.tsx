@@ -317,6 +317,7 @@ describe('Sidebar primary navigation', () => {
       '/dashboard/boxes',
       '/dashboard/images',
       '/dashboard/volumes',
+      '/dashboard/checkpoints',
       '/dashboard/domains',
     ])
     expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()

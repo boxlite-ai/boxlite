@@ -154,6 +154,41 @@ boxlite pull alpine:latest
 boxlite images
 ```
 
+## Checkpoint management
+
+Checkpoints are managed by the selected REST server. Local runtimes return
+an unsupported-operation error. Each checkpoint captures a stopped box's disk
+and execution configuration, survives source deletion, and can create multiple
+boxes. It does not capture memory or running processes.
+
+```bash
+# Use a REST context, or pass --url with the selected server.
+boxlite --url https://api.example.com stop source
+boxlite --url https://api.example.com checkpoint create source --name dev-base
+boxlite --url https://api.example.com checkpoint list
+boxlite --url https://api.example.com checkpoint get dev-base
+
+# Saved execution settings are inherited; configuration overrides are refused.
+boxlite --url https://api.example.com import --checkpoint dev-base --name worker
+
+# Replace an idle stopped or failed box, preserving its public Box ID.
+boxlite --url https://api.example.com import --checkpoint dev-base --box worker
+boxlite --url https://api.example.com checkpoint delete dev-base
+```
+
+A capture can initially report `creating`; wait for `ready` before import.
+Capture never automatically stops a Box. Name and replacement target are
+mutually exclusive. Deleting a checkpoint leaves previously imported boxes
+intact; `--force` tolerates absence and never bypasses active use.
+
+Storage, capture coordination, and replacement retries belong to the server.
+The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
+Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
+management routes. Existing binary archive export/import remains available.
+The cloud runner validates downloaded archives through its separate native
+archive helper before using ordinary native import; this creates no local
+checkpoint catalog or recovery records.
+
 ## Connecting to a remote server
 
 To target a remote BoxLite REST server instead of the local runtime, sign in

@@ -15,6 +15,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -906,18 +907,24 @@ export class BoxService {
     ctx: Context,
     lookup: 'id' | 'id-or-name' = 'id-or-name',
   ): Promise<Box> {
-    const box = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
+    const selected = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
+    const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(
+      selected.id,
+      selected.organizationId,
+    )
 
-    if (box.pending) {
+    if (box.pending && !checkpointState?.activeJobId) {
       throw new BoxError('Box state change in progress')
     }
 
     const updateData = Box.getSoftDeleteUpdate(box)
 
-    const updatedBox = await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: box.pending, state: box.state },
-    })
+    const updatedBox = checkpointState?.activeJobId
+      ? await this.boxRepository.deleteCheckpointTarget(box, checkpointState)
+      : await this.boxRepository.updateWhere(box.id, {
+          updateData,
+          whereCondition: { pending: box.pending, state: box.state },
+        })
 
     recordBoxRequested('box.delete', updatedBox, ctx)
 
@@ -1319,11 +1326,12 @@ export class BoxService {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
-    const result = await this.boxRepository.delete({
-      state: BoxState.ERROR,
-      desiredState: BoxDesiredState.DESTROYED,
-      updatedAt: LessThan(sevenDaysAgo),
-    })
+    const result = await this.boxRepository
+      .createQueryBuilder()
+      .delete()
+      .where({ state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: LessThan(sevenDaysAgo) })
+      .andWhere(`NOT ${CANCELLED_CHECKPOINT_TARGET_SQL}`)
+      .execute()
 
     if (result.affected > 0) {
       this.logger.debug(`Cleaned up ${result.affected} stale error boxes`)

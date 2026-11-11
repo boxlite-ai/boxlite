@@ -1,4 +1,4 @@
-PHONY_TARGETS += coverage codecov
+PHONY_TARGETS += coverage codecov coverage\:go\:checkpoint
 
 # Match Codecov's exclusions locally: production guest and SDK code must not
 # disappear from the denominator just because their tests run separately.
@@ -17,7 +17,7 @@ define run_unit_coverage
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_VMM_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov test --no-report $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:runtime || rc=$$?; \
-	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc $(NEXTEST_FILTER) || rc=$$?; \
+	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc --test checkpoint $(NEXTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
 	if [ "$$(uname)" = Linux ]; then \
 		cargo llvm-cov nextest $(GUEST_RUNNER_CONFIG) --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
@@ -97,6 +97,22 @@ coverage\:go: dev\:go
 	(cd apps/image-service && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
+
+# Native archive import/export does not boot a VM, but the production constructor still
+# requires a supported host. The Linux native-binding job enables KVM first.
+coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
+	@mkdir -p target/coverage
+	@native_tags=boxlite_dev,boxlite_integration; \
+	if [ -n "$$CARGO_LLVM_COV" ]; then \
+		native_tags=$$native_tags,boxlite_coverage; \
+		native_profile_runtime=("$$(rustc --print target-libdir)"/libprofiler_builtins-*.rlib); \
+		(cd sdks/go && CGO_LDFLAGS="\"$${native_profile_runtime[0]}\"" go test -count=1 -tags=$$native_tags ./integration/archive/internal/nativeprofile) || exit $$?; \
+	fi; \
+	cd sdks/go && go test -count=1 -tags=$$native_tags \
+		-o "$(PROJECT_ROOT)/target/coverage/checkpoint-native.test" \
+		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-checkpoint-native.out" \
+		-run '^TestCheckpointNative' ./integration/archive
 
 coverage\:python: _ensure-python-deps
 	@mkdir -p target/coverage/python

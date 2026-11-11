@@ -5,6 +5,8 @@ import { ResourceFilter } from '@/components/ResourceLayout'
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
+import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { OrganizationSuspendedError } from '@/api/errors'
 import { AsciiButton, StatCard } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
@@ -82,6 +84,9 @@ const Boxes: React.FC = () => {
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const checkpointCapabilities = useCheckpointCapabilities()
+  const [checkpointSource, setCheckpointSource] = useState<{ box: Box; organizationId: string } | null>(null)
+  useEffect(() => setCheckpointSource(null), [selectedOrganization?.id])
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
   const updateOnboardingProgress = useCallback(
@@ -760,6 +765,11 @@ const Boxes: React.FC = () => {
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
         <BoxTable
+          onCreateCheckpoint={
+            checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
+              ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
+              : undefined
+          }
           boxIsLoading={boxIsLoading}
           boxStateIsTransitioning={boxStateIsTransitioning}
           handleStart={handleStart}
@@ -793,6 +803,13 @@ const Boxes: React.FC = () => {
         />
       </div>
 
+      {checkpointSource && checkpointSource.organizationId === selectedOrganization?.id && (
+        <CheckpointCreateDialog
+          key={`${checkpointSource.organizationId}:${checkpointSource.box.id}`}
+          box={checkpointSource.box}
+          onClose={() => setCheckpointSource(null)}
+        />
+      )}
       {boxToDelete && (
         <AlertDialog
           open={showDeleteDialog}
