@@ -47,5 +47,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-python
+        if: github.event_name == 'release'
+      - name: Validate API release metadata
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: make setup:openapi check:openapi:release
       - uses: ./.github/actions/ci-config
         id: config

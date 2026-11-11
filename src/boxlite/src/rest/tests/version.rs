@@ -68,14 +68,31 @@ async fn exec_user(client: &ApiClient) -> BoxliteResult<Value> {
         .await
 }
 
+fn supported_config() -> String {
+    json!({"api_version":crate::rest::api_version()}).to_string()
+}
+
 #[tokio::test]
-async fn semver_boundaries_and_untrusted_discovery() {
+async fn released_0120_does_not_prove_pending_feature_support() {
+    let (options, task) = server(vec![(200, r#"{"api_version":"0.12.0"}"#.into())]).await;
+    let result = exec_user(&ApiClient::new(&options).unwrap()).await;
+    assert!(
+        matches!(result, Err(BoxliteError::Unsupported(_))),
+        "{result:?}"
+    );
+    assert_eq!(task.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn development_identity_and_untrusted_discovery() {
     for (reported, accepted) in [
         (json!("0.11.99"), false),
         (json!("0.12.0-rc.1"), false),
-        (json!("0.12.0"), true),
-        (json!("0.12.0+build.42"), true),
-        (json!("1.0.0"), true),
+        (json!("0.12.0"), false),
+        (json!("0.12.0+build.42"), false),
+        (json!("1.0.0"), false),
+        (json!(crate::rest::api_version()), true),
+        (json!(format!("{}wrong", crate::rest::api_version())), false),
         (Value::Null, false),
         (json!(12), false),
         (json!("0.12"), false),
@@ -101,7 +118,7 @@ async fn semver_boundaries_and_untrusted_discovery() {
             assert!(
                 error
                     .to_string()
-                    .contains("startExecution (body.user) requires server >= 0.12.0")
+                    .contains("startExecution (body.user) requires matching development API")
             );
         }
         let requests = task.await.unwrap();
@@ -124,7 +141,7 @@ async fn failed_discovery_retries_and_keeps_http_error_classes() {
     ] {
         let (options, task) = server(vec![
             (status, body.into()),
-            (200, r#"{"api_version":"0.12.0"}"#.into()),
+            (200, supported_config()),
             (200, "{}".into()),
         ])
         .await;
@@ -145,7 +162,7 @@ async fn failed_discovery_retries_and_keeps_http_error_classes() {
 
 #[tokio::test]
 async fn concurrent_clones_share_discovery_and_new_clients_discover_again() {
-    let mut replies = vec![(200, r#"{"api_version":"0.12.0"}"#.into())];
+    let mut replies = vec![(200, supported_config())];
     replies.extend((0..9).map(|_| (200, "{}".into())));
     replies.extend([(200, r#"{"api_version":"0.11.0"}"#.into())]);
     let (options, task) = server(replies).await;
@@ -207,7 +224,7 @@ async fn cancelled_discovery_does_not_poison_the_client() {
             .0
             .starts_with("GET /v1/config ")
     );
-    respond(&mut socket, 200, r#"{"api_version":"0.12.0"}"#).await;
+    respond(&mut socket, 200, &supported_config()).await;
     let (mut socket, _) = listener.accept().await.unwrap();
     assert!(
         read_request(&mut socket)

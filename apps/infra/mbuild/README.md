@@ -31,6 +31,21 @@ npm run mbuild promote -- --tag <full-commit-sha> --from dev --to prod
 Use the deployment workflow to resolve a ref and prepare the matching source tree.
 `verify` prints `artifact=address` results and does not build missing images.
 
+## Server version identity
+
+An artifact can declare a repository-relative `versionFile`: a JSON string containing
+its stable product version, optionally with SemVer build metadata. `publish` validates
+it before external calls and passes it to Docker as `--build-arg VERSION=...`.
+Release-qualified image tags must match the version exactly. Missing/malformed files
+or a development identity in a release build stop publication. Promotion keeps bytes unchanged.
+
+The API artifact uses `src/boxlite/src/rest/api_version.json`, generated from OpenAPI.
+Development builds carry `<workspace-version>+dev.<contract-digest>`; the bump PR
+finalizes `next-release` requirements and regenerates the stable identity.
+Run `make check:openapi:release` before publishing a release; the release workflow
+also enforces it. Images published before this fix must be rebuilt at a new immutable
+address to acquire the correct identity.
+
 ## Registry and promotion boundaries
 
 | Stage home | Registry | Coordinates |

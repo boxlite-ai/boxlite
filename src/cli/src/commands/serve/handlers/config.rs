@@ -6,7 +6,7 @@ use super::super::types::{ServerCapabilities, ServerConfig};
 
 pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
     Json(ServerConfig {
-        api_version: env!("CARGO_PKG_VERSION"),
+        api_version: boxlite::api_version(),
         capabilities: ServerCapabilities {
             checkpoints_enabled: false,
             linux_capabilities_enabled: true,
@@ -28,7 +28,7 @@ mod tests {
     #[tokio::test]
     async fn config_advertises_exec_user() {
         let config = get_config().await.0;
-        assert_eq!(config.api_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(config.api_version, boxlite::api_version());
         assert!(config.capabilities.exec_user_enabled);
     }
 

@@ -8,6 +8,52 @@ use semver::Version;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// API identity shared by matching servers and development SDK builds.
+pub fn api_version() -> &'static str {
+    static VERSION: LazyLock<String> = LazyLock::new(|| {
+        serde_json::from_str(include_str!("api_version.json")).expect("generated API version")
+    });
+    &VERSION
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+#[serde(try_from = "String")]
+enum Minimum {
+    Released(Version),
+    Unplanned,
+}
+
+impl TryFrom<String> for Minimum {
+    type Error = semver::Error;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value == "unplanned" {
+            Ok(Self::Unplanned)
+        } else {
+            Version::parse(&value).map(Self::Released)
+        }
+    }
+}
+
+impl std::fmt::Display for Minimum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Released(version) => version.fmt(f),
+            Self::Unplanned => f.write_str("unplanned"),
+        }
+    }
+}
+
+impl Minimum {
+    fn cmp_precedence(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Self::Released(a), Self::Released(b)) => a.cmp_precedence(b),
+            (Self::Unplanned, Self::Unplanned) => std::cmp::Ordering::Equal,
+            (Self::Unplanned, _) => std::cmp::Ordering::Greater,
+            (_, Self::Unplanned) => std::cmp::Ordering::Less,
+        }
+    }
+}
+
 static ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("version_rules.json"))
         .expect("generated OpenAPI version rules must be valid")
@@ -18,7 +64,9 @@ struct Route {
     method: String,
     path: String,
     operation: String,
-    minimum: Option<Version>,
+    minimum: Option<Minimum>,
+    #[serde(default)]
+    exact: bool,
     rules: Vec<FieldRule>,
 }
 
@@ -26,7 +74,9 @@ struct Route {
 struct FieldRule {
     location: String,
     path: Vec<String>,
-    minimum: Version,
+    minimum: Minimum,
+    #[serde(default)]
+    exact: bool,
     condition: String,
     #[serde(default)]
     default: Value,
@@ -37,7 +87,8 @@ struct FieldRule {
 pub(super) struct Requirement<'a> {
     operation: &'a str,
     field: Option<&'a FieldRule>,
-    minimum: &'a Version,
+    minimum: &'a Minimum,
+    exact: bool,
 }
 
 impl Requirement<'_> {
@@ -46,6 +97,18 @@ impl Requirement<'_> {
             .field
             .map(|r| format!(" ({}.{})", r.location, r.path.join(".")))
             .unwrap_or_default();
+        if *self.minimum == Minimum::Unplanned {
+            return BoxliteError::Unsupported(format!(
+                "{}{} is not yet supported (unplanned); no supporting server release is known. Omit this feature.",
+                self.operation, field
+            ));
+        }
+        if self.exact {
+            return BoxliteError::Unsupported(format!(
+                "{}{} requires matching development API {}; reported {}. Use the matching development server or a finalized SDK release.",
+                self.operation, field, self.minimum, reported
+            ));
+        }
         BoxliteError::Unsupported(format!(
             "{}{} requires server >= {}; reported {}. Upgrade the server and recreate the client, or omit the unsupported feature.",
             self.operation, field, self.minimum, reported
@@ -53,8 +116,19 @@ impl Requirement<'_> {
     }
 
     pub(super) fn check(&self, server: &Version) -> BoxliteResult<()> {
-        if server.cmp_precedence(self.minimum).is_lt() {
+        self.check_planned()?;
+        let Minimum::Released(minimum) = self.minimum else {
+            unreachable!()
+        };
+        if (self.exact && server != minimum) || server.cmp_precedence(minimum).is_lt() {
             return Err(self.rejection(&server.to_string()));
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_planned(&self) -> BoxliteResult<()> {
+        if *self.minimum == Minimum::Unplanned {
+            return Err(self.rejection("not checked"));
         }
         Ok(())
     }
@@ -102,6 +176,7 @@ fn evaluate<'a>(
         operation: &route.operation,
         field: None,
         minimum,
+        exact: route.exact,
     });
     // JSON is inspected only where rules require it. Never consume a streamed
     // archive or rebuild a serialized body: this is a guard, not a serializer.
@@ -169,14 +244,19 @@ fn evaluate<'a>(
         if values
             .iter()
             .any(|v| rule.condition == "present" || v != &rule.default)
-            && required
-                .as_ref()
-                .is_none_or(|r| rule.minimum.cmp_precedence(r.minimum).is_gt())
+            && required.as_ref().is_none_or(|r| {
+                rule.minimum == Minimum::Unplanned
+                    || (*r.minimum != Minimum::Unplanned
+                        && ((rule.exact && !r.exact)
+                            || (rule.exact == r.exact
+                                && rule.minimum.cmp_precedence(r.minimum).is_gt())))
+            })
         {
             required = Some(Requirement {
                 operation: &route.operation,
                 field: Some(rule),
                 minimum: &rule.minimum,
+                exact: rule.exact,
             });
         }
     }

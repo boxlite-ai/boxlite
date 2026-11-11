@@ -3,6 +3,60 @@ use reqwest::Client;
 use serde_json::json;
 
 #[test]
+fn released_rules_keep_semver_precedence() {
+    let routes: Vec<Route> = serde_json::from_value(json!([{
+        "method":"GET", "path":"/config", "operation":"config", "minimum":"0.12.0", "rules":[]
+    }]))
+    .unwrap();
+    let root = Url::parse("https://example.test/v1").unwrap();
+    let request = Client::new()
+        .get("https://example.test/v1/config")
+        .build()
+        .unwrap();
+    let gate = evaluate(&routes, &request, &root, None).unwrap().unwrap();
+    for (version, accepted) in [
+        ("0.11.99", false),
+        ("0.12.0-rc.1", false),
+        ("0.12.0", true),
+        ("0.12.0+build.1", true),
+        ("1.0.0", true),
+    ] {
+        assert_eq!(
+            gate.check(&Version::parse(version).unwrap()).is_ok(),
+            accepted,
+            "{version}"
+        );
+    }
+}
+
+#[test]
+fn unplanned_dominates_released_and_development_rules() {
+    for operation in ["unplanned", "0.11.0"] {
+        let routes: Vec<Route> = serde_json::from_value(json!([{
+            "method":"POST", "path":"/boxes", "operation":"createBox", "minimum":operation,
+            "rules":[
+                {"location":"body","path":["unknown"],"minimum":"unplanned","condition":"present"},
+                {"location":"body","path":["next"],"minimum":api_version(),"exact":true,"condition":"present"}
+            ]
+        }])).unwrap();
+        let root = Url::parse("https://example.test/v1").unwrap();
+        let request = Client::new()
+            .post("https://example.test/v1/boxes")
+            .json(&json!({"unknown":null,"next":true}))
+            .build()
+            .unwrap();
+        let gate = evaluate(&routes, &request, &root, None).unwrap().unwrap();
+        assert!(
+            gate.check_planned()
+                .unwrap_err()
+                .to_string()
+                .contains("not yet supported (unplanned)")
+        );
+        assert!(gate.check(&Version::parse("999.0.0").unwrap()).is_err());
+    }
+}
+
+#[test]
 fn routing_uses_exact_base_prefix_and_encoded_segments() {
     for (base, prefix) in [
         ("https://example.test/v1", None),

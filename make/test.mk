@@ -558,6 +558,12 @@ test\:unit\:gvproxy:
 generate\:openapi:
 	@python3 openapi/generate_version_rules.py
 
+finalize\:openapi:
+	@python3 openapi/generate_version_rules.py --finalize --base "$$BASE"
+
+check\:openapi\:release:
+	@python3 openapi/generate_version_rules.py --check --release --tag "$$RELEASE_TAG"
+
 check\:openapi:
 	@python3 openapi/generate_version_rules.py --check $(if $(BASE),--base "$(BASE)",)
 

@@ -641,6 +641,12 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
 
 #[cfg(test)]
 mod tests {
+    fn api_config() -> &'static str {
+        static CONFIG: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            serde_json::json!({"api_version": crate::api_version()}).to_string()
+        });
+        &CONFIG
+    }
     use super::*;
     use crate::runtime::options::{PortProtocol, PortSpec};
 
@@ -941,7 +947,7 @@ mod tests {
 
     #[tokio::test]
     async fn supported_version_creates_on_the_shared_route() {
-        let (port, server) = json_server(vec![r#"{"api_version":"0.12.0"}"#, BOX_RESPONSE]).await;
+        let (port, server) = json_server(vec![api_config(), BOX_RESPONSE]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
 
@@ -1141,7 +1147,7 @@ mod tests {
         const EXEC_RESPONSE: &str = r#"{"execution_id":"exec-1"}"#;
         let (port, server) = exchange_server(vec![
             (200, BOX_RESPONSE),
-            (200, r#"{"api_version":"0.12.0"}"#),
+            (200, api_config()),
             (201, EXEC_RESPONSE),
             (201, EXEC_RESPONSE),
         ])
@@ -1184,21 +1190,22 @@ mod tests {
     #[tokio::test]
     async fn exec_request_body_carries_user_only_when_set() {
         const EXEC_RESPONSE: &str = r#"{"execution_id":"exec-1"}"#;
-        type ExecUserCase = (Option<&'static str>, &'static [(u16, &'static str)]);
+        type ExecUserCase = (Option<&'static str>, Vec<(u16, &'static str)>);
         let cases: [ExecUserCase; 2] = [
-            (None, &[(200, BOX_RESPONSE), (201, EXEC_RESPONSE)]),
+            (None, vec![(200, BOX_RESPONSE), (201, EXEC_RESPONSE)]),
             (
                 Some("1000:1000"),
-                &[
+                vec![
                     (200, BOX_RESPONSE),
-                    (200, r#"{"api_version":"0.12.0"}"#),
+                    (200, api_config()),
                     (201, EXEC_RESPONSE),
                 ],
             ),
         ];
 
         for (user, replies) in cases {
-            let (port, server) = exchange_server(replies.to_vec()).await;
+            let expected_requests = replies.len();
+            let (port, server) = exchange_server(replies).await;
             let runtime =
                 RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
                     .unwrap();
@@ -1232,7 +1239,7 @@ mod tests {
                 ),
                 None => assert!(body.get("user").is_none(), "{body}"),
             }
-            assert_eq!(requests.len(), replies.len(), "{user:?}: {requests:?}");
+            assert_eq!(requests.len(), expected_requests, "{user:?}: {requests:?}");
         }
     }
 
@@ -1602,7 +1609,7 @@ mod tests {
     #[tokio::test]
     async fn versioned_privileged_create_reuses_discovery() {
         let (port, server) = capture_server(vec![
-            (200, r#"{"api_version":"0.12.0"}"#),
+            (200, api_config()),
             (200, BOX_RESPONSE),
             (200, BOX_RESPONSE),
         ])
@@ -1730,7 +1737,7 @@ mod tests {
                 404,
                 r#"{"error":{"message":"missing","type":"NotFoundError","code":"not_found"}}"#,
             ),
-            (200, r#"{"api_version":"0.12.0"}"#),
+            (200, api_config()),
             (200, BOX_RESPONSE),
         ])
         .await;

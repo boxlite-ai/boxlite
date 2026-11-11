@@ -2,6 +2,7 @@
 """Compile OpenAPI request-version declarations; check additions against a Git base."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -12,6 +13,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = "openapi/box.openapi.yaml"
 OUTPUT = ROOT / "src/boxlite/src/rest/version_rules.json"
+API_VERSION = OUTPUT.with_name("api_version.json")
+PENDING = {"next-release", "unplanned"}
 MINIMUM = "x-boxlite-min-server-version"
 CONDITION = "x-boxlite-version-check"
 METHODS = {"get", "head", "post", "put", "patch", "delete", "options"}
@@ -36,6 +39,12 @@ def version(value):
             raise ValueError(f"invalid numeric prerelease: {value}")
         parts.append((0, int(item)) if item.isdigit() else (1, item))
     return numbers, pre is None, tuple(parts)
+
+
+def validate_minimum(value):
+    if isinstance(value, str) and value in PENDING:
+        return
+    version(value)
 
 
 class Contract:
@@ -103,7 +112,7 @@ class Contract:
             if CONDITION in node:
                 raise ValueError(f"{path}: condition without minimum")
             return None
-        version(node[MINIMUM])
+        validate_minimum(node[MINIMUM])
         condition = node.get(CONDITION)
         if condition not in {"present", "non-default"}:
             raise ValueError(f"{path}: expected present or non-default condition")
@@ -149,7 +158,7 @@ class Contract:
                 ids.add(name)
                 result = {"method": method.upper(), "path": path, "operation": name, "rules": []}
                 if MINIMUM in op:
-                    version(op[MINIMUM])
+                    validate_minimum(op[MINIMUM])
                     result["minimum"] = op[MINIMUM]
                 if CONDITION in op:
                     raise ValueError(f"{name}: operations cannot have field conditions")
@@ -212,7 +221,7 @@ def check_additions(before, after, base_version):
     base = version(base_version)
     for op in Contract(after).operations():
         old = baseline.get((op["method"], op["path"]))
-        future = lambda v: v is not None and version(v) > base
+        future = lambda v: v in PENDING or (v is not None and version(v) > base)
         if old is None:
             if not future(op.get("minimum")):
                 raise ValueError(f"{op['operation']}: new operation needs minimum > {base_version}")
@@ -227,8 +236,82 @@ def check_additions(before, after, base_version):
                 raise ValueError(f"{op['operation']} {field}: new request field needs minimum > {base_version}")
 
 
-def render(spec):
+def api_version(spec, workspace):
+    version(workspace)
+    declared = spec["info"]["version"]
+    if declared == "next-release":
+        digest = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return f"{workspace.split('+', 1)[0]}+dev.{digest}"
+    if declared != workspace:
+        raise ValueError("OpenAPI info.version must match the workspace release or be next-release")
+    return workspace
+
+
+def validate_release(spec, workspace, *, releasing=False):
+    identity = api_version(spec, workspace)
+    if releasing and spec["info"]["version"] == "next-release":
+        raise ValueError("next-release must be finalized before publication")
+    for operation in Contract(spec).operations():
+        for node in [operation, *operation["rules"]]:
+            value = node.get("minimum")
+            if value == "next-release" and spec["info"]["version"] != "next-release":
+                raise ValueError("next-release requires info.version: next-release")
+            # Exact development rules dominate numeric floors only under this invariant.
+            if value is not None and value not in PENDING and version(value) > version(workspace):
+                raise ValueError(f"{operation['operation']}: minimum {value} is newer than workspace {workspace}")
+    return identity
+
+
+def finalize(text, workspace, base_version):
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", workspace):
+        raise ValueError("finalization requires a stable workspace version")
+    if version(workspace) <= version(base_version):
+        raise ValueError("bump the workspace version above the Git base before finalizing")
+    before = Contract(yaml.safe_load(text)).operations()
+    # Scalar spans preserve comments, anchors, and formatting in the authoritative spec.
+    replacements = {}
+    scalars = [token for token in yaml.scan(text) if isinstance(token, yaml.ScalarToken)]
+    visited = set()
+    def walk(node, path=()):
+        if id(node) in visited:
+            return
+        visited.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                if (path == ("info",) and key.value == "version") or (
+                    key.value == MINIMUM and value.value == "next-release"
+                ):
+                    token = next(token for token in scalars
+                                 if value.start_mark.index <= token.start_mark.index
+                                 and token.end_mark.index <= value.end_mark.index
+                                 and token.value == value.value)
+                    replacements[token.start_mark.index, token.end_mark.index] = json.dumps(workspace)
+                walk(value, (*path, key.value))
+        elif isinstance(node, yaml.SequenceNode):
+            for value in node.value:
+                walk(value, path)
+    walk(yaml.compose(text))
+    for (start, end), value in sorted(replacements.items(), reverse=True):
+        text = text[:start] + value + text[end:]
+    spec = yaml.safe_load(text)
+    validate_release(spec, workspace, releasing=True)
+    for old, new in zip(before, Contract(spec).operations()):
+        for key, value in {("operation",): old.get("minimum"), **old["fields"]}.items():
+            updated = new.get("minimum") if key == ("operation",) else new["fields"].get(key)
+            if value != "next-release" and value != updated:
+                raise ValueError("finalization changed an existing minimum through a shared YAML anchor")
+    return text
+
+
+def render(spec, workspace=None):
     operations = Contract(spec).operations()
+    identity = validate_release(spec, workspace) if workspace else None
+    for operation in operations:
+        for node in [operation, *operation["rules"]]:
+            if node.get("minimum") == "next-release":
+                if identity is None:
+                    raise ValueError("next-release generation requires the workspace version")
+                node.update(minimum=identity, exact=True)
     return "[\n" + ",\n".join(
         "  " + json.dumps({k: v for k, v in op.items() if k != "fields"}, separators=(",", ":"))
         for op in operations
@@ -239,19 +322,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--base", help="Git base commit for new request declarations")
+    parser.add_argument("--finalize", action="store_true", help="Finalize next-release after the workspace bump; requires --base")
+    parser.add_argument("--release", action="store_true", help="Refuse next-release before publishing")
+    parser.add_argument("--tag", help="Release tag, which must match the workspace version")
     args = parser.parse_args()
-    spec = yaml.safe_load((ROOT / SPEC).read_text())
+    source = (ROOT / SPEC).read_text()
+    spec = yaml.safe_load(source)
     def release_version(manifest):
         package = manifest.split("[workspace.package]", 1)[1]
         return re.search(r'^version\s*=\s*"([^"]+)"', package, re.MULTILINE).group(1)
-    if spec["info"]["version"] != release_version((ROOT / "Cargo.toml").read_text()):
-        raise ValueError("OpenAPI info.version must match the SDK/server workspace release")
-    output = render(spec)
-    if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text() != output:
-            raise ValueError("generated rules are stale; run make generate:openapi")
-    else:
-        OUTPUT.write_text(output)
+    workspace = release_version((ROOT / "Cargo.toml").read_text())
+    if args.tag and args.tag != f"v{workspace}":
+        raise ValueError(f"release tag {args.tag} does not match workspace {workspace}")
+    if args.finalize and (not args.base or args.check):
+        raise ValueError("--finalize requires --base and cannot be combined with --check")
     if args.base:
         base_commit = subprocess.check_output(
             ["git", "rev-parse", "--verify", "--end-of-options", args.base + "^{commit}"], cwd=ROOT, text=True
@@ -259,7 +343,20 @@ def main():
         def read_base(path):
             return subprocess.check_output(["git", "show", f"{base_commit}:{path}"], cwd=ROOT, text=True)
         release = release_version(read_base("Cargo.toml"))
+        if args.finalize:
+            source = finalize(source, workspace, release)
+            spec = yaml.safe_load(source)
         check_additions(yaml.safe_load(read_base(SPEC)), spec, release)
+    identity = validate_release(spec, workspace, releasing=args.release)
+    outputs = {OUTPUT: render(spec, workspace), API_VERSION: json.dumps(identity) + "\n"}
+    for path, output in outputs.items():
+        if args.check:
+            if not path.exists() or path.read_text() != output:
+                raise ValueError(f"{path.name} is stale; run make generate:openapi")
+        else:
+            path.write_text(output)
+    if args.finalize:
+        (ROOT / SPEC).write_text(source)
 
 
 if __name__ == "__main__":

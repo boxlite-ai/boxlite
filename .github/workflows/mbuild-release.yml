@@ -128,6 +128,14 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.resolve.outputs.sha }}
           path: release-source
+
+      - uses: ./.github/actions/setup-python
+      - name: Validate API release metadata
+        working-directory: release-source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: make setup:openapi check:openapi:release
+
       - uses: ./.github/actions/setup-infra
 
       - name: Keep registry credentials out of HOME
