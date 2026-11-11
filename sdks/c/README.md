@@ -495,6 +495,12 @@ void boxlite_runtime_free(CBoxliteRuntime* runtime);
 
 #### Box Lifecycle
 
+Nested virtualization is a creation option:
+`boxlite_advanced_options_set_nested_virtualization(advanced, 1)` requires runtime
+experimental authorization. Attach the advanced options before create; runtime
+saves the existing BoxConfig. `boxlite_start_box` retains its original signature
+and uses saved configuration. Passing `0` selects an ordinary new Box.
+
 ```c
 // Create box (auto-started)
 BoxliteErrorCode boxlite_create_box(

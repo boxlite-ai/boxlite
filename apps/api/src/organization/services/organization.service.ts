@@ -124,6 +124,25 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     })
   }
 
+  async setNestedVirtualizationEnabled(organizationId: string, enabled: boolean): Promise<void> {
+    const result = await this.organizationRepository.update(organizationId, { nestedVirtualizationEnabled: enabled })
+    if (!result.affected) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+  }
+
+  async isNestedVirtualizationEnabled(organizationId: string): Promise<boolean> {
+    const organization = await this.organizationRepository.findOne({
+      where: { id: organizationId },
+      select: { id: true, nestedVirtualizationEnabled: true },
+      cache: false,
+    })
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+    return organization.nestedVirtualizationEnabled === true
+  }
+
   async getReferralCode(organizationId: string): Promise<OrganizationReferralCodeDto> {
     for (let attempt = 0; attempt < MAX_REFERRAL_CODE_ATTEMPTS; attempt++) {
       try {
@@ -237,9 +256,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new BadRequestException('Organization name is required')
     }
 
-    organization.name = trimmedName
-
-    return this.organizationRepository.save(organization)
+    const saved = await this.organizationRepository.save({ id: organizationId, name: trimmedName })
+    return Object.assign(organization, saved)
   }
 
   async suspend(
@@ -253,15 +271,14 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
 
-    organization.suspended = true
-    organization.suspensionReason = suspensionReason || null
-    organization.suspendedUntil = suspendedUntil || null
-    organization.suspendedAt = new Date()
-    if (suspensionCleanupGracePeriodHours) {
-      organization.suspensionCleanupGracePeriodHours = suspensionCleanupGracePeriodHours
-    }
-
-    await this.organizationRepository.save(organization)
+    await this.organizationRepository.save({
+      id: organizationId,
+      suspended: true,
+      suspensionReason: suspensionReason || null,
+      suspendedUntil: suspendedUntil || null,
+      suspendedAt: new Date(),
+      ...(suspensionCleanupGracePeriodHours ? { suspensionCleanupGracePeriodHours } : {}),
+    })
   }
 
   /**
@@ -285,12 +302,13 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       throw new ConflictException('Organization suspension reason does not match the expected reason')
     }
 
-    organization.suspended = false
-    organization.suspensionReason = null
-    organization.suspendedUntil = null
-    organization.suspendedAt = null
-
-    await this.organizationRepository.save(organization)
+    await this.organizationRepository.save({
+      id: organizationId,
+      suspended: false,
+      suspensionReason: null,
+      suspendedUntil: null,
+      suspendedAt: null,
+    })
   }
 
   async updateBoxDefaultLimitedNetworkEgress(
@@ -301,9 +319,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     if (!organization) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
-    organization.boxLimitedNetworkEgress = boxDefaultLimitedNetworkEgress
-
-    await this.organizationRepository.save(organization)
+    await this.organizationRepository.save({
+      id: organizationId,
+      boxLimitedNetworkEgress: boxDefaultLimitedNetworkEgress,
+    })
   }
 
   /**
@@ -323,9 +342,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     }
 
     await this.validateOrganizationDefaultRegion(defaultRegionId)
-    organization.defaultRegionId = defaultRegionId
-
-    await this.organizationRepository.save(organization)
+    await this.organizationRepository.save({ id: organizationId, defaultRegionId })
   }
 
   async updateExperimentalConfig(
@@ -356,7 +373,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       }
     }
 
-    await this.organizationRepository.save(organization)
+    await this.organizationRepository.save({
+      id: organizationId,
+      _experimentalConfig: organization._experimentalConfig,
+    })
   }
 
   async getOtelConfigByBoxAuthToken(boxAuthToken: string): Promise<OtelConfigDto | null> {
@@ -528,11 +548,13 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
       return
     }
 
-    organization.suspended = false
-    organization.suspendedAt = null
-    organization.suspensionReason = null
-    organization.suspendedUntil = null
-    await entityManager.save(organization)
+    await entityManager.save(Organization, {
+      id: organization.id,
+      suspended: false,
+      suspendedAt: null,
+      suspensionReason: null,
+      suspendedUntil: null,
+    })
   }
 
   private async findDefaultForUserWithEntityManager(

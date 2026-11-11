@@ -148,6 +148,9 @@ export class Runner {
   @Column({ default: false })
   supportsPrivileged: boolean
 
+  @Column({ default: false })
+  nestedVirtualizationEnabled: boolean
+
   @Column({
     nullable: true,
     type: 'timestamp with time zone',

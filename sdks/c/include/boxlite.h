@@ -876,6 +876,11 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Set nested virtualization for a new box. Runtime experimental authorization
+// is checked by create; the value is saved with the existing BoxConfig.
+enum BoxliteErrorCode boxlite_advanced_options_set_nested_virtualization(CAdvancedBoxOptions *opts,
+                                                                         int enabled);
+
 // Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
 // Copies the path; invalid input leaves the previous option unchanged.
 enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
