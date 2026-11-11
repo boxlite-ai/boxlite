@@ -283,7 +283,7 @@ export class ApiClient {
   ): Promise<{ box_id: string; name?: string }> {
     return (
       await this.http.post(
-        `/v1/${encodeURIComponent(org)}/boxes/import`,
+        `/v1/${encodeURIComponent(org)}/boxes`,
         {
           checkpoint_id: key,
           ...(name ? { name } : {}),

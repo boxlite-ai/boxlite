@@ -30,7 +30,12 @@ function makeController() {
     toBoxDto: jest.fn().mockResolvedValue(startedBox),
   }
   const commerceBoxLimitService = { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(3) }
-  const controller = new BoxliteBoxController(boxService as never, {} as never, commerceBoxLimitService as never)
+  const controller = new BoxliteBoxController(
+    boxService as never,
+    {} as never,
+    commerceBoxLimitService as never,
+    {} as never,
+  )
   return { controller, boxService }
 }
 

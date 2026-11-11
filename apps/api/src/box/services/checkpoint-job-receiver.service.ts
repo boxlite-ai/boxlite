@@ -192,10 +192,9 @@ export class CheckpointJobReceiver {
         operation.nativeId = result.nativeId as string
         operation.errorReason = null
       } else {
-        // The runner may already have removed the predecessor. Keep the use
-        // reservation and ownership for an explicit retry of this operation.
+        // Keep the use reservation and ownership until the Box is deleted.
         operation.state = 'failed'
-        operation.errorReason = 'Checkpoint import failed; retry the same checkpoint'
+        operation.errorReason = 'Checkpoint import failed; delete the Box and create another from the checkpoint'
         box.state = BoxState.ERROR
         box.errorReason = operation.errorReason
         box.recoverable = false

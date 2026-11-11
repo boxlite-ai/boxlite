@@ -27,11 +27,10 @@ CLI matrix and both authentication modes, is in
 
 ### Managed checkpoints
 
-`cases/test_checkpoints.py` exercises hot export and upload, source deletion,
-new-Box import and stopped-target recovery through the SDK and actual guests.
-Guest reads verify immutable disk contents and inherited environment values;
-recovery verifies the public Box ID and captured CPU/memory settings. Deleting
-the checkpoint must leave the created and recovered Boxes usable.
+`cases/test_checkpoints.py` exercises hot export and upload, source deletion and
+creating a Box from the checkpoint through the SDK and actual guests.
+Guest reads verify immutable disk contents and inherited environment values.
+Deleting the checkpoint must leave the created Box usable.
 
 Run against an API/runner built from this branch with checkpoint storage enabled:
 

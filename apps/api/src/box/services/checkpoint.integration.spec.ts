@@ -3,7 +3,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { ConfigService } from '@nestjs/config'
-import { DataSource, EntityManager, Repository } from 'typeorm'
+import { DataSource, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Box } from '../entities/box.entity'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
@@ -115,13 +115,11 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     )
     repository = new BoxRepository(dataSource, events as unknown as EventEmitter2, cache as any)
     recovery = new CheckpointRecoverService(
-      dataSource,
       service,
       jobService,
       { assertOrganizationIsNotSuspended: jest.fn() } as any,
       resourceLimits as any,
       imageAdmission as any,
-      cache as any,
       repository,
       runnerSelection as never,
       events as unknown as EventEmitter2,
@@ -243,18 +241,6 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect((await boxes.findOneByOrFail({ id: shadow.id })).pending).toBe(false)
   })
 
-  it('prefers the exact Box ID over a colliding name during replacement', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('exact-target')
-    const shadow = await source(target.id)
-    await boxes.update(target.id, { name: 'updated-exact-target', env: { ROLE: 'exact-target' } })
-    const recovered = await recovery.recover(organization, checkpoint.id, target.id, undefined)
-    expect(recovered.id).toBe(target.id)
-    const operation = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ boxId: target.id })
-    expect(await jobs.findOneByOrFail({ id: operation.jobId })).toMatchObject({ resourceId: target.id })
-    expect((await boxes.findOneByOrFail({ id: shadow.id })).pending).toBe(false)
-  })
-
   async function legacyCheckpointNameCollision() {
     const checkpoint = await readyCheckpoint()
     const id = randomUUID()
@@ -360,9 +346,6 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await expect(recovery.createBox(organization, checkpoint.id, 'must-not-import', undefined)).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     )
-    await expect(recovery.recover(organization, checkpoint.id, target.id, undefined)).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
-    )
     expect(await jobs.count()).toBe(priorJobs)
     expect((await service.get(organizationId, checkpoint.id)).state).toBe('ready')
   })
@@ -412,16 +395,13 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await states.findOneByOrFail({ boxId: box.id })).toMatchObject({ activeJobId: null })
   })
 
-  it('retains the last recovery sequence across exports and advances it on the next recovery', async () => {
+  it('retains the import sequence across later exports and ignores a replayed import receipt', async () => {
     const checkpoint = await readyCheckpoint()
-    const target = await source('sequence-target')
-    await recovery.recover(organization, checkpoint.id, target.id, undefined)
+    const target = await recovery.createBox(organization, checkpoint.id, 'sequence-target', undefined)
     const operation = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ boxId: target.id })
-    await finish(operation.jobId, {
-      operationId: operation.id,
-      targetSequence: operation.sequence,
-      nativeId: 'first-native',
-    })
+    const receipt = { operationId: operation.id, targetSequence: operation.sequence, nativeId: 'first-native' }
+    await finish(operation.jobId, receipt)
+    await boxes.update(target.id, { desiredState: BoxDesiredState.STOPPED, pending: false })
     for (const name of ['export-one', 'export-two']) {
       const captured = await service.create(organizationId, target.id, name)
       expect(await states.findOneByOrFail({ boxId: target.id })).toMatchObject({
@@ -434,60 +414,14 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
         sequence: operation.sequence,
       })
     }
-    await recovery.recover(organization, checkpoint.id, target.id, undefined)
-    const next = await states.findOneByOrFail({ boxId: target.id })
-    expect(next.sequence).toBe(operation.sequence + 1)
-    await finish(operation.jobId, {
-      operationId: operation.id,
-      targetSequence: operation.sequence,
-      nativeId: 'late-native',
+    const settled = await states.findOneByOrFail({ boxId: target.id })
+    await finish(operation.jobId, { ...receipt, nativeId: 'late-native' })
+    expect(await states.findOneByOrFail({ boxId: target.id })).toEqual(settled)
+    expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
+      state: 'completed',
+      nativeId: 'first-native',
     })
-    expect(await states.findOneByOrFail({ boxId: target.id })).toEqual(next)
-    expect(await boxes.findOneByOrFail({ id: target.id })).toMatchObject({ state: BoxState.RESTORING, pending: true })
-  })
-
-  it('serializes different checkpoints at the first target use without an organization quota lock', async () => {
-    const first = await readyCheckpoint()
-    const second = await readyCheckpoint(undefined, '-second')
-    const target = await source('first-use-target')
-    expect(await states.findOneBy({ boxId: target.id })).toBeNull()
-    let arrived = 0
-    let release!: () => void
-    let timeout: ReturnType<typeof setTimeout>
-    const boundary = new Promise<void>((resolve, reject) => {
-      release = resolve
-      timeout = setTimeout(() => reject(new Error('both recoveries must reach the target lock')), 3000)
-    })
-    const findOne = EntityManager.prototype.findOne
-    const probe = jest.spyOn(EntityManager.prototype, 'findOne').mockImplementation(async function (entity, options) {
-      if (
-        entity === Box &&
-        (options.where as { id?: string }).id === target.id &&
-        options.lock?.mode === 'pessimistic_write'
-      ) {
-        if (++arrived === 2) release()
-        await boundary
-      }
-      return findOne.call(this, entity, options)
-    })
-    try {
-      const results = await Promise.allSettled(
-        [first, second].map((checkpoint) => recovery.recover(organization, checkpoint.id, target.id, undefined)),
-      )
-      expect(arrived).toBe(2)
-      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-      expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 409 } })
-      expect(await states.countBy({ boxId: target.id })).toBe(1)
-      const owner = await states.findOneByOrFail({ boxId: target.id })
-      expect(await dataSource.getRepository(CheckpointOperation).findBy({ boxId: target.id })).toEqual([
-        expect.objectContaining({ state: 'pending', jobId: owner.activeJobId, sequence: owner.sequence }),
-      ])
-      expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT, resourceId: target.id })).toBe(1)
-    } finally {
-      release()
-      clearTimeout(timeout!)
-      probe.mockRestore()
-    }
+    expect(await boxes.findOneByOrFail({ id: target.id })).toMatchObject({ state: BoxState.STOPPED, pending: false })
   })
 
   it('rolls back a new Box, operation and job if coordination cannot be persisted', async () => {
@@ -510,34 +444,6 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       await dataSource.query('DROP TRIGGER reject_checkpoint_state ON "box_checkpoint_state"')
       await dataSource.query(`DROP FUNCTION "${schema}".reject_checkpoint_state()`)
     }
-  })
-
-  it('rejects deletion from an old ownership snapshot after a newer recovery starts', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('stale-delete-target')
-    await recovery.recover(organization, checkpoint.id, target.id, undefined)
-    const selected = await repository.findWithCheckpointState(target.id)
-    const operation = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ boxId: target.id })
-    await finish(operation.jobId, {
-      operationId: operation.id,
-      targetSequence: operation.sequence,
-      nativeId: 'first-native',
-    })
-    await recovery.recover(organization, checkpoint.id, target.id, undefined)
-    const current = await states.findOneByOrFail({ boxId: target.id })
-    await expect(repository.deleteCheckpointTarget(selected.box, selected.checkpointState!)).rejects.toMatchObject({
-      status: 409,
-    })
-    await expect(
-      repository.updateWhere(target.id, {
-        updateData: Box.getSoftDeleteUpdate(target),
-        whereCondition: { pending: target.pending, state: target.state },
-      }),
-    ).rejects.toThrow()
-    expect(await states.findOneByOrFail({ boxId: target.id })).toEqual(current)
-    expect(
-      await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ jobId: current.activeJobId! }),
-    ).toMatchObject({ state: 'pending' })
   })
 
   it.each(['', 'x'.repeat(129), 'bad\0name'])('rejects invalid imported Box name %j before admission', async (name) => {
@@ -572,116 +478,6 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
   })
 
-  it.each(['volumes', 'secrets'] as const)(
-    'refuses recovery targets with %s before reserving the archive',
-    async (field) => {
-      const checkpoint = await readyCheckpoint()
-      const target = await source('external-reference-target')
-      await boxes.update(target.id, { [field]: [{ id: 'external-reference' }] })
-      await expect(
-        recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-      ).rejects.toThrow('volumes or secrets')
-      expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
-      expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-      expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-        state: BoxState.STOPPED,
-        pending: false,
-      })
-    },
-  )
-
-  it.each([
-    { pending: true },
-    { activeJobId: randomUUID() },
-    { state: BoxState.STARTED },
-    { desiredState: BoxDesiredState.DESTROYED },
-    { desiredState: BoxDesiredState.STARTED },
-  ])('refuses a busy or non-idle target %j without scheduling import', async (state) => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('busy-target')
-    if ('activeJobId' in state) await states.save({ boxId: target.id, ...state })
-    else await boxes.update(target.id, state)
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toMatchObject({
-      status: 409,
-    })
-    expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-  })
-
-  it('refuses a target without its runner and preserves its disk ownership', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('runnerless-target')
-    await boxes.update(target.id, { runnerId: null })
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toThrow('Target runner')
-    expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      state: BoxState.STOPPED,
-      pending: false,
-    })
-  })
-
-  it('refuses unfinished lifecycle work even when the target busy flag is clear', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('queued-target')
-    await jobs.save(
-      new Job({ type: JobType.EXPORT_BOX, runnerId: runner.id, resourceType: ResourceType.BOX, resourceId: target.id }),
-    )
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toThrow('unfinished runner job')
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-    expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
-  })
-
-  it('does not replace a pending recovery with another checkpoint', async () => {
-    const checkpoint = await readyCheckpoint()
-    const other = await readyCheckpoint(undefined, '-other')
-    const target = await source('pending-target')
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
-    await expect(
-      recovery.recover(organization, other.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toThrow('already has a checkpoint operation')
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(1)
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      activeJobId: admitted.activeJobId,
-    })
-  })
-
-  it('does not reuse a failed operation whose job ownership changed', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('changed-owner-target')
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
-    await finish(admitted.activeJobId!, undefined, JobStatus.FAILED)
-    const newerJob = randomUUID()
-    await states.update(target.id, { activeJobId: newerJob })
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toThrow('another unfinished checkpoint operation')
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(1)
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      activeJobId: newerJob,
-    })
-  })
-
-  it('requires the failed attempt receipt to exist before retrying', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('missing-receipt-target')
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
-    await finish(admitted.activeJobId!, undefined, JobStatus.FAILED)
-    await jobs.delete(admitted.activeJobId!)
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toThrow('Previous checkpoint attempt has not finished')
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-    expect(
-      await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ jobId: admitted.activeJobId! }),
-    ).toMatchObject({ state: 'failed' })
-  })
-
   it('refuses a ready checkpoint with missing captured image metadata before creating a target', async () => {
     const checkpoint = await readyCheckpoint()
     await checkpoints.update(checkpoint.id, { environment: { ...checkpoint.environment, image: '' } })
@@ -690,49 +486,6 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     ).rejects.toThrow('no OCI image')
     expect(await boxes.findOneBy({ name: 'invalid-image-target' })).toBeNull()
     expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-  })
-
-  it('commits inherited configuration only with its matching native import receipt', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    await boxes.update(target.id, { cpu: 1, mem: 1, disk: 2, env: { OLD: 'keep until commit' } })
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, 2).then(withCheckpointState)
-    expect(admitted).toMatchObject({ id: target.id, state: BoxState.RESTORING, pending: true, cpu: 1, mem: 1, disk: 2 })
-    const operation = await dataSource
-      .getRepository(CheckpointOperation)
-      .findOneByOrFail({ jobId: admitted.activeJobId! })
-    expect(operation.environment).toMatchObject({ cpu: 4, mem: 8, disk: 12, env: { APP_ENV: 'test' } })
-    expect((await jobs.findOneByOrFail({ id: operation.jobId })).getPayload()).toMatchObject({
-      operationId: operation.id,
-      targetSequence: operation.sequence,
-      targetBoxId: target.id,
-      mode: 'recover',
-      archive: checkpoint.archive,
-      platformEnv: { BOXLITE_BOX_ID: target.id, BOXLITE_ORGANIZATION_ID: organizationId },
-    })
-    await finish(operation.jobId, {
-      operationId: operation.id,
-      targetSequence: operation.sequence,
-      nativeId: 'new-native-id',
-    })
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      id: target.id,
-      state: BoxState.STOPPED,
-      pending: false,
-      activeJobId: null,
-      cpu: 4,
-      mem: 8,
-      disk: 12,
-      env: { APP_ENV: 'test' },
-    })
-    expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
-      state: 'completed',
-      nativeId: 'new-native-id',
-    })
-    expect(events.emit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ box: expect.objectContaining({ id: target.id, cpu: 4 }) }),
-    )
   })
 
   it('creates a fresh target after source deletion with inherited settings and new platform identity', async () => {
@@ -784,6 +537,14 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       cpu: 4,
       env: { APP_ENV: 'test' },
     })
+    expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
+      state: 'completed',
+      nativeId: 'created-native',
+    })
+    expect(events.emit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ box: expect.objectContaining({ id: created.id, cpu: 4 }) }),
+    )
   })
 
   it('rolls back the import job and ownership when a new target name conflicts', async () => {
@@ -888,16 +649,24 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
 
   it('keeps pending and failed checkpoint uses even for force deletion', async () => {
     const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
+    const admitted = await recovery
+      .createBox(organization, checkpoint.id, 'target', undefined)
+      .then(withCheckpointState)
     await expect(service.remove(organizationId, checkpoint.id, true)).rejects.toMatchObject({ status: 409 })
     await finish(admitted.activeJobId!, undefined, JobStatus.FAILED)
     await expect(service.remove(organizationId, checkpoint.id, true)).rejects.toMatchObject({ status: 409 })
     expect(archiveStore.remove).not.toHaveBeenCalled()
-    const retried = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
+    expect(await dataSource.getRepository(CheckpointOperation).countBy({ state: 'failed' })).toBe(1)
+  })
+
+  it('releases a completed checkpoint use so the checkpoint can be deleted', async () => {
+    const checkpoint = await readyCheckpoint()
+    const admitted = await recovery
+      .createBox(organization, checkpoint.id, 'target', undefined)
+      .then(withCheckpointState)
     const operation = await dataSource
       .getRepository(CheckpointOperation)
-      .findOneByOrFail({ jobId: retried.activeJobId! })
+      .findOneByOrFail({ jobId: admitted.activeJobId! })
     await finish(operation.jobId, {
       operationId: operation.id,
       targetSequence: operation.sequence,
@@ -905,7 +674,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     })
     await service.remove(organizationId, checkpoint.id)
     expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
+    expect(await boxes.findOneByOrFail({ id: admitted.id }).then(withCheckpointState)).toMatchObject({
       state: BoxState.STOPPED,
       cpu: 4,
     })
@@ -1077,112 +846,52 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     }
   })
 
-  it('reuses logical ownership across failed attempts and ignores their late completion', async () => {
+  it('keeps a failed import failed and ignores its late completion', async () => {
     const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    const first = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
+    const first = await recovery.createBox(organization, checkpoint.id, 'target', undefined).then(withCheckpointState)
     const operation = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ jobId: first.activeJobId! })
     await finish(operation.jobId, undefined, JobStatus.FAILED)
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
+    const failed = {
       state: BoxState.ERROR,
       pending: true,
       activeJobId: operation.jobId,
-    })
-    const retried = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
-    expect(retried.activeJobId).not.toBe(operation.jobId)
-    const current = await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })
-    expect(current).toMatchObject({
-      id: operation.id,
       sequence: operation.sequence,
-      state: 'pending',
-      jobId: retried.activeJobId,
-    })
+    }
+    expect(await boxes.findOneByOrFail({ id: first.id }).then(withCheckpointState)).toMatchObject(failed)
     await finish(operation.jobId, {
       operationId: operation.id,
       targetSequence: operation.sequence,
       nativeId: 'late-old-attempt',
     })
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      state: BoxState.RESTORING,
-      activeJobId: current.jobId,
+    expect(await boxes.findOneByOrFail({ id: first.id }).then(withCheckpointState)).toMatchObject(failed)
+    expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
+      state: 'failed',
+      nativeId: null,
     })
-    await finish(current.jobId, {
-      operationId: current.id,
-      targetSequence: current.sequence,
-      nativeId: 'accepted-retry',
-    })
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      state: BoxState.STOPPED,
-      activeJobId: null,
-    })
+    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(1)
   })
 
-  it('rejects resource admission and foreign targets before scheduling import', async () => {
+  it('rejects resource admission and foreign checkpoints before scheduling import', async () => {
     const checkpoint = await readyCheckpoint()
-    const target = await source('target')
     resourceLimits.resolve.mockResolvedValue({ maxCpuPerBox: 1, maxMemoryPerBox: 1, maxDiskPerBox: 1 })
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toMatchObject({
+    await expect(recovery.createBox(organization, checkpoint.id, 'over-limit', undefined)).rejects.toMatchObject({
       status: 400,
     })
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
     resourceLimits.resolve.mockResolvedValue({ maxCpuPerBox: 16, maxMemoryPerBox: 128, maxDiskPerBox: 100 })
-    await boxes.update(target.id, { organizationId: otherOrganizationId })
     await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toMatchObject({
-      status: 404,
-    })
+      recovery.createBox({ id: otherOrganizationId } as Organization, checkpoint.id, 'foreign', undefined),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(await boxes.count()).toBe(1)
+    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
     expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(0)
   })
 
-  it('does not revive an errored target beyond the organization Box quota', async () => {
+  it('replays a native success after the completion transaction rolls back', async () => {
     const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    await boxes.update(target.id, { state: BoxState.ERROR, desiredState: BoxDesiredState.STARTED })
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, 1).then(withCheckpointState),
-    ).rejects.toThrow()
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, 2).then(withCheckpointState)
+    const target = await recovery.createBox(organization, checkpoint.id, 'target', undefined).then(withCheckpointState)
     const operation = await dataSource
       .getRepository(CheckpointOperation)
-      .findOneByOrFail({ jobId: admitted.activeJobId! })
-    await finish(operation.jobId, {
-      operationId: operation.id,
-      targetSequence: operation.sequence,
-      nativeId: 'native-ready-to-start',
-    })
-    expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
-      state: BoxState.STOPPED,
-      desiredState: BoxDesiredState.STARTED,
-      activeJobId: null,
-      cpu: 4,
-    })
-  })
-
-  it('joins concurrent recovery requests without creating another operation or job', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    const results = await Promise.all(
-      Array.from({ length: 6 }, () =>
-        recovery.recover(organization, checkpoint.id, target.id, 2).then(withCheckpointState),
-      ),
-    )
-    expect(new Set(results.map((box) => box.activeJobId)).size).toBe(1)
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(1)
-    expect(await dataSource.getRepository(CheckpointOperation).count()).toBe(1)
-  })
-
-  it('replays a native success after the configuration transaction rolls back', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    await boxes.update(target.id, { cpu: 1, mem: 1, disk: 2, env: { OLD: 'committed' } })
-    const admitted = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
-    const operation = await dataSource
-      .getRepository(CheckpointOperation)
-      .findOneByOrFail({ jobId: admitted.activeJobId! })
+      .findOneByOrFail({ jobId: target.activeJobId! })
     // Fail the second write, after the Box update, inside the real transaction.
     await dataSource.query(`CREATE FUNCTION "${schema}".reject_checkpoint_commit() RETURNS trigger AS $$
       BEGIN IF NEW.state = 'completed' THEN RAISE EXCEPTION 'checkpoint commit unavailable'; END IF;
@@ -1200,10 +909,6 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
         state: BoxState.RESTORING,
         pending: true,
-        cpu: 1,
-        mem: 1,
-        disk: 2,
-        env: { OLD: 'committed' },
         activeJobId: operation.jobId,
       })
       expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
@@ -1217,7 +922,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await Promise.all([receiver.reconcile(), receiver.reconcile()])
     expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
       state: BoxState.STOPPED,
-      pending: false,
+      desiredState: BoxDesiredState.STARTED,
       activeJobId: null,
       cpu: 4,
       mem: 8,
@@ -1233,13 +938,11 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   })
 
   it.each(['operationId', 'targetSequence', 'nativeId'])(
-    'retains ownership and committed configuration on an invalid %s receipt',
+    'retains ownership and the checkpoint use on an invalid %s receipt',
     async (field) => {
       const checkpoint = await readyCheckpoint()
-      const target = await source('target')
-      await boxes.update(target.id, { cpu: 1, env: { OLD: 'committed' } })
       const admitted = await recovery
-        .recover(organization, checkpoint.id, target.id, undefined)
+        .createBox(organization, checkpoint.id, 'target', undefined)
         .then(withCheckpointState)
       const operation = await dataSource
         .getRepository(CheckpointOperation)
@@ -1251,41 +954,20 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       }
       delete receipt[field]
       await finish(operation.jobId, receipt)
-      expect(await boxes.findOneByOrFail({ id: target.id }).then(withCheckpointState)).toMatchObject({
+      expect(await boxes.findOneByOrFail({ id: admitted.id }).then(withCheckpointState)).toMatchObject({
         state: BoxState.ERROR,
         pending: true,
         activeJobId: operation.jobId,
-        cpu: 1,
-        env: { OLD: 'committed' },
+        sequence: operation.sequence,
       })
       expect(await dataSource.getRepository(CheckpointOperation).findOneByOrFail({ id: operation.id })).toMatchObject({
         state: 'failed',
         nativeId: null,
       })
       expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'ready' })
-      const retry = await recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState)
-      expect(retry.sequence).toBe(operation.sequence)
-      expect(retry.activeJobId).not.toBe(operation.jobId)
+      await expect(service.remove(organizationId, checkpoint.id)).rejects.toMatchObject({ status: 409 })
     },
   )
-
-  it('rejects recovery while a target has an active migration between jobs', async () => {
-    const checkpoint = await readyCheckpoint()
-    const target = await source('target')
-    await dataSource.getRepository(BoxMigration).save(
-      Object.assign(new BoxMigration(), {
-        boxId: target.id,
-        state: BoxMigrationState.PENDING_IMPORT,
-        updatedAt: target.updatedAt,
-      }),
-    )
-    await expect(
-      recovery.recover(organization, checkpoint.id, target.id, undefined).then(withCheckpointState),
-    ).rejects.toMatchObject({
-      status: 409,
-    })
-    expect(await jobs.countBy({ type: JobType.IMPORT_CHECKPOINT })).toBe(0)
-  })
 
   it('wakes the runner for upload only after the export transaction commits', async () => {
     const box = await source()
