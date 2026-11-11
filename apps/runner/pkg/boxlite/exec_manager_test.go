@@ -113,6 +113,49 @@ func TestInventoryRecoveryDoesNotReapAnExistingSession(t *testing.T) {
 	}
 }
 
+type blockedStartBox struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b blockedStartBox) StartExecution(context.Context, string, []string, *sdk.ExecutionOptions) (*sdk.Execution, error) {
+	b.entered <- struct{}{}
+	<-b.release
+	return nil, errors.New("controlled startup rejection")
+}
+func (b blockedStartBox) Executions() *sdk.Executions { return nil }
+
+func TestKeyedStartDoesNotBlockOtherRequests(t *testing.T) {
+	for _, other := range []struct{ box, key string }{{"other-box", "token"}, {"box", "other-token"}} {
+		t.Run(other.box+other.key, func(t *testing.T) {
+			manager := newQuietManager(t)
+			first := blockedStartBox{make(chan struct{}, 1), make(chan struct{})}
+			second := blockedStartBox{make(chan struct{}, 1), make(chan struct{})}
+			finished := make(chan struct{}, 2)
+			start := func(b blockedStartBox, box, key string) {
+				_, _ = manager.Start(context.Background(), b, box, StartOptions{IdempotencyKey: key})
+				finished <- struct{}{}
+			}
+			go start(first, "box", "token")
+			<-first.entered
+			go start(second, other.box, other.key)
+			progress := false
+			select {
+			case <-second.entered:
+				progress = true
+			case <-time.After(time.Second):
+			}
+			close(first.release)
+			close(second.release)
+			<-finished
+			<-finished
+			if !progress {
+				t.Fatal("unrelated keyed request blocked behind slow startup")
+			}
+		})
+	}
+}
+
 func TestKeyedStartupRetainsOrphanAndLifetimeCleanup(t *testing.T) {
 	for _, lifetime := range []bool{false, true} {
 		manager := newQuietManager(t)

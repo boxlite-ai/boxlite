@@ -393,7 +393,9 @@ impl ContainerCommand {
             .into());
         }
 
-        let (uid, gid) = self.resolve_exec_user()?;
+        let (uid, gid) = self
+            .resolve_exec_user()
+            .map_err(SpawnFailure::BeforeSpawn)?;
 
         tracing::debug!(
             container_id = %self.id,

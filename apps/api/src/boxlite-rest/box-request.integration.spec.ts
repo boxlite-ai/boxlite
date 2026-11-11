@@ -8,6 +8,10 @@ import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../box/constants/box.constants'
 import { BoxState } from '../box/enums/box-state.enum'
+import { BoxDto } from '../box/dto/box.dto'
+import { BoxliteBoxController } from './boxlite-box.controller'
+import { Context } from '../common/context/context'
+import { boxToBoxResponse } from './mappers/box-to-box.mapper'
 
 const describeDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `request_${randomUUID().replaceAll('-', '')}`
@@ -101,6 +105,38 @@ describeDatabase('Box request recovery with real PostgreSQL', () => {
     expect(forbiddenCreate).not.toHaveBeenCalled()
     expect(await database.getRepository(Box).countBy({ organizationId })).toBe(1)
     await expect(retry.run(scope, key, { image: 'different' }, forbiddenCreate)).rejects.toMatchObject({ status: 422 })
+  })
+
+  it('recovers the public DTO after resource binding without a saved response', async () => {
+    const key = randomUUID()
+    const value = box()
+    value.mem = 4
+    value.inboundEnabled = true
+    value.outboundEnabled = false
+    const payload = { image: 'alpine' }
+    await expect(
+      requests.run(scope, key, payload, async (bind) => {
+        await repository.insert(value, 1, undefined, undefined, undefined, bind)
+        throw new Error('response lost')
+      }),
+    ).rejects.toThrow('response lost')
+    const create = jest.fn()
+    const service = {
+      create,
+      findOneByIdOrName: (id: string) => database.getRepository(Box).findOneByOrFail({ id }),
+      toBoxDto: async (entity: Box) => BoxDto.fromBox(entity, {}),
+    }
+    const controller = Reflect.construct(BoxliteBoxController, [service, {}, {}, requests]) as BoxliteBoxController
+    const result = await controller.createBox(
+      { organizationId, organization: { id: organizationId }, userId: 'owner' } as never,
+      payload as never,
+      Context.user(),
+      { headers: { 'idempotency-key': key } } as never,
+    )
+    const persisted = await database.getRepository(Box).findOneByOrFail({ id: value.id })
+    expect(result.memory_mib).toBe(4096)
+    expect(result).toEqual(boxToBoxResponse(BoxDto.fromBox(persisted, {})))
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('retries a quota rejection after release and replays success at full quota', async () => {

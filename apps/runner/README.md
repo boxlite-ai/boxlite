@@ -8,7 +8,10 @@ The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
 Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
 API for SDK clients and the control-plane API. One runner process hosts many
 boxes; each box hosts many executions; each execution can be attached to at
-most one client at a time.
+at most one client at a time. Keyed startup serializes only requests with the
+same Box ID and internal token through SDK startup and output adoption. A slow
+startup does not hold a runner-wide lock over other Boxes or request tokens;
+request locks are removed after their last holder or waiter finishes.
 
 Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3003`
 behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)

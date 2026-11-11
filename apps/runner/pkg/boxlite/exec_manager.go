@@ -76,7 +76,9 @@ type executionSource interface {
 	attach(context.Context, string, io.Writer, io.Writer) (execHandle, io.Writer, error)
 }
 
-type sdkExecutionSource struct{ box *boxlite.Box }
+type sdkExecutionSource struct {
+	box interface{ Executions() *boxlite.Executions }
+}
 
 func (s sdkExecutionSource) list(ctx context.Context) ([]boxlite.ExecutionInfo, error) {
 	return s.box.Executions().List(ctx)
@@ -100,6 +102,7 @@ func (s sdkExecutionSource) attach(ctx context.Context, id string, stdout, stder
 
 type ExecManager struct {
 	keyedStarts sync.Mutex
+	starts      map[[2]string]*startLock
 	mu          sync.RWMutex
 	execs       map[string]*ManagedExec
 
@@ -404,10 +407,47 @@ type StartOptions struct {
 	User              string
 }
 
-func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
-	if opts.IdempotencyKey != "" {
+type startLock struct {
+	mu    sync.Mutex
+	users int
+}
+
+// Serialize adoption for one request without holding a runner-wide lock over
+// SDK startup. Count waiters too so lock removal cannot split one request.
+func (m *ExecManager) lockStart(boxID, key string) func() {
+	identity := [2]string{boxID, key}
+	m.keyedStarts.Lock()
+	if m.starts == nil {
+		m.starts = make(map[[2]string]*startLock)
+	}
+	entry := m.starts[identity]
+	if entry == nil {
+		entry = &startLock{}
+		m.starts[identity] = entry
+	}
+	entry.users++
+	m.keyedStarts.Unlock()
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
 		m.keyedStarts.Lock()
-		defer m.keyedStarts.Unlock()
+		entry.users--
+		if entry.users == 0 {
+			delete(m.starts, identity)
+		}
+		m.keyedStarts.Unlock()
+	}
+}
+
+type executionStarter interface {
+	StartExecution(context.Context, string, []string, *boxlite.ExecutionOptions) (*boxlite.Execution, error)
+	Executions() *boxlite.Executions
+}
+
+func (m *ExecManager) Start(ctx context.Context, bx executionStarter, boxID string, opts StartOptions) (string, error) {
+	if opts.IdempotencyKey != "" {
+		unlock := m.lockStart(boxID, opts.IdempotencyKey)
+		defer unlock()
 	}
 	now := time.Now()
 	exec := &ManagedExec{

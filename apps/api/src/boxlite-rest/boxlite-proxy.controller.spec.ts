@@ -448,6 +448,51 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).not.toHaveBeenCalled()
   })
 
+  it.each([false, true])('keeps keyed execution active despite activity failure=%s', async (activityFails) => {
+    jest.useFakeTimers()
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', autoStop: 1 })
+    if (activityFails) boxService.updateLastActivityAt.mockRejectedValue(new Error('activity unavailable'))
+    let release!: (value: unknown) => void
+    const ledger = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    Object.assign(controller, { boxRequests: { run: ledger } })
+    const res = Object.assign(new EventEmitter(), { status: jest.fn().mockReturnThis(), json: jest.fn() })
+    const pending = controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      {
+        method: 'POST',
+        headers: { 'idempotency-key': 'key' },
+        body: { command: 'sleep' },
+      } as never,
+      res as never,
+      jest.fn(),
+    )
+    // Attach a rejection observer before driving the asynchronous preparation.
+    const outcome = pending.then(
+      () => undefined,
+      (error) => error,
+    )
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    const admitted = ledger.mock.calls.length
+    jest.advanceTimersByTime(500)
+    const beats = boxService.updateLastActivityAt.mock.calls.length
+    release?.({ execution_id: 'original' })
+    const error = await outcome
+    res.emit('finish')
+    jest.advanceTimersByTime(1000)
+    expect(error).toBeUndefined()
+    expect(admitted).toBe(1)
+    expect(beats).toBe(2)
+    expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(2)
+    expect(res.json).toHaveBeenCalledWith({ execution_id: 'original' })
+  })
+
   it('refreshes activity for the whole lifetime of a file transfer', async () => {
     jest.useFakeTimers()
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)

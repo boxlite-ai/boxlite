@@ -527,6 +527,9 @@ original box. Authorization checks still apply to replays.
 
 The PostgreSQL request ledger binds fresh creation and warm-pool assignment in
 the resource transaction, so an API crash after creation recovers that box.
+Recovery converts the persisted entity through the same Box DTO mapping as normal
+creation, preserving memory units, reported status and network settings before
+saving the response for later replays.
 Keyed execution uses a random internal token carrying the fixed deadline and
 binds retries to one running VM generation. The guest retains startup results
 independently of process/output retention, rejects expired tokens and safely
@@ -534,7 +537,10 @@ reclaims expired completed request entries. Unresolved startup remains counted;
 a guest holds at most 4096 unexpired or unresolved requests and rejects new work
 at capacity. An uncertain execution cannot resume a replacement VM. This does
 not guarantee exactly-once external effects across VM termination; old guests
-without the keyed RPC reject the operation.
+without the keyed RPC reject the operation. Keyed and ordinary execution requests
+share activity preparation: activity-store failures are logged rather than
+rejecting execution, and a response-lifetime heartbeat prevents AutoStop during
+long startup requests. The heartbeat ends on response completion, close or error.
 
 Resource permissions are enforced per route. A box mutation — create, start,
 stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an

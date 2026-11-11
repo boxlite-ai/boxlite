@@ -138,7 +138,8 @@ export class BoxliteBoxController {
     const create = async (bindRequest?: BindBoxRequest, boxId?: string) => {
       let box
       if (boxId) {
-        box = await this.boxService.findOneByIdOrName(boxId, organization.id)
+        const persisted = await this.boxService.findOneByIdOrName(boxId, organization.id)
+        box = await this.boxService.toBoxDto(persisted)
       } else {
         const createBoxDto = createBoxToCreateBox(dto)
         const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
