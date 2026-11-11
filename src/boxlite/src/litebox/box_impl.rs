@@ -1437,6 +1437,29 @@ impl BoxImpl {
                     self.config.id, state.status
                 )));
             }
+            // Running makes resize available. Its allocation must be durable
+            // first; save_box preserves the resources written separately here.
+            if let Some(resources) = resources {
+                if let Err(error) = self
+                    .runtime
+                    .box_manager
+                    .save_resources(&self.config.id, &resources)
+                {
+                    cleanup_guard.set_last_error(&error);
+                    if !adopting_running {
+                        // build() moved the handler into LiveState. Return it
+                        // so failed resource persistence stops and reaps this VM.
+                        cleanup_guard.set_handler(
+                            live_state
+                                .handler
+                                .into_inner()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        );
+                    }
+                    return Err(error);
+                }
+                state.resources = Some(resources);
+            }
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
             // A box entering Running publishes its PID, status, and `started_at`
@@ -1461,12 +1484,6 @@ impl BoxImpl {
 
             // Save to DB (cache for queries and recovery)
             self.runtime.box_manager.save_box(&self.config.id, &state)?;
-            if let Some(resources) = resources {
-                self.runtime
-                    .box_manager
-                    .save_resources(&self.config.id, &resources)?;
-                state.resources = Some(resources);
-            }
 
             // Arm the watcher under the *same* lock that publishes Running+pid.
             // A concurrent handout runs `arm_watcher(None)`, which reads the state

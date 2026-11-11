@@ -306,8 +306,9 @@ Memory limit in mebibytes (MiB).
 
 **Default:** 1024
 
-**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
-it is lower. Creating a box above that fails with `InvalidArgument`.
+**Range:** 1 MiB up to the smallest of host memory and finite `memory.max`
+limits across the runtime's visible cgroup ancestry. Creating a box above that
+fails with `InvalidArgument`.
 
 **Example:**
 ```python
@@ -319,7 +320,8 @@ memory_mib=4096   # 4 GB
 **Notes:**
 - 1 MiB = 1024 KiB = 1,048,576 bytes
 - Minimum 128 MiB required for most images
-- Out of memory kills the box process
+- Guest memory exhaustion can kill individual guest processes; exit of the main command stops the box.
+- Host memory exhaustion or limits can terminate the VMM and therefore the whole box.
 - Monitor with `box.metrics().memory_usage_bytes`
 
 ### `disk_size_gb: int | None`

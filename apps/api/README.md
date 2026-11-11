@@ -654,7 +654,11 @@ reports the Runner's actual allocation.
 
 `ResizeJobService` uses database time, row locks, claim tokens and a durable
 deadline. It requeues expired leases every 15 seconds and retries failures with
-jittered 1–60 second backoff. Lease requeue skips rows locked by another
+jittered 1–60 second backoff. Ordinary and eligible resize jobs share one
+oldest-first batch, including single-job polls. A committed requeue sends a Redis
+wake hint; polling also bounds its wait by the earliest durable retry time.
+Lost hints fall back to the poll timeout, capped at 60 seconds.
+Lease requeue skips rows locked by another
 transaction, and each terminalization bounds its row-lock wait, so one contended
 Box cannot stall unrelated cleanup. Completion validates the exact observed target and,
 in one transaction, updates Box `cpu/mem`, clears the fence, calls the existing
@@ -662,8 +666,16 @@ in one transaction, updates Box `cpu/mem`, clears the fence, calls the existing
 resize that reaches 10 attempts or its 30-minute deadline, including an unclaimed
 PENDING job past the deadline, becomes terminal `FAILED`: the fence is released,
 the old Box size and usage period stay unchanged, and stop/suspension proceeds.
-Late completion reports are rejected. Same-target requests reuse the job; the HTTP
+Completion and renewal reject the overall deadline even while the current claim
+lease remains valid. A duplicate committed completion remains idempotent.
+Same-target requests reuse the job; the HTTP
 wait expires after 30 seconds without cancelling it.
+
+Every successful claim or renewal grants a fixed 120-second lease. The Runner
+uses 119 seconds from request send time, allowing one second for timing uncertainty.
+These durations form one protocol contract and must change together; the margin
+assumes server elapsed time advances at most one second faster during a lease.
+Database time and claim-token checks remain authoritative.
 
 Rollout order: install the additive migration, upgrade every runtime, SDK/ABI
 consumer, Runner and API instance, then set `CLOUD_RESIZE_ENABLED=true` (default

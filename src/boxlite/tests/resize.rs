@@ -8,6 +8,75 @@ use boxlite::BoxOptions;
 use common::box_test::BoxTestBase;
 
 #[tokio::test]
+async fn resize_start_persists_resources_before_running() {
+    let t = BoxTestBase::with_options(common::alpine_opts()).await;
+    let db = rusqlite::Connection::open(t.home_dir().join("db/boxlite.db")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER require_resources BEFORE UPDATE ON box_state
+        WHEN NEW.status = 'running' AND json_extract(NEW.json, '$.resources') IS NULL
+        BEGIN SELECT RAISE(ABORT, 'Running requires durable resources'); END;",
+    )
+    .unwrap();
+    t.bx.start()
+        .await
+        .expect("resources must precede publishing Running");
+    assert!(t.bx.resize(boxlite::ResizeOptions::default()).await.is_ok());
+    t.bx.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn resize_start_never_publishes_running_if_resource_storage_fails() {
+    let t = BoxTestBase::with_options(common::alpine_opts()).await;
+    let db = rusqlite::Connection::open(t.home_dir().join("db/boxlite.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE published_running (id TEXT);
+        CREATE TRIGGER observe_running AFTER UPDATE ON box_state
+        WHEN NEW.status = 'running'
+        BEGIN INSERT INTO published_running VALUES (NEW.id); END;
+        CREATE TRIGGER reject_resources BEFORE UPDATE OF json ON box_state
+        WHEN json_extract(NEW.json, '$.resources') IS NOT NULL
+        BEGIN SELECT RAISE(ABORT, 'injected resource storage failure'); END;",
+    )
+    .unwrap();
+    let error =
+        t.bx.start()
+            .await
+            .expect_err("resource persistence must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("injected resource storage failure"),
+        "{error}"
+    );
+    let count: u32 = db
+        .query_row("SELECT COUNT(*) FROM published_running", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "Running must never be published before resources are durable"
+    );
+    assert!(!t.bx.info().await.unwrap().status.is_running());
+    let status: String = db
+        .query_row(
+            "SELECT status FROM box_state WHERE id = ?1",
+            [t.bx.id().as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(status, "running");
+    // A failed allocation write must also clean up the unpublished VM.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !common::home::live_shim_pids(&t.home_dir().join("boxes")).is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("failed start must stop its spawned shim");
+}
+
+#[tokio::test]
 async fn resize_memory_grows_without_restart() {
     use boxlite::{BoxliteError, ResizeOptions};
     const BOOT_MIB: u32 = 128;

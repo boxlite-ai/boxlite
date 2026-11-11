@@ -900,7 +900,14 @@ Resource resize runs through `RESIZE_BOX` jobs, not a direct mutation route.
 The executor confirms its lease before touching the VM and sends the claim token
 with every heartbeat/result. It always applies the explicit CPU/RAM target,
 even if a query already matches: mapped RAM can precede completed Guest hotplug.
-Heartbeat loss cancels the local wait; the API reclaims the persisted target.
+Transient renewal failures (transport, 408, 429 and 5xx) retry with jittered
+backoff inside the last confirmed lease. Permanent 4xx responses cancel immediately.
+The API grants 120 seconds; the Runner budgets 119 seconds from request send time,
+reserving one second for timing uncertainty. A watchdog cancels even stalled
+renewals, and a late success cannot revive expired work. These durations must
+change together; see the API's timing assumptions below.
+After cancellation, the API reclaims the persisted target. The executor joins
+renewal shutdown before deciding whether it may report completion.
 Startup skips old in-progress resize claims and waits for a fresh token. Guest
 exit causes a retry until that same Box is restarted; resize itself does not
 restart it. See [API rollout and recovery](../api/README.md#cloud-resize).

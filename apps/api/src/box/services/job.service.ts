@@ -7,8 +7,9 @@
 import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, LessThan, In, Not, EntityManager } from 'typeorm'
+import { Repository, LessThan, In, Not, Raw, EntityManager } from 'typeorm'
 import { ResizeJobService } from './resize-job.service'
+import { RESIZE_MAX_ATTEMPTS } from './resize-resources'
 import { Job } from '../entities/job.entity'
 import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { ResourceTypeForJobType } from '../dto/job-type-map.dto'
@@ -111,7 +112,7 @@ export class JobService {
 
   async pollJobs(runnerId: string, limit = 10, timeoutSeconds = 30, abortSignal?: AbortSignal): Promise<JobDto[]> {
     const queueKey = runnerJobQueueKey(runnerId)
-    const maxTimeout = Math.min(timeoutSeconds, 60) // Max 60 seconds
+    let maxTimeout = Math.min(timeoutSeconds, 60) // Max 60 seconds
 
     // Check if already aborted
     if (abortSignal?.aborted) {
@@ -133,6 +134,10 @@ export class JobService {
 
       return claimedJobs
     }
+
+    const retryDelay = await this.resizeJobs?.nextAttemptDelaySeconds(runnerId)
+    // Redis interprets zero as an infinite wait. A due retry must wake promptly.
+    maxTimeout = Math.max(0.01, Math.min(maxTimeout, retryDelay ?? maxTimeout))
 
     // STEP 2: No existing jobs - wait for notification via Redis BRPOP
     // Create a new dedicated Redis client for this BRPOP to support concurrent polling from multiple runners
@@ -440,20 +445,39 @@ export class JobService {
    * This prevents duplicate processing of the same job
    */
   private async claimPendingJobs(runnerId: string, limit: number): Promise<JobDto[]> {
-    const resizeClaims = (await this.resizeJobs?.claim(runnerId, limit)) ?? []
-    if (resizeClaims.length === limit) return resizeClaims
-    // Find pending jobs
-    const jobs = await this.jobRepository.find({
-      where: {
-        runnerId,
-        status: JobStatus.PENDING,
-        type: Not(JobType.RESIZE_BOX),
-      },
+    if (limit <= 0) return []
+    // Select one oldest-first batch before partitioning by claim protocol, so
+    // a resize backlog cannot starve ordinary work (including limit=1 polls).
+    const candidates = await this.jobRepository.find({
+      where: [
+        {
+          runnerId,
+          status: JobStatus.PENDING,
+          type: Not(JobType.RESIZE_BOX),
+        },
+        ...(this.resizeJobs
+          ? [
+              {
+                runnerId,
+                status: JobStatus.PENDING,
+                type: JobType.RESIZE_BOX,
+                resizePhase: 'APPLY' as const,
+                nextAttemptAt: Raw((alias) => `${alias} <= statement_timestamp()`),
+                resizeDeadlineAt: Raw((alias) => `(${alias} IS NULL OR ${alias} > statement_timestamp())`),
+                attempt: LessThan(RESIZE_MAX_ATTEMPTS),
+              },
+            ]
+          : []),
+      ],
       order: {
         createdAt: 'ASC',
+        id: 'ASC',
       },
-      take: limit - resizeClaims.length,
+      take: limit,
     })
+    const resizeIds = candidates.filter((job) => job.type === JobType.RESIZE_BOX).map((job) => job.id)
+    const resizeClaims = (await this.resizeJobs?.claim(runnerId, resizeIds.length, resizeIds)) ?? []
+    const jobs = candidates.filter((job) => job.type !== JobType.RESIZE_BOX)
 
     if (jobs.length === 0) {
       return resizeClaims
@@ -494,6 +518,7 @@ export class JobService {
       this.logger.debug(`Claimed ${claimedJobs.length} existing pending jobs for runner ${runnerId}`)
     }
 
-    return [...resizeClaims, ...claimedJobs]
+    const byId = new Map([...resizeClaims, ...claimedJobs].map((job) => [job.id, job]))
+    return candidates.flatMap((job) => (byId.has(job.id) ? [byId.get(job.id)!] : []))
   }
 }

@@ -16,6 +16,9 @@ import {
 } from './resize-resources'
 import { UsageService } from '../../usage/services/usage.service'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import { Redis } from 'ioredis'
+import { runnerJobQueueKey } from '../constants/runner-job-queue'
 
 /**
  * Resize uses a leased Job with bounded retries. Completion commits the Box
@@ -30,10 +33,11 @@ export class ResizeJobService implements OnApplicationBootstrap {
     @InjectRepository(Job) private readonly jobs: Repository<Job>,
     private readonly usage: UsageService,
     private readonly cache: BoxLookupCacheInvalidationService,
+    @InjectRedis() private readonly redis: Redis,
   ) {}
 
-  async claim(runnerId: string, limit: number): Promise<JobDto[]> {
-    if (limit <= 0) return []
+  async claim(runnerId: string, limit: number, ids?: string[]): Promise<JobDto[]> {
+    if (limit <= 0 || ids?.length === 0) return []
     return this.jobs.manager.transaction(async (manager) => {
       const jobs = await manager
         .createQueryBuilder(Job, 'job')
@@ -46,7 +50,9 @@ export class ResizeJobService implements OnApplicationBootstrap {
         .andWhere('job.nextAttemptAt <= statement_timestamp()')
         .andWhere('(job.resizeDeadlineAt IS NULL OR job.resizeDeadlineAt > statement_timestamp())')
         .andWhere('job.attempt < :maxAttempts', { maxAttempts: RESIZE_MAX_ATTEMPTS })
-        .orderBy('job.nextAttemptAt', 'ASC')
+        .andWhere(ids ? 'job.id IN (:...ids)' : 'TRUE', { ids })
+        .orderBy('job.createdAt', 'ASC')
+        .addOrderBy('job.id', 'ASC')
         .take(limit)
         .setLock('pessimistic_write')
         .setOnLocked('skip_locked')
@@ -62,6 +68,22 @@ export class ResizeJobService implements OnApplicationBootstrap {
       }
       return jobs.map((job) => new JobDto(job))
     })
+  }
+
+  async nextAttemptDelaySeconds(runnerId: string): Promise<number | undefined> {
+    const next = await this.jobs
+      .createQueryBuilder('job')
+      .select('EXTRACT(EPOCH FROM (MIN(job.nextAttemptAt) - statement_timestamp()))', 'seconds')
+      .where('job.runnerId = :runnerId AND job.type = :type AND job.status = :status', {
+        runnerId,
+        type: JobType.RESIZE_BOX,
+        status: JobStatus.PENDING,
+      })
+      .andWhere('job.resizePhase = :phase', { phase: 'APPLY' })
+      .andWhere('job.attempt < :maxAttempts', { maxAttempts: RESIZE_MAX_ATTEMPTS })
+      .andWhere('(job.resizeDeadlineAt IS NULL OR job.resizeDeadlineAt > statement_timestamp())')
+      .getRawOne<{ seconds: string | null }>()
+    return next?.seconds == null ? undefined : Number(next.seconds)
   }
 
   async report(
@@ -126,7 +148,8 @@ export class ResizeJobService implements OnApplicationBootstrap {
           job.status !== JobStatus.IN_PROGRESS ||
           job.resizePhase !== 'APPLY' ||
           !job.leaseExpiresAt ||
-          job.leaseExpiresAt <= now
+          job.leaseExpiresAt <= now ||
+          (job.resizeDeadlineAt !== null && job.resizeDeadlineAt <= now)
         ) {
           throw new ConflictException('Resize claim expired or was replaced')
         }
@@ -214,6 +237,9 @@ export class ResizeJobService implements OnApplicationBootstrap {
       }
 
       if (status === JobStatus.IN_PROGRESS) {
+        if (job.resizeDeadlineAt !== null && job.resizeDeadlineAt <= now) {
+          throw new ConflictException('Resize deadline expired')
+        }
         job.leaseExpiresAt = new Date(now.getTime() + RESIZE_LEASE_MS)
         return manager.save(Job, job)
       }
@@ -258,6 +284,7 @@ export class ResizeJobService implements OnApplicationBootstrap {
         name: changedBox.name,
       })
     }
+    if (job.status === JobStatus.PENDING) await this.notifyRetry(job)
     return job
   }
 
@@ -273,7 +300,7 @@ export class ResizeJobService implements OnApplicationBootstrap {
 
   private async requeueExpiredLeases(): Promise<void> {
     try {
-      const rows: Array<{ id: string }> = await this.jobs.query(
+      const [rows]: [Array<Pick<Job, 'id' | 'runnerId'>>, number] = await this.jobs.query(
         `UPDATE "job"
          SET "status" = $1,
              "claimToken" = NULL,
@@ -288,7 +315,7 @@ export class ResizeJobService implements OnApplicationBootstrap {
              AND ("resizeDeadlineAt" IS NULL OR "resizeDeadlineAt" > statement_timestamp())
            FOR UPDATE SKIP LOCKED
          )
-         RETURNING "id"`,
+         RETURNING "id", "runnerId"`,
         [
           JobStatus.PENDING,
           'Resize lease expired; retrying the persisted target',
@@ -298,8 +325,19 @@ export class ResizeJobService implements OnApplicationBootstrap {
         ],
       )
       if (rows.length) this.logger.warn({ message: 'Requeued expired resize leases', count: rows.length })
+      await Promise.all(rows.map((job) => this.notifyRetry(job)))
     } catch (error) {
       this.logger.error('Failed to requeue expired resize leases', error)
+    }
+  }
+
+  private async notifyRetry(job: Pick<Job, 'id' | 'runnerId'>): Promise<void> {
+    // Called after commit: the hint wakes an existing poll, whose next request
+    // bounds its wait by the durable nextAttemptAt even if this hint is lost.
+    try {
+      await this.redis.lpush(runnerJobQueueKey(job.runnerId), job.id)
+    } catch (error) {
+      this.logger.warn(`Failed to notify runner ${job.runnerId} of resize retry: ${error.message}`)
     }
   }
 

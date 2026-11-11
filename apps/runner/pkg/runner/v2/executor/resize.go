@@ -3,14 +3,24 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
+	"net/http"
+	"sync"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/backend"
 )
+
+// The API grants a fixed 120-second lease. Start the local budget at request
+// send time and reserve one second for timing uncertainty; never extend on error.
+const resizeLeaseBudget = 119 * time.Second
+
+var errResizeClaimRejected = errors.New("resize claim rejected")
 
 func (e *Executor) executeResize(ctx context.Context, job *apiclient.Job) {
 	ctx = e.extractTraceContext(ctx, job)
@@ -19,11 +29,29 @@ func (e *Executor) executeResize(ctx context.Context, job *apiclient.Job) {
 		return
 	}
 	// Validate ownership before touching the VM, including claims delivered late.
+	confirmedAt := time.Now()
 	if err := e.reportResize(ctx, job, apiclient.JOBSTATUS_IN_PROGRESS, nil, nil); err != nil {
 		e.log.ErrorContext(ctx, "Cannot confirm resize lease", "job_id", job.GetId(), "error", err)
 		return
 	}
+	deadline := confirmedAt.Add(resizeLeaseBudget)
+	if ctx.Err() != nil || !time.Now().Before(deadline) {
+		return
+	}
 	work, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// The watchdog runs independently of HTTP renewals, including stalled ones.
+	// Its lock also prevents an already-fired callback from cancelling a renewal.
+	var leaseMu sync.Mutex
+	stopped := false
+	watchdog := time.AfterFunc(time.Until(deadline), func() {
+		leaseMu.Lock()
+		defer leaseMu.Unlock()
+		if !stopped && !time.Now().Before(deadline) {
+			cancel()
+		}
+	})
+	heartbeat, stopHeartbeat := context.WithCancel(work)
 	done := make(chan struct{})
 	interval := 30 * time.Second
 	if e.heartbeatInterval > 0 {
@@ -31,25 +59,58 @@ func (e *Executor) executeResize(ctx context.Context, job *apiclient.Job) {
 	}
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		backoff := time.Second
 		for {
 			select {
-			case <-work.Done():
+			case <-heartbeat.Done():
 				return
-			case <-ticker.C:
-				if err := e.reportResize(work, job, apiclient.JOBSTATUS_IN_PROGRESS, nil, nil); err != nil {
+			case <-timer.C:
+				leaseMu.Lock()
+				renewal, stopRenewal := context.WithDeadline(heartbeat, deadline)
+				leaseMu.Unlock()
+				sentAt := time.Now()
+				err := e.reportResize(renewal, job, apiclient.JOBSTATUS_IN_PROGRESS, nil, nil)
+				stopRenewal()
+				// A rejection wins even if normal shutdown cancelled the request
+				// while its response was in flight.
+				if errors.Is(err, errResizeClaimRejected) {
 					e.log.ErrorContext(work, "Lost resize lease", "job_id", job.GetId(), "error", err)
 					cancel()
 					return
 				}
+				if heartbeat.Err() != nil {
+					return
+				}
+				if err != nil {
+					e.log.WarnContext(work, "Resize renewal failed; retrying within confirmed lease", "job_id", job.GetId(), "error", err)
+					timer.Reset(backoff/2 + time.Duration(rand.Int64N(int64(backoff/2))))
+					backoff = min(2*backoff, 5*time.Second)
+					continue
+				}
+				leaseMu.Lock()
+				if work.Err() != nil || !time.Now().Before(deadline) || time.Since(sentAt) >= resizeLeaseBudget {
+					cancel() // A delayed success cannot revive an expired lease.
+					leaseMu.Unlock()
+					return
+				}
+				deadline = sentAt.Add(resizeLeaseBudget)
+				watchdog.Reset(time.Until(deadline))
+				leaseMu.Unlock()
+				backoff = time.Second
+				timer.Reset(interval)
 			}
 		}
 	}()
 	result, err := e.applyResize(work, job)
-	lost := work.Err() != nil
-	cancel()
+	stopHeartbeat()
 	<-done
+	leaseMu.Lock()
+	stopped = true
+	watchdog.Stop()
+	lost := work.Err() != nil || !time.Now().Before(deadline)
+	leaseMu.Unlock()
 	if lost || ctx.Err() != nil {
 		return
 	}
@@ -106,6 +167,10 @@ func (e *Executor) reportResize(ctx context.Context, job *apiclient.Job, status 
 		}
 		body.SetResultMetadata(string(encoded))
 	}
-	_, _, err := e.client.JobsAPI.UpdateJobStatus(ctx, job.GetId()).UpdateJobStatus(*body).Execute()
+	_, response, err := e.client.JobsAPI.UpdateJobStatus(ctx, job.GetId()).UpdateJobStatus(*body).Execute()
+	if err != nil && response != nil && response.StatusCode >= 400 && response.StatusCode < 500 &&
+		response.StatusCode != http.StatusRequestTimeout && response.StatusCode != http.StatusTooManyRequests {
+		return fmt.Errorf("%w (HTTP %d): %w", errResizeClaimRejected, response.StatusCode, err)
+	}
 	return err
 }

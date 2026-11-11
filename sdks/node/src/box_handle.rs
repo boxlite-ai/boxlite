@@ -24,12 +24,14 @@ pub struct JsBox {
 }
 
 #[napi(object)]
+#[derive(Debug)]
 pub struct JsResizeOptions {
     pub cpus: Option<f64>,
     pub memory_mib: Option<f64>,
 }
 
 #[napi(object)]
+#[derive(Debug)]
 pub struct JsBoxResources {
     pub cpus: f64,
     pub memory_mib: u32,

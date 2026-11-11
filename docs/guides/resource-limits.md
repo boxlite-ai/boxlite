@@ -222,8 +222,9 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
-it is lower. Creating a box above that fails with `InvalidArgument`.
+**Range:** 1 MiB up to the smallest of host memory and finite `memory.max`
+limits across the runtime's visible cgroup ancestry. Creating a box above that
+fails with `InvalidArgument`.
 
 **Default:** 1024 MiB
 
@@ -272,6 +273,8 @@ boxlite resize mybox
 REST clients use `POST /v1/boxes/{box_id}/resize` with
 `{"cpus":1.5,"memory_mib":2048}`. The response contains `cpus`, `memory_mib`,
 `max_cpus`, and `max_memory_mib`.
+In `boxlite serve`, empty and all-null requests leave the AutoStop idle clock
+unchanged. Parsed explicit targets count as activity, including rejected attempts.
 
 Cloud uses the same SDK and CLI calls, rounding memory targets up to whole GiB:
 `await box.resize(memory_mib=1537)` requests 2048 MiB. The control plane saves
@@ -307,6 +310,9 @@ plane and Runner; see the [rollout sequence](../../apps/api/README.md#cloud-resi
   requests are serialized. A failed request can leave a partial allocation;
   query again and retry the original target. A submitted operation can finish
   after its caller disconnects.
+  Startup persists the allocation before publishing Running and cleans up the new
+  VM if that write fails. If the first memory
+  submission response is lost, a bounded status query recovers any observed mapping.
 - `cpus` reports the last committed CPU allocation. If a CPU RPC reply is lost,
   the guest may have brought additional CPUs online while the host attempts
   to restore the previous quota. A resource query still reports the committed

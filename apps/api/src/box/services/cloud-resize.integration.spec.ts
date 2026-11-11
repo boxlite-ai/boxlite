@@ -23,6 +23,7 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { boxLookupCacheKeyById } from '../utils/box-lookup-cache.util'
 import { RESIZE_MAX_DURATION_MINUTES } from './resize-resources'
+import { runnerJobQueueKey } from '../constants/runner-job-queue'
 
 const databaseTests = process.env.DB_HOST && process.env.REDIS_HOST ? describe : describe.skip
 const schema = `resize_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -84,7 +85,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       {} as never,
       {} as never,
     )
-    leases = new ResizeJobService(db.getRepository(Job), usage, cache)
+    leases = new ResizeJobService(db.getRepository(Job), usage, cache, redis)
     jobs = new JobService(
       db.getRepository(Job),
       redis,
@@ -135,6 +136,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     availableRunner.mockReset().mockResolvedValue({ apiVersion: '2' })
     removeCache.mockClear()
     runtimeResources = { ...target, cpus: 1, memory_mib: 1024 }
+    await redis.del(runnerJobQueueKey(runnerId))
     await db.query('TRUNCATE "job", "box_usage_periods", "box" CASCADE')
     box = Object.assign(new Box('test'), {
       organizationId: randomUUID(),
@@ -188,6 +190,121 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     throw new Error(`resize did not reach ${phase}`)
   }
   const stopJob = () => jobs.createJob(null, JobType.STOP_BOX, runnerId, ResourceType.BOX, box.id)
+
+  it.each([JobStatus.COMPLETED, JobStatus.IN_PROGRESS])(
+    'rejects %s after the operation deadline even with a live lease',
+    async (status) => {
+      const [claimed] = await claim()
+      await db.query('UPDATE "job" SET "resizeDeadlineAt" = statement_timestamp() WHERE id = $1', [job.id])
+      const before = await db.getRepository(Job).findOneByOrFail({ id: job.id })
+      await expect(
+        leases.report(job.id, runnerId, claimed.claimToken, status, undefined, JSON.stringify(target)),
+      ).rejects.toThrow('expired')
+      expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+        status: JobStatus.IN_PROGRESS,
+        leaseExpiresAt: before.leaseExpiresAt,
+        completedAt: null,
+      })
+      expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+        cpu: 1,
+        mem: 1,
+        resizeJobId: job.id,
+      })
+      expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+    },
+  )
+
+  it('preserves the fixed two-minute renewal contract', async () => {
+    const [claimed] = await claim()
+    const renewed = await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.IN_PROGRESS)
+    const [{ remaining }] = await db.query(
+      'SELECT EXTRACT(EPOCH FROM ($1::timestamptz - statement_timestamp())) AS remaining',
+      [renewed.leaseExpiresAt],
+    )
+    expect(Number(remaining)).toBeGreaterThan(119)
+    expect(Number(remaining)).toBeLessThanOrEqual(120)
+  })
+
+  it('claims an older ordinary job ahead of resize even with a one-job batch', async () => {
+    const ordinary = new Job({ type: JobType.START_BOX, runnerId, resourceType: ResourceType.BOX, resourceId: 'older' })
+    ordinary.createdAt = new Date(job.createdAt.getTime() - 1000)
+    await db.getRepository(Job).insert(ordinary)
+    const first = await (jobs as any).claimPendingJobs(runnerId, 1)
+    expect(first.map((row: Job) => row.id)).toEqual([ordinary.id])
+    const polls = await Promise.all([
+      (jobs as any).claimPendingJobs(runnerId, 1),
+      (jobs as any).claimPendingJobs(runnerId, 1),
+    ])
+    expect(polls.flat().map((row: Job) => row.id)).toEqual([job.id])
+  })
+
+  it('wakes the long poll when a persisted retry becomes due', async () => {
+    await db.query(
+      'UPDATE "job" SET "nextAttemptAt" = statement_timestamp() + interval \'150 milliseconds\' WHERE id = $1',
+      [job.id],
+    )
+    const abort = new AbortController()
+    const watchdog = setTimeout(() => abort.abort(), 1500)
+    try {
+      const claimed = await jobs.pollJobs(runnerId, 1, 10, abort.signal)
+      expect(claimed.map((row) => row.id)).toEqual([job.id])
+    } finally {
+      clearTimeout(watchdog)
+      abort.abort()
+    }
+  })
+
+  it.each(['failure', 'expired lease'])('notifies a blocked runner after requeue from %s commits', async (reason) => {
+    const [claimed] = await claim()
+    const listener = redis.duplicate()
+    try {
+      const notification = listener.brpop(runnerJobQueueKey(runnerId), 1)
+      if (reason === 'failure') {
+        await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.FAILED, 'temporary failure')
+      } else {
+        await db.query('UPDATE "job" SET "leaseExpiresAt" = statement_timestamp() WHERE id = $1', [job.id])
+        await leases.reapResizeJobs()
+      }
+      expect(await notification).toEqual([runnerJobQueueKey(runnerId), job.id])
+      expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+        status: JobStatus.PENDING,
+        claimToken: null,
+        nextAttemptAt: expect.any(Date),
+      })
+    } finally {
+      listener.disconnect()
+    }
+  })
+
+  it('discovers a committed retry within the poll timeout when notification fails', async () => {
+    const [claimed] = await claim()
+    let blocked!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      blocked = resolve
+    })
+    const duplicate = redis.duplicate.bind(redis)
+    const duplicateSpy = jest.spyOn(redis, 'duplicate').mockImplementation((options) => {
+      const client = duplicate(options)
+      const brpop = client.brpop.bind(client)
+      jest.spyOn(client, 'brpop').mockImplementation(((...args: Parameters<typeof brpop>) => {
+        const result = brpop(...args)
+        blocked()
+        return result
+      }) as typeof brpop)
+      return client
+    })
+    const notify = jest.spyOn(redis, 'lpush').mockRejectedValue(new Error('injected notification failure'))
+    try {
+      const poll = jobs.pollJobs(runnerId, 1, 2)
+      await waiting
+      await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.FAILED, 'retry')
+      expect((await poll).map((row) => row.id)).toEqual([job.id])
+      expect(notify).toHaveBeenCalledWith(runnerJobQueueKey(runnerId), job.id)
+    } finally {
+      notify.mockRestore()
+      duplicateSpy.mockRestore()
+    }
+  })
 
   it('admits a rounded immutable target without changing Box or billing, then commits both on completion', async () => {
     await freshAdmission()
@@ -428,7 +545,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     ])
     await leases.reapResizeJobs()
     await db.query('UPDATE "job" SET "nextAttemptAt" = statement_timestamp() WHERE id = $1', [job.id])
-    const restarted = new ResizeJobService(db.getRepository(Job), usage, cache)
+    const restarted = new ResizeJobService(db.getRepository(Job), usage, cache, redis)
     const [second] = await restarted.claim(runnerId, 10)
     expect(second.claimToken).not.toBe(first.claimToken)
     await expect(

@@ -148,6 +148,7 @@ describe('McpTools.register', () => {
  * someone decides whether OAuth callers may reach it.
  */
 const API_KEY_ONLY = [
+  'resizeBox',
   'enableSsh',
   'configureSsh',
   'exportBox',

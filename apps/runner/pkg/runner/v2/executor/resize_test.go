@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
@@ -75,6 +79,7 @@ type resizeBackend struct {
 	queryFailure error
 	resources    *dto.BoxResources
 	wait         bool
+	release      <-chan struct{}
 }
 
 func (b *resizeBackend) ResizeResources(ctx context.Context, _ string, cpus float64, memory uint32) (*dto.BoxResources, error) {
@@ -84,8 +89,11 @@ func (b *resizeBackend) ResizeResources(ctx context.Context, _ string, cpus floa
 	if cpus != 0 || memory != 0 {
 		b.targets = append(b.targets, dto.ResizeBoxPayload{CPUs: cpus, MemoryMiB: memory})
 		if b.wait {
-			<-ctx.Done()
-			return nil, ctx.Err()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-b.release:
+			}
 		}
 		if b.failure != nil {
 			return nil, b.failure
@@ -232,4 +240,156 @@ func TestResizeLosingHeartbeatCancelsWaitWithoutCompletingJob(t *testing.T) {
 	if calls.Load() != 2 {
 		t.Fatalf("reported completion after losing lease: %d calls", calls.Load())
 	}
+}
+
+func TestResizeRecoversAfterTransientHeartbeatFailure(t *testing.T) {
+	for _, transportFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transport=%t", transportFailure), func(t *testing.T) {
+			h := newHarness(t, nil)
+			release := make(chan struct{})
+			h.executor.backend = &resizeBackend{BoxBackend: h.backend, wait: true, release: release}
+			h.executor.heartbeatInterval = 5 * time.Millisecond
+			var heartbeats, completed atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body apiclient.UpdateJobStatus
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if body.Status == apiclient.JOBSTATUS_IN_PROGRESS {
+					switch heartbeats.Add(1) {
+					case 2:
+						if transportFailure {
+							conn, _, err := w.(http.Hijacker).Hijack()
+							if err != nil {
+								t.Error(err)
+								return
+							}
+							conn.Close()
+						} else {
+							w.WriteHeader(http.StatusServiceUnavailable)
+						}
+						return
+					case 3:
+						close(release)
+					}
+				} else if body.Status == apiclient.JOBSTATUS_COMPLETED {
+					completed.Add(1)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"id":"job-1","type":"RESIZE_BOX","status":"IN_PROGRESS","resourceType":"box","resourceId":"box-1","createdAt":"2026-01-01T00:00:00Z"}`)
+			}))
+			defer server.Close()
+			config := apiclient.NewConfiguration()
+			config.Servers = apiclient.ServerConfigurations{{URL: server.URL}}
+			h.executor.client = apiclient.NewAPIClient(config)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			h.executor.Execute(ctx, resizeJob())
+			if completed.Load() != 1 || heartbeats.Load() < 3 {
+				t.Fatalf("transient renewal failure cancelled a valid lease: heartbeats=%d completed=%d", heartbeats.Load(), completed.Load())
+			}
+		})
+	}
+}
+
+type resizeTransport func(*http.Request) (*http.Response, error)
+
+func (f resizeTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func resizeResponse(status int) *http.Response {
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"id":"job-1","type":"RESIZE_BOX","status":"IN_PROGRESS","resourceType":"box","resourceId":"box-1","createdAt":"2026-01-01T00:00:00Z"}`))}
+}
+
+func resizeExecutorWithTransport(b *resizeBackend, transport resizeTransport) *Executor {
+	config := apiclient.NewConfiguration()
+	config.Servers = apiclient.ServerConfigurations{{URL: "http://resize.test"}}
+	config.HTTPClient = &http.Client{Transport: transport}
+	return &Executor{backend: b, client: apiclient.NewAPIClient(config), log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+func TestResizeRenewalsStopAtConfirmedLeaseBudget(t *testing.T) {
+	for _, stalled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stalled=%t", stalled), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				calls, finalReports := 0, 0
+				e := resizeExecutorWithTransport(&resizeBackend{wait: true}, func(r *http.Request) (*http.Response, error) {
+					var body apiclient.UpdateJobStatus
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					if body.Status != apiclient.JOBSTATUS_IN_PROGRESS {
+						finalReports++
+					}
+					calls++
+					if calls == 1 {
+						return resizeResponse(200), nil
+					}
+					if stalled {
+						<-r.Context().Done()
+						return nil, r.Context().Err()
+					}
+					return resizeResponse(503), nil
+				})
+				ctx, cancel := context.WithTimeout(context.Background(), 130*time.Second)
+				defer cancel()
+				start := time.Now()
+				e.executeResize(ctx, resizeJob())
+				if elapsed := time.Since(start); elapsed != 119*time.Second {
+					t.Fatalf("confirmed lease should survive transient errors until its conservative deadline: %s", elapsed)
+				}
+				if finalReports != 0 {
+					t.Fatalf("reported after lease loss: %d", finalReports)
+				}
+			})
+		})
+	}
+}
+
+func TestResizeRejectsAnInitialConfirmationReceivedAfterItsBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := &resizeBackend{}
+		calls := 0
+		e := resizeExecutorWithTransport(b, func(_ *http.Request) (*http.Response, error) {
+			calls++
+			// Model a delayed successful transport return, even after its request
+			// deadline fired. The executor must validate elapsed time itself.
+			if calls == 1 {
+				time.Sleep(120 * time.Second)
+			}
+			return resizeResponse(200), nil
+		})
+		e.executeResize(context.Background(), resizeJob())
+		if len(b.targets) != 0 || calls != 1 {
+			t.Fatalf("expired confirmation touched runtime: targets=%v reports=%d", b.targets, calls)
+		}
+	})
+}
+
+func TestResizeCompletionRacingARejectedRenewalDoesNotReportSuccess(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		calls, finalReports := 0, 0
+		e := resizeExecutorWithTransport(&resizeBackend{wait: true, release: release}, func(r *http.Request) (*http.Response, error) {
+			var body apiclient.UpdateJobStatus
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Status != apiclient.JOBSTATUS_IN_PROGRESS {
+				finalReports++
+			}
+			calls++
+			if calls == 2 {
+				close(release)       // Backend returns while this renewal is still pending.
+				<-r.Context().Done() // Let the executor enter normal renewal shutdown.
+				return resizeResponse(409), nil
+			}
+			return resizeResponse(200), nil
+		})
+		e.executeResize(context.Background(), resizeJob())
+		if finalReports != 0 {
+			t.Fatalf("completion escaped a concurrent lease rejection: %d", finalReports)
+		}
+	})
 }

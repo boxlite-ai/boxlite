@@ -101,14 +101,26 @@ impl HostProbe for SystemProbe {
 #[cfg(target_os = "linux")]
 mod linux {
     use std::os::fd::AsRawFd;
+    use std::path::{Component, Path};
 
-    /// `memory.max` of this process's cgroup v2, if it sets a limit.
+    /// Smallest finite `memory.max` in the visible cgroup v2 ancestry.
     pub(super) fn cgroup_memory_max() -> Option<u64> {
         let membership = std::fs::read_to_string("/proc/self/cgroup").ok()?;
         let path = membership.lines().find_map(|l| l.strip_prefix("0::"))?;
-        let path = path.trim_start_matches('/');
-        let value = std::fs::read_to_string(format!("/sys/fs/cgroup/{path}/memory.max")).ok()?;
-        value.trim().parse().ok()
+        let relative = Path::new(path.strip_prefix('/')?);
+        if relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return None;
+        }
+        let root = Path::new("/sys/fs/cgroup");
+        let leaf = root.join(relative);
+        leaf.ancestors()
+            .take_while(|ancestor| ancestor.starts_with(root))
+            .filter_map(|ancestor| std::fs::read_to_string(ancestor.join("memory.max")).ok())
+            .filter_map(|value| value.trim().parse::<u64>().ok())
+            .min()
     }
 
     /// `KVM_CAP_MAX_VCPUS`, falling back to `KVM_CAP_NR_VCPUS` as libkrun's
@@ -127,6 +139,108 @@ mod linux {
             .map(check)
             .find(|&n| n > 0)
             .map(|n| n as u32)
+    }
+
+    // Redirect only cgroup probe files into a per-test filesystem. The production
+    // traversal and parsing run unchanged, including on the pre-fix baseline.
+    #[cfg(test)]
+    mod std {
+        pub use ::std::{os, path};
+        pub mod fs {
+            pub use ::std::fs::File;
+            use ::std::{
+                cell::RefCell,
+                io,
+                path::{Path, PathBuf},
+            };
+            thread_local! { pub static FIXTURE: RefCell<Option<PathBuf>> = const { RefCell::new(None) }; }
+            pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
+                let path = path.as_ref();
+                let redirected = FIXTURE.with(|fixture| {
+                    fixture.borrow().as_ref().and_then(|root| {
+                        if path == Path::new("/proc/self/cgroup") {
+                            Some(root.join("membership"))
+                        } else {
+                            path.strip_prefix("/sys/fs/cgroup")
+                                .ok()
+                                .map(|suffix| root.join("cgroup").join(suffix))
+                        }
+                    })
+                });
+                ::std::fs::read_to_string(redirected.as_deref().unwrap_or(path))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn cgroup_memory_ceiling_honors_visible_ancestors() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("cgroup");
+            ::std::fs::create_dir_all(root.join("parent/leaf")).unwrap();
+            ::std::fs::write(dir.path().join("membership"), "0::/parent/leaf\n").unwrap();
+            ::std::fs::write(root.join("memory.max"), "max\n").unwrap();
+            ::std::fs::write(root.join("parent/memory.max"), "2147483648\n").unwrap();
+            ::std::fs::write(root.join("parent/leaf/memory.max"), "max\n").unwrap();
+            std::fs::FIXTURE.with(|fixture| *fixture.borrow_mut() = Some(dir.path().to_owned()));
+            let observed = cgroup_memory_max();
+            std::fs::FIXTURE.with(|fixture| *fixture.borrow_mut() = None);
+            assert_eq!(
+                observed,
+                Some(2147483648),
+                "an unlimited leaf still inherits its parent limit"
+            );
+        }
+
+        #[test]
+        fn cgroup_memory_ceiling_handles_root_missing_and_finite_limits() {
+            for (membership, leaf, parent, root_limit, expected) in [
+                (
+                    "/parent/leaf",
+                    Some("1024"),
+                    Some("2048"),
+                    "max",
+                    Some(1024),
+                ),
+                (
+                    "/parent/leaf",
+                    Some("4096"),
+                    Some("2048"),
+                    "max",
+                    Some(2048),
+                ),
+                ("/parent/leaf", None, Some("2048"), "1024", Some(1024)),
+                ("/", None, None, "1024", Some(1024)),
+                ("/parent/leaf", Some("max"), None, "max", None),
+                ("/../escape", None, None, "1024", None),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let root = dir.path().join("cgroup");
+                ::std::fs::create_dir_all(root.join("parent/leaf")).unwrap();
+                ::std::fs::write(dir.path().join("membership"), format!("0::{membership}\n"))
+                    .unwrap();
+                ::std::fs::write(root.join("memory.max"), root_limit).unwrap();
+                for (path, value) in [
+                    ("parent/memory.max", parent),
+                    ("parent/leaf/memory.max", leaf),
+                ] {
+                    if let Some(value) = value {
+                        ::std::fs::write(root.join(path), value).unwrap();
+                    }
+                }
+                std::fs::FIXTURE
+                    .with(|fixture| *fixture.borrow_mut() = Some(dir.path().to_owned()));
+                let observed = cgroup_memory_max();
+                std::fs::FIXTURE.with(|fixture| *fixture.borrow_mut() = None);
+                assert_eq!(
+                    observed, expected,
+                    "membership {membership}, leaf {leaf:?}, parent {parent:?}"
+                );
+            }
+        }
     }
 }
 

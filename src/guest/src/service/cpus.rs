@@ -49,10 +49,11 @@ pub(super) fn online_cpus(root: &Path, count: u32) -> Result<OnlineCpusResponse,
             failure = format!("online CPU {id}: {error}");
             break;
         }
-        // The sysfs write is synchronous, but read back rather than assuming
-        // success. A partial result lets the host reconcile quota and storage.
+        // A successful sysfs write has synchronously onlined the CPU. Preserve
+        // that allocation even if the diagnostic readback fails afterward.
+        online[index] = true;
         match std::fs::read_to_string(path) {
-            Ok(value) if value.trim() == "1" => online[index] = true,
+            Ok(value) if value.trim() == "1" => {}
             result => {
                 failure = format!("CPU {id} did not become online: {result:?}");
                 break;
@@ -67,6 +68,32 @@ pub(super) fn online_cpus(root: &Path, count: u32) -> Result<OnlineCpusResponse,
 
 fn io_status(error: std::io::Error) -> Box<Status> {
     Box::new(Status::internal(format!("guest CPU hotplug: {error}")))
+}
+
+// Fault injection stays at the filesystem boundary. Production writes still
+// update the fixture before its readback fails; the hotplug algorithm is unchanged.
+#[cfg(test)]
+mod std {
+    pub use ::std::{io, path};
+    pub mod fs {
+        pub use ::std::fs::{create_dir, read_dir, write};
+        use ::std::{
+            cell::RefCell,
+            io,
+            path::{Path, PathBuf},
+        };
+        thread_local! { pub static FAIL_READBACK: RefCell<Option<PathBuf>> = const { RefCell::new(None) }; }
+        pub fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
+            let path = path.as_ref();
+            let value = ::std::fs::read_to_string(path)?;
+            if value.trim() == "1"
+                && FAIL_READBACK.with(|fail| fail.borrow().as_deref() == Some(path))
+            {
+                return Err(io::Error::other("injected CPU readback failure"));
+            }
+            Ok(value)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,5 +144,20 @@ mod tests {
         let dir = topology();
         online_cpus(dir.path(), 3).unwrap();
         assert_eq!(online_cpus(dir.path(), 1).unwrap().online, 3);
+    }
+
+    #[test]
+    fn successful_online_write_is_counted_when_readback_fails() {
+        let dir = topology();
+        let path = dir.path().join("cpu1/online");
+        std::fs::FAIL_READBACK.with(|fail| *fail.borrow_mut() = Some(path.clone()));
+        let response = online_cpus(dir.path(), 2).unwrap();
+        std::fs::FAIL_READBACK.with(|fail| *fail.borrow_mut() = None);
+        assert_eq!(::std::fs::read_to_string(path).unwrap(), "1");
+        assert_eq!(
+            response.online, 2,
+            "successful synchronous writes must survive a failed readback"
+        );
+        assert!(response.error.contains("injected CPU readback failure"));
     }
 }

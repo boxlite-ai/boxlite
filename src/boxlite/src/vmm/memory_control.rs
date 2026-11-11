@@ -51,7 +51,15 @@ pub(crate) async fn request(path: &Path, target: u32) -> BoxliteResult<MemorySta
 /// its last observed host mapping so the caller can persist partial allocation.
 pub(crate) async fn grow(path: &Path, target: u32) -> BoxliteResult<MemoryStatus> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    let mut status = request(path, target).await?;
+    let mut status = match request(path, target).await {
+        Ok(status) => status,
+        Err(error) => {
+            // The shim may have mapped RAM before its response was lost. Query
+            // the mailbox before returning so that mapping can be persisted.
+            tracing::warn!(%error, "memory resize submission response unavailable; querying status");
+            request(path, 0).await?
+        }
+    };
     loop {
         if status.request_error != 0
             || status.error != 0
@@ -145,6 +153,35 @@ pub(crate) fn configure(path: &Path, ctx_id: Option<u32>) -> BoxliteResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn grow_recovers_mapping_after_the_first_response_is_lost() {
+        for (plugged, mapped, error) in [(258_u32, 384_u32, libc::EIO), (512, 512, 0)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("memory.sock");
+            let listener = tokio::net::UnixListener::bind(&path).unwrap();
+            let shim = tokio::spawn(async move {
+                let (mut submit, _) = listener.accept().await.unwrap();
+                assert_eq!(submit.read_u32_le().await.unwrap(), 512);
+                drop(submit); // The mapping changed, but the acknowledgement was lost.
+                let (mut query, _) = listener.accept().await.unwrap();
+                assert_eq!(query.read_u32_le().await.unwrap(), 0);
+                query.write_all(b"BLM1").await.unwrap();
+                for word in [1024, 512, plugged, mapped, error as u32, 1, 0] {
+                    query.write_u32_le(word).await.unwrap();
+                }
+            });
+            let result = grow(&path, 512).await;
+            if result.is_err() {
+                shim.abort();
+            }
+            let status = result.expect("recover the allocation after an ambiguous submission");
+            assert_eq!(status.mapped_mib, mapped);
+            assert_eq!(status.plugged_mib, plugged);
+            assert_eq!(status.error, error);
+            shim.await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn grow_preserves_partial_mapping_when_the_shim_disconnects() {

@@ -183,6 +183,9 @@ pub(in crate::commands::serve) async fn resize_box(
             );
         }
     };
+    if options.cpus.is_some() || options.memory_mib.is_some() {
+        state.record_box_activity(&box_id).await;
+    }
     let bx = match get_or_fetch_box(&state, &box_id).await {
         Ok(bx) => bx,
         Err(response) => return response,
