@@ -389,7 +389,17 @@ fn extract_from_reader<R: Read>(
                 let mut file = entry.map_err(|e| {
                     BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
-                let is_directory = file.header().entry_type().is_dir();
+                let kind = file.header().entry_type();
+                // Match tar-rs's old BSD fallback after link/extension handling.
+                let is_directory = kind.is_dir()
+                    || (!kind.is_hard_link()
+                        && !kind.is_symlink()
+                        && !kind.is_pax_global_extensions()
+                        && !kind.is_pax_local_extensions()
+                        && !kind.is_gnu_longname()
+                        && !kind.is_gnu_longlink()
+                        && file.header().as_ustar().is_none()
+                        && file.path_bytes().ends_with(b"/"));
                 if let Ok(path) = file.path() {
                     if let Some(relative) = sanitize_entry_path(path.as_ref()) {
                         let target = dest.join(&relative);
@@ -1387,6 +1397,69 @@ mod tests {
 
         let result = unpack(tar_path, dest, uc(false, false, false)).await;
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_reuses_old_format_directory_headers() {
+        let tmp = copy_policy_tempdir();
+        let tar_path = tmp.path().join("old.tar");
+        let mut archive = tar::Builder::new(std::fs::File::create(&tar_path).unwrap());
+        let mut header = tar::Header::new_old();
+        for (name, kind) in [
+            ("existing/", b'0'),
+            ("contiguous/", b'7'),
+            ("character/", b'3'),
+            ("block/", b'4'),
+            ("fifo/", b'6'),
+            ("unknown/", b'Z'),
+        ] {
+            header.set_path(name).unwrap();
+            header.set_entry_type(tar::EntryType::new(kind));
+            header.set_size(0);
+            header.set_mode(0o700);
+            header.set_cksum();
+            archive.append(&header, std::io::empty()).unwrap();
+        }
+        archive.finish().unwrap();
+        drop(archive);
+        let dest = tmp.path().join("output");
+        let names = [
+            "existing",
+            "contiguous",
+            "character",
+            "block",
+            "fifo",
+            "unknown",
+        ];
+        for name in names {
+            std::fs::create_dir_all(dest.join(name)).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dest.join(name), std::fs::Permissions::from_mode(0o750))
+                    .unwrap();
+            }
+        }
+        let result = unpack(tar_path, dest.clone(), uc(false, false, false)).await;
+        assert!(
+            result.is_ok(),
+            "old directory header must reuse directory: {result:?}"
+        );
+        for name in names {
+            assert!(dest.join(name).is_dir());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(dest.join(name))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o750
+                );
+            }
+        }
     }
 
     #[tokio::test]

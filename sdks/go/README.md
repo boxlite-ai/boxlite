@@ -186,12 +186,13 @@ The existing call without an option retains `overwrite=true`.
 
 Directory metadata is retained only for directories that existed before the
 upload. A directory created by an earlier archive entry still receives its own
-later header's permissions. For protected downloads, the local runtime resolves
-trusted host parent paths (including macOS `/tmp` links) before extraction;
+later header's permissions. Rust `copy_out` with
+`CopyOptions::no_overwrite()` resolves trusted host parent paths (including macOS `/tmp` links) before extraction;
 the destination leaf and archive-created paths retain conflict and link checks.
 A trailing `/` still requests a destination directory. Missing host parents are
 created using filesystem path resolution, so `..` follows the resolved symlink
-parent rather than a lexical simplification of the path.
+parent rather than a lexical simplification of the path. Go `CopyOut` currently
+has no overwrite option and cannot request protected downloads.
 
 A local runtime treats the archive as trusted because local applications own
 both the runtime and archive. A REST runtime uploads the file and relies on the

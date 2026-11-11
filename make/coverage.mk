@@ -164,3 +164,12 @@ coverage\:integration: $(if $(SETUP_DONE),,runtime\:debug)
 	$(MAKE) coverage:report || rc=$$?; \
 	exit $$rc
 	@echo "✅ Combined coverage report: target/coverage/html/index.html"
+
+# Exercise file-copy entry points with a real guest and retain the unit profiles.
+# The serve regression is explicitly ignored by the non-VM unit pass.
+coverage\:copy\:vm: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite --features krun,gvproxy,native --test copy --test copy_ownership
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite-cli --bin boxlite --run-ignored only -E 'test(upload_duplicate_entries_return_conflict)'
+	@$(MAKE) coverage:report

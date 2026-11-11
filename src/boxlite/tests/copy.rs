@@ -388,7 +388,11 @@ async fn copy_integration() {
         .expect("trusted host symlink parent must resolve");
         let expected = std::fs::read(tmp.path().join("input.txt")).unwrap();
         assert_eq!(std::fs::read(&output).unwrap(), expected);
-        for suffix in ["directory-output/", "absent/../parent-output/"] {
+        for suffix in [
+            "directory-output/",
+            "absent/../parent-output/",
+            "dot-output/.",
+        ] {
             let destination = linked.join(suffix);
             bx.copy_out(
                 "/root/input.txt",
@@ -421,8 +425,26 @@ async fn copy_integration() {
             "trailing slash must not bypass leaf link rejection"
         );
         assert!(!target.join("input.txt").exists());
+        let occupied_parent = root.join("occupied-parent");
+        std::fs::write(&occupied_parent, b"keep parent").unwrap();
+        let error = bx
+            .copy_out(
+                "/root/input.txt",
+                &occupied_parent.join("child/output"),
+                CopyOptions::default().no_overwrite(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, boxlite::BoxliteError::AlreadyExists(_)),
+            "ancestor conflict: {error:?}"
+        );
+        assert_eq!(std::fs::read(&occupied_parent).unwrap(), b"keep parent");
+
         let leaf = linked.join("leaf-link");
-        std::os::unix::fs::symlink(root.join("missing/new.txt"), &leaf).unwrap();
+        let absent_target = root.join("absent-leaf-target");
+        assert!(!absent_target.exists());
+        std::os::unix::fs::symlink(&absent_target, &leaf).unwrap();
         assert!(
             bx.copy_out(
                 "/root/input.txt",

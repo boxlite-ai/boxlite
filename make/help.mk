@@ -142,6 +142,7 @@ help:
 	@echo "    make coverage:ci-listener  - Collect shared CI Listener coverage (optional local Postgres)"
 	@echo "    make coverage:github-ci-runner - Collect standalone CI Listener coverage"
 	@echo "    make coverage:integration  - Generate coverage for Rust integration tests"
+	@echo "    make coverage:copy:vm      - Add real-guest copy and upload coverage to existing profiles"
 	@echo ""
 	@echo "  Local Development:"
 	@echo "    make dev:python     - Build and install Python SDK locally (debug mode)"

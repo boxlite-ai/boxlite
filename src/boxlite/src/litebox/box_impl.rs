@@ -1044,7 +1044,14 @@ impl BoxImpl {
                 .map_err(|e| {
                     BoxliteError::Storage(format!("host copy resolution task failed: {e}"))
                 })?
-                .map_err(|e| BoxliteError::Storage(format!("resolve host copy destination: {e}")))?
+                .map_err(|e| {
+                    let message = format!("resolve host copy destination: {e}");
+                    if e.kind() == std::io::ErrorKind::NotADirectory {
+                        BoxliteError::AlreadyExists(message)
+                    } else {
+                        BoxliteError::Storage(message)
+                    }
+                })?
         };
         boxlite_shared::tar::unpack(
             temp_tar.to_path_buf(),
@@ -1052,7 +1059,10 @@ impl BoxImpl {
             boxlite_shared::tar::UnpackContext {
                 overwrite: opts.overwrite,
                 mkdir_parents: true,
-                force_directory: host_dst.as_os_str().to_string_lossy().ends_with('/'),
+                force_directory: {
+                    let raw = host_dst.as_os_str().to_string_lossy();
+                    raw.ends_with('/') || raw.ends_with("/.")
+                },
             },
         )
         .await?;

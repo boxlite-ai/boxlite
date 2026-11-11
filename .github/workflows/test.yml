@@ -441,8 +441,8 @@ jobs:
         timeout-minutes: 5
         run: make coverage:vmm:kvm
 
-      - name: Prepare guest mount test toolchain
-        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+      - name: Prepare real-guest test toolchain
+        if: matrix.platform.target == 'linux-x64-gnu'
         run: |
           sudo apt-get install -y musl-tools gperf
           rustup target add x86_64-unknown-linux-musl
@@ -468,6 +468,13 @@ jobs:
         env:
           BOXLITE_DEPS_STUB: '1'
         run: make coverage:bindings:external
+
+      - name: Measure file-copy workflows with a real guest
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.rust == 'true'
+        timeout-minutes: 20
+        run: |
+          make setup:submodules
+          make coverage:copy:vm
 
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this

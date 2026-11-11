@@ -117,3 +117,18 @@ The runner HTTP VM regression skips only the runtime constructor's typed
 existing execution-inventory regression. Other constructor errors and every
 upload/download assertion remain failures. Hosted Go coverage jobs may therefore
 skip this VM case; the local supported-host run provides its HTTP/guest evidence.
+
+`make coverage:copy:vm` adds the existing copy/ownership suites and the explicitly
+ignored serve duplicate-entry regression to collected Rust profiles. The Linux
+x64 Rust job runs it after enabling KVM access when Rust or CLI inputs change.
+Unlike the unit pass, this pass builds the runtime without dependency stubs and
+boots real guests. It preserves earlier profiles, fails on missing KVM or a test
+failure, and leaves the 90% patch gate unchanged. This connects upload and host
+copy behavior already checked locally to the report reviewers see in CI.
+
+Old-format tar headers with regular-file type and a trailing slash follow tar-rs's
+directory interpretation, including reuse without resetting existing metadata.
+Protected Rust copy-out retains terminal `/.` directory intent as well as `/`;
+a non-directory host ancestor returns `AlreadyExists`, while other resolution
+errors remain storage errors. Regression runs against the prior production tree
+failed at each of these behavioral checks before these corrections.

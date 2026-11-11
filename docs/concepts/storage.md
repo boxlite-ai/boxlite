@@ -56,8 +56,10 @@ the destination leaf protected. Missing host parents use filesystem resolution
 for `..` and symlinks; a trailing `/` requests a destination directory. Host
 resolution runs on a blocking worker to keep filesystem I/O off the async executor.
 
-REST runtimes retain their refusal of protected copies when runner support cannot
+REST runtimes refuse copy-in with `overwrite=false` when runner support cannot
 be established. This prevents older runners from silently replacing files.
+REST copy-out currently extracts with overwrite enabled and does not enforce
+`CopyOptions::no_overwrite()`.
 
 ## Home directory
 
