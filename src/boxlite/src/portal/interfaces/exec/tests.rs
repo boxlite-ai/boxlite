@@ -43,8 +43,15 @@ impl ExecutionService for RecordingExecutionService {
         &self,
         request: Request<ExecRequest>,
     ) -> Result<Response<ExecResponse>, Status> {
-        if request.get_ref().program == "unsupported" {
-            return Err(Status::unimplemented("keyed execution is unavailable"));
+        let status = match request.get_ref().program.as_str() {
+            "unsupported" => Some(Status::unimplemented("keyed execution is unavailable")),
+            "invalid" => Some(Status::invalid_argument("payload mismatch")),
+            "expired" => Some(Status::failed_precondition("request expired")),
+            "full" => Some(Status::resource_exhausted("request capacity reached")),
+            _ => None,
+        };
+        if let Some(status) = status {
+            return Err(status);
         }
         Ok(Response::new(ExecResponse {
             execution_id: "keyed".into(),
@@ -186,6 +193,40 @@ async fn keyed_unsupported_guest_returns_typed_error_without_unkeyed_fallback() 
     assert!(
         matches!(result, Err(BoxliteError::Unsupported(message)) if message == "keyed execution is unavailable")
     );
+    assert_eq!(
+        fixture
+            .unkeyed_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(fixture.waits.try_recv().is_err());
+    assert!(fixture.attaches.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn keyed_rpc_errors_preserve_admission_classification_without_fallback() {
+    let mut fixture = RpcFixture::new().await;
+    for program in ["invalid", "expired", "full"] {
+        let result = fixture
+            .interface
+            .exec(
+                BoxCommand::new(program).idempotency_key("internal.deadline"),
+                CancellationToken::new(),
+            )
+            .await;
+        match program {
+            "invalid" => assert!(
+                matches!(result, Err(BoxliteError::InvalidArgument(message)) if message == "payload mismatch")
+            ),
+            "expired" => assert!(
+                matches!(result, Err(BoxliteError::InvalidState(message)) if message == "request expired")
+            ),
+            "full" => assert!(
+                matches!(result, Err(BoxliteError::ResourceExhausted(message)) if message == "request capacity reached")
+            ),
+            _ => unreachable!(),
+        }
+    }
     assert_eq!(
         fixture
             .unkeyed_calls

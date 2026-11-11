@@ -602,6 +602,9 @@ certificates are rejected. Unlike the historical ordinary proxy's `secure: false
 keyed HTTPS requires this trust configuration; deployments using private runner
 certificates must provide it. HTTP runner endpoints retain their existing behavior. An older guest's missing keyed RPC returns an unsupported
 operation error and never falls back to starting an unkeyed command.
+The native keyed RPC preserves payload rejection, expired-request and capacity
+errors as InvalidArgument, InvalidState and ResourceExhausted respectively; these
+errors do not start ordinary execution or acquire execution streams.
 
 Resource permissions are enforced per route. A box mutation — create, start,
 stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an
