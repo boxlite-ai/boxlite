@@ -691,7 +691,19 @@ took, and then announces that slot on the kernel command line.
   `announce` puts one per slot at the front under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
-  `/dev/vdb`, and so on.
+  `/dev/vdb`, and so on. Current production composition needs at most 10 slots:
+  8 disks, the balloon and one optional aggregate filesystem. The
+  [M2 device plan](../../docs/contributing/architecture/vmm/README.md#devices-by-milestone)
+  adds net, vsock, console and rng, for 14 slots; the 18-slot budget covers
+  that plan without claiming those devices are wired today. IRQ 8 follows the
+  pinned Linux [RTC platform declaration](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/kernel/rtc.c#L114-L152),
+  and the upper GSI bound follows the 24-pin IOAPIC described in the
+  [Linux KVM IOAPIC source](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/include/uapi/asm/kvm.h#L77-L99).
+  The VM composition test uses the production attach and boot-loading paths
+  with eight distinct raw disks, with and without aggregate fs. It reads the
+  command line from guest RAM and checks consecutive MMIO windows, GSIs that
+  skip 8, disk capacities in configuration order, balloon/fs device IDs and
+  the real CMOS ports on a mock host VM; it does not boot a Linux guest.
 - **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
