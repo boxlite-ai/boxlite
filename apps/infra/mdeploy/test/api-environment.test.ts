@@ -48,6 +48,64 @@ for (const home of ['aws', 'gcp'] as const) {
   }
 }
 
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} delivers FILESTORE_INSTANCES through the stage API group`, () => {
+    // The runner reads the resolved server/export from its dispatch, so this
+    // value is the deployment's own placement record for Filestore instances
+    // (PR boxlite-ai/boxlite#2608): absent on stages without the feature, a
+    // JSON array when an operator provisions one.
+    const path = new URL('../../mstage.env.json', import.meta.url)
+    const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+    const required = Object.fromEntries(
+      declared.envSelectGroup
+        .api!.filter((name) => !declared.envOptional.api!.includes(name))
+        .map((name) => [name, 'fixture']),
+    )
+    const instances = JSON.stringify([{ name: 'boxlite-dev-shared', server: '10.0.0.7', export: '/vol1' }])
+    const selected = valuesOfGroup({
+      group: 'api',
+      groups: declared.envSelectGroup,
+      optional: declared.envOptional.api,
+      where: path.pathname,
+      values: { ...required, FILESTORE_INSTANCES: instances },
+    })
+    const { environment, secrets } = apiEnvironmentFrom({
+      environment: { ...base, ...selected },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: home === 'aws' ? 'us-east-1' : 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(environment.FILESTORE_INSTANCES, instances)
+    assert.equal(Object.hasOwn(secrets, 'FILESTORE_INSTANCES'), false)
+  })
+
+  test(`${home} omits FILESTORE_INSTANCES when the stage does not set it`, () => {
+    const path = new URL('../../mstage.env.json', import.meta.url)
+    const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+    const required = Object.fromEntries(
+      declared.envSelectGroup
+        .api!.filter((name) => !declared.envOptional.api!.includes(name))
+        .map((name) => [name, 'fixture']),
+    )
+    const selected = valuesOfGroup({
+      group: 'api',
+      groups: declared.envSelectGroup,
+      optional: declared.envOptional.api,
+      where: path.pathname,
+      values: { ...required },
+    })
+    const { environment } = apiEnvironmentFrom({
+      environment: { ...base, ...selected },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: home === 'aws' ? 'us-east-1' : 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), false)
+  })
+}
+
 
 for (const home of ['aws', 'gcp'] as const) {
   for (const minimum of [undefined, '1', '3', '63']) {
