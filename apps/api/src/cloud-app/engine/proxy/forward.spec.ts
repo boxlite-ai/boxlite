@@ -16,7 +16,7 @@ describe('App proxy credentials', () => {
     const app = { name: 'example' } as AppRow
     const env = {
       name: 'main',
-      box_id: 'box1',
+      active_box_id: 'box1',
       box_url: 'https://box.example.test',
       live_deployment: 1,
       forward_secret: 'gateway-token',

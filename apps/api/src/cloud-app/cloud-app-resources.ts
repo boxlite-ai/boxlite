@@ -10,7 +10,7 @@ import { createBoxToCreateBox, boxToBoxResponse } from '../boxlite-rest/mappers/
 import { Context } from '../common/context/context'
 import { EncryptionService } from '../encryption/encryption.service'
 import type { BoxliteClient, BoxInfo, CreateBoxRequest } from './engine/boxlite'
-import type { AppVolumes } from './engine/ctx'
+import type { AppBoxes, AppVolumes } from './engine/ctx'
 
 @Injectable()
 export class CloudAppResources {
@@ -38,14 +38,14 @@ export class CloudAppResources {
       return { id: response.box_id, name: response.name, status: response.status }
     }
     return {
-      createBox: async (request: CreateBoxRequest) => {
+      createBox: async (request: CreateBoxRequest, environmentId: string) => {
         const org = await organization()
         const maxCreatedBoxes = await this.limits.resolveMaxCreatedBoxes(organizationId)
         const dto = createBoxToCreateBox(request)
         dto.labels = { 'boxlite.io/managed-by': 'cloud-app' }
         const box = await this.boxes.create(dto, org, Context.user(), {
           maxCreatedBoxes,
-          appEnvironmentId: request.env.BOXLITE_ENV_ID,
+          appEnvironmentId: environmentId,
         })
         await this.waiter.waitForStarted(box.id, organizationId, 120)
         return info(box.id)
@@ -95,6 +95,23 @@ export class CloudAppResources {
           [id, organizationId, url, token],
         )
         return url
+      },
+    }
+  }
+
+  boxesForOrganization(organizationId: string): AppBoxes {
+    return {
+      list: async (app, environment) => {
+        if (app.org_id !== organizationId || (environment && environment.app_id !== app.id)) {
+          throw new NotFoundException('App environment not found')
+        }
+        const boxes: { id: string }[] = await this.database.query(
+          `SELECT id FROM box WHERE "organizationId" = $1 AND app_id = $2
+           AND ($3::text IS NULL OR environment_id = $3) AND "desiredState" <> 'destroyed'
+           ORDER BY "createdAt", id`,
+          [organizationId, app.id, environment?.id ?? null],
+        )
+        return boxes.map((box) => box.id)
       },
     }
   }

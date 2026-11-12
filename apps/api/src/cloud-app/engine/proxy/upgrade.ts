@@ -45,8 +45,8 @@ export async function handleUpgrade(
       identity.status === 401 ? 'Unauthorized' : identity.status === 404 ? 'Not Found' : 'Forbidden',
     )
   // Like an HTTP request, a WebSocket to a sleeping app wakes it; the client reconnects once it runs.
-  if (env.box_id && (await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown')) === 'stopped') {
-    if (!ctx.resources.wakeFailure(env.box_id)) void (await ctx.resources.wake(env.box_id))
+  if (env.active_box_id && (await ctx.resources.boxStatus(env.active_box_id).catch(() => 'unknown')) === 'stopped') {
+    if (!ctx.resources.wakeFailure(env.active_box_id)) void (await ctx.resources.wake(env.active_box_id))
     return reject(503, 'Service Unavailable')
   }
   const target = new URL(env.box_url + url.pathname + url.search)

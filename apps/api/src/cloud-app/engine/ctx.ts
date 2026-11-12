@@ -20,6 +20,10 @@ export interface AppVolumes {
   create(app: AppRow, environment: EnvRow, name: string): Promise<VolumeInfo>
   remove(app: AppRow, environment: EnvRow, volumeId: string): Promise<void>
 }
+export interface AppBoxes {
+  /** Every non-destroyed Box owned by the App, independently of the active runtime. */
+  list(app: AppRow, environment?: EnvRow): Promise<string[]>
+}
 export interface AppSourceStore {
   has(appId: string, sha: string): Promise<boolean>
   put(
@@ -38,6 +42,7 @@ export interface Deps {
   origins: Origins
   domains: import('./services/domains').AppDomains
   volumes: AppVolumes
+  boxes: AppBoxes
   tunnelHeaders?: (boxUrl: string) => Promise<Record<string, string>>
   organizationMember?: (organizationId: string, provider: string, providerUserId: string) => Promise<boolean>
   boxlite: BoxliteClient

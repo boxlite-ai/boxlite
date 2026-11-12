@@ -139,7 +139,7 @@ export class Resources {
     env: EnvRow,
     timeoutMs = 3_000,
   ): Promise<{ box: string | null; services: ServiceState[]; fresh: boolean; usage: BoxUsage | null }> {
-    const box = env.box_id ? await this.boxStatus(env.box_id).catch(() => 'unknown') : null
+    const box = env.active_box_id ? await this.boxStatus(env.active_box_id).catch(() => 'unknown') : null
     if (box === 'running' && env.box_url) {
       let timer: NodeJS.Timeout | undefined
       const h = await Promise.race([
