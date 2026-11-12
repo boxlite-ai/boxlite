@@ -780,8 +780,7 @@ impl ConfigScanner<'_> {
                     active = !never_match;
                 }
                 "identityfile" | "identityfile2" | "certificatefile" if active => {
-                    // words() removes unknown escapes that OpenSSH preserves;
-                    // never let an escaped filename masquerade as the sentinel.
+                    // Only unescaped sentinel syntax is allowed; other values denote files.
                     if keyword != "certificatefile"
                         && !value.contains('\\')
                         && !value.chars().any(|c| c.is_control() && c != '\t')
