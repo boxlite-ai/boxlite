@@ -26,6 +26,7 @@ import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
 import { CreateBoxDto } from '../dto/create-box.dto'
+import { appForEnvironment } from './app-environment'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -362,7 +363,12 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const appId =
+        options.appEnvironmentId === undefined
+          ? null
+          : await appForEnvironment(this.boxRepository.manager, organization.id, options.appEnvironmentId)
+      const needsFreshBox =
+        appId !== null || !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -414,6 +420,8 @@ export class BoxService {
       const box = new Box(region.id, createBoxDto.name)
 
       box.organizationId = organization.id
+      box.appId = appId
+      box.environmentId = options.appEnvironmentId ?? null
 
       //  TODO: make configurable
       box.class = boxClass
