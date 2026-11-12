@@ -68,6 +68,12 @@ from e2e_auth import auth_context, request_json
 
 GUEST_PATH = "/filestore"
 
+# The stage Filestore instance this module verifies against, hardcoded on
+# the stage verification branch only (not destined for main). The probe
+# carries the logical name; the API resolves name -> server/export from its
+# FILESTORE_INSTANCES configuration, where this is the declared tuple.
+STAGE_INSTANCE = {"name": "boxlite-dev-shared", "server": "10.53.8.194", "export": "/shared"}
+
 # The API's words for an instance name its configuration does not know,
 # pinned verbatim so a softened or reworded refusal cannot pass silently
 # (apps/api/src/box/services/volume.service.ts).
@@ -90,7 +96,7 @@ def filestore_instance():
     # The built-in default is the stage instance name, so a workflow run
     # needs no per-run configuration: an API whose configuration declares
     # the name runs the four cases, one without it skips the module green.
-    candidate = os.environ.get("FILESTORE_E2E_INSTANCE") or "boxlite-dev-shared"
+    candidate = os.environ.get("FILESTORE_E2E_INSTANCE") or STAGE_INSTANCE["name"]
     # An unknown instance always skips, never fails — including an
     # explicitly exported name: the test instance can be recycled at any
     # time, so its absence is an unprovisioned environment, not a broken
