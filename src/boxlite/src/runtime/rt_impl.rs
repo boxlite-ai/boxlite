@@ -930,9 +930,10 @@ impl RuntimeImpl {
                 Ok(locker) => locker,
                 Err(error) => {
                     self.sync_cleanup_pending.store(true, Ordering::Release);
-                    eprintln!(
-                        "[boxlite] Sync shutdown deferred for {}: {error}",
-                        config.id
+                    tracing::warn!(
+                        box_id = %config.id,
+                        error = %error,
+                        "Sync shutdown deferred: failed to retrieve box lock"
                     );
                     continue;
                 }
@@ -942,9 +943,9 @@ impl RuntimeImpl {
                     Some(guard) => Some(guard),
                     None => {
                         self.sync_cleanup_pending.store(true, Ordering::Release);
-                        eprintln!(
-                            "[boxlite] Sync shutdown deferred for {}: box is busy",
-                            config.id
+                        tracing::warn!(
+                            box_id = %config.id,
+                            "Sync shutdown deferred: box is busy"
                         );
                         continue;
                     }
@@ -957,9 +958,10 @@ impl RuntimeImpl {
                 Err(BoxliteError::NotFound(_)) => continue,
                 Err(error) => {
                     self.sync_cleanup_pending.store(true, Ordering::Release);
-                    eprintln!(
-                        "[boxlite] Sync shutdown deferred for {}: {error}",
-                        config.id
+                    tracing::warn!(
+                        box_id = %config.id,
+                        error = %error,
+                        "Sync shutdown deferred: failed to refresh box state"
                     );
                     continue;
                 }

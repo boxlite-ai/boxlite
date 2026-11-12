@@ -179,6 +179,7 @@ admission and cleanup checks. Stand-in processes and loopback guest RPCs are not
 VM evidence. For real boot/stop races and implicit-job restart prevention, leave
 dependency stubs unset and run `make test:integration:lifecycle-race` with
 `BOXLITE_REPRO_ROOTFS` pointing to a local OCI image layout, not an unpacked rootfs.
+The image must provide `/bin/sh` and `/bin/sleep`, which both VM test suites invoke.
 This target explicitly runs the ignored tests. The implicit-operation regression
 counts guest-written markers before cleanup and checks that explicit restart still
 works.
