@@ -1,12 +1,13 @@
 //! Per-box resource ceilings derived from host capacity.
 //!
-//! A box may never be given more vCPUs or memory than the host can back.
+//! A box boots with spare vCPUs and memory up to these ceilings so it can grow
+//! online later. Creation does not check against them; a box larger than the
+//! host still boots, just without room to grow.
 //! [`ResourceCeiling`] is the smallest of the limits a [`HostProbe`] reports,
 //! following Kata's `default_maxvcpus` / `default_maxmemory` rule. The bundled
 //! guest kernel's vCPU cap applies only when no custom kernel is configured.
 
 use crate::runtime::constants::vm_defaults::GUEST_KERNEL_MAX_VCPUS;
-use boxlite_shared::{BoxliteError, BoxliteResult};
 
 /// Host limits that bound a box's resources.
 pub(crate) trait HostProbe {
@@ -18,7 +19,7 @@ pub(crate) trait HostProbe {
     fn hypervisor_max_vcpus(&self) -> Option<u32>;
 }
 
-/// The largest vCPU count and memory size a box may have on this host.
+/// The largest vCPU count and memory size a box may grow to on this host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResourceCeiling {
     pub(crate) max_cpus: u8,
@@ -45,23 +46,6 @@ impl ResourceCeiling {
             max_cpus: cpus.clamp(1, u32::from(u8::MAX)) as u8,
             max_memory_mib: probe.memory_mib().min(u64::from(u32::MAX)) as u32,
         }
-    }
-
-    /// Reject a requested size that is zero or above the ceiling.
-    pub(crate) fn check(&self, cpus: u8, memory_mib: u32) -> BoxliteResult<()> {
-        if cpus == 0 || cpus > self.max_cpus {
-            return Err(BoxliteError::InvalidArgument(format!(
-                "cpus must be between 1 and {} on this host, got {cpus}",
-                self.max_cpus
-            )));
-        }
-        if memory_mib == 0 || memory_mib > self.max_memory_mib {
-            return Err(BoxliteError::InvalidArgument(format!(
-                "memory_mib must be between 1 and {} on this host, got {memory_mib}",
-                self.max_memory_mib
-            )));
-        }
-        Ok(())
     }
 }
 
@@ -318,20 +302,6 @@ mod tests {
     #[test]
     fn memory_ceiling_saturates_at_u32() {
         assert_eq!(ceiling(4, u64::MAX, None).max_memory_mib, u32::MAX);
-    }
-
-    #[test]
-    fn check_accepts_sizes_at_the_ceiling() {
-        assert!(ceiling(4, 8192, None).check(4, 8192).is_ok());
-    }
-
-    #[test]
-    fn check_rejects_zero_and_oversized_requests() {
-        let c = ceiling(4, 8192, None);
-        for (cpus, memory_mib) in [(0, 512), (5, 512), (1, 0), (1, 8193)] {
-            let err = c.check(cpus, memory_mib).unwrap_err();
-            assert!(matches!(err, BoxliteError::InvalidArgument(_)), "{err}");
-        }
     }
 
     #[test]

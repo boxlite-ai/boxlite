@@ -279,11 +279,9 @@ CPU allocation, default `1`, from `0.125` to `16` with the bundled kernel, in in
 Integers, including `2.0`, retain their online vCPU count; Linux also applies a bandwidth quota when spare vCPUs are available.
 Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
-New boxes are additionally bounded by the host ceiling: the smallest of the CPUs the runtime may use
-(affinity and cgroup quota) and the hypervisor's per-VM vCPU limit. The bundled
-guest kernel additionally limits new boxes to 16 vCPUs; custom kernels are not
-bound by that bundled-kernel limit. New boxes above their ceiling fail with
-`InvalidArgument`. Reusing an existing box preserves its saved allocation.
+New boxes above 16 vCPUs with the bundled kernel fail with `InvalidArgument`;
+custom kernels are not bound by that limit. Creation does not check the host's
+CPUs, and reusing an existing box preserves its saved allocation whatever its size.
 
 **Example:**
 ```python
@@ -306,9 +304,8 @@ Memory limit in mebibytes (MiB).
 
 **Default:** 1024
 
-**Range:** 1 MiB up to the smallest of host memory and finite `memory.max`
-limits across the runtime's visible cgroup ancestry. Creating a box above that
-fails with `InvalidArgument`.
+**Range:** creation does not check `memory_mib` against host memory or
+`memory.max` limits. Those limits only bound how far a running box can grow.
 
 **Example:**
 ```python

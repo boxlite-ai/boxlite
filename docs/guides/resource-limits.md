@@ -113,11 +113,12 @@ Integer allocations add no new cgroup requirement and continue working on macOS.
 Zero, negatives, non-finite values, and excessive precision are rejected.
 A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
 Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
-New boxes are additionally bounded by the host ceiling: the smallest of the CPUs the runtime may use
-(affinity and cgroup quota) and the hypervisor's per-VM vCPU limit. The bundled
-guest kernel additionally limits new boxes to 16 vCPUs; custom kernels are not
-bound by that bundled-kernel limit. New boxes above their ceiling fail with
-`InvalidArgument`. Reusing an existing box preserves its saved allocation.
+New boxes above 16 vCPUs with the bundled kernel fail with `InvalidArgument`.
+Creation does not check the host's CPUs or memory, and reusing an existing box
+preserves its saved allocation whatever its size.
+The host ceiling is the smallest of the CPUs the runtime may use (affinity and
+cgroup quota), the hypervisor's per-VM vCPU limit, and, with the bundled kernel,
+16. It sets only how far a running box can grow (below).
 Legacy boxes above 16 vCPUs still boot with a warning when using the bundled kernel.
 
 **Spare vCPUs (Linux/libkrun):** so a running box can later gain CPUs, a box boots
@@ -222,9 +223,8 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 1 MiB up to the smallest of host memory and finite `memory.max`
-limits across the runtime's visible cgroup ancestry. Creating a box above that
-fails with `InvalidArgument`.
+**Range:** creation does not check `memory_mib` against host memory or
+`memory.max` limits. Those limits only bound how far a running box can grow.
 
 **Default:** 1024 MiB
 
