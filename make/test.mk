@@ -529,7 +529,7 @@ test\:unit\:openapi:
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
 test\:unit\:openapi\:server: _ensure-python-deps
-	@uv run --with fastapi --with uvicorn --with sse-starlette --with PyJWT --with python-multipart --with python-dotenv --with pyyaml --python .venv/bin/python python -m unittest discover -s openapi/reference-server/tests -p 'test_handle_cache.py' -v
+	@. .venv/bin/activate && uv run --with fastapi --with uvicorn --with sse-starlette --with PyJWT --with python-multipart --with python-dotenv --with pyyaml --python .venv/bin/python python -m unittest discover -s openapi/reference-server/tests -p 'test_handle_cache.py' -v
 
 test\:unit\:scripts:
 	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
