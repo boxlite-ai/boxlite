@@ -100,6 +100,7 @@ help:
 	@echo "    make test:apps:dashboard    - Run Dashboard tests (FILTER=<pattern>)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:secret-server - Run Secret Server Go tests with the race detector"
+	@echo "    make test:apps:secret-server:integration - Test Secret Server against infra-local PostgreSQL"
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
