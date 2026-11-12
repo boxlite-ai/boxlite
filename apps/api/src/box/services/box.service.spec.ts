@@ -26,7 +26,16 @@ import { SecretServerClient } from './secret-server-client'
 import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Volume } from '../entities/volume.entity'
+import { CheckpointRecoverService } from './checkpoint-recover.service'
+import { VolumeService } from './volume.service'
 import { VolumeState } from '../enums/volume-state.enum'
+import { Test } from '@nestjs/testing'
+import { BoxliteBoxController } from '../../boxlite-rest/boxlite-box.controller'
+import { BoxStateWaiterService } from './box-state-waiter.service'
+import { CommerceBoxLimitService } from '../../boxlite-rest/commerce-box-limit.service'
+import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
+import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
+import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 
 const disabledSecretServer = () => new SecretServerClient({ get: () => false } as any)
 
@@ -626,6 +635,133 @@ describe('BoxService inbound defaults', () => {
     })
   })
 
+  async function appVolumeService() {
+    let stored: unknown
+    const volumes = new VolumeService(
+      {
+        findOne: async () => null,
+        find: async () => [stored],
+        save: async (volume) => (stored = volume),
+        manager: {
+          query: async (_sql, [_organizationId, environmentId]) => [
+            { id: environmentId === 'other-app' ? 'app-b' : 'app-a' },
+          ],
+        },
+      } as never,
+      {} as never,
+      { assertOrganizationIsNotSuspended: () => undefined } as never,
+      { get: () => 'gcs' } as never,
+      {} as never,
+      {} as never,
+    )
+    const volume = await volumes.create({ id: 'org-1' } as never, { name: 'app-data' }, Context.user(), {
+      appId: 'app-a',
+      environmentId: 'main',
+    })
+    volume.state = VolumeState.READY
+    return { volumes, volume }
+  }
+
+  it.each(['main', 'staging'])('mounts App-owned volumes for a trusted %s App Box', async (environmentId) => {
+    const { volumes, volume } = await appVolumeService()
+    const { service, boxRepository } = makeCreateService({ volumeService: volumes })
+    await service.create(
+      { name: 'app-box', image: 'node:test', volumes: [{ volumeId: volume.name, mountPath: '/data' }] } as never,
+      { id: 'org-1' } as never,
+      Context.user(),
+      { appEnvironmentId: environmentId },
+    )
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        volumes: [{ volumeId: volume.id, mountPath: '/data' }],
+      }),
+      undefined,
+    )
+  })
+
+  it('refuses another App at the shared Box creation boundary', async () => {
+    const { volumes, volume } = await appVolumeService()
+    const { service, boxRepository } = makeCreateService({ volumeService: volumes })
+    await expect(
+      service.create(
+        {
+          name: 'foreign-app-box',
+          image: 'node:test',
+          volumes: [{ volumeId: volume.id, mountPath: '/data' }],
+        } as never,
+        { id: 'org-1' } as never,
+        Context.user(),
+        { appEnvironmentId: 'other-app' },
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  it('the public REST route cannot claim App ownership through process variables', async () => {
+    const { volumes, volume } = await appVolumeService()
+    const { service, boxRepository } = makeCreateService({ volumeService: volumes })
+    const builder = Test.createTestingModule({
+      controllers: [BoxliteBoxController],
+      providers: [
+        { provide: BoxService, useValue: service },
+        { provide: BoxStateWaiterService, useValue: {} },
+        { provide: CheckpointRecoverService, useValue: {} },
+        { provide: CommerceBoxLimitService, useValue: { resolveMaxCreatedBoxes: async () => undefined } },
+      ],
+    })
+    builder.overrideGuard(CombinedAuthGuard).useValue({
+      canActivate: (context) => {
+        context.switchToHttp().getRequest().user = {
+          userId: 'owner',
+          role: 'admin',
+          organizationId: 'org-1',
+          organization: { id: 'org-1' },
+          organizationUser: { role: 'owner' },
+          apiKey: { permissions: Object.values(OrganizationResourcePermission) },
+        }
+        return true
+      },
+    })
+    builder.overrideGuard(OrganizationResourceActionGuard).useValue({ canActivate: () => true })
+    const application = (await builder.compile()).createNestApplication()
+    try {
+      await application.listen(0, '127.0.0.1')
+      const response = await fetch(`${await application.getUrl()}/v1/boxes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'standalone',
+          image: 'node:test',
+          env: { BOXLITE_ENV_ID: 'main' },
+          volumes: [{ managed_volume: volume.id, guest_path: '/data' }],
+        }),
+      })
+      expect(response.status).toBe(403)
+      expect((await response.json()).message).toContain('belongs to App')
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    } finally {
+      await application.close()
+    }
+  })
+
+  it('caller-supplied labels grant no App volume access at the shared creation boundary', async () => {
+    const { volumes, volume } = await appVolumeService()
+    const { service, boxRepository } = makeCreateService({ volumeService: volumes })
+    await expect(
+      service.create(
+        {
+          name: 'standalone',
+          image: 'node:test',
+          labels: { 'boxlite.io/managed-by': 'cloud-app', app_id: 'app-a' },
+          volumes: [{ volumeId: volume.id, mountPath: '/data' }],
+        } as never,
+        { id: 'org-1' } as never,
+        Context.user(),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
   /**
    * Two collaborators now stand between the request and the box: admission
    * decides whether this image may be used at all, and the resolver decides
@@ -753,7 +889,7 @@ describe('BoxService inbound defaults', () => {
       Context.user(),
     )
 
-    expect(validateVolumes).toHaveBeenCalledWith('org-1', ['shared-data'])
+    expect(validateVolumes).toHaveBeenCalledWith('org-1', ['shared-data'], undefined)
     expect(boxRepository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ volumes: [{ volumeId: volume.id, mountPath: '/data' }] }),
       undefined,

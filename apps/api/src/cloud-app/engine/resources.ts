@@ -103,7 +103,7 @@ export class Resources {
     return await this.boxes.ensureRunning(envId, log, signal)
   }
 
-  async deleteVolumes(app: AppRow, env: EnvRow): Promise<string[]> {
+  async deleteVolumes(app: AppRow, env: EnvRow): Promise<void> {
     return await deleteVolumes(this.ctx, app, env)
   }
 
