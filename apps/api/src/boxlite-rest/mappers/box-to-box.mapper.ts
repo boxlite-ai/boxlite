@@ -25,7 +25,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     last_activity_at: box.lastActivityAt,
     image: box.image || '',
     cpus: box.cpu || 1,
-    memory_mib: (box.memory || 1) * 1024,
+    memory_mib: Math.ceil((box.memory || 1) * 1024),
     privileged: box.privileged,
     labels: box.labels || {},
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,

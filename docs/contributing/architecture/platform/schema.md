@@ -517,7 +517,7 @@ or `archived`.
 | `errorReason` | `character varying` | nullable |
 | `cpu` | `double precision` | default `2`; CPU allocation in cores, precision `0.001` |
 | `gpu` | `integer` | default `0` |
-| `mem` | `double precision` | GiB in 1/1024 increments, default `4` |
+| `mem` | `double precision` | requested GiB, default `4`; execution rounds up to whole MiB |
 | `disk` | `integer` | default `10` |
 | `autoStop` | `integer` | seconds, default `900`; `0` disables |
 | `autoDelete` | `integer` | default `0` = disabled |
@@ -984,7 +984,7 @@ the pool by shape, which is why one index covers every shape column at once.
 | `target` | `character varying` | |
 | `class` | `enum` | default `small` |
 | `cpu` | `double precision` | allocation in cores, precision `0.001` |
-| `mem` | `double precision` | GiB in 1/1024 increments |
+| `mem` | `double precision` | requested GiB; execution rounds up to whole MiB |
 | `disk` / `gpu` | `integer` | |
 | `gpuType` | `character varying` | |
 | `osUser` | `character varying` | |

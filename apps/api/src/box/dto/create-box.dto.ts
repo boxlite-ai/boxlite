@@ -163,7 +163,7 @@ export class CreateBoxDto {
   gpu?: number
 
   @ApiPropertyOptional({
-    description: 'Memory in GiB, at least 0.25 and in increments of 1/1024 GiB',
+    description: 'Memory in GiB, at least 0.25; stored as requested and rounded up to whole MiB for execution',
     example: 1,
     type: 'number',
     format: 'double',

@@ -6680,7 +6680,7 @@ components:
           example: 0
           type: number
         memory:
-          description: The memory quota for the box in GiB, in increments of 1/1024 GiB
+          description: The requested memory quota in GiB; execution rounds up to whole MiB
           example: 4
           type: number
           format: double

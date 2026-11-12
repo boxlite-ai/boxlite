@@ -96,8 +96,8 @@ export function toBoxApiCreateRequest(params?: CreateBoxParams): BoxApiCreateReq
     cmd: p.cmd,
     env: p.envVars,
     cpus: p.resources?.cpu,
-    // The dashboard form works in GiB; the Box API contract takes MiB.
-    memory_mib: p.resources?.memory !== undefined ? p.resources.memory * 1024 : undefined,
+    // The cloud model uses GiB; the Box API takes whole-MiB allocations.
+    memory_mib: p.resources?.memory !== undefined ? Math.ceil(p.resources.memory * 1024) : undefined,
     disk_size_gb: p.resources?.disk,
     network: p.network,
     auto_stop: p.autoStopIntervalSeconds,

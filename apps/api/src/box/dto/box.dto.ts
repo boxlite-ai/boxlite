@@ -171,7 +171,7 @@ export class BoxDto {
   gpu: number
 
   @ApiProperty({
-    description: 'The memory quota for the box in GiB, in increments of 1/1024 GiB',
+    description: 'The requested memory quota in GiB; execution rounds up to whole MiB',
     format: 'double',
     example: 4,
   })

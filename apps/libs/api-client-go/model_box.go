@@ -43,7 +43,7 @@ type Box struct {
 	Cpu float32 `json:"cpu"`
 	// The GPU quota for the box
 	Gpu float32 `json:"gpu"`
-	// The memory quota for the box in GiB, in increments of 1/1024 GiB
+	// The requested memory quota in GiB; execution rounds up to whole MiB
 	Memory float64 `json:"memory"`
 	// The disk quota for the box
 	Disk float32 `json:"disk"`

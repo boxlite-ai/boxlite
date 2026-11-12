@@ -145,7 +145,7 @@ Run `make test:fractional-cpus:acceptance` on a KVM host with CPU controller del
 
 ## Memory management
 
-All Box creation entry points accept **integer MiB**, with a **256 MiB minimum**.
+CLI, SDK and Box REST creation accept **integer MiB**, with a **256 MiB minimum**.
 1 MiB is 1,048,576 bytes; values such as 257 or 513 are preserved exactly.
 Omitting memory retains the existing default (1024 MiB in the local runtime); explicit zero, negative, fractional MiB and overflowing values fail validation.
 
@@ -167,9 +167,12 @@ The Rust/Python/Node/CLI representation allows up to 4,294,967,295 MiB; C, Go an
 Pass an explicit valid size to `boxlite_simple_new`, or omit the optional setting in the Native API to retain its default.
 Existing smaller Boxes remain readable, but starting or recovering them requires recreating them with at least 256 MiB; stored allocations are never silently increased.
 
-**Cloud conversion and rollout:** the legacy cloud model and Runner JSON retain GiB units, with increments of 1/1024 GiB.
-For example, `513 MiB → 0.5009765625 GiB → 513 MiB`; no step rounds to whole GiB.
-Scheduling, quotas and billing consume the exact GiB allocation.
+**Cloud conversion and rollout:** the legacy cloud model and Runner JSON retain the requested GiB decimal without forcing a step size.
+Execution and integer-MiB responses round upward: `0.3 GiB stored → ceil(307.2) → 308 MiB allocated`.
+Already aligned values remain exact: `513 MiB → 0.5009765625 GiB → 513 MiB`.
+The 256 MiB minimum and backend maximum apply before rounding; non-finite values remain invalid.
+Scheduling, quotas and billing continue to use the stored GiB value; the MiB allocation can be less than one MiB larger.
+
 Deploy the `fractional-box-memory` pre-deploy database migration first, then supporting Runners, then the API and Dashboard.
 Drain old Runners before exposing fractional GiB requests: their integer JSON decoder cannot accept them.
 The migration preserves integer allocations, defaults and indexes, and uses a five-second lock timeout.

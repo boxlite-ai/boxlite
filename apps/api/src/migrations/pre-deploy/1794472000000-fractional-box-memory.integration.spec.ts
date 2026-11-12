@@ -40,11 +40,13 @@ describeDatabase('fractional memory migration (PostgreSQL)', () => {
     for (const table of ['box', 'warm_pool']) {
       await db.query(`INSERT INTO "${table}" (id,mem) VALUES (2,$1),(3,$2)`, [256 / 1024, 513 / 1024])
       await db.query(`INSERT INTO "${table}" (id) VALUES (4)`)
+      await db.query(`INSERT INTO "${table}" (id,mem) VALUES (5,$1)`, [0.3])
       expect(await db.query(`SELECT mem FROM "${table}" ORDER BY id`)).toEqual([
         { mem: 2 },
         { mem: 256 / 1024 },
         { mem: 513 / 1024 },
         { mem: 2 },
+        { mem: 0.3 },
       ])
     }
     const indexes = await db.query('SELECT indexname FROM pg_indexes WHERE schemaname=$1', [schema])

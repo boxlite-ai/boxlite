@@ -9,6 +9,22 @@ import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
+  it.each([
+    [0.25, 256],
+    [0.3, 308],
+    [0.50098, 514],
+    [0.5009765625, 513],
+    [0.5009765625000001, 514],
+  ])('preserves stored %s GiB and reports %i whole MiB', (gib, expectedMib) => {
+    const row = new Box('us', 'memory')
+    row.mem = gib
+    const cloudResponse = BoxDto.fromBox(row)
+
+    expect(cloudResponse.memory).toBe(gib)
+    expect(boxToBoxResponse(cloudResponse).memory_mib).toBe(expectedMib)
+    expect(row.mem).toBe(gib)
+  })
+
   it.each([256, 257, 512, 513, 768, 1024, 1536])('preserves %i MiB through cloud mapping', (memoryMib) => {
     const mapped = createBoxToCreateBox({ memory_mib: memoryMib })
     expect(mapped.memory).toBe(memoryMib / 1024)

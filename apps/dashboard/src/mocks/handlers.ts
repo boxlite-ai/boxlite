@@ -211,7 +211,7 @@ export const handlers = [
         updated_at: box.updatedAt,
         image,
         cpus: box.cpu,
-        memory_mib: (box.memory ?? 1) * 1024,
+        memory_mib: Math.ceil((box.memory ?? 1) * 1024),
         labels: {},
         auto_stop: 0,
         auto_delete: 0,

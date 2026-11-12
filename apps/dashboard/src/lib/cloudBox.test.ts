@@ -3,6 +3,16 @@ import { boxTemplateFor } from './quickstart/box-templates'
 import { toBoxApiCreateRequest, validateLifecyclePolicy } from './cloudBox'
 
 describe('toBoxApiCreateRequest', () => {
+  it.each([
+    [0.25, 256],
+    [0.3, 308],
+    [0.50098, 514],
+    [513 / 1024, 513],
+  ])('rounds %s GiB up to %i MiB at the REST boundary', (memory, expectedMib) => {
+    const request = toBoxApiCreateRequest({ resources: { cpu: 1, memory, disk: 1 } })
+    expect(request.memory_mib).toBe(expectedMib)
+  })
+
   it('forwards the accepted Bun startup recipe to the REST create boundary', () => {
     const template = boxTemplateFor('bun')!
     const request = toBoxApiCreateRequest({ image: template.image, ...template.startup })

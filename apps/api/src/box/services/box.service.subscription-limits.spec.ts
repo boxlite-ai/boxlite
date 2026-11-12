@@ -8,6 +8,9 @@ import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapp
 import { OrganizationController } from '../../organization/controllers/organization.controller'
 import { Organization } from '../../organization/entities/organization.entity'
 
+// Resource admission does not register accounts or consult email-domain lists.
+jest.mock('../../user/registration-email', () => ({ normalizeRegistrationEmail: jest.fn() }))
+
 const baseline = { maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }
 const subscribed = { maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 }
 const organization = { id: 'org-1', ...baseline } as Organization
@@ -43,6 +46,13 @@ describe('subscription Box resource limits', () => {
 
   const request = (cpus = 16, memory_mib = 32768, disk_size_gb = 100) =>
     createBoxToCreateBox({ image: 'example/app:latest', cpus, memory_mib, disk_size_gb })
+
+  it.each([0.3, 0.50098])('persists the original %s GiB without rounding', async (memory) => {
+    const dto = { ...request(1, 256, 1), memory }
+    await service.create(dto, organization, Context.user())
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ mem: memory }), undefined)
+    expect(dto.memory).toBe(memory)
+  })
 
   it.each([
     [0.125, 4096, 20],

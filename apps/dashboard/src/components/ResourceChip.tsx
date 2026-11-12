@@ -31,7 +31,7 @@ const resourceIcons = {
 export function ResourceChip({ resource, value, unit, icon, className }: Props) {
   const showMiB = resource === 'memory' && unit === undefined && !Number.isInteger(value)
   const resourceUnit = showMiB ? 'MiB' : (unit ?? resourceUnits[resource])
-  const displayValue = showMiB ? value * 1024 : value
+  const displayValue = showMiB ? Math.ceil(value * 1024) : value
   const ResourceIcon = resourceIcons[resource]
 
   return (

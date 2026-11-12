@@ -27,9 +27,40 @@ func TestMemoryMiB(t *testing.T) {
 			}
 		}
 	}
-	for _, gib := range []float64{0, -1, 255.0 / 1024, 256.5 / 1024, math.NaN(), math.Inf(1), float64(math.MaxInt32+1) / 1024} {
+	for _, gib := range []float64{0, -1, 255.0 / 1024, 255.5 / 1024, math.NaN(), math.Inf(1), (float64(math.MaxInt32) + 0.25) / 1024, float64(math.MaxInt32+1) / 1024} {
 		if _, err := MemoryMiB(gib); err == nil {
 			t.Fatalf("accepted %v GiB", gib)
+		}
+	}
+}
+
+func TestMemoryMiBRoundsUpAtExecutionBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		gib float64
+		mib int
+	}{
+		{0.25, 256},
+		{0.3, 308},
+		{256.5 / 1024, 257},
+		{0.50098, 514},
+		{513.0 / 1024, 513},
+		{math.Nextafter(513.0/1024, math.Inf(1)), 514},
+		{(float64(math.MaxInt32) - 0.25) / 1024, math.MaxInt32},
+	} {
+		body := []byte(fmt.Sprintf(`{"memoryQuota":%g}`, tc.gib))
+		var created CreateBoxDTO
+		var recovered RecoverBoxDTO
+		if err := json.Unmarshal(body, &created); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(body, &recovered); err != nil {
+			t.Fatal(err)
+		}
+		for _, quota := range []float64{created.MemoryQuota, recovered.MemoryQuota} {
+			got, err := MemoryMiB(quota)
+			if err != nil || got != tc.mib || quota != tc.gib {
+				t.Errorf("%g GiB: quota=%g, got %d MiB, want %d, error=%v", tc.gib, quota, got, tc.mib, err)
+			}
 		}
 	}
 }

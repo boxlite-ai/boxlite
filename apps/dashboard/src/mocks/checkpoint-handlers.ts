@@ -42,7 +42,7 @@ function boxResponse(box: Box) {
     updated_at: box.updatedAt,
     image: box.image,
     cpus: box.cpu,
-    memory_mib: (box.memory ?? 1) * 1024,
+    memory_mib: Math.ceil((box.memory ?? 1) * 1024),
     labels: box.labels,
   }
 }
