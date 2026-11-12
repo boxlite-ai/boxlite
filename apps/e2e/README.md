@@ -243,11 +243,11 @@ export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 
-# The filestore happy-path case uses this instance name from the API's
-# FILESTORE_INSTANCES configuration instead of its probe name. Without it the
-# case probes and skips when the API configures no instance (see the Filestore
-# section):
-export FILESTORE_E2E_INSTANCE=dev-filestore-1
+# The filestore case probes the built-in default instance name
+# (boxlite-dev-shared) out of the box; exporting this overrides it for an
+# environment whose API configuration declares a different name (see the
+# Filestore section):
+# export FILESTORE_E2E_INSTANCE=other-instance-name
 
 # The private image case runs only with a real private image and its login,
 # written with its host and a tag or digest. The prefix defaults to the
@@ -365,20 +365,20 @@ only honest probe). The gate's outcome decides the whole file:
   prove data sharing (write in one, read in the other, read again after the
   first is destroyed), and the lifecycle rules are pinned (in-use refusal →
   409, free removal → 204, force re-delete → 204).
-- **No configured instance** (probing the generated default name) → one warning —
+- **No configured instance** (probing the built-in default name) → one warning —
   `GCP FileStore instance=[<name>] not existed. Skip test_filestore.py .` —
   and the entire module skips.
-- **`FILESTORE_E2E_INSTANCE` set but unknown** → hard failure, not a skip:
-  a declared instance is operator intent, so its absence is a misconfiguration
-  to fix by hand (correct the injected name, or provision/remove the instance).
+An explicitly exported `FILESTORE_E2E_INSTANCE` only pins which name the
+gate probes; an unknown instance skips the module the same way — the test
+instance can be recycled at any time, so its absence is never a broken run.
 
 All cases skip when the API key cannot attach volumes (403 without
 READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. None is
 marked `smoke` — prod's API configures no Filestore instance either.
 
-Set `FILESTORE_E2E_INSTANCE` to name the instance the gate should probe and
-the cases should use, when the API configuration declares one under a name
-other than the generated probe default.
+The gate probes the built-in default name (`boxlite-dev-shared`) without any
+configuration; set `FILESTORE_E2E_INSTANCE` only when the API configuration
+declares the instance under a different name.
 
 ## The cloud legs (CI)
 
