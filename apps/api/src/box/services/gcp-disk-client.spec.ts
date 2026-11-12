@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { GoogleError } from 'google-gax'
 import { GcpDiskClient, GcpDiskRateLimitedError, toExpansionClientError } from './gcp-disk-client'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
@@ -37,9 +38,27 @@ describe('GcpDiskClient', () => {
     })
 
     it.each([
-      ['a GCP 400', { code: 400, message: 'rate limit exceeded' }, true],
-      ['a transport 5xx', { code: 500, message: 'backend error' }, false],
-      ['a 404 for a replaced disk', { code: 404, message: 'not found' }, false],
+      [
+        'a GCP rate-limit rejection (HTTP 429, reason rateLimitExceeded)',
+        GoogleError.parseHttpError({
+          error: {
+            code: 429,
+            errors: [
+              { domain: 'global', message: 'Quota exceeded for requests per minute', reason: 'rateLimitExceeded' },
+            ],
+            message: 'Quota exceeded for requests per minute',
+            status: 'RESOURCE_EXHAUSTED',
+          },
+        }),
+        true,
+      ],
+      [
+        'a genuine request-validation 400 (INVALID_ARGUMENT)',
+        GoogleError.parseHttpError({ error: { code: 400, message: 'New size must be larger' } }),
+        false,
+      ],
+      ['a transport 5xx', GoogleError.parseHttpError({ error: { code: 500, message: 'backend error' } }), false],
+      ['a 404 for a replaced disk', GoogleError.parseHttpError({ error: { code: 404, message: 'not found' } }), false],
     ])('maps %s to the right error class', async (_label, error, rateLimited) => {
       const disks = fakeDisks(() => Promise.reject(error))
       const client = new GcpDiskClient({ disks: disks.client })
@@ -69,12 +88,22 @@ describe('GcpDiskClient', () => {
   })
 
   describe('toExpansionClientError', () => {
-    it('labels 400s as rate limited and passes everything else through', () => {
-      expect(toExpansionClientError({ code: 400, message: 'no' })).toBeInstanceOf(GcpDiskRateLimitedError)
-      const other = toExpansionClientError(new Error('boom'))
+    it('labels the throttle signal (RESOURCE_EXHAUSTED) as rate limited and passes everything else through', () => {
+      const throttled = GoogleError.parseHttpError({
+        error: { code: 429, message: 'Quota exceeded for requests per minute', status: 'RESOURCE_EXHAUSTED' },
+      })
+      expect(toExpansionClientError(throttled)).toBeInstanceOf(GcpDiskRateLimitedError)
+      // A genuine 400 arrives as INVALID_ARGUMENT (3): a real validation
+      // rejection, never a throttle signal.
+      const invalid = GoogleError.parseHttpError({ error: { code: 400, message: 'New size must be larger' } })
+      const other = toExpansionClientError(invalid)
       expect(other).toBeInstanceOf(Error)
       expect(other).not.toBeInstanceOf(GcpDiskRateLimitedError)
-      expect(other.message).toBe('boom')
+      expect(other.message).toBe('New size must be larger')
+      const plain = toExpansionClientError(new Error('boom'))
+      expect(plain).toBeInstanceOf(Error)
+      expect(plain).not.toBeInstanceOf(GcpDiskRateLimitedError)
+      expect(plain.message).toBe('boom')
     })
   })
 })

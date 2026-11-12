@@ -17236,6 +17236,7 @@ __metadata:
     fast-deep-equal: "npm:^3.1.3"
     fast-glob: "npm:^3.3.0"
     form-data: "npm:^4.0.6"
+    google-gax: "npm:^6.0.0"
     gt-react: "npm:^10.0.8"
     gtx-cli: "npm:^2.6.24"
     http-proxy-middleware: "npm:^4.2.0"

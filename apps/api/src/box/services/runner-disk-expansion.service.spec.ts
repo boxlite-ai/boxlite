@@ -5,6 +5,7 @@
 
 import { Logger } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
+import { GoogleError } from 'google-gax'
 import { DataSource } from 'typeorm'
 import { Runner } from '../entities/runner.entity'
 import { RunnerDiskExpansion } from '../entities/runner-disk-expansion.entity'
@@ -159,7 +160,7 @@ function makeService(opts: {
     ...opts.expansion,
   }
   const values: Record<string, unknown> = {
-    'runnerDisk': { expandLimitGiB: opts.expandLimitGiB },
+    runnerDisk: { expandLimitGiB: opts.expandLimitGiB },
     'runnerDisk.expansion': expansion,
     'runnerDisk.expansion.enabled': expansion.enabled,
     'runnerDisk.expansion.sampleIntervalMinutes': expansion.sampleIntervalMinutes,
@@ -310,7 +311,7 @@ describe('RunnerDiskExpansionService round', () => {
     expect(gcpDiskClient.resizeDisk).not.toHaveBeenCalled()
   })
 
-  it('holds back during the 400 cooldown', async () => {
+  it('holds back during the throttle cooldown', async () => {
     const { service, gcpDiskClient } = makeService({ hasRecentRateLimit: true })
 
     await service.evaluateAndConfirm()
@@ -518,9 +519,22 @@ describe('RunnerDiskExpansionService round', () => {
     it('records a rate-limited rejection on the intent row and does not spend the budget', async () => {
       const { service, expansions, gcpDiskClient } = makeService({})
       // Rejected lazily: an eagerly-created rejected promise can surface as an
-      // unhandled rejection before the service awaits it.
+      // unhandled rejection before the service awaits it. The rejection shape
+      // is the one google-gax's REST fallback actually produces: GoogleError
+      // with a gRPC status (RESOURCE_EXHAUSTED), not a raw HTTP code.
       ;(gcpDiskClient.resizeDisk as jest.Mock).mockImplementationOnce(() =>
-        Promise.reject(Object.assign(new Error('rate limit exceeded'), { code: 400 })),
+        Promise.reject(
+          GoogleError.parseHttpError({
+            error: {
+              code: 429,
+              errors: [
+                { domain: 'global', message: 'Quota exceeded for requests per minute', reason: 'rateLimitExceeded' },
+              ],
+              message: 'Quota exceeded for requests per minute',
+              status: 'RESOURCE_EXHAUSTED',
+            },
+          }),
+        ),
       )
 
       await service.evaluateAndConfirm()
@@ -539,7 +553,24 @@ describe('RunnerDiskExpansionService round', () => {
     it('records any other rejection as not accepted', async () => {
       const { service, expansions, gcpDiskClient } = makeService({})
       ;(gcpDiskClient.resizeDisk as jest.Mock).mockImplementationOnce(() =>
-        Promise.reject(Object.assign(new Error('disk not found'), { code: 404 })),
+        Promise.reject(GoogleError.parseHttpError({ error: { code: 404, message: 'disk not found' } })),
+      )
+
+      await service.evaluateAndConfirm()
+
+      expect(expansions.update).toHaveBeenCalledWith(
+        'inserted-row',
+        expect.objectContaining({ status: RunnerDiskExpansionStatus.FAILED, error: EXPANSION_ERROR.NOT_ACCEPTED }),
+      )
+    })
+
+    it('records a genuine request-validation 400 as not accepted, not rate limited', async () => {
+      // HTTP 400 surfaces as gRPC INVALID_ARGUMENT (3): a real validation
+      // rejection (for example "new size must be larger") that must open no
+      // cooldown. Only the throttle signal (RESOURCE_EXHAUSTED) does.
+      const { service, expansions, gcpDiskClient } = makeService({})
+      ;(gcpDiskClient.resizeDisk as jest.Mock).mockImplementationOnce(() =>
+        Promise.reject(GoogleError.parseHttpError({ error: { code: 400, message: 'New size must be larger' } })),
       )
 
       await service.evaluateAndConfirm()

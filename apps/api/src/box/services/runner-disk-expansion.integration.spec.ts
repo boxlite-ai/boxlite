@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
 import { DataSource, Repository } from 'typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
+import { GoogleError } from 'google-gax'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { Runner } from '../entities/runner.entity'
@@ -55,7 +56,7 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
     }
     const runnerDisk = { ...runnerDiskConfig({}), expansion: expansionBlock }
     const values: Record<string, unknown> = {
-      'runnerDisk': runnerDisk,
+      runnerDisk: runnerDisk,
       'runnerDisk.expansion': expansionBlock,
       'runnerDisk.expansion.enabled': expansionBlock.enabled,
       'runnerDisk.expansion.sampleIntervalMinutes': expansionBlock.sampleIntervalMinutes,
@@ -175,7 +176,11 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
     expansions = dataSource.getRepository(RunnerDiskExpansion)
     samples = dataSource.getRepository(RunnerDiskUsageSample)
 
-    redis = new Redis({ host: process.env.REDIS_HOST || '127.0.0.1', port: Number(process.env.REDIS_PORT || 6379), lazyConnect: false })
+    redis = new Redis({
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: Number(process.env.REDIS_PORT || 6379),
+      lazyConnect: false,
+    })
     lockProvider = new RedisLockProvider(redis)
     resizeDisk = jest.fn(async () => ({ operation: 'op-integration' }))
 
@@ -278,8 +283,18 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
       const now = new Date()
       const retentionHours = runnerDiskConfig({}).expansion.sampleRetentionHours
       await samples.save([
-        { runnerId: runner.id, bucketAt: new Date(now.getTime() - (retentionHours - 1) * 3600_000), usedGiB: 1, capacityGiB: 200 },
-        { runnerId: runner.id, bucketAt: new Date(now.getTime() - (retentionHours + 1) * 3600_000), usedGiB: 1, capacityGiB: 200 },
+        {
+          runnerId: runner.id,
+          bucketAt: new Date(now.getTime() - (retentionHours - 1) * 3600_000),
+          usedGiB: 1,
+          capacityGiB: 200,
+        },
+        {
+          runnerId: runner.id,
+          bucketAt: new Date(now.getTime() - (retentionHours + 1) * 3600_000),
+          usedGiB: 1,
+          capacityGiB: 200,
+        },
       ] as RunnerDiskUsageSample[])
 
       const cleanup = service as unknown as { cleanupSamples: (now: Date) => Promise<void> }
@@ -370,7 +385,16 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
 
     it('records a rate-limited rejection and cools down', async () => {
       resizeDisk.mockImplementationOnce(async () => {
-        throw Object.assign(new Error('rate limit exceeded'), { code: 400 })
+        throw GoogleError.parseHttpError({
+          error: {
+            code: 429,
+            errors: [
+              { domain: 'global', message: 'Quota exceeded for requests per minute', reason: 'rateLimitExceeded' },
+            ],
+            message: 'Quota exceeded for requests per minute',
+            status: 'RESOURCE_EXHAUSTED',
+          },
+        })
       })
       const runner = await thirstyRunner()
 

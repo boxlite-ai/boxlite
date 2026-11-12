@@ -27,7 +27,7 @@ import { GcpDiskClient, GcpDiskClientLike, GcpDiskRateLimitedError, toExpansionC
 import { runnerDiskConfig } from '../../config/configuration'
 
 /** Fixed behaviors, deliberately not configurable (misconfiguration surface). */
-/** How long a GCP rate-limit 400 keeps the runner out of new attempts. */
+/** How long a GCP throttle rejection (RESOURCE_EXHAUSTED) keeps the runner out of new attempts. */
 export const RATE_LIMIT_COOLDOWN_MS = 30 * 60 * 1000
 /** Fewer samples (or a span shorter than this) means no growth history: H falls back to its floor. */
 export const MIN_GROWTH_SAMPLES = 2
@@ -457,7 +457,7 @@ export class RunnerDiskExpansionService {
     if (await this.expansions.exist({ where: { runnerId: runner.id, status: RunnerDiskExpansionStatus.PENDING } })) {
       return false
     }
-    // A recent GCP 400 keeps the runner quiet for the cooldown.
+    // A recent GCP throttle rejection keeps the runner quiet for the cooldown.
     const cooldownStart = new Date(now.getTime() - RATE_LIMIT_COOLDOWN_MS)
     if (
       await this.expansions.exist({

@@ -11,7 +11,7 @@ export class AddRunnerDiskExpansion1794528002000 implements MigrationInterface {
     // resize until the runner's filesystem reports the new size (or the
     // attempt times out as `unconfirmed`). Failed-before-accept rows keep
     // accepted=false so they never consume the GCP-side resize budget that
-    // only counts accepted requests. The rate-limit window and the 400
+    // only counts accepted requests. The rate-limit window and the throttle
     // cooldown query by (runnerId, requestedAt).
     await queryRunner.query(`CREATE TABLE "runner_disk_expansion" (
       "id" uuid NOT NULL DEFAULT uuid_generate_v4(),

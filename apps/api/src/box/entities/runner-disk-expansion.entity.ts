@@ -14,7 +14,7 @@ import { RunnerDiskExpansionStatus } from '../enums/runner-disk-expansion-status
  * device (ext4 metadata — the confirmation step's tolerance accounts for
  * it). `accepted` records whether the cloud accepted the request at
  * all: the resize budget counts only accepted requests, so a rejected one
- * (including a GCP rate-limit 400) must not spend it. `operation` is the name
+ * (including a GCP throttle rejection) must not spend it. `operation` is the name
  * of the zone operation GCP returned, used to poll for completion.
  */
 @Entity()

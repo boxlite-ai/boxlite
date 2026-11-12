@@ -6,7 +6,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
-/** GCP rejected the resize with 400 — for this API's budget that means the per-disk resize rate limit. */
+/** GCP rejected the resize with its throttle signal (RESOURCE_EXHAUSTED) — for this API's budget that means the per-disk resize rate limit. */
 export class GcpDiskRateLimitedError extends Error {
   constructor(message: string) {
     super(message)
@@ -130,12 +130,29 @@ export class GcpDiskClient implements GcpDiskClientLike {
   }
 }
 
-/** Maps a raw @google-cloud/compute failure to the expansion controller's error classes. */
+/**
+ * Maps a raw @google-cloud/compute failure to the expansion controller's error classes.
+ *
+ * The client runs google-gax's REST fallback, so failures arrive as GoogleError
+ * objects whose `code` is a gRPC status, not the HTTP status: GCP's rate-limit
+ * rejection (HTTP 429, reason rateLimitExceeded) surfaces as RESOURCE_EXHAUSTED
+ * (8), while a genuine request-validation 400 surfaces as INVALID_ARGUMENT (3)
+ * and must stay an unthrottled rejection. Only the throttle signal opens the
+ * cooldown; matching the HTTP status instead never fires in production.
+ */
 export function toExpansionClientError(error: unknown): Error {
   const status = (error as { code?: number })?.code
   const message = error instanceof Error ? error.message : String(error)
-  if (status === 400) {
+  if (status === GCP_THROTTLE_GRPC_STATUS) {
     return new GcpDiskRateLimitedError(message)
   }
   return error instanceof Error ? error : new Error(message)
 }
+
+/**
+ * google-gax's gRPC status for RESOURCE_EXHAUSTED — the code behind GCP's
+ * HTTP 429 rateLimitExceeded. Quota errors that need an infrastructure
+ * action (HTTP 403 quotaExceeded → PERMISSION_DENIED) deliberately keep the
+ * unthrottled rejection so they surface instead of cooling down silently.
+ */
+const GCP_THROTTLE_GRPC_STATUS = 8
