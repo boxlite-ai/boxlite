@@ -668,11 +668,12 @@ cron (`runner-disk-expansion.service.ts`); everything else reads it.
 
 The disk identity the controller expands is the runner's own report
 (`dataDiskRef`, refreshed on each heartbeat that carries it). The API records
-no independent binding between a runner and its disk, so a compromised runner
-can point the controller at another disk within the service account's IAM
-reach; GCP disks cannot shrink, so such a misdirected resize persists until an
-operator intervenes. Closing this needs an authoritative disk identity
-recorded at provisioning (boxlite#2602).
+no independent binding between a runner and its disk: a runner's ref sits in
+the same trust tier as its other heartbeat telemetry (sizes, usage, health),
+and the write's reach is bounded by the service account's IAM scope, the
+per-runner resize budget, and the cap. Recording an authoritative identity at
+provisioning was considered and rejected — the precondition, a compromised
+runner host, already grants more damaging capabilities (2026-11-12).
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
