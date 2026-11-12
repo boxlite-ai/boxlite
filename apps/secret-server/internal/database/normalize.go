@@ -7,6 +7,7 @@ import (
 )
 
 // NormalizeName validates a secret name and maps each Unicode scalar to an environment key.
+// Keep its mapping consistent with the name_normalized CHECK in 00001_initial.sql.
 func NormalizeName(name string) (string, error) {
 	if !utf8.ValidString(name) || utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 64 || strings.ContainsRune(name, 0) {
 		return "", errors.New("secret name must contain 1 to 64 valid non-NUL Unicode characters")

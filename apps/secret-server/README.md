@@ -121,16 +121,19 @@ but KMS, provider routing, and migration jobs are not implemented here.
 
 ## Database migrations
 
-Set `SECRET_DATABASE_URL` to the separate PostgreSQL database and run
+Set `DATABASE_URL` to the separate PostgreSQL database and run
 `secret-server migrate`. The command applies embedded goose migrations under a
 PostgreSQL session lock, with a two-minute deadline. Run it with an account that
 can create schema objects. Migrations are forward-only; deployed application
-versions must tolerate compatible schema changes.
+versions must tolerate compatible schema changes. The database must use UTF-8
+server encoding. SIGINT and SIGTERM cancel a running migration.
 
 Before serving requests, the future service must call `database.Initialize`.
 It applies migrations and verifies a durable encrypted canary under a separate
 transaction advisory lock. If the canary is absent but versions exist, it first
 decrypts an existing version. A wrong key or corrupt ciphertext fails readiness.
+Canary enrollment uses a read-committed transaction even when the database has a
+different default isolation level.
 
 ## Verification
 
@@ -148,6 +151,7 @@ The unit test target runs with the race detector and `GOWORK=off`. The integrati
 target requires infra-local PostgreSQL and permission to create a temporary database.
 It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
 creates a uniquely named database and drops it after the test.
+It also checks that SIGTERM cancels the migration command while it waits for a lock.
 CI runs the same integration target against a PostgreSQL 17 service on Ubuntu,
 including on draft PRs when Go-related files change. This checks database behavior;
 the infra-local BoxLite VM still needs separate local verification.

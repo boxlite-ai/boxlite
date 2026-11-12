@@ -18,15 +18,16 @@ var canaryContext = encryption.SecretContext{
 	Version:        1, Hosts: []string{"canary"}, Headers: map[string]string{"X-Canary": "canary"},
 }
 
+// Reserve a stable lock distinct from goose's session lock for canary enrollment.
 const canaryLock int64 = 0x626f786c69746501
 const canaryValue = "boxlite secret server key verification v1"
 
-// VerifyKey creates or checks durable ciphertext before the service is ready.
+// VerifyKey checks durable ciphertext, creating it on first enrollment.
 func VerifyKey(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Cipher) error {
 	if cipher == nil {
 		return errors.New("verify key: cipher is nil")
 	}
-	tx, err := pool.Begin(ctx)
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin key verification: %w", err)
 	}
@@ -45,9 +46,12 @@ func VerifyKey(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Ciphe
 			return fmt.Errorf("encrypt key canary: %w", err)
 		}
 		_, err = tx.Exec(ctx, "INSERT INTO key_verification_canary (id, ciphertext, encrypted_dek, key_id) VALUES (1, $1, $2, $3)", envelope.Ciphertext, envelope.WrappedDEK.Ciphertext, envelope.WrappedDEK.KeyID)
+		if err != nil {
+			return fmt.Errorf("insert key canary: %w", err)
+		}
 	}
 	if err != nil {
-		return fmt.Errorf("read or create key canary: %w", err)
+		return fmt.Errorf("read key canary: %w", err)
 	}
 	plaintext, err := cipher.Decrypt(ctx, canaryContext, envelope)
 	if err != nil {

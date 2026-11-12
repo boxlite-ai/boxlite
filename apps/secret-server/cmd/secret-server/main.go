@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/database"
@@ -15,9 +16,9 @@ func run(ctx context.Context, args []string) error {
 	if len(args) != 1 || args[0] != "migrate" {
 		return fmt.Errorf("usage: secret-server migrate")
 	}
-	url := os.Getenv("SECRET_DATABASE_URL")
+	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		return fmt.Errorf("SECRET_DATABASE_URL is required")
+		return fmt.Errorf("DATABASE_URL is required")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -30,7 +31,7 @@ func run(ctx context.Context, args []string) error {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)

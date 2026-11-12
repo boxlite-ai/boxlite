@@ -1,4 +1,14 @@
 -- +goose Up
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF current_setting('server_encoding') <> 'UTF8' THEN
+        RAISE EXCEPTION 'Secret Server requires a UTF8 database';
+    END IF;
+END;
+$$;
+-- +goose StatementEnd
+
 CREATE TABLE secret (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id uuid NOT NULL,
@@ -12,6 +22,7 @@ CREATE TABLE secret (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CHECK ((scope = 'box') = (box_id IS NOT NULL)),
+    -- Keep this mapping consistent with database.NormalizeName.
     CHECK (name_normalized = translate(
         regexp_replace(name COLLATE "C", '[^A-Za-z0-9_]', '_', 'g'),
         'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))
@@ -41,6 +52,7 @@ CREATE INDEX secret_version_key_idx ON secret_version (key_id);
 -- +goose StatementBegin
 CREATE FUNCTION protect_secret_version() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    -- encrypted_dek and key_id remain mutable for future KMS rewrapping.
     IF (NEW.secret_id, NEW.version, NEW.ciphertext, NEW.hosts, NEW.headers,
         NEW.placeholder, NEW.created_by, NEW.created_at)
        IS DISTINCT FROM
