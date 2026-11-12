@@ -1,9 +1,11 @@
+import { QuotaTicks } from '@/components/QuotaTicks'
+import { TechnicalText, FormattedBytes } from '@/components/TechnicalText'
 /*
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter, ResourceIdentity } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
@@ -23,7 +25,7 @@ import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
 import { useImageUsageQuery, useImagesQuery } from '@/hooks/queries/useImagesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { formatBytes, timeAgo } from '@/lib/format'
+import { timeAgo } from '@/lib/format'
 import { conflictBoxIds, imageRouteKey, imageStartRef } from '@/lib/image-ref'
 import { BOX_TEMPLATES } from '@/lib/quickstart/box-templates'
 import { cn } from '@/lib/utils'
@@ -37,7 +39,8 @@ import { toast } from 'sonner'
 // Volumes: two grid containers solving independently drift apart column by
 // column.
 // `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own box.
-const ROW_GRID = 'grid min-w-[760px] grid-cols-[1.8fr_1.2fr_0.6fr_0.5fr_0.8fr_110px] items-center gap-3'
+const ROW_GRID =
+  'grid min-w-[760px] grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_72px_48px_100px_110px] items-center gap-4'
 
 function BoxLinks({ boxes }: { boxes: Box[] }) {
   return (
@@ -150,7 +153,7 @@ export function ImageCatalog() {
             <div className="flex flex-wrap items-center gap-4">
               <span
                 className={cn(
-                  'whitespace-nowrap font-mono text-meta tabular-nums',
+                  'inline-flex items-center gap-2 whitespace-nowrap font-mono text-meta tabular-nums',
                   atLimit
                     ? 'text-destructive'
                     : nearLimit
@@ -159,12 +162,13 @@ export function ImageCatalog() {
                 )}
               >
                 Custom images {usage.count} / {usage.limit}
+                <QuotaTicks used={usage.count} limit={usage.limit} />
               </span>
               <span aria-hidden="true" className="text-meta text-muted-foreground">
                 ·
               </span>
               <span className="whitespace-nowrap font-mono text-meta tabular-nums text-muted-foreground">
-                Total image size {formatBytes(usage.knownBytes)}
+                Total image size <FormattedBytes bytes={usage.knownBytes} />
               </span>
               {atLimit && (
                 <span className="font-sans text-meta text-muted-foreground">
@@ -200,11 +204,13 @@ export function ImageCatalog() {
                     ? openTemplate(image.templateId)
                     : navigate(generatePath(RoutePath.IMAGE_DETAILS, { idOrRef: imageRouteKey(image) }))
                 }
-                className="flex min-w-0 items-center gap-3 text-left"
+                className="min-w-0 text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
                 title={image.curatedRef ?? image.name}
+                aria-label={image.name}
               >
-                <Layers className="size-6 shrink-0 text-muted-foreground" />
-                <span className="block resource-name hover:underline">{image.name}</span>
+                <ResourceIdentity icon={<Layers />}>
+                  <TechnicalText value={image.curatedRef ?? image.name} className="resource-name hover:underline" />
+                </ResourceIdentity>
               </button>
               <span className="truncate font-mono text-meta text-muted-foreground" title={image.aliases.join(', ')}>
                 {image.aliases.length === 0
@@ -214,7 +220,7 @@ export function ImageCatalog() {
                     : `${image.aliases[0]} +${image.aliases.length - 1}`}
               </span>
               <span className="font-mono text-meta tabular-nums text-muted-foreground">
-                {formatBytes(image.sizeBytes)}
+                <FormattedBytes bytes={image.sizeBytes} />
               </span>
               <span className="font-mono text-meta tabular-nums text-muted-foreground">
                 {boxes.length > 0 ? boxes.length : '—'}
@@ -223,6 +229,7 @@ export function ImageCatalog() {
               <div className="flex items-center justify-end gap-1">
                 {canCreateBox && (
                   <AsciiButton
+                    variant="quiet"
                     size="sm"
                     type="button"
                     onClick={() =>
@@ -235,7 +242,7 @@ export function ImageCatalog() {
                 )}
                 {canDelete && !image.curated && image.id && (
                   <AsciiButton
-                    variant="danger"
+                    variant="quiet-danger"
                     size="icon"
                     aria-label={`Remove ${image.name}`}
                     type="button"

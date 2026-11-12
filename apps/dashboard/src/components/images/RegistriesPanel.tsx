@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter, ResourceIdentity } from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { KeyRound, Trash } from '@/components/ui/icon'
+import { KeyRound, Server, Trash } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -143,7 +143,8 @@ export const PROVIDERS: Provider[] = [
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
 // `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own box.
-const ROW_GRID = 'grid min-w-[680px] grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
+const ROW_GRID =
+  'grid min-w-[680px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_110px] items-center gap-6'
 
 /** The same Covers label is used for display and local filtering. */
 function registryCoverage(prefix?: string): string {
@@ -341,7 +342,9 @@ export function RegistriesPanel() {
 
             {rows.map((credential) => (
               <div key={credential.id} className={cn(ROW_GRID, 'resource-list-row')}>
-                <span className="resource-name">{credential.registryHost}</span>
+                <ResourceIdentity icon={<Server />}>
+                  <span className="resource-name">{credential.registryHost}</span>
+                </ResourceIdentity>
                 <span className="truncate font-mono text-meta text-muted-foreground">
                   {registryCoverage(credential.repositoryPrefix)}
                 </span>
@@ -355,6 +358,7 @@ export function RegistriesPanel() {
                 <div className="flex items-center justify-end gap-1">
                   {canWrite && (
                     <AsciiButton
+                      variant="quiet"
                       size="sm"
                       type="button"
                       onClick={() => {
@@ -370,7 +374,7 @@ export function RegistriesPanel() {
                   )}
                   {canDelete && (
                     <AsciiButton
-                      variant="danger"
+                      variant="quiet-danger"
                       size="icon"
                       aria-label={`Remove the credential for ${credential.registryHost}`}
                       type="button"

@@ -72,7 +72,7 @@ describe('WalletTransactionsTable PR #829 surface', () => {
       'Status',
     ])
     expect(host.querySelector('[data-transaction-date]')?.textContent).toBe('2026-07-01')
-    expect(host.querySelector('[data-transaction-type]')?.textContent).toBe('top-up')
+    expect(host.querySelector('[data-transaction-type]')?.textContent).toBe('Top-up')
     expect(host.querySelector('[data-transaction-amount]')?.textContent).toBe('+100.00')
     expect(host.querySelector('[data-transaction-status]')?.textContent).toBe('ok')
     expect(host.textContent).not.toContain('Details')

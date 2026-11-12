@@ -212,7 +212,9 @@ describe('the image list', () => {
     await renderCatalog()
 
     expect(document.body.textContent).not.toContain('Built-in')
-    expect(buttonWithTitle('docker.io/library/python:3.12-slim')?.textContent).toBe('python')
+    expect(buttonWithTitle('docker.io/library/python:3.12-slim')?.textContent).toBe(
+      'docker.io/library/python:3.12-slim',
+    )
     expect(buttonWithTitle('Remove python')).toBeUndefined()
     expect(buttonWithTitle('Remove quay.io/acme/app')).toBeTruthy()
   })
