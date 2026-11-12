@@ -178,8 +178,9 @@ absent, no credential is injected and the upstream may return 401.
 - ASCII control bytes 0–31 except HTAB (9), and DEL (127), in templates or rendered values; spaces and HTAB are allowed
 
 Creation applies all these rules. Stored configurations remain readable as metadata.
-Start, import and reconnect to a running box validate stored secret headers before
-activation or installation. Restart performs stop first, so rejected activation
+Start of a new VM and import validate stored secret headers before
+activation or installation. Running legacy boxes keep running until stopped;
+reattaching to stop them does not validate headers. Restart performs stop first, so rejected activation
 leaves the box stopped with its stored data intact. Missing, null or empty headers
 produce `secret "x" has no headers; recreate the box with headers`.
 Other legacy header conflicts retain their existing last-writer behavior and warning.
@@ -231,8 +232,8 @@ including an empty value, triggers injection on a matching host.
 existing boxes that have secrets, supplying explicit headers. Metadata queries still
 work. Restart stops a running legacy box first, then start rejects missing headers;
 its stored data remains intact, and recreation with explicit headers is required.
-Import and running reconnect still reject invalid headers before changing VM or
-stored-data state. The cloud database was confirmed to contain no such boxes;
+Import still rejects invalid headers before changing stored-data state.
+Running legacy boxes keep running until stopped. The cloud database was confirmed to contain no such boxes;
 local SQLite stores were not checked.
 
 The development-only singular `header` field is not migrated. Recreate those

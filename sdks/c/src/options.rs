@@ -330,6 +330,13 @@ pub unsafe extern "C" fn boxlite_options_add_secret(
 
 /// Add a secret with parallel header-name and template arrays.
 /// At least one entry is required at creation; zero entries and empty strings are rejected by Rust.
+/// # Safety
+/// Every non-null options pointer must reference a live, exclusively accessible
+/// options handle for the duration of this call. Non-null string pointers must
+/// reference readable NUL-terminated strings. For positive counts, each non-null
+/// array must contain at least that many readable pointer entries; every non-null
+/// entry must reference a readable NUL-terminated string. Header name and template
+/// arrays both use `headers_count`; the hosts array uses `hosts_count`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_secret_with_headers(
     opts: *mut CBoxliteOptions,
@@ -718,6 +725,13 @@ pub unsafe fn options_set_network_inbound_disabled(handle: *mut OptionsHandle) {
     }
 }
 
+/// # Safety
+/// Every non-null options pointer must reference a live, exclusively accessible
+/// options handle for the duration of this call. Non-null string pointers must
+/// reference readable NUL-terminated strings. For positive counts, each non-null
+/// array must contain at least that many readable pointer entries; every non-null
+/// entry must reference a readable NUL-terminated string. Header name and template
+/// arrays both use `headers_count`; the hosts array uses `hosts_count`.
 pub unsafe fn options_add_secret_with_headers(
     handle: *mut OptionsHandle,
     name: *const c_char,

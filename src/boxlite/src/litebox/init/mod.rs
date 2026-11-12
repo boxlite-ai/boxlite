@@ -205,7 +205,6 @@ impl BoxBuilder {
         // validate only their stored shape here; the boot-assets task reopens a
         // source only when no complete box-scoped generation exists.
         let options = &config.options;
-        options.validate_secret_headers()?;
         validate_persisted_options(&runtime.experimental_features, options)?;
 
         Ok(Self {
@@ -222,6 +221,12 @@ impl BoxBuilder {
     /// disarm the returned guard after a successful start and DB persist.
     pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
+
+        // Reattach must remain available to stop a legacy shim. Only a new VM
+        // consumes stored headers to build its proxy configuration.
+        if self.state.status != BoxStatus::Running {
+            self.config.options.validate_secret_headers()?;
+        }
 
         let total_start = Instant::now();
 
@@ -402,14 +407,14 @@ mod plan_tests {
                 state.status = status;
                 runtime.box_manager.add_box(&config, &state).unwrap();
                 let before = serde_json::to_value(&state).unwrap();
-                let result = BoxBuilder::new(runtime.clone(), config.clone(), state);
-                if suffix.contains("X-Key") {
-                    assert!(
-                        result.is_ok(),
-                        "valid headers must allow activation planning"
-                    );
+                let builder = BoxBuilder::new(runtime.clone(), config.clone(), state).unwrap();
+                if status == BoxStatus::Running {
                     continue;
                 }
+                if suffix.contains("X-Key") {
+                    continue;
+                }
+                let result = builder.build().await;
                 assert!(
                     result.is_err(),
                     "activation accepted missing headers for {status:?}"
@@ -576,11 +581,6 @@ mod required_start_safety_tests {
     #[tokio::test]
     async fn required_headers_public_start_preserves_state() {
         assert_rejection_preserves_state(BoxStatus::Stopped, false).await;
-    }
-
-    #[tokio::test]
-    async fn required_headers_public_reconnect_preserves_state() {
-        assert_rejection_preserves_state(BoxStatus::Running, false).await;
     }
 
     #[tokio::test]
