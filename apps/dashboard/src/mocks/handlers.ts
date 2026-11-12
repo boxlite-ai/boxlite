@@ -13,6 +13,7 @@ import { sshHandlers } from './ssh-handlers'
 import { tunnelHandlers } from './tunnel-handlers'
 import { ciHandlers } from './ci-handlers'
 import { resourceStateHandlers } from './resource-state-handlers'
+import { cloudAppHandlers } from './cloud-app-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -133,6 +134,7 @@ export const handlers = [
   ...subscriptionCancellationHandlers(API_URL, BILLING_API_URL),
   ...resourceStateHandlers(API_URL),
   ...ciHandlers(newUserPreview),
+  ...cloudAppHandlers(),
   ...sshHandlers,
   ...tunnelHandlers,
   ...domainHandlers(),

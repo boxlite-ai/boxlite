@@ -139,6 +139,8 @@ export type BoxCreationOptions = {
   createdBy?: string
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
+  /** Trusted Cloud App provisioning context, supplied independently of the public DTO. */
+  appEnvironmentId?: string
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -370,6 +372,7 @@ export class BoxService {
         const volumes = await this.volumeService.validateVolumes(
           organization.id,
           createBoxDto.volumes.map((v) => v.volumeId),
+          options.appEnvironmentId,
         )
         // Replace the caller's selector with the volume it resolved to inside
         // this organization. A name is only unique per organization, but
