@@ -507,21 +507,47 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     expect(await receipts()).toHaveLength(0)
     expect(await store.state.read(['notice/10/50'])).toHaveLength(0)
   })
-  it('rechecks binding loss between the inbox read and write transactions', async () => {
+  it('holds binding authority through atomic inbox persistence and rejects later revocation', async () => {
     const transaction = db.transaction.bind(db)
-    let calls = 0
+    let entered!: () => void,
+      release!: () => void,
+      calls = 0
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const resume = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const wrapped = jest.spyOn(db, 'transaction').mockImplementation((async (...args: any[]) => {
-      const result = await (transaction as any)(...args)
-      if (++calls === 1) await db.query("UPDATE ci_installation_binding SET state='disabled'")
-      return result
+      const work = args[args.length - 1]
+      args[args.length - 1] = async (tx: any) => {
+        const result = await work(tx)
+        if (++calls === 1) {
+          entered()
+          await resume
+        }
+        return result
+      }
+      return (transaction as any)(...args)
     }) as any)
+    const pending = host.accept(notification())
     try {
-      await expect(host.accept(notification())).rejects.toThrow('binding')
+      await inside
+      await expect(
+        transaction(async (tx) => {
+          await tx.query("SET LOCAL lock_timeout='50ms'")
+          await tx.query("UPDATE ci_installation_binding SET state='disabled'")
+        }),
+      ).rejects.toMatchObject({ driverError: { code: '55P03' } })
     } finally {
+      release()
+      await pending
       wrapped.mockRestore()
     }
-    expect(await receipts()).toHaveLength(0)
-    expect(await store.state.read(['notice/10/50'])).toHaveLength(0)
+    await db.query("UPDATE ci_installation_binding SET state='disabled'")
+    await expect(host.accept(notification())).rejects.toThrow('binding')
+    expect(await receipts()).toHaveLength(1)
+    expect(await store.state.read(['notice/10/50'])).toHaveLength(1)
   })
   it('retains signed installation-removal hints as discovery work without execution authority', async () => {
     await db.query('DELETE FROM ci_installation_binding')

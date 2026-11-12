@@ -18,6 +18,11 @@ export interface RunnerIdentity {
   id: number
   name: string
 }
+export interface RunnerObservation extends RunnerIdentity {
+  busy: boolean
+  status: 'online' | 'offline'
+  labels: string[]
+}
 export type RunnerEffect = { kind: 'register'; name: string } | { kind: 'remove'; id: number; name: string }
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -173,6 +178,38 @@ export class GitHubRunners {
       throw new Error('GitHub JIT registration identity is unknown')
     return new JitRegistration({ id: value.runner.id, name }, value.encoded_jit_config)
   }
+  /** Successful, complete enumeration under original authority is the only absence signal. */
+  async list(signal?: AbortSignal): Promise<RunnerObservation[]> {
+    await this.authority(false, signal)
+    const values = await this.inventory(`${this.route}/actions/runners`, 'runners', signal)
+    const runners = values.map((value): RunnerObservation => {
+      if (
+        !object(value) ||
+        !positive(value.id) ||
+        typeof value.name !== 'string' ||
+        !value.name ||
+        typeof value.busy !== 'boolean' ||
+        !['online', 'offline'].includes(value.status as string) ||
+        !Array.isArray(value.labels) ||
+        value.labels.length > 100 ||
+        !value.labels.every(
+          (label) =>
+            object(label) && typeof label.name === 'string' && label.name.length > 0 && label.name.length <= 128,
+        )
+      )
+        throw new Error('Invalid GitHub runner supply inventory')
+      return {
+        id: value.id,
+        name: value.name,
+        busy: value.busy,
+        status: value.status as RunnerObservation['status'],
+        labels: value.labels.map((label) => (label as { name: string }).name.toLowerCase()),
+      }
+    })
+    await this.authority(false, signal)
+    return runners
+  }
+
   /** Successful, complete enumeration under original authority is the only absence signal. */
   async lookup(identity: { id?: number; name: string }, signal?: AbortSignal): Promise<RunnerIdentity | null> {
     identity = { ...identity }

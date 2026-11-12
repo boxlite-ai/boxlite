@@ -18,6 +18,10 @@ export interface StateCheck {
   key: string
   version: string
 }
+export interface IngressTransaction {
+  read(keys: readonly string[]): Promise<StateRecord[]>
+  write(changes: StateChange[]): Promise<StateRecord[]>
+}
 type Owner = { owner: string; epoch: number }
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 const record = (key: string, payload: Json): StateRecord => ({
@@ -226,6 +230,42 @@ export class ListenerState {
       },
       'snapshot',
     )
+  }
+
+  /** Host adapters must check the live binding in this same database transaction. */
+  async ingress<T>(target: string, work: (tx: IngressTransaction) => Promise<T>, lease?: ExecutionLease): Promise<T> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,200}$/.test(target)) throw new Error('Invalid ingress target')
+    return this.database.transaction(this.namespace, async (tx) => {
+      if (lease) await this.assertLease(tx, lease)
+      if (tx.lock) await tx.lock('ingress/' + target)
+      else await tx.get('@anchor', true)
+      this.anchor(await tx.get('@anchor'))
+      this.owner(await tx.get('@owner'))
+      this.until(await tx.get('@lease'))
+      const result = await work({
+        read: async (keys) => {
+          const rows: StateRecord[] = []
+          for (const key of keys) {
+            if (!/^(receipt|notice|wake|demand|job-fact|runner-claim)\/[A-Za-z0-9:._/-]+$/.test(key))
+              throw new Error('Invalid ingress record kind')
+            const row = await tx.get(key)
+            if (row) {
+              this.valid(row)
+              rows.push(row)
+            }
+          }
+          return rows
+        },
+        write: async (changes) => {
+          const prepared = this.prepare(changes)
+          if (prepared.some(({ key }) => !/^(receipt|notice|wake|demand|job-fact|runner-claim)\//.test(key)))
+            throw new Error('Invalid ingress record kind')
+          return this.apply(tx, prepared)
+        },
+      })
+      if (lease) await this.assertLease(tx, lease)
+      return result
+    })
   }
 
   /** Host adapters must check the live binding in this same database transaction. */

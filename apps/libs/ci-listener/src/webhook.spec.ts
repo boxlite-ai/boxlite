@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,7 +58,9 @@ describe('CI shared webhook verification', () => {
   )
   it('does not treat an unsigned event header as permission to reinterpret the signed body', () => {
     expect(verifyWebhook(signed(payload(), randomUUID(), 'installation'), secret)).toBeNull()
-    expect(verifyWebhook(signed({ ...payload(), action: 'completed' }), secret)).toBeNull()
+    expect(() => verifyWebhook(signed({ ...payload(), action: 'completed' }), secret)).toThrow(
+      'Invalid workflow job notification',
+    )
     expect(
       verifyWebhook(
         signed({ ...payload(), workflow_job: { ...payload().workflow_job, labels: ['ubuntu-latest'] } }),
@@ -143,10 +145,69 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await inbox.receive(notification)).toBe('stored')
       const rows = await records()
       expect(rows.map((row) => row.key).sort()).toEqual(
-        [`receipt/${notification.delivery}`, 'wake/9/21', 'notice/9/55'].sort(),
+        [
+          `receipt/${notification.delivery}`,
+          'wake/9/21',
+          'notice/9/55',
+          'job-fact/9/55',
+          'demand/9/21/' +
+            createHash('sha256')
+              .update(JSON.stringify(['boxlite']))
+              .digest('hex'),
+        ].sort(),
       )
-      expect(rows.find((row) => row.key === 'notice/9/55')!.payload).toEqual(notification.hint)
+      expect(rows.find((row) => row.key === 'notice/9/55')!.payload).toEqual({ ...notification.hint, counted: true })
+      expect(rows.find((row) => row.key.startsWith('demand/'))!.payload).toMatchObject({
+        queued: 1,
+        labels: ['boxlite'],
+        dirty: false,
+      })
       expect(JSON.stringify(rows)).not.toContain(secret.toString('hex'))
+    })
+    it('persists all distinct jobs from a concurrent same-repository webhook burst', async () => {
+      const notifications = Array.from(
+        { length: 8 },
+        (_, index) =>
+          verifyWebhook(
+            signed({
+              ...payload(),
+              workflow_job: { ...payload().workflow_job, id: 100 + index },
+            }),
+            secret,
+          )!,
+      )
+      const results = await Promise.allSettled(
+        notifications.map((notification) => new ListenerInbox(state).receive(notification)),
+      )
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(0)
+      const stored = await records()
+      expect(stored.filter((row) => row.key.startsWith('notice/'))).toHaveLength(8)
+      expect(stored.filter((row) => row.key.startsWith('receipt/'))).toHaveLength(8)
+      expect(stored.find((row) => row.key.startsWith('demand/'))!.payload).toMatchObject({ queued: 8, dirty: false })
+    })
+    it('counts duplicate and out-of-order job transitions once', async () => {
+      const send = (status: 'queued' | 'in_progress' | 'completed') =>
+        inbox.receive(
+          verifyWebhook(
+            signed({
+              ...payload(),
+              action: status,
+              workflow_job: { ...payload().workflow_job, status, runner_id: status === 'queued' ? null : 91 },
+            }),
+            secret,
+          )!,
+        )
+      await send('queued')
+      await send('queued')
+      const stored = await records()
+      const key = stored.find((row) => row.key.startsWith('demand/'))!.key
+      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 1 })
+      await send('in_progress')
+      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 0, dirty: false })
+      await send('queued')
+      await send('completed')
+      await send('in_progress')
+      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 0, dirty: false })
     })
     it('deduplicates concurrent receiver instances and rejects a reused delivery with another body', async () => {
       const input = signed(),

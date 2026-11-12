@@ -47,6 +47,9 @@ class PostgresTransaction implements StateTransaction {
   private async rows(sql: string, parameters: unknown[]): Promise<Row[]> {
     return (await this.session.query(sql, parameters)) as Row[]
   }
+  async lock(key: string): Promise<void> {
+    await this.session.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [this.namespace + ':' + key])
+  }
   async now(): Promise<number> {
     const rows = (await this.session.query(
       'SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::text AS value',

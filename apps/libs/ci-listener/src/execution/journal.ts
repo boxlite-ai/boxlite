@@ -44,6 +44,8 @@ const workerId = (key: string) => {
   return key.slice(7)
 }
 const jobKey = (scope: ExecutionScope, job: JobNotice) => `job/${scope.installation.id}/${job.repository}/${job.job}`
+const allocationLink = (scope: ExecutionScope, value: Allocation) =>
+  value.supply ? 'supply/' + value.name.slice(7) : jobKey(scope, value.job)
 const count = (record: StateRecord | undefined, field: string): number => {
   if (
     !record ||
@@ -57,6 +59,21 @@ const count = (record: StateRecord | undefined, field: string): number => {
 
 /** Historical scopes are point references; only outstanding work has recovery memberships. */
 export class ExecutionJournal {
+  private readonly quotaWrites = new Map<string, Promise<void>>()
+  private async serializeQuota<T>(organization: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.quotaWrites.get(organization) ?? Promise.resolve()
+    const result = previous.then(work)
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.quotaWrites.set(organization, tail)
+    try {
+      return await result
+    } finally {
+      if (this.quotaWrites.get(organization) === tail) this.quotaWrites.delete(organization)
+    }
+  }
   constructor(private readonly state: ListenerState) {}
 
   async initialize(initial: { key: string; payload: Json }[] = []): Promise<void> {
@@ -166,7 +183,7 @@ export class ExecutionJournal {
     const original = decodeAllocation(first.payload)
     const scope = await this.scope(lease, original.scope)
     const membership = 'active-worker/' + scopeId(original.scope) + '/' + workerId(key)
-    const dedupe = jobKey(scope.scope, original.job)
+    const dedupe = allocationLink(scope.scope, original)
     const rows = new Map((await this.state.read([key, membership, dedupe], lease)).map((row) => [row.key, row]))
     const record = rows.get(key)
     if (!record) return undefined
@@ -174,7 +191,7 @@ export class ExecutionJournal {
     if (
       value.name !== 'ci-jit-' + workerId(key) ||
       value.scope !== original.scope ||
-      jobKey(scope.scope, value.job) !== dedupe
+      allocationLink(scope.scope, value) !== dedupe
     )
       throw new StateCorrupt()
     for (const link of [membership, dedupe]) {
@@ -194,6 +211,32 @@ export class ExecutionJournal {
       ({ maximum, domain }) => maximum === null || usage.find((row) => row.id === ids[domain])!.used < maximum,
     )
   }
+  async claimedRunners(lease: ExecutionLease, scope: ExecutionScope, ids: readonly number[]): Promise<Set<number>> {
+    const known = new Set<number>()
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const keys = ids.slice(offset, offset + 100).map((id) => `runner-claim/${scope.installation.id}/${id}`)
+      if (!keys.length) continue
+      for (const row of await this.state.read(keys, lease)) {
+        if (
+          !object(row.payload) ||
+          !positive(row.payload.repository) ||
+          !positive(row.payload.job) ||
+          !positive(row.payload.run) ||
+          !['in_progress', 'completed'].includes(row.payload.status as string)
+        )
+          throw new StateCorrupt()
+        const repository = row.payload.repository
+        if (
+          scope.runners.kind === 'repository'
+            ? repository !== scope.runners.repository.id
+            : !scope.runners.repositories.includes(repository)
+        )
+          throw new StateCorrupt()
+        known.add(Number(row.key.split('/')[2]))
+      }
+    }
+    return known
+  }
 
   /** Dashboard aggregate: an entirely new domain has no usage; a broken pair is corruption. */
   async used(organization: string): Promise<number> {
@@ -207,6 +250,23 @@ export class ExecutionJournal {
     scope: string,
     notice: JobNotice,
     policy: CapacityPolicy,
+    supply?: Allocation['supply'],
+  ): Promise<AllocationRow | undefined> {
+    lease = { ...lease }
+    notice = { ...notice }
+    policy = captureCapacity(policy)
+    supply = supply ? { labels: [...supply.labels] } : undefined
+    const target = await this.scope(lease, scope)
+    return this.serializeQuota(target.scope.organization, () =>
+      this.reserveCapacity(lease, scope, notice, policy, supply),
+    )
+  }
+  private async reserveCapacity(
+    lease: ExecutionLease,
+    scope: string,
+    notice: JobNotice,
+    policy: CapacityPolicy,
+    supply?: Allocation['supply'],
   ): Promise<AllocationRow | undefined> {
     lease = { ...lease }
     notice = { ...notice }
@@ -221,8 +281,9 @@ export class ExecutionJournal {
         : !runner.repositories.includes(notice.repository)
     )
       throw new Error('CI job is outside its execution scope')
+    supply = supply ? { labels: [...supply.labels] } : undefined
     const dedupe = jobKey(target.scope, notice),
-      [previous] = await this.state.read([dedupe], lease)
+      [previous] = supply ? [] : await this.state.read([dedupe], lease)
     if (previous) {
       if (!object(previous.payload) || typeof previous.payload.worker !== 'string') throw new StateCorrupt()
       const allocation = await this.allocation(lease, previous.payload.worker)
@@ -245,6 +306,7 @@ export class ExecutionJournal {
       scope,
       name: 'ci-jit-' + id,
       job: notice,
+      ...(supply ? { supply } : {}),
       createdAt: Date.now(),
       box: { phase: 'none', id: null },
       runner: { phase: 'none', id: null },
@@ -252,13 +314,14 @@ export class ExecutionJournal {
       closing: false,
       effect: null,
     }
+    decodeAllocation(value)
     const rows = await this.state.commit(
       lease,
       [
         ...this.activity(target, 1),
         ...this.charge(usage, 1),
         { key, expected: null, payload: json(value) },
-        { key: dedupe, expected: null, payload: { worker: key } },
+        { key: allocationLink(target.scope, value), expected: null, payload: { worker: key } },
         { key: 'active-worker/' + scopeId(scope) + '/' + id, expected: null, payload: { worker: key } },
       ],
       [{ key: target.record.key, version: target.record.version }, ...(policy.checks ?? [])],
@@ -268,6 +331,13 @@ export class ExecutionJournal {
 
   /** Only an original no-creation proof can retire an uncertain create intent. */
   async rejectCreation(lease: ExecutionLease, key: string, version: string, effect: string): Promise<void> {
+    lease = { ...lease }
+    const row = await this.allocation(lease, key)
+    if (!row) throw new StateConflict()
+    const target = await this.scope(lease, row.value.scope)
+    return this.serializeQuota(target.scope.organization, () => this.rejectCapacity(lease, key, version, effect))
+  }
+  private async rejectCapacity(lease: ExecutionLease, key: string, version: string, effect: string): Promise<void> {
     lease = { ...lease }
     const row = await this.allocation(lease, key)
     if (!row || row.record.version !== version) throw new StateConflict()
@@ -285,6 +355,20 @@ export class ExecutionJournal {
   }
 
   async advance(lease: ExecutionLease, key: string, version: string, change: AllocationChange): Promise<AllocationRow> {
+    lease = { ...lease }
+    change = structuredClone(change)
+    if (change.box?.phase !== 'absent') return this.advanceRecord(lease, key, version, change)
+    const row = await this.allocation(lease, key)
+    if (!row) throw new StateConflict()
+    const target = await this.scope(lease, row.value.scope)
+    return this.serializeQuota(target.scope.organization, () => this.advanceRecord(lease, key, version, change))
+  }
+  private async advanceRecord(
+    lease: ExecutionLease,
+    key: string,
+    version: string,
+    change: AllocationChange,
+  ): Promise<AllocationRow> {
     lease = { ...lease }
     change = structuredClone(change)
     if (Object.keys(change).some((key) => !['box', 'runner', 'delivery', 'closing', 'effect'].includes(key)))
@@ -320,6 +404,13 @@ export class ExecutionJournal {
   async release(lease: ExecutionLease, key: string, version: string): Promise<void> {
     lease = { ...lease }
     const row = await this.allocation(lease, key)
+    if (!row) throw new StateConflict()
+    const target = await this.scope(lease, row.value.scope)
+    return this.serializeQuota(target.scope.organization, () => this.releaseRecord(lease, key, version))
+  }
+  private async releaseRecord(lease: ExecutionLease, key: string, version: string): Promise<void> {
+    lease = { ...lease }
+    const row = await this.allocation(lease, key)
     if (!row || row.record.version !== version) throw new StateConflict()
     if (row.value.box.phase !== 'absent' || row.value.runner.phase !== 'absent')
       throw new Error('Original CI resources require confirmed cleanup')
@@ -329,7 +420,7 @@ export class ExecutionJournal {
   private async remove(lease: ExecutionLease, row: AllocationRow, occupied: boolean): Promise<void> {
     const scope = await this.scope(lease, row.value.scope)
     const keys = [
-      jobKey(scope.scope, row.value.job),
+      allocationLink(scope.scope, row.value),
       'active-worker/' + scopeId(row.value.scope) + '/' + workerId(row.record.key),
     ]
     const links = await this.state.read(keys, lease)

@@ -14,6 +14,7 @@ import type { AppDeliveryRecovery } from './replay/recovery'
 import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity } from './capacity'
 import { RepositoryCompensation, RepositoryScanSession } from './compensation/scanner'
 import { ScanClaim } from './compensation/queue'
+import { decodeDemand, DemandUncertain, LabelDemand, rebuildDemand } from './demand'
 
 export interface ListenerBackend extends PoolBackend {
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -34,6 +35,7 @@ interface Runtime {
   pool: WorkerPool
 }
 interface Session {
+  demandRefresh: Map<string, number>
   lease: ExecutionLease
   recoveryAfter: string
   runtimes: Map<string, Runtime>
@@ -120,6 +122,7 @@ export class Listener {
     const stop = new AbortController(),
       signal = AbortSignal.any([external, stop.signal]),
       session: Session = {
+        demandRefresh: new Map(),
         lease,
         recoveryAfter: '',
         runtimes: new Map(),
@@ -202,13 +205,19 @@ export class Listener {
   private async cycle(session: Session, signal: AbortSignal): Promise<void> {
     const { lease } = session,
       recovery = await this.journal.activeScopes(lease, session.recoveryAfter),
-      blocked = new Set<string>()
+      blocked = new Set<string>(),
+      counted = new Map<string, { scope: ExecutionScope; runtime: Runtime }>()
     session.recoveryAfter = recovery.after
     // Only outstanding work is paged; each pool separately fences admission until
     // its worker recovery round completes without a blocking resource failure.
     for (const row of recovery.rows) {
       const key = row.record.key
       try {
+        const runtime = await this.runtime(session, key, row.scope)
+        if (runtime.backend.inventory) {
+          counted.set(key, { scope: row.scope, runtime })
+          continue
+        }
         // Recovery consumes an existing reservation, even when policy lookup is unavailable.
         await (await this.runtime(session, key, row.scope)).pool.tick(lease, closedCapacity, undefined, signal)
       } catch (error) {
@@ -219,7 +228,7 @@ export class Listener {
     }
     signal.throwIfAborted()
     this.options.host.recovery?.step(lease, signal)
-    const records = await this.options.state.recover(lease, 100000, ['notice/', 'wake/'])
+    const records = await this.options.state.recover(lease, 100000, ['notice/', 'wake/', 'demand/'])
     const wakes = records.filter((row) => row.key.startsWith('wake/'))
     for (const row of wakes) this.validateWake(row)
     const inventory = wakes.filter((row) => {
@@ -319,10 +328,15 @@ export class Listener {
           signal,
         }),
       )
+    for (const [key, scope] of session.current) {
+      const runtime = await this.runtime(session, key, scope)
+      if (runtime.backend.inventory) counted.set(key, { scope, runtime })
+    }
+    await this.balanceCounts(session, counted, records, resolveCapacity, signal)
     const pending = records.filter((row) => row.key.startsWith('notice/')).map(pendingJob),
       candidates = pending.flatMap((job) =>
         [...session.current]
-          .filter(([key, scope]) => !blocked.has(key) && matches(scope, job))
+          .filter(([key, scope]) => !counted.has(key) && !blocked.has(key) && matches(scope, job))
           .map(([key, scope]) => ({ scope, value: { key, scope, job } })),
       )
     for (const { key, scope, job } of session.jobs.take(candidates, 32)) {
@@ -365,6 +379,101 @@ export class Listener {
       await runtime.backend.close()
       session.runtimes.delete(key)
     }
+  }
+  private async balanceCounts(
+    session: Session,
+    runtimes: Map<string, { scope: ExecutionScope; runtime: Runtime }>,
+    records: readonly StateRecord[],
+    capacity: (scope: ExecutionScope, repository: number, job?: JobNotice) => Promise<CapacityPolicy>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const counters = new Map(records.filter((row) => row.key.startsWith('demand/')).map((row) => [row.key, row]))
+    const tasks = [...runtimes].map(async ([key, { scope, runtime }]) => {
+      const current = session.current.has(key)
+      const related = (row: StateRecord) =>
+        row.key.startsWith(`demand/${scope.installation.id}/`) &&
+        repositories(scope).some((id) => row.key.startsWith(`demand/${scope.installation.id}/${id}/`))
+      const notices = records.filter(
+        (row) =>
+          row.key.startsWith(`notice/${scope.installation.id}/`) &&
+          object(row.payload) &&
+          repositories(scope).includes(row.payload.repositoryId as number),
+      )
+      const repairs = new Set<number>()
+      const now = Date.now()
+      for (const row of [...counters.values()].filter(related)) {
+        try {
+          const value = decodeDemand(row)
+          const refreshKey = `${scope.installation.id}/${value.repositoryId}`
+          if (
+            value.dirty ||
+            (value.queued > 0 &&
+              now - value.updatedAt >= 30000 &&
+              now - (session.demandRefresh.get(refreshKey) ?? 0) >= 30000)
+          )
+            repairs.add(value.repositoryId)
+        } catch {
+          repairs.add(Number(row.key.split('/')[2]))
+        }
+      }
+      for (const notice of notices)
+        if (object(notice.payload) && notice.payload.counted !== true)
+          repairs.add(notice.payload.repositoryId as number)
+      const refreshCounts = async (targets: Iterable<number>) => {
+        for (const repository of targets) {
+          if (!repositories(scope).includes(repository)) throw new StateCorrupt()
+          const wakeKey = `wake/${scope.installation.id}/${repository}`
+          const [wake] = await this.options.state.read([wakeKey], session.lease)
+          const jobs = (await runtime.backend.queued(repository, signal)).filter((job) =>
+            jobMatches(job, this.worker.labels),
+          )
+          const refreshed = await rebuildDemand(
+            this.options.state,
+            session.lease,
+            {
+              installationId: scope.installation.id,
+              accountId: scope.installation.account.id,
+              repositoryId: repository,
+            },
+            [...counters.values()].filter(related),
+            jobs,
+            wake?.version,
+          )
+          const prefix = `demand/${scope.installation.id}/${repository}/`
+          for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
+          for (const row of refreshed) counters.set(row.key, row)
+          session.demandRefresh.set(`${scope.installation.id}/${repository}`, Date.now())
+        }
+      }
+      if (current) await refreshCounts(repairs)
+      const readCounts = (): LabelDemand[] => {
+        const values = current ? [...counters.values()].filter(related).map(decodeDemand) : []
+        if (values.some((value) => value.accountId !== scope.installation.account.id)) throw new StateCorrupt()
+        return values
+      }
+      const resolve = async (values: readonly LabelDemand[]) => {
+        const target = values.find((value) => value.queued > 0)
+        return target ? capacity(scope, target.repositoryId) : closedCapacity
+      }
+      let demands = readCounts()
+      try {
+        await runtime.pool.balance(session.lease, await resolve(demands), demands, signal)
+      } catch (error) {
+        if (!(error instanceof DemandUncertain) || !current) throw error
+        // PAT hosts and missed running events cannot derive a trustworthy deficit
+        // from transport counters alone. Rebuild once before any resource mutation.
+        await refreshCounts(repositories(scope))
+        demands = readCounts()
+        await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
+      }
+      for (const notice of notices) await this.settle(session.lease, notice)
+    })
+    const results = await Promise.allSettled(tasks)
+    for (const result of results)
+      if (result.status === 'rejected') {
+        if (result.reason instanceof LeaseLost || signal.aborted) throw result.reason
+        this.options.host.report(result.reason, 'label-capacity-balance')
+      }
   }
   private validateWake(row: StateRecord): void {
     const value = row.payload

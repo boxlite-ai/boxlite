@@ -188,6 +188,224 @@ describe('CI shared Listener orchestration', () => {
     }
   }
   const ingressRows = () => state.recover(lease, 1000, ['notice/', 'wake/', 'receipt/'])
+  const observePhase = (status: 'in_progress' | 'completed', job: number, runner: number | null = null) => {
+    const secret = Buffer.alloc(32, 1)
+    const raw = Buffer.from(
+      JSON.stringify({
+        action: status,
+        installation: { id: 1 },
+        repository: { id: 21, owner: { id: 7 } },
+        workflow_job: { id: job, run_id: 33, status, labels: ['boxlite'], runner_id: runner },
+      }),
+    )
+    return verifyWebhook(
+      {
+        raw,
+        delivery: randomUUID(),
+        event: 'workflow_job',
+        signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'),
+      },
+      secret,
+    )!
+  }
+  it('rebuilds dirty demand before reserving capacity', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    await listener.receive(notification())
+    await db.transaction(namespace, async (tx) => {
+      const [row] = await tx.page('', 10, 'demand/')
+      await tx.put(
+        { ...row, version: randomUUID(), payload: { ...(row.payload as object), queued: 99, dirty: true } },
+        row.version,
+      )
+    })
+    await runUntil(delivered.promise)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    const [counter] = await state.recover(lease, 1000, ['demand/'])
+    expect(counter.payload).toMatchObject({ queued: 1, dirty: false })
+    expect(backend.job).not.toHaveBeenCalled()
+  })
+  it('uses a queue fallback for busy PAT-style supply without webhook claim observations', async () => {
+    let busy = false,
+      name = ''
+    const repaired = deferred()
+    Object.assign(backend, {
+      inventory: jest.fn(async () => {
+        const rows = await db.transaction(namespace, (tx) => tx.page('', 100, 'demand/'))
+        if (busy && rows.some((row) => (row.payload as { queued: number }).queued === 0)) repaired.resolve()
+        return name ? [{ id: 91, name, busy, status: 'online', labels: ['boxlite'] }] : []
+      }),
+    })
+    jest.mocked(backend.workers.deliverJit).mockImplementation(async (runnerName) => {
+      name = runnerName
+      busy = true
+    })
+    jest.mocked(backend.queued).mockImplementation(async () => {
+      if (busy) return []
+      return [{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }]
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    await runUntil(repaired.promise)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 0, dirty: false })
+  })
+  it('fences a reservation when a completion changes demand during inventory lookup', async () => {
+    const rejected = deferred()
+    Object.assign(backend, {
+      inventory: jest.fn(async () => {
+        await listener.receive(observePhase('completed', 55))
+        return []
+      }),
+    })
+    jest.mocked(host.report).mockImplementation((_error, operation) => {
+      if (operation === 'label-capacity-balance') rejected.resolve()
+    })
+    await listener.receive(notification())
+    await runUntil(rejected.promise)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
+  })
+  it('does not use another account counter inside a matching installation scope', async () => {
+    const denied = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.report).mockImplementation((error, operation) => {
+      if (error instanceof StateCorrupt && operation === 'label-capacity-balance') denied.resolve()
+    })
+    await listener.receive(notification(55, 1, 8))
+    await runUntil(denied.promise)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('replenishes label capacity when a triggering job runner claims another job', async () => {
+    const inventory = new Map<number, { id: number; name: string; busy: boolean; status: 'online'; labels: string[] }>()
+    let nextId = 100
+    const second = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => [...inventory.values()].map((row) => ({ ...row }))) })
+    jest.mocked(backend.runners).mockImplementation(async (guard) => ({
+      registry: {
+        create: jest.fn(async (name) => {
+          await guard({ kind: 'register', name })
+          const runner = { id: ++nextId, name, busy: false, status: 'online' as const, labels: ['boxlite'] }
+          inventory.set(runner.id, runner)
+          return new JitRegistration(runner, 'c2VjcmV0')
+        }),
+        lookup: jest.fn(async (identity) => [...inventory.values()].find((row) => row.name === identity.name) ?? null),
+        remove: jest.fn(async () => {}),
+      },
+      close: jest.fn(async () => {}),
+    }))
+    jest.mocked(backend.workers.deliverJit).mockImplementation(async (name) => {
+      const runner = [...inventory.values()].find((row) => row.name === name)!
+      runner.busy = true
+      if (inventory.size === 1) {
+        // GitHub assigns this runner to B while the original trigger A remains queued.
+        const secret = Buffer.alloc(32, 1)
+        const raw = Buffer.from(
+          JSON.stringify({
+            action: 'in_progress',
+            installation: { id: 1 },
+            repository: { id: 21, owner: { id: 7 } },
+            workflow_job: { id: 56, run_id: 33, status: 'in_progress', labels: ['boxlite'], runner_id: runner.id },
+          }),
+        )
+        const claimed = verifyWebhook(
+          {
+            raw,
+            delivery: randomUUID(),
+            event: 'workflow_job',
+            signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'),
+          },
+          secret,
+        )
+        // Compatibility with the original verifier reaches the per-job guard even
+        // when that verifier legitimately ignores non-queued wake notifications.
+        if (claimed) await listener.receive(claimed)
+      } else second.resolve()
+    })
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 2, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification(55))
+    const task = listener.run(abort.signal)
+    const timeout = setTimeout(() => abort.abort(), 2000)
+    try {
+      await Promise.race([second.promise, task])
+    } finally {
+      clearTimeout(timeout)
+      abort.abort()
+      await task
+    }
+    expect(backend.workers.create).toHaveBeenCalledTimes(2)
+    expect(backend.job).not.toHaveBeenCalled()
+    expect((await inspectJournal(state, lease)).workers).toHaveLength(2)
+  })
+  it('creates all missing label capacity concurrently within the organization quota', async () => {
+    const release = deferred(),
+      entered = deferred()
+    let inFlight = 0,
+      maximum = 0
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    const create = jest.mocked(backend.workers.create).getMockImplementation()!
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      inFlight++
+      maximum = Math.max(maximum, inFlight)
+      if (inFlight === 16) entered.resolve()
+      await release.promise
+      try {
+        return await create(launch)
+      } finally {
+        inFlight--
+      }
+    })
+    let runnerId = 100
+    jest.mocked(backend.runners).mockImplementation(async (guard) => ({
+      registry: {
+        create: jest.fn(async (name) => {
+          await guard({ kind: 'register', name })
+          return new JitRegistration({ id: ++runnerId, name }, 'c2VjcmV0')
+        }),
+        lookup: jest.fn(async () => null),
+        remove: jest.fn(async () => {}),
+      },
+      close: jest.fn(async () => {}),
+    }))
+    listener = new Listener({
+      state,
+      host: withScanCatalog(host),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 16, tenant: 16 }) },
+      timing: { tickMs: 1, leaseMs: 10000 },
+    })
+    for (let job = 100; job < 117; job++) await listener.receive(notification(job))
+    const task = listener.run(abort.signal)
+    const timeout = setTimeout(() => {
+      abort.abort()
+      release.resolve()
+    }, 3000)
+    try {
+      await Promise.race([entered.promise, task])
+    } finally {
+      clearTimeout(timeout)
+      abort.abort()
+      release.resolve()
+      await task
+    }
+    expect(maximum).toBe(16)
+    expect(backend.workers.create).toHaveBeenCalledTimes(16)
+    expect((await inspectJournal(state, lease)).workers).toHaveLength(16)
+  })
   it('continues valid scope admission when another discovered definition is invalid', async () => {
     const discover = jest.mocked(host.discover).getMockImplementation()!
     jest.mocked(host.discover).mockImplementation(async (...args) => ({

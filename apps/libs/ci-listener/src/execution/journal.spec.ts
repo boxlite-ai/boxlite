@@ -87,6 +87,17 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         }
       }
     })
+    it('does not bind counted supply reservations to the triggering job', async () => {
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      const reserve = () => journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })
+      const first = await reserve()
+      const second = await reserve()
+      expect(first).toBeDefined()
+      expect(second).toBeDefined()
+      expect(second!.record.key).not.toBe(first!.record.key)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect(await reserve()).toBeUndefined()
+    })
     it('defines known and new scopes without enumerating retained history', async () => {
       for (let generation = 2; generation <= 6; generation++) await journal.define(lease, { ...definition, generation })
       const pages: string[] = []
