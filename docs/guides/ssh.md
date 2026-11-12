@@ -212,12 +212,14 @@ The installer uses the same credentials, host-key verification and SSH preparati
 rules as default login, but does not open a tunnel or launch SSH. It adds one
 leading Include to `~/.ssh/config` and writes its entries in
 `~/.boxlite/ssh/config`, independently of the runtime/credential `--home`.
-Existing user configuration is preserved in `~/.ssh/config.boxlite-backup`
-before the first edit; reinstalling does not replace that backup. New managed
+New installations save the original user configuration in
+`~/.boxlite/ssh/config.backup`, outside ordinary `~/.ssh/config.*` Includes.
+Reinstalling never replaces an existing backup; older
+`~/.ssh/config.boxlite-backup` files remain untouched. New managed
 directories/files use 0700/0600 permissions. Unsafe ownership, writable
-permissions, symlinks and ambiguous configurations fail rather than being
-silently rewritten. Marked entries are checked for manual edits; use the CLI
-to update their target instead of editing the generated stanza.
+permissions and symlink destinations fail rather than being silently repaired.
+Marked entries are checked for manual edits; use the CLI to update their target
+instead of editing the generated stanza.
 
 Installation requires `HOME` to resolve to the real user's account home, where
 plain OpenSSH reads its default configuration. Different symlink spellings of
@@ -246,67 +248,41 @@ boxlite ssh dev --install-ssh-config --alias dev-cloud
 boxlite ssh dev --install-ssh-config --overwrite
 ```
 
-`--overwrite` does not change the old box, delete its keys, or overwrite a
-handwritten Host block. Matching explicit Host patterns in user configuration,
-including conventional nested Includes, are conflicts. General `Host *` defaults
-are permitted unless they add authentication identities for the alias. Host
-patterns use OpenSSH's case-sensitive matching.
-Unknown backslash escapes in Host patterns remain literal, matching OpenSSH.
-Exclude an alias with its exact spelling (`!dev`), not an escaped spelling such
-as `!d\ev`.
+`--overwrite` changes only a conflicting BoxLite-managed target. Handwritten Host
+entries remain unchanged, including entries matching the installed alias. The
+leading managed Include takes precedence for most explicitly configured options;
+other user and system settings still participate in normal OpenSSH resolution.
+Choose another alias if the existing name should retain its handwritten target.
 
-User Includes support conventional quoting, relative paths, `~/` and globbing,
-including byte-oriented wildcards over Unicode filenames. POSIX named character
-classes such as `[[:alpha:]]`, collating symbols, equivalence classes and
-caret-prefixed bracket classes such as `[^a]` are refused because matching differs
-between OpenSSH and native implementations. Use ordinary wildcards such as
-`config.d/*.conf` and `!` for bracket-class negation instead.
-Relative system Includes resolve under the selected OpenSSH client's compiled
-configuration directory, without `~`
-expansion. Other token/environment expansions and Match conditions other than
-`Match all` are refused; the installer never executes `Match exec`.
-Embedded carriage returns are rejected rather than treated as argument
-separators; normal CRLF line endings remain supported.
+The installer does not parse user/system Include graphs or evaluate Match
+conditions. OpenSSH handles `Match final all`, `Match canonical all`, other Match
+forms and Include expansion when the alias is used. Installation validates only
+the generated managed file with `ssh -G -F`; it never executes handwritten
+`Match exec` commands. OpenSSH itself may execute them when connecting or inspecting
+the combined configuration with `ssh -G`.
 
-The installer checks user and system Include graphs before preparing SSH and
-again before publication. It discovers the client's compiled directory using
-`ssh -G -F /dev/null`, without evaluating handwritten configuration, rather than
-assuming `/etc/ssh`. Unrecognized or ambiguous defaults fail installation.
-It also conservatively scans `/usr/etc/ssh/ssh_config` when present to cover
-vendor configuration. Relative Includes in that file still use the compiled
-directory. Reinstall aliases after changing OpenSSH clients.
+Personal `IdentityFile` and `CertificateFile` settings may add authentication
+identities, even with the managed `IdentitiesOnly yes` setting. The generated entry
+still selects its managed client key, disables agent authentication and connection
+sharing, and supplies strict host-key checking with a dedicated `known_hosts`
+file, fixed `HostKeyAlias`, `GlobalKnownHostsFile /dev/null` and
+`KnownHostsCommand none`.
 
-An `IdentityFile` (including its legacy `IdentityFile2` spelling) or
-`CertificateFile` applying to the alias is rejected: these options accumulate
-despite `IdentitiesOnly yes`. A single `IdentityFile none` is allowed, including
-case variants and supported double quoting; it does not clear other identities.
-Escaped sentinel-like filenames remain rejected, as does `CertificateFile none`,
-which OpenSSH treats as a filename. Keep personal identities in Host blocks that
-exclude managed aliases, for example:
+These settings are defaults, not complete isolation from user configuration.
+`CanonicalizeHostname no` disables hostname canonicalization, but does not prevent
+a `Match final` second pass from activating more user settings. In particular,
+Apple's `NoHostAuthenticationForProxyCommand yes` can bypass host-key checking:
+do not enable it for BoxLite connections. The installer no longer detects or
+rejects these inherited settings, and explicit SSH command-line options can
+override managed values.
 
-```sshconfig
-Host * !dev !dev-cloud
-  IdentityFile ~/.ssh/personal_key
-```
-
-Managed entries set `CanonicalizeHostname no`, preventing a second configuration
-pass from reactivating identities excluded by the original alias. Other hosts
-retain their canonicalization settings. Entries also set `KnownHostsCommand none`,
-so a handwritten helper cannot add another host-key trust source. Reinstall
-existing aliases to receive these settings. Explicit OpenSSH command-line options
-can override managed settings.
-
-An applicable `NoHostAuthenticationForProxyCommand` must be `no`: Apple's OpenSSH
-can otherwise bypass host-key verification for a ProxyCommand despite strict
-checking. Disable it or exclude the managed alias in user and system Includes.
-Both this check and the additional-identity checks run before SSH preparation and
-again before publishing the alias.
-
-Handwritten Includes must not match `~/.ssh/config.boxlite-backup`, even when
-that backup does not exist yet. For example, narrow `Include config.*` to the
-intended configuration files before installing. Otherwise installation fails
-before publishing configuration or a backup, preventing recursive Includes
-from breaking connections to unrelated hosts.
+Installation success does not validate the combined configuration or guarantee
+that a later connection will succeed. Keep handwritten Includes from loading
+BoxLite's private backups or repeatedly loading its managed file. The installer
+checks its own marker placement, file ownership, permissions and unchanged-file
+snapshots, but does not diagnose arbitrary Include cycles or configuration
+conflicts. Use `boxlite ssh BOX` instead when you need the existing isolated
+login path that ignores user and system SSH configuration.
 
 Generated ProxyCommands use the CLI's absolute executable path and capture runtime
 home/configuration for local boxes, or credential home, context, effective URL and

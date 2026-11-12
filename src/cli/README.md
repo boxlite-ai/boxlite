@@ -322,7 +322,9 @@ updates its entry; a different target requires `--alias NAME` or `--overwrite`.
 Overwrite replaces only BoxLite-managed entries, never handwritten Host blocks.
 The CLI adds one Include to `~/.ssh/config` and keeps its entries separately in
 `~/.boxlite/ssh/config`. Installed aliases pin home, backend, endpoint, context and
-routing, while credentials remain in the existing store. See the
+routing, while credentials remain in the existing store. User and system SSH
+settings still participate, including personal identities and Match conditions;
+installation does not guarantee complete configuration isolation. See the
 [installation guide](../../docs/guides/ssh.md#managed-openssh-aliases) for safety
 checks and lifecycle behavior.
 

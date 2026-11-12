@@ -146,6 +146,72 @@ async fn cloud_install_keeps_excluded_identities_out_of_canonicalization_pass() 
     }
 }
 
+#[rstest::rstest]
+#[case::final_pass("final", true)]
+#[case::canonical_only("canonical", false)]
+#[case::canonical_with_final("canonical", true)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_install_allows_shared_configuration(#[case] pass: &str, #[case] final_pass: bool) {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    let user_home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    let root = user_home.path().join(".ssh/config");
+    std::fs::create_dir(root.parent().unwrap()).unwrap();
+    let mut original = format!(
+        "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /manual/known_hosts\n  KnownHostsCommand /usr/bin/false\n\
+         Host * !dev\n  IdentityFile /manual/client\n\
+         Match {pass} all\n  CertificateFile /manual/cert\n"
+    );
+    if final_pass {
+        original.push_str("Match final all\n  ServerAliveInterval 17\n");
+    }
+    std::fs::write(&root, &original).unwrap();
+    install(home.path(), user_home.path(), &[]).await.unwrap();
+
+    let output = std::process::Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(&root)
+        .arg("dev")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let resolved = String::from_utf8(output.stdout).unwrap();
+    let directory = only_credential_directory(home.path())
+        .canonicalize()
+        .unwrap();
+    let known_hosts = std::fs::read_to_string(directory.join("known_hosts")).unwrap();
+    let host_alias = known_hosts.split_ascii_whitespace().next().unwrap();
+    for expected in [
+        "stricthostkeychecking true".to_owned(),
+        "globalknownhostsfile /dev/null".to_owned(),
+        format!("hostkeyalias {host_alias}"),
+        format!("identityfile {}", directory.join("client_key").display()),
+        format!(
+            "userknownhostsfile {}",
+            directory.join("known_hosts").display()
+        ),
+    ] {
+        assert!(
+            resolved.lines().any(|line| line == expected),
+            "missing {expected}:\n{resolved}"
+        );
+    }
+    assert!(!resolved.contains("/usr/bin/false"), "{resolved}");
+    for identity in [
+        "identityfile /manual/client",
+        "certificatefile /manual/cert",
+    ] {
+        assert_eq!(
+            resolved.lines().any(|line| line == identity),
+            final_pass,
+            "{resolved}"
+        );
+    }
+    assert!(std::fs::read(&root).unwrap().ends_with(original.as_bytes()));
+    assert!(cloud.state.lock().unwrap().connects.is_empty());
+}
+
 /// Installing twice keeps keys and alias files byte-stable and never connects;
 /// using the installed alias later proves proxy routing only, not SSH login.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -965,13 +965,17 @@ boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
 ```
 
 The default alias is the resolved box name, or full ID for unnamed boxes.
-Reinstalling the same target is idempotent; conflicting aliases require
-`--alias NAME` or `--overwrite`. Overwrite affects only BoxLite-managed entries,
-not handwritten Host blocks. The installer preserves existing user configuration,
-adds one leading Include and stores entries at `~/.boxlite/ssh/config`.
+Reinstalling the same target is idempotent; conflicts with another BoxLite-managed
+target require `--alias NAME` or `--overwrite`. Overwrite affects only managed
+entries, not handwritten Host blocks. The installer preserves existing user
+configuration, adds one leading Include and stores entries at
+`~/.boxlite/ssh/config`. User/system Match conditions, Includes and personal
+identities remain subject to normal OpenSSH rules; installation does not validate
+the combined configuration or guarantee complete isolation. New original-config
+backups live at `~/.boxlite/ssh/config.backup`.
 Generated proxies fix the backend/home and remote context/endpoint/routing without
 storing API tokens. See [managed aliases](../../guides/ssh.md#managed-openssh-aliases)
-for file safety, collision handling and lifecycle rules.
+for file safety, configuration precedence and lifecycle rules.
 
 Custom configuration always replaces the whole SSH configuration and disconnects
 clients. Default login does so only for a new managed identity or disabled
