@@ -3,6 +3,18 @@ import { type ComponentProps, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Container, Search } from '@/components/ui/icon'
 
+/** Shared identity geometry; callers own links, copy controls and the displayed values. */
+export function ResourceIdentity({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <span className="flex min-w-0 items-center gap-3">
+      <span className="resource-object-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-1 items-center gap-2">{children}</span>
+    </span>
+  )
+}
+
 /** Centers a decorative resource icon, optional guidance, and secondary actions. */
 export function ResourceEmptyState({
   title,

@@ -5,7 +5,7 @@ import { VolumeResourceIcon } from '@/components/ResourceStateIcon'
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter, ResourceIdentity } from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -56,7 +56,8 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 // once so the two can no longer diverge.
 // `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own
 // box instead of squeezing names down to a letter.
-const ROW_GRID = 'grid min-w-[760px] grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-center gap-3'
+const ROW_GRID =
+  'grid min-w-[760px] grid-cols-[minmax(0,1.4fr)_minmax(0,1.5fr)_120px_100px_100px_104px] items-center gap-4'
 
 // Transitional states read as `warn` rather than blending in with the healthy
 // ones: a volume stuck in `pending_delete` is exactly the leak this page exists
@@ -236,12 +237,11 @@ const Volumes: React.FC = () => {
           return (
             <div key={volume.id}>
               <div className={cn(ROW_GRID, 'resource-list-row')}>
-                <span className="flex min-w-0 items-center gap-3">
-                  <VolumeResourceIcon state={volume.state} />
+                <ResourceIdentity icon={<VolumeResourceIcon state={volume.state} />}>
                   <span className="resource-name" title={volume.name}>
                     {volume.name}
                   </span>
-                </span>
+                </ResourceIdentity>
                 <button
                   type="button"
                   onClick={async () => {
@@ -249,6 +249,7 @@ const Volumes: React.FC = () => {
                     else toast.error('Could not copy to clipboard')
                   }}
                   title="Copy volume ID"
+                  aria-label={`Copy volume ID ${volume.id}`}
                   className="min-h-6 truncate text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
                 >
                   {volume.id}
@@ -264,6 +265,7 @@ const Volumes: React.FC = () => {
                 <div className="flex items-center justify-end gap-[6px]">
                   {canCreateBox && volume.state === VolumeState.READY && (
                     <AsciiButton
+                      variant="quiet"
                       size="sm"
                       type="button"
                       // The id, not the name — see the mount-row comment in
@@ -276,7 +278,7 @@ const Volumes: React.FC = () => {
                   )}
                   {canDelete && (
                     <AsciiButton
-                      variant="danger"
+                      variant="quiet-danger"
                       size="icon"
                       type="button"
                       onClick={() => {
@@ -287,7 +289,7 @@ const Volumes: React.FC = () => {
                       title={removable ? 'Delete volume' : 'Only a ready or errored volume can be deleted'}
                       aria-label={`Delete ${volume.name}`}
                     >
-                      <Trash className="size-[13px]" strokeWidth={2} />
+                      <Trash className="size-[15px]" />
                     </AsciiButton>
                   )}
                 </div>

@@ -1,18 +1,16 @@
-import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
-import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
+import { TechnicalText } from '@/components/TechnicalText'
+import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceIdentity } from '@/components/ResourceLayout'
 import { isCheckpointBoxIdle } from '@/lib/checkpoints'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel, getBoxRouteId } from '@/lib/box-identity'
-import { copyToClipboard } from '@/lib/copy-text'
-import { toast } from 'sonner'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
@@ -29,13 +27,13 @@ import {
   RotateCcw,
   Trash2,
 } from '@/components/ui/icon'
-import { useState } from 'react'
+import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
+import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
 import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
 
-// Proportional columns so the gaps stay even as the table widens, instead of
-// dumping all the slack into the Name column.
-const GRID = 'grid-cols-[2fr_1.3fr_1fr_120px] gap-x-4'
+// Data stays in separate columns; status and actions keep a fixed footprint.
+const GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.5fr)_56px_64px_112px_72px] gap-x-4'
 
 // Releasing a drag-selection (e.g. selecting a box name to copy it) fires a
 // click on the row; navigating away then would discard the selection mid-copy.
@@ -44,30 +42,22 @@ function isSelectingText(): boolean {
   return selection != null && !selection.isCollapsed
 }
 
-// One-click name copy that must not trigger the row's navigation click.
 /** Copies a box name without triggering navigation from its parent row. */
 function CopyNameButton({ name, className }: { name: string; className?: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, copy] = useCopyToClipboard({ timeout: 1300 })
 
   return (
     <button
       type="button"
       title="Copy name"
-      aria-label="Copy name"
+      aria-label={copied === name ? 'Copied name' : 'Copy name'}
       onClick={(e) => {
         e.stopPropagation()
-        void copyToClipboard(name).then((ok) => {
-          if (!ok) {
-            toast.error('Could not copy to clipboard')
-            return
-          }
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1300)
-        })
+        void copy(name)
       }}
       className={`inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className ?? ''}`}
     >
-      {copied ? <Check className="size-[13px]" style={{ color: 'hsl(var(--success))' }} /> : <Copy className="size-[13px]" />}
+      {copied === name ? <Check className="size-[13px] text-success" /> : <Copy className="size-[13px]" />}
     </button>
   )
 }
@@ -139,6 +129,7 @@ export function BoxTable({
       <>
         {writePermitted && recoverable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Recover"
             aria-label="Recover"
@@ -150,28 +141,31 @@ export function BoxTable({
         )}
         {writePermitted && startable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Start"
             aria-label="Start"
             onClick={() => handleStart(box.id)}
             className={buttonClassName}
           >
-            <Play className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+            <Play className={iconClassName} strokeWidth={1.3} />
           </AsciiButton>
         )}
         {writePermitted && stoppable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Stop"
             aria-label="Stop"
             onClick={() => handleStop(box.id)}
             className={buttonClassName}
           >
-            <Square className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+            <Square className={iconClassName} strokeWidth={1.3} />
           </AsciiButton>
         )}
         {writePermitted && transitioning && !startable && !stoppable && !recoverable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Working…"
             aria-label="Working…"
@@ -185,7 +179,14 @@ export function BoxTable({
         {(deletePermitted || canCheckpoint) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <AsciiButton size="icon" aria-label="More" className={buttonClassName} type="button" title="More">
+              <AsciiButton
+                variant="quiet"
+                size="icon"
+                aria-label="More"
+                className={buttonClassName}
+                type="button"
+                title="More"
+              >
                 <MoreHorizontal className={iconClassName} strokeWidth={1.3} />
               </AsciiButton>
             </DropdownMenuTrigger>
@@ -239,19 +240,25 @@ export function BoxTable({
       {/* header */}
       <div
         className={cn(
-          `hidden ${GRID} resource-list-head flex-none items-center`,
-          (loading || totalItems > 0 || hasFilter) && 'md:grid',
+          `hidden ${GRID} resource-list-head flex-none items-center overflow-y-auto [scrollbar-gutter:stable]`,
+          (loading || data.length > 0) && 'md:grid',
         )}
       >
         <span>Name</span>
         <span>Box ID</span>
+        <span>Image</span>
+        <span>CPU</span>
+        <span>Memory</span>
         <span>Status</span>
         <span className="text-right">Actions</span>
       </div>
 
       {/* rows */}
       <div
-        className={cn('hidden min-h-0 overflow-y-auto md:block', isPageFetching && 'opacity-60 transition-opacity')}
+        className={cn(
+          'scroll-edge hidden min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable] md:flex',
+          isPageFetching && 'opacity-60 transition-opacity',
+        )}
         aria-busy={loading || isPageFetching}
       >
         {loading
@@ -264,6 +271,7 @@ export function BoxTable({
             ? emptyState
             : data.map((box) => {
                 const name = getBoxDisplayName(box)
+                const image = box.image ?? '—'
                 const busy = boxIsLoading[box.id]
 
                 return (
@@ -277,11 +285,10 @@ export function BoxTable({
                       onRowClick ? 'cursor-pointer' : ''
                     } ${busy ? 'pointer-events-none' : ''}`}
                   >
-                    {/* the box: its shape drawn, then its name */}
-                    <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
-                      <BoxResourceIcon box={box} />
+                    <ResourceIdentity icon={<BoxResourceIcon box={box} />}>
                       <a
                         className="resource-link"
+                        title={name}
                         href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
                         onClick={(event) => {
                           event.stopPropagation()
@@ -294,12 +301,26 @@ export function BoxTable({
                       >
                         {name}
                       </a>
-                      <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />
-                    </span>
+                      <CopyNameButton
+                        name={name}
+                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                      />
+                    </ResourceIdentity>
 
-                    {/* box id */}
-                    <span className="truncate font-mono text-meta text-muted-foreground">
+                    <span
+                      className="truncate font-mono text-meta text-muted-foreground"
+                      title={getBoxPublicIdLabel(box)}
+                    >
                       {getBoxPublicIdLabel(box)}
+                    </span>
+                    <span className="truncate font-mono text-meta" title={box.image ?? undefined}>
+                      <TechnicalText value={image} />
+                    </span>
+                    <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
+                      {box.cpu ?? '—'} vCPU
+                    </span>
+                    <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
+                      {box.memory ?? '—'} GiB
                     </span>
 
                     {/* status */}
@@ -315,7 +336,10 @@ export function BoxTable({
       </div>
 
       <div
-        className={cn('min-h-0 space-y-3 overflow-y-auto md:hidden', isPageFetching && 'opacity-60 transition-opacity')}
+        className={cn(
+          'min-h-0 flex-1 space-y-3 overflow-y-auto md:hidden',
+          isPageFetching && 'opacity-60 transition-opacity',
+        )}
         role="region"
         aria-label="Box cards"
         aria-busy={loading || isPageFetching}
@@ -355,10 +379,8 @@ export function BoxTable({
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <span className="min-w-0">
                         <span className="flex min-w-0 items-center gap-2 font-semibold">
-                          <span style={{ color: 'hsl(var(--brand))' }} className="text-meta">
-                            ▸
-                          </span>
-                          <span className="truncate">{name}</span>
+                          <BoxResourceIcon box={box} />
+                          <span className="truncate font-mono">{name}</span>
                           <CopyNameButton name={name} />
                         </span>
                         <span className="mt-1 block truncate font-mono text-meta text-muted-foreground">
