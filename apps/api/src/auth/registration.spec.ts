@@ -318,9 +318,6 @@ describe('POST /api/auth/register', () => {
             }),
         } as never,
       )
-      jest
-        .spyOn(creator as never, 'generatePrivateKey')
-        .mockResolvedValue({ privateKey: 'private', publicKey: 'public' } as never)
       users.create.mockImplementation((dto, ctx) => creator.create(dto, ctx))
       const response = await post()
       expect(response.status).toBe(200)
