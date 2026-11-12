@@ -29,14 +29,6 @@ impl LocalSnapshotBackend {
         _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
-        let backend = Self::new(self.inner.clone());
-        let name = name.to_owned();
-        tokio::spawn(async move { backend.snapshot_create_inner(&name).await })
-            .await
-            .map_err(|error| BoxliteError::Internal(format!("Snapshot task failed: {error}")))?
-    }
-
-    async fn snapshot_create_inner(&self, name: &str) -> BoxliteResult<SnapshotInfo> {
         let t0 = Instant::now();
         let _lock = self.inner.disk_ops.lock().await;
 

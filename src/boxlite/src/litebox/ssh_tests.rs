@@ -188,13 +188,12 @@ async fn fixture_with_container(started: bool) -> Fixture {
     state.pid = Some(std::process::id());
     state.set_lock_id(runtime.lock_manager.allocate().unwrap());
     runtime.box_manager.add_box(&config, &state).unwrap();
-    let backend = BoxImpl::new(
+    let backend = Arc::new(BoxImpl::new(
         config,
         state,
         runtime.clone(),
         runtime.shutdown_token.child_token(),
-    )
-    .into_shared();
+    ));
     let live = LiveState::new(
         Box::new(TestHandler),
         GuestSession::new(backend.config.transport()),
@@ -379,13 +378,12 @@ async fn ssh_observation_does_not_start_idle_boxes() {
             }
             let mut state = BoxState::new();
             state.status = status;
-            let backend = BoxImpl::new(
+            let backend = Arc::new(BoxImpl::new(
                 config,
                 state,
                 f.backend.runtime.clone(),
                 f.backend.runtime.shutdown_token.child_token(),
-            )
-            .into_shared();
+            ));
             let ssh = SshHandle::new(backend.clone());
             for operation in [1, 2, 3] {
                 let result = operate(ssh.clone(), operation).await;
@@ -424,13 +422,12 @@ async fn ssh_observation_does_not_start_idle_boxes() {
 #[tokio::test]
 async fn ssh_observation_uses_existing_vm_without_container_start() {
     let f = fixture_with_container(false).await;
-    let recovered = BoxImpl::new(
+    let recovered = Arc::new(BoxImpl::new(
         f.backend.config.clone(),
         f.backend.state.read().clone(),
         f.backend.runtime.clone(),
         f.backend.runtime.shutdown_token.child_token(),
-    )
-    .into_shared();
+    ));
     for backend in [&f.backend, &recovered] {
         let ssh = SshHandle::new(backend.clone());
         for operation in [1, 2, 3] {

@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -145,7 +145,6 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
-    owner: Weak<Self>,
     auto_removed: AtomicBool,
 
     /// Event listeners (from runtime options).
@@ -206,7 +205,6 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
-            owner: Weak::new(),
             auto_removed: AtomicBool::new(false),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
@@ -217,19 +215,6 @@ impl BoxImpl {
             #[cfg(test)]
             background_start_finished: Arc::new(tokio::sync::Notify::new()),
         }
-    }
-
-    pub(crate) fn into_shared(mut self) -> SharedBoxImpl {
-        Arc::new_cyclic(|owner| {
-            self.owner = owner.clone();
-            self
-        })
-    }
-
-    pub(crate) fn operation_owner(&self) -> BoxliteResult<SharedBoxImpl> {
-        self.owner.upgrade().ok_or_else(|| {
-            BoxliteError::Internal("BoxImpl must be published through into_shared".into())
-        })
     }
 
     /// Watch this box's main command, if it is running and nobody is watching it
@@ -1927,7 +1912,6 @@ mod tests {
 
     mod execution_recovery;
     mod operation_lock;
-    mod quiesce_cancel;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network
@@ -2191,7 +2175,7 @@ mod tests {
         assert!(box_impl.live.set(live).is_ok(), "install live state");
 
         StartFixture {
-            box_impl: box_impl.into_shared(),
+            box_impl: Arc::new(box_impl),
             listener,
             _temp_dir: temp_dir,
             server,

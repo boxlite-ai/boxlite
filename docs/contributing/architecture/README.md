@@ -148,31 +148,27 @@ cleanup. Async shutdown marks cleanup pending before awaiting stops and clears i
 only after every stop succeeds. Timeout, failure, or cancellation leaves a later
 synchronous shutdown or runtime Drop able to retry.
 
-Disk APIs still use the existing **per-handle `disk_ops` mutex**, not a disk-lock
-registry. Quiescing snapshot creation, clone, and export run their existing complete
-operation in an owner task retaining the same facade and mutex. Dropping the caller
-detaches its wait; the task finishes disk work, resume/thaw, snapshot-marker cleanup,
-and later clone/export phases before releasing `disk_ops`. A weak self-reference
-preserves the original facade after cache invalidation rather than reconstructing
-a handle with a different mutex.
+Disk APIs retain their existing **per-handle `disk_ops` mutex**, not a disk-lock
+registry. The quiesce bracket also takes lifecycle write admission through
+freeze, pause, disk work, resume, and thaw. The order is `disk_ops` → lifecycle →
+state; lifecycle entrypoints never acquire `disk_ops`. Final archive writing
+releases lifecycle admission but retains disk exclusion while its caller awaits it.
 
-Only the quiesce bracket also takes lifecycle write admission, through resume/thaw.
-The order is `disk_ops` → lifecycle → state; lifecycle entrypoints never acquire
-`disk_ops`. Final archive writing releases lifecycle admission but retains disk
-exclusion. This needs a live Tokio executor; executor/process destruction is not
-an asynchronous-cleanup guarantee.
+Disk operations still execute in the caller's future. Cancelling that future does
+not guarantee completion of disk work or resume/thaw cleanup: a blocking worker
+may continue after the caller drops its guards. Cancellation-safe owner tasks are
+a separate change, not a guarantee provided by lifecycle admission.
 
 Stopped-disk operations retain their existing coordination limits. There is no
 cross-handle disk registry or lifecycle-read/disk-write composition yet; complete
 snapshot/clone/export lock migration is separate work.
 
-Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` and
-`BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=quiesce_cancel` for host admission and
-cleanup checks. Stand-in shims, loopback guest RPCs, real disk helpers, and archive
-FIFOs are not VM evidence. For the real boot control/race cases, leave dependency
-stubs unset and run `make test:integration:lifecycle-race` with
-`BOXLITE_REPRO_ROOTFS` pointing to a local OCI image layout, not an unpacked rootfs;
-this target explicitly runs the ignored tests.
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` for host
+admission and cleanup checks. Stand-in processes and loopback guest RPCs are not
+VM evidence. For the real boot control/race cases, leave dependency stubs unset
+and run `make test:integration:lifecycle-race` with `BOXLITE_REPRO_ROOTFS` pointing
+to a local OCI image layout, not an unpacked rootfs; this target explicitly runs
+the ignored tests.
 
 
 ### ShimController
