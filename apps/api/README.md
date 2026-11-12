@@ -33,6 +33,28 @@ Their SPA fixtures leave the optional MCP resource URL empty, matching the deplo
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
 
+### Hosted CI snapshot retries
+
+The hosted listener uses Repeatable Read transactions for state snapshots and
+checks its execution lease by locking the owner record. Concurrent lease renewal
+can update that record after a snapshot begins, causing PostgreSQL error `40001`.
+The owned `CiNativeState.state` adapter retries the entire snapshot transaction
+after rollback, up to three total attempts, with jittered waits of 25–50 ms and
+50–100 ms outside transactions. Every attempt rechecks the original lease.
+
+Only database work is repeated; GitHub registration and Box operations remain
+outside this retry boundary. Lease loss, other errors and exhausted retries
+propagate to the caller. Read Committed writes and `inside(tx)` borrowed
+transactions retain their existing behavior; the enclosing transaction owns rollback.
+Existing statement and lock timeouts apply per attempt, rather than bounding the
+whole operation to the backoff duration.
+
+`make test:apps:api TEST_FILES=ci-native-state.spec.ts` exercises concurrent
+renewal, retry exhaustion, expired/replaced leases and error boundaries against
+PostgreSQL. Supply `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` if needed,
+and `DB_DATABASE` for a disposable local database; without `DB_HOST`, it skips.
+The suite creates and drops its own schema and accepts only loopback database hosts.
+
 ### Production entity metadata checks
 
 `make build:apps:api` and the API Docker build validate PostgreSQL entity metadata

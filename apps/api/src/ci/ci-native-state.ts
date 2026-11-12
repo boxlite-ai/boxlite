@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { ForbiddenException, Injectable, ServiceUnavailableException } from '@nestjs/common'
-import { DataSource, EntityManager } from 'typeorm'
+import { DataSource, EntityManager, QueryFailedError } from 'typeorm'
+import { setTimeout as delay } from 'node:timers/promises'
 import {
   ExecutionJournal,
   ExecutionScope,
@@ -39,12 +40,28 @@ export class CiNativeState {
     this.namespace = 'ci:' + (this.app || 'disabled')
     this.state = new ListenerState(
       new PostgresStateDatabase({
-        transaction: (isolation, work) =>
-          db.transaction(isolation, async (tx) => {
-            await tx.query("SET LOCAL statement_timeout='4s'")
-            await tx.query("SET LOCAL lock_timeout='2s'")
-            return work(tx)
-          }),
+        transaction: async (isolation, work) => {
+          for (let attempt = 0; ; attempt++) {
+            try {
+              return await db.transaction(isolation, async (tx) => {
+                await tx.query("SET LOCAL statement_timeout='4s'")
+                await tx.query("SET LOCAL lock_timeout='2s'")
+                return work(tx)
+              })
+            } catch (error) {
+              if (
+                isolation !== 'REPEATABLE READ' ||
+                !(error instanceof QueryFailedError) ||
+                (error.driverError as { code?: string })?.code !== '40001' ||
+                attempt === 2
+              )
+                throw error
+              // Renewal can change @owner after the snapshot starts. The owned
+              // transaction has rolled back; retry database-only work with a fresh snapshot.
+              await delay(25 * 2 ** attempt * (1 + Math.random()))
+            }
+          }
+        },
       }),
       this.namespace,
     )
