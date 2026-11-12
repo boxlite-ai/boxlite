@@ -133,11 +133,12 @@ which retains its backend checks. A hosted resource refusal before persistence
 records the existing confirmed-rejection fact and returns its occupied slot.
 Unknown creation outcomes retain capacity until the original Box can be reconciled.
 
-Resource specifications are not persisted in the Listener journal. A new job or
-rerun rereads its original GitHub job labels before creation. Restarting a reserved
-operation does the same; an already attempted create only recovers its original
-Box ID, never repeats POST. Pending JIT registration rereads the original job
-when needed. A single reconciliation uses the same selection for launch and JIT.
+New allocations persist canonical advertised labels in `supply.labels`. The
+routing label supplies both creation resources and JIT registration; the original
+job is provenance rather than an exclusive assignment. Legacy allocations without
+a label snapshot read their original job metadata during recovery. An attempted
+create only recovers its original Box ID and never repeats POST. Default
+`boxlite` quantities still come from the host configuration.
 
 Organization runner-group names are independent of workflow routing labels and
 retain their configured defaults.
@@ -186,8 +187,9 @@ aggregates; they never grant permission to execute jobs.
 
 ### Execution lease storage
 
-`@owner` stores `{owner, epoch}` with record schema 2; `@lease` stores `{until}`
-with schema 1. The identity and its UUID record version remain stable throughout
+`@owner` stores `{owner, epoch}` with record schema 2, or adds `deployment` with
+schema 3 for deployment-aware hosts; `@lease` stores `{until}` with schema 1.
+The identity and its UUID record version remain stable throughout
 a scheduler's tenure. Renewal extends only the deadline; takeover increments the
 epoch and changes both records atomically.
 
@@ -214,12 +216,33 @@ abort the whole transaction, preserving the previous identity, deadline and jour
 Malformed identity or deadline payloads block initialization or ingress rather
 than admitting new work with incomplete lease metadata.
 
-Old binaries reject owner schema 2. During rollout, an old scheduler stops renewing
+Pre-schema-2 binaries reject owner schema 2. During that upgrade, an old scheduler stops renewing
 and an upgraded instance can acquire after the preserved deadline expires.
 Upgrade all hosts sharing a namespace; reverting binaries alone is unsupported,
 and deleting execution state would lose recovery records. The existing PostgreSQL
 and SQLite tables are retained: identity columns belong to `@owner`, and
 `lease_until` belongs to `@lease`.
+
+### Deployment eligibility
+
+A host may construct `ListenerState(database, namespace, deployment)` with a
+positive safe integer assigned by its deployment workflow. After HTTP is serving,
+it calls `activate()`: a higher deployment takes the same owner lock as execution
+transactions, waits for those transactions to finish, then atomically advances the
+deployment and epoch, clears the owner and expires the lease. Same-deployment
+activation is idempotent; an older deployment cannot move the target backwards.
+
+The first activation upgrades owner schema 2 to 3, so earlier binaries fail closed
+instead of renewing an ownership record they do not understand. Acquisition,
+renewal and execution writes require the active deployment. Initialization and
+webhook ingress do not activate a deployment. Unversioned standalone hosts retain
+schema 2 and cannot acquire an upgraded namespace. Keep the journal when upgrading;
+rolling back to an older binary requires an explicit state-format recovery plan.
+
+No HTTP call holds this database lock. A call issued before takeover may finish,
+but stale state commits fail; the replacement owner recovers its persisted intent
+using original resource identifiers. A retired API may keep WebSockets open and
+accept authorized ingress without retaining scheduling authority.
 
 ### Conditional admission writes
 
@@ -270,9 +293,10 @@ Temporary GitHub tokens and JIT configuration must never be written as payloads.
 The execution journal retains immutable scope definitions addressed by their hash.
 Known worker lookups, App authorization and quota checks use point reads; none
 enumerates historical scopes. `active-scope/<scope>` and
-`active-worker/<scope>/<worker>` index only unfinished allocations. A separate
-`job/<installation>/<repository>/<job>` record prevents duplicate reservations
-across scope generations until both resources are cleaned up. Reservation and
+`active-worker/<scope>/<worker>` index only unfinished allocations. Each new reservation has an independent
+`supply/<allocation-id>` identity. Legacy `job/<installation>/<repository>/<job>`
+records remain valid for original cleanup; new supply is not deduplicated by its
+trigger job. Reservation and
 final release update these memberships and the scope activity version atomically.
 There is no global historical-scope catalog or 10,000-scope ceiling.
 
@@ -300,10 +324,87 @@ does not stop it. An elapsed timeout or a successful runner DELETE is not proof
 that its Box is idle. Delivered workers remain running until actual Box exit;
 automatic idle retirement requires separate verification. Physical Box capacity
 returns after its original Box is confirmed absent. The allocation stays indexed
-until both original resources are absent, preserving runner cleanup and job dedup.
+until both original resources are absent, preserving original-resource cleanup.
 The host must enforce authority and execution epoch
 again at actual side effects, including native Box persistence. Both host entry
 points use this kernel; runtime acceptance remains a separate deployment check.
+
+## Label capacity scheduling
+
+Hosted API and standalone Listener Boxes use the same label-count scheduler.
+Signed `queued`, `in_progress` and `completed` observations update aggregate demand
+and minimal job facts atomically. Repository-scoped ingress transactions serialize
+the counter and wake, including their initial insertion. Duplicate or out-of-order
+transitions cannot increment demand twice or resurrect completed jobs.
+`job-fact.runner` records GitHub's actual assignment; it does not lock the job to a
+runner provisioned because of that job.
+
+Demand groups retain their BoxLite organization, original execution scope and
+compatible routing labels. Installation, binding generation, repository/group
+membership and visibility still constrain eligibility. Matching labels alone
+cannot transfer capacity across these boundaries.
+
+```text
+missing = max(0, queued - starting - idle)
+new reservations <= remaining organization/host quota
+
+A queues -> R is provisioned -> GitHub assigns B to R
+R is busy -> A remains queued -> provision matching capacity for A
+```
+
+Busy and closing resources retain quota until original Box absence is confirmed,
+but do not count as available supply. Unknown creation outcomes retain their
+reservation and never repeat create POST. Pending registrations count
+conservatively as starting supply. Counter versions fence reservations against
+newer observations; short quota updates serialize without holding a lock over
+GitHub or Box network calls.
+
+Independent allocations advance concurrently without a fixed management
+concurrency ceiling. Reservations commit before HTTP starts, within existing
+organization/host limits. All started operations settle before the next pool
+round. Credentials are isolated by allocation; each runner preserves its own
+effect ordering and lease checks.
+
+Dirty/missing counts, compensation notices and positive counts older than 30
+seconds trigger an authoritative queue rebuild. Newer webhook versions prevent
+an older rebuild from overwriting them. A busy runner without a matching claim
+also requires a rebuild before replenishment, covering PAT hosts and missed
+running events. Job queries support recovery instead of ordinary per-allocation
+admission. Custom backends without supply inventory retain job-driven fallback.
+
+Reused runner IDs do not reject job observations. Ambiguous assignment observations
+force an authoritative queue rebuild. A repository whose refresh repeatedly races
+new webhooks defers admission while other repositories and resource cleanup proceed.
+Inventory failures block new reservations while allowing existing cleanup. A known
+runner missing from inventory or offline retains starting supply during the existing
+300-second bootstrap budget from its persisted `runner.registeredAt`; older records
+fall back to allocation creation time. A delayed registration therefore receives
+its own startup grace. After that budget it enters cleanup without releasing quota
+until the original Box is absent.
+An offline runner still reported busy is excluded from idle supply without
+stopping its running job solely because of the inventory status.
+
+Reservations use rotating counter windows within the database's 100-check budget,
+including scope and host-policy fences. Only fenced counters add demand and all
+compatible supply is deducted. Wide repository sets can therefore underfill while
+compatible idle runners cover every individual window, even when total queued
+demand is larger. Rotation admits later repositories as that supply becomes busy;
+it does not guarantee filling the entire queue across windows. The window does
+not cap runners represented by one counter or replace organization quota.
+
+Only current counted scopes settle their repository notices. Retired scopes may
+recover existing resources but leave notices pending, so a replacement scope can
+admit the work even if its backend uses the job-driven fallback.
+
+A fallback replaces or removes a malformed aggregate only after a version-fenced
+queue snapshot. Terminal job observations prevent stale scans from recreating
+completed demand. Rejected ingress changes leave receipts, facts and counters
+uncommitted.
+
+The label-count upgrade preserves an existing version-2 journal and outstanding
+resources. It adds no state-table DDL and requires no journal reset. Legacy
+allocations recover through original identifiers and job-label fallback. Hosted
+deployment handoff follows the eligibility protocol above.
 
 ## Independent repository compensation
 
@@ -353,17 +454,14 @@ failed retirement retains its handle for retry and reports the cleanup failure.
 
 ## Worker recovery and logs
 
-The scheduler rotates through at most eight active scopes per recovery page. Each
-pool processes at most 32 active workers per page and keeps its cursor across ticks.
-An exact full page requires another page to establish the end; deleted cursor keys
-remain valid keyset boundaries. A scope must complete a clean recovery round before
-one admission attempt is allowed. Incomplete rounds and Box lookup failures block
-that scope, including across cursor wraps. Lease changes or membership changes
-invalidate readiness; the final reservation checks the captured membership version.
-A stable completed round must enumerate exactly the recorded active count; a
-missing worker membership fails closed instead of silently omitting its cleanup.
-A newly empty scope can complete recovery immediately. Large active sets may need
-several ticks, but retained inactive scopes add no recovery work.
+The scheduler rotates through eight active scopes per recovery metadata page;
+this is pagination, not a management concurrency limit. The label-capacity path
+reads each pool's allocations once per round in 32-record pages, counts compatible
+supply from a complete GitHub inventory, and advances independent resources
+concurrently. It does not rescan the pool before every reservation. Custom
+backends without inventory retain their clean-round and membership-version
+admission guard. Unknown resources retain their original identity and quota.
+
 The native API can also record a definitive creation refusal when the typed
 Box creation-limit error occurs before `onPersist` begins. It stores the original
 scope and creation-operation UUID in the same ledger key that would hold a Box ID;
@@ -385,17 +483,17 @@ The general resource state machine still forbids requested-to-absent transitions
 the explicit refusal path is limited to an unmaterialized Box with no runner.
 
 Stopped/error Boxes are deleted by their original IDs; a lookup error retains
-capacity and blocks that scope's admission. Confirmed absence releases physical
+capacity. Confirmed absence releases physical
 capacity even when GitHub registration cleanup must retry. Other allocations
 still get reconciled after an ordinary per-worker error. Lease loss, corrupt or
 conflicting state, abort and unretired credential handles stop further work.
 
 An absent Box's allocation remains in the journal until runner cleanup is confirmed.
-The same installation/repository/job cannot create a duplicate while that debt exists.
+A new supply allocation does not exclusively reserve its trigger job.
 Unknown Box creation still occupies capacity and is never repeated. Cleanup debt
 survives restart and remains in the paged active indexes. Runner-only cleanup debt
-does not charge physical capacity or block fresh admission after a clean Box
-recovery round. Final release removes memberships and deduplication without
+does not charge physical capacity or prevent matching demand from receiving new
+capacity. Final release removes memberships and allocation identity without
 decrementing capacity a second time.
 
 Both production hosts write the same structured `WorkerEvent` facts: standalone
@@ -431,12 +529,12 @@ execution lease, renews it while GitHub/Box operations wait, pages active
 allocations for recovery, and drives the shared worker pools. The
 host supplies an authoritative scope directory, bound execution adapters and an
 ingress transaction that checks the current binding. Receiving a notification
-stores its receipt and job before waking the scheduler; it needs no execution
-lease. A notification is a hint: admission fetches the actual job under its
-original authority. Settlement uses the captured notice version, so a concurrent
+stores its receipt, observed phase and aggregate demand before waking the
+scheduler; it needs no execution lease. Notifications grant no authority: actual
+effects still check the original scope and host policy. Settlement uses the captured notice version, so a concurrent
 delivery stays pending.
 
-Queued jobs are selected by platform tenant, then GitHub account, then job; a
+The job-driven fallback selects by platform tenant, then GitHub account, then job; a
 large repository list earns no extra turns. Selection continues rotating across
 tenants and accounts until it selects 32 candidates or exhausts the current input.
 An account can supply multiple distinct candidates in one batch; a short batch
@@ -447,7 +545,7 @@ notice and skips admission-time GitHub job reads while the durable account or
 tenant quota is full. Independent compensation scans continue recording pending
 jobs without reading or reserving capacity. Other tenants can still admit jobs;
 the final reservation rechecks the same usage atomically.
-A recovery error blocks that scope's new admissions while other accounts
+A fallback recovery error blocks that scope's new admissions while other accounts
 can proceed; corrupt shared journal state still blocks admission. Invalid discovered
 scope definitions withhold that binding without restoring old authority or blocking
 healthy bindings. Known
@@ -761,7 +859,7 @@ sequenceDiagram
   Boxes-->>Listener: Original Box observed stopped
   Listener->>State: Journal original-resource cleanup intents
   Listener->>Boxes: Delete known original stopped Box and confirm absence
-  Listener->>State: Return physical Box capacity, retain runner cleanup debt and job dedup
+  Listener->>State: Return physical Box capacity, retain original runner cleanup debt
   Listener->>GitHub: Confirm or remove original runner and confirm absence
   Listener->>State: Remove allocation after both resources are absent
   Note over Listener,State: Completion webhooks alone do not stop a Box or release quota

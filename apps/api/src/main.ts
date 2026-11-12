@@ -41,6 +41,7 @@ import { mcpStrategy } from './mcp/mcp.controller'
 import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
+import { CiListenerService } from './ci/ci-listener.service'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -248,6 +249,7 @@ async function bootstrap() {
       }
       socket.destroy()
     })
+    await app.get(CiListenerService).start()
   } else {
     await app.init()
     app.flushLogs()

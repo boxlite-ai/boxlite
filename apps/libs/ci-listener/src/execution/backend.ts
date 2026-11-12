@@ -2,7 +2,7 @@
 import { CredentialSource, ListenerCredentials } from '../credentials'
 import { JobNotice, WorkflowJob } from '../jobs'
 import { readRepositoryJobs } from '../job-reader'
-import { GitHubRunners, RunnerEffect } from '../runners'
+import { GitHubRunners, RunnerEffect, RunnerObservation } from '../runners'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { WorkerExecutor } from '../worker'
 import { ExecutionJournal } from './journal'
@@ -23,13 +23,14 @@ export class GitHubExecutionBackend implements PoolBackend {
   private readonly scope: ExecutionScope
   private readonly lease: ExecutionLease
   private readonly credentials: ListenerCredentials
+  private readonly workerCredentials = new Map<string, ListenerCredentials>()
   private readonly journal: ExecutionJournal
   private readonly labels: string[]
   constructor(
-    state: ListenerState,
+    private readonly state: ListenerState,
     lease: ExecutionLease,
     scope: ExecutionScope,
-    source: CredentialSource,
+    private readonly source: CredentialSource,
     private readonly host: ExecutionHost,
     labels: readonly string[],
   ) {
@@ -105,7 +106,7 @@ export class GitHubExecutionBackend implements PoolBackend {
     if (repository === undefined) throw new Error('Original worker repository required')
     await readRepositoryJobs(
       this.scope,
-      this.credentials,
+      this.credentialsFor(name),
       (signal) => this.check('admission', signal),
       repository,
       async () => undefined,
@@ -147,6 +148,7 @@ export class GitHubExecutionBackend implements PoolBackend {
     beforeMutation: (effect: RunnerEffect) => Promise<void>,
     signal?: AbortSignal,
     labels: readonly string[] = this.labels,
+    name?: string,
   ): Promise<RunnerSession> {
     labels = [...labels]
     await this.check('cleanup', signal)
@@ -154,7 +156,7 @@ export class GitHubExecutionBackend implements PoolBackend {
       this.scope.runners.kind === 'repository'
         ? { kind: 'repository-runners' as const, repository: this.scope.runners.repository.id }
         : { kind: 'organization-runners' as const }
-    const borrow = await this.credentials.open(purpose, signal)
+    const borrow = await (name ? this.credentialsFor(name) : this.credentials).open(purpose, signal)
     try {
       const registry = new GitHubRunners(borrow.credential, this.scope.runners, labels, async (effect) => {
         await this.check(effect.kind === 'register' ? 'admission' : 'cleanup', signal)
@@ -167,7 +169,43 @@ export class GitHubExecutionBackend implements PoolBackend {
       throw error
     }
   }
-  close(): Promise<void> {
-    return this.credentials.close()
+  private credentialsFor(name: string): ListenerCredentials {
+    if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) throw new Error('Original CI worker required for credential isolation')
+    let provider = this.workerCredentials.get(name)
+    if (!provider) {
+      provider = new ListenerCredentials(
+        this.state,
+        this.lease,
+        scopeKey(this.scope) + '/' + name.slice(7),
+        this.source,
+      )
+      this.workerCredentials.set(name, provider)
+    }
+    return provider
+  }
+  async inventory(signal?: AbortSignal): Promise<RunnerObservation[]> {
+    const session = await this.runners(async () => {
+      throw new Error('Read-only runner inventory')
+    }, signal)
+    try {
+      if (!session.registry.list) throw new Error('Runner inventory is unavailable')
+      return await session.registry.list(signal)
+    } finally {
+      await session.close()
+    }
+  }
+  async retire(name: string): Promise<void> {
+    const provider = this.workerCredentials.get(name)
+    if (!provider) return
+    await provider.close()
+    this.workerCredentials.delete(name)
+  }
+  async close(): Promise<void> {
+    const results = await Promise.allSettled([
+      this.credentials.close(),
+      ...[...this.workerCredentials.keys()].map((name) => this.retire(name)),
+    ])
+    const errors = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+    if (errors.length) throw new AggregateError(errors, 'Runner credential retirement is incomplete')
   }
 }

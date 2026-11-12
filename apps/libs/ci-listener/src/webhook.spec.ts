@@ -1,11 +1,11 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DataSource } from 'typeorm'
 import { ListenerState } from './state/store'
-import { StateDatabase, StateConflict } from './state/database'
+import { StateDatabase, StateConflict, StateCorrupt } from './state/database'
 import { SqliteStateDatabase } from './state/sqlite'
 import { PostgresStateDatabase, postgresStateTable } from './state/postgres'
 import { ciWakeHint, ListenerInbox, verifyWebhook } from './webhook'
@@ -22,6 +22,28 @@ const signed = (value: unknown = payload(), delivery: string = randomUUID(), eve
   return { raw, signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'), delivery, event }
 }
 describe('CI shared webhook verification', () => {
+  it.each([-1, 1.5, '91'])('rejects a signed invalid runner identity %j', (runner_id) => {
+    expect(() =>
+      verifyWebhook(
+        signed({
+          ...payload(),
+          workflow_job: { ...payload().workflow_job, runner_id },
+        }),
+        secret,
+      ),
+    ).toThrow('Invalid workflow runner identity')
+  })
+  it.each([undefined, null, 0, 91])('normalizes signed runner identity %j', (runner_id) => {
+    expect(
+      verifyWebhook(
+        signed({
+          ...payload(),
+          workflow_job: { ...payload().workflow_job, runner_id },
+        }),
+        secret,
+      )?.observation?.runner,
+    ).toBe(runner_id || null)
+  })
   it('recognizes signed custom resources and rejects conflicting or invalid requests', () => {
     const body = payload()
     body.workflow_job.labels = ['boxlite-2vcpu-4gbmem-10gbdisk']
@@ -58,7 +80,9 @@ describe('CI shared webhook verification', () => {
   )
   it('does not treat an unsigned event header as permission to reinterpret the signed body', () => {
     expect(verifyWebhook(signed(payload(), randomUUID(), 'installation'), secret)).toBeNull()
-    expect(verifyWebhook(signed({ ...payload(), action: 'completed' }), secret)).toBeNull()
+    expect(() => verifyWebhook(signed({ ...payload(), action: 'completed' }), secret)).toThrow(
+      'Invalid workflow job notification',
+    )
     expect(
       verifyWebhook(
         signed({ ...payload(), workflow_job: { ...payload().workflow_job, labels: ['ubuntu-latest'] } }),
@@ -138,15 +162,100 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       }
     })
     const records = async () => state.recover((await state.acquire(randomUUID(), 10000))!)
+    it('preserves compatibility for internal job hints without an observation', async () => {
+      const { observation: _observation, ...notification } = verifyWebhook(signed(), secret)!
+      expect(await inbox.receive(notification)).toBe('stored')
+      expect((await state.read(['notice/9/55']))[0].payload).toEqual(notification.hint)
+      expect((await records()).map((row) => row.key).sort()).toEqual(
+        ['notice/9/55', `receipt/${notification.delivery}`, 'wake/9/21'].sort(),
+      )
+    })
+    it('stores installation inventory without job facts, demand or executable notices', async () => {
+      const notification = verifyWebhook(
+        signed(
+          {
+            action: 'created',
+            installation: { id: 9, account: { id: 7 } },
+          },
+          randomUUID(),
+          'installation',
+        ),
+        secret,
+      )!
+      expect(await inbox.receive(notification)).toBe('stored')
+      expect(await inbox.receive(notification)).toBe('duplicate')
+      expect((await records()).map((row) => row.key).sort()).toEqual(
+        [`receipt/${notification.delivery}`, 'wake/9/0'].sort(),
+      )
+    })
     it('atomically records a verified delivery, wake and job without holding execution ownership', async () => {
       const notification = verifyWebhook(signed(), secret)!
       expect(await inbox.receive(notification)).toBe('stored')
       const rows = await records()
       expect(rows.map((row) => row.key).sort()).toEqual(
-        [`receipt/${notification.delivery}`, 'wake/9/21', 'notice/9/55'].sort(),
+        [
+          `receipt/${notification.delivery}`,
+          'wake/9/21',
+          'notice/9/55',
+          'job-fact/9/55',
+          'demand/9/21/' +
+            createHash('sha256')
+              .update(JSON.stringify(['boxlite']))
+              .digest('hex'),
+        ].sort(),
       )
-      expect(rows.find((row) => row.key === 'notice/9/55')!.payload).toEqual(notification.hint)
+      expect(rows.find((row) => row.key === 'notice/9/55')!.payload).toEqual({ ...notification.hint, counted: true })
+      expect(rows.find((row) => row.key.startsWith('demand/'))!.payload).toMatchObject({
+        queued: 1,
+        labels: ['boxlite'],
+        dirty: false,
+      })
       expect(JSON.stringify(rows)).not.toContain(secret.toString('hex'))
+    })
+    it('persists all distinct jobs from a concurrent same-repository webhook burst', async () => {
+      const notifications = Array.from(
+        { length: 8 },
+        (_, index) =>
+          verifyWebhook(
+            signed({
+              ...payload(),
+              workflow_job: { ...payload().workflow_job, id: 100 + index },
+            }),
+            secret,
+          )!,
+      )
+      const results = await Promise.allSettled(
+        notifications.map((notification) => new ListenerInbox(state).receive(notification)),
+      )
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(0)
+      const stored = await records()
+      expect(stored.filter((row) => row.key.startsWith('notice/'))).toHaveLength(8)
+      expect(stored.filter((row) => row.key.startsWith('receipt/'))).toHaveLength(8)
+      expect(stored.find((row) => row.key.startsWith('demand/'))!.payload).toMatchObject({ queued: 8, dirty: false })
+    })
+    it('counts duplicate and out-of-order job transitions once', async () => {
+      const send = (status: 'queued' | 'in_progress' | 'completed') =>
+        inbox.receive(
+          verifyWebhook(
+            signed({
+              ...payload(),
+              action: status,
+              workflow_job: { ...payload().workflow_job, status, runner_id: status === 'queued' ? null : 91 },
+            }),
+            secret,
+          )!,
+        )
+      await send('queued')
+      await send('queued')
+      const stored = await records()
+      const key = stored.find((row) => row.key.startsWith('demand/'))!.key
+      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 1 })
+      await send('in_progress')
+      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 0, dirty: false })
+      await send('queued')
+      await send('completed')
+      await send('in_progress')
+      expect((await state.read([key]))[0].payload).toMatchObject({ queued: 0, dirty: false })
     })
     it('deduplicates concurrent receiver instances and rejects a reused delivery with another body', async () => {
       const input = signed(),
@@ -173,6 +282,46 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await expect(inbox.receive(conflict)).rejects.toMatchObject({ status: 409 })
       expect(await state.read(['notice/9/55', 'wake/9/21'])).toEqual(before)
       expect(await state.read([`receipt/${conflict.delivery}`])).toEqual([])
+    })
+    it.each(['repositoryId', 'accountId', 'id', 'runId'] as const)(
+      'rejects changed %s in a durable job fact after its executable notice is settled',
+      async (field) => {
+        const completed = verifyWebhook(
+          signed({
+            ...payload(),
+            action: 'completed',
+            workflow_job: { ...payload().workflow_job, status: 'completed' },
+          }),
+          secret,
+        )!
+        await inbox.receive(completed)
+        const lease = (await state.acquire(randomUUID(), 10000))!
+        const [fact] = await state.read(['job-fact/9/55'])
+        const changed = {
+          ...completed.hint,
+          job: { ...completed.hint.job! },
+        }
+        if (field === 'repositoryId' || field === 'accountId') changed[field]++
+        else changed.job[field]++
+        await state.commit(lease, [
+          {
+            key: fact.key,
+            expected: fact.version,
+            payload: { status: 'completed', labels: ['boxlite'], runner: null, hint: changed },
+          },
+        ])
+        const before = await state.recover(lease)
+        const notification = verifyWebhook(signed(), secret)!
+        await expect(inbox.receive(notification)).rejects.toMatchObject({ status: 409 })
+        expect(await state.recover(lease)).toEqual(before)
+        expect(await state.read([`receipt/${notification.delivery}`])).toEqual([])
+      },
+    )
+    it('rolls back a malformed observation before storing its receipt or wake', async () => {
+      const notification = verifyWebhook(signed(), secret)!
+      notification.observation!.runner = -1
+      await expect(inbox.receive(notification)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await records()).toEqual([])
     })
     it('keeps a newer notice and wake when an older captured version tries to settle', async () => {
       await inbox.receive(verifyWebhook(signed(), secret)!)

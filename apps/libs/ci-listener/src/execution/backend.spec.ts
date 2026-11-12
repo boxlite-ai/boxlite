@@ -179,6 +179,67 @@ describe('CI shared execution authority', () => {
     rmSync(directory, { recursive: true, force: true })
   })
   const launch = () => ({ name, image: 'runner', cpus: 2, memoryMiB: 2048, entrypoint: ['bash', '-c', 'run'] })
+  it('reads the authorized runner inventory and releases the credential borrow', async () => {
+    runners.push({
+      id: 91,
+      name,
+      busy: false,
+      status: 'online',
+      labels: [{ name: 'boxlite' }],
+    } as (typeof runners)[number])
+    await expect(backend.inventory()).resolves.toEqual([
+      { id: 91, name, busy: false, status: 'online', labels: ['boxlite'] },
+    ])
+    await expect(backend.inventory()).resolves.toHaveLength(1)
+    expect(calls.some((call) => call.path.endsWith('/generate-jitconfig'))).toBe(false)
+  })
+  it('isolates runner credential borrows per worker and retires them independently', async () => {
+    const other = 'ci-jit-' + 'b'.repeat(32)
+    const [first, second] = await Promise.all([
+      backend.runners(async () => {}, undefined, ['boxlite'], name),
+      backend.runners(async () => {}, undefined, ['boxlite'], other),
+    ])
+    await Promise.all([first.close(), second.close()])
+    await Promise.all([backend.retire(name), backend.retire(other)])
+    const again = await backend.runners(async () => {}, undefined, ['boxlite'], name)
+    await again.close()
+    await backend.retire(name)
+  })
+  it('rejects foreign worker names before issuing runner credentials', async () => {
+    await expect(backend.runners(async () => {}, undefined, ['boxlite'], 'foreign')).rejects.toThrow(
+      'credential isolation',
+    )
+    expect(calls.some((call) => call.path.endsWith('/access_tokens'))).toBe(false)
+  })
+  it('retires the issued credential if runner session construction rejects labels', async () => {
+    await expect(backend.runners(async () => {}, undefined, [], name)).rejects.toThrow('runner labels')
+    expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(1)
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(1)
+    const again = await backend.runners(async () => {}, undefined, ['boxlite'], name)
+    await again.close()
+    expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(2)
+  })
+  it('attempts every worker retirement and retains failed revocation for a later close', async () => {
+    const other = 'ci-jit-' + 'b'.repeat(32)
+    await backend.runners(async () => {}, undefined, ['boxlite'], name)
+    await backend.runners(async () => {}, undefined, ['boxlite'], other)
+    const fetcher = global.fetch
+    let failed = false
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname === '/installation/token' && !failed) {
+        failed = true
+        return new Response(null, { status: 503 })
+      }
+      return fetcher(input, options)
+    }) as typeof fetch
+    await expect(backend.close()).rejects.toThrow('Runner credential retirement is incomplete')
+    expect(failed).toBe(true)
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(1)
+    expect(await state.recover(lease, 1000, ['credential/'])).toHaveLength(1)
+    await backend.close()
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(2)
+    expect(await state.recover(lease, 1000, ['credential/'])).toEqual([])
+  })
   it('sends the same resource selection to the host and the actual GitHub JIT request', async () => {
     const label = 'boxlite-2vcpu-4gbmem-10gbdisk'
     const fetcher = global.fetch

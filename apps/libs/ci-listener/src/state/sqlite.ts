@@ -104,6 +104,9 @@ class SqliteTransaction implements StateTransaction {
     private readonly database: DatabaseSync,
     private readonly namespace: string,
   ) {}
+  async lock(_key: string): Promise<void> {
+    // The enclosing SQLite transaction already serializes connections to this file.
+  }
   async now(): Promise<number> {
     return Date.now()
   }

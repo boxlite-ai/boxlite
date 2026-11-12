@@ -50,6 +50,14 @@ upgrade: do not revert to an older binary or delete the journal to roll back.
 See [shared lease semantics](../libs/ci-listener/README.md#execution-lease-storage)
 for locking, expiry and migration rules.
 
+When `CI_SCHEDULER_GENERATION` is configured, the serving host activates that
+deployment only after HTTP starts listening. Activation waits for outstanding
+execution transactions, advances the owner epoch and deployment atomically, and
+expires the old lease. Old deployments cannot renew, reacquire or commit execution
+writes, even while their WebSockets remain open. The owner uses schema 3; workers,
+resource identities and quota records are preserved. Ingress stays independent of
+execution eligibility. See [deployment eligibility](../libs/ci-listener/README.md#deployment-eligibility).
+
 `make test:apps:api TEST_FILES=ci-native-state.spec.ts` exercises concurrent
 renewal without snapshot restarts, takeover fencing and error propagation against
 PostgreSQL. Supply `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` if needed,
@@ -150,6 +158,7 @@ either host is unset.
 The `api:test` cache includes PostgreSQL and Redis hosts, ports, usernames, passwords,
 and the database name, so changing connection settings invalidates cached results.
 Coverage runs bypass the cache.
+
 ## Checkpoint capture
 
 `POST /api/v1/checkpoints` accepts `source_box_id` and an optional `name`.
@@ -240,12 +249,12 @@ both periodic destruction retries and retention protection active.
 Export completion commits the upload job before notifying the runner's Redis
 queue. If notification fails, the durable job remains available to polling.
 
-| Boundary | Job owner | Source busy | Archive ownership and retry |
-| --- | --- | --- | --- |
-| Export pending or running | Source `BOX` | Yes | Runner retains its private export directory. |
-| Export receipt accepted | `CHECKPOINT` upload job | No | Checkpoint owns the immutable archive; upload retries reuse it. |
-| Upload receipt accepted | No active capture job | No | Object storage holds the archive; runner staging can be reclaimed. |
-| Import pending or failed | New `BOX` | Not applicable | Operation retains checkpoint use and Box ownership until completion or Box deletion. |
+| Boundary                  | Job owner               | Source busy    | Archive ownership and retry                                                          |
+| ------------------------- | ----------------------- | -------------- | ------------------------------------------------------------------------------------ |
+| Export pending or running | Source `BOX`            | Yes            | Runner retains its private export directory.                                         |
+| Export receipt accepted   | `CHECKPOINT` upload job | No             | Checkpoint owns the immutable archive; upload retries reuse it.                      |
+| Upload receipt accepted   | No active capture job   | No             | Object storage holds the archive; runner staging can be reclaimed.                   |
+| Import pending or failed  | New `BOX`               | Not applicable | Operation retains checkpoint use and Box ownership until completion or Box deletion. |
 
 Run the transaction and HTTP admission checks with
 `make test:apps:api TEST_FILES='checkpoint|job-state-handler'`, providing
@@ -621,18 +630,18 @@ per business event; the attributes reach OTLP through nestjs-pino, where alerts 
 The same sanitized attributes reach PostHog through the client shared with HTTP metrics.
 Activity does not require the optional logging ClickHouse instance.
 
-| Event | Recorded by | Outcomes |
-| --- | --- | --- |
-| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
-| `user.login` | `LoginEventRecorder` | success |
-| `org.active` | `OrganizationActivityInterceptor`, best effort on a person's first request in an organization each UTC hour; a process exit or lost Redis acknowledgment after claiming the key can suppress the rest of that hour | success |
-| `box.create`, `box.start`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
-| `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
-| `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
-| `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
-| `api_key.create` | `ApiKeyService`, including platform bootstrap | requested, success, exception |
-| `volume.create`, `volume.delete` | `VolumeService`, shared by REST and Dashboard | requested, success, exception |
-| `box.open` | Authenticated preview proxy through the last-activity endpoint | success (sampled anonymous presence) |
+| Event                                               | Recorded by                                                                                                                                                                                                        | Outcomes                                                    |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `user.registration`                                 | `UserService.create`, through `recordOutcomes`                                                                                                                                                                     | requested, success, exception                               |
+| `user.login`                                        | `LoginEventRecorder`                                                                                                                                                                                               | success                                                     |
+| `org.active`                                        | `OrganizationActivityInterceptor`, best effort on a person's first request in an organization each UTC hour; a process exit or lost Redis acknowledgment after claiming the key can suppress the rest of that hour | success                                                     |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons                                                                                                                                                                  | requested                                                   |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes                                                                                                                                                                    | success, exception                                          |
+| `box.exec`, `box.file_upload`                       | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files`                                                                                                                                                      | requested, then success or exception by the response status |
+| `tunnel.create`                                     | `BoxliteProxyController`, through `recordOutcomes`                                                                                                                                                                 | requested, success, exception                               |
+| `api_key.create`                                    | `ApiKeyService`, including platform bootstrap                                                                                                                                                                      | requested, success, exception                               |
+| `volume.create`, `volume.delete`                    | `VolumeService`, shared by REST and Dashboard                                                                                                                                                                      | requested, success, exception                               |
+| `box.open`                                          | Authenticated preview proxy through the last-activity endpoint                                                                                                                                                     | success (sampled anonymous presence)                        |
 
 Volume success means the command entered the lifecycle queue, not that backing storage is ready or deleted.
 Force-deleting a missing or already-deleting volume is a no-op and emits no event. Mutation failures carry fixed
@@ -721,13 +730,13 @@ returns `columns` and positional `results` arrays, unlike ClickHouse's JSON obje
 [Query API](https://posthog.com/docs/api/queries) and [supported SQL functions](https://posthog.com/docs/sql/clickhouse-functions).
 The example documents the contract; it has not been executed against a live PostHog project.
 
-| Activity field | PostHog value |
-| --- | --- |
-| Event/time | `event`, `timestamp` (the original event emission time) |
-| Outcome/entity | `properties['event.outcome']`, `properties['correlation.id']` |
-| Organization/person | `properties['organization.id']`, optional `properties['user.id']` |
+| Activity field       | PostHog value                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------- |
+| Event/time           | `event`, `timestamp` (the original event emission time)                                  |
+| Outcome/entity       | `properties['event.outcome']`, `properties['correlation.id']`                            |
+| Organization/person  | `properties['organization.id']`, optional `properties['user.id']`                        |
 | Actor/reason/failure | `properties['actor.kind']`, `properties['event.reason']`, `properties['exception.type']` |
-| Client/auth | `properties['client.source']`, `properties['sdk.version']`, `properties['auth.method']` |
+| Client/auth          | `properties['client.source']`, `properties['sdk.version']`, `properties['auth.method']`  |
 
 Always filter `properties.activity_schema = '1'` and the exact configured producer environment, including
 nested queries. Legacy `api_*` events remain available for existing analytics but are not Activity rows.
@@ -751,11 +760,11 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context | `actor.kind` | `event.reason` |
-| --- | --- | --- |
-| `Context.user(actor?)` | `user` | — |
-| `Context.admin(actor?)` | `admin` | — |
-| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `auto_resume` |
+| Context                    | `actor.kind` | `event.reason`                                             |
+| -------------------------- | ------------ | ---------------------------------------------------------- |
+| `Context.user(actor?)`     | `user`       | —                                                          |
+| `Context.admin(actor?)`    | `admin`      | —                                                          |
+| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `auto_resume` |
 
 - Only the platform gives a reason; user and admin contexts have none.
 - A request handler names its caller with `@UserContext() ctx`, or `requestContext(req)` where it
@@ -1272,17 +1281,23 @@ Cleanup uses the known original Box ID and scope, even after admission is revoke
 A missing ownership record is an error. Only absence of the known original Box row
 or a confirmed destroyed state permits the shared controller to mark it absent;
 failed destruction does not. Physical capacity returns after original Box absence
-is confirmed. Runner cleanup debt and the same-job dedup record remain until
+is confirmed. Runner cleanup debt and its original allocation identity remain until
 GitHub runner absence is confirmed. An elapsed timeout or a completed notice does not prove
 a running Box is idle.
 
-The shared controller reconciles historical allocations before new demand.
+The shared [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
+counts queued demand and compatible starting/idle supply. Busy runners retain Box
+quota but no longer exclusively cover their trigger jobs. Actual job observations
+support recovery, while new reservations use independent allocation identities.
+Hosted PostgreSQL and standalone SQLite use this shared implementation.
+
+The controller recovers historical allocations alongside new capacity demand.
 Transient journal initialization failures retry through the existing session
 loop. An unexpectedly stopped hosted scheduler rejects new webhook ingress
 instead of acknowledging work that this replica cannot schedule.
 One ordinary cleanup failure does not skip other workers; an absent Box's pending
 runner cleanup does not hold physical capacity. Query failures retain capacity
-and block that scope's admission. Lease loss, corrupt/conflicting state, abort
+until the original outcome is known. Lease loss, corrupt/conflicting state, abort
 and pending credential retirement stop further work. These rules match standalone
 Listener Boxes and recover from the existing PostgreSQL journal after restart.
 
@@ -1339,6 +1354,7 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
 | `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
+| `CI_SCHEDULER_GENERATION`                                        | Positive deployment generation; mdeploy uses `GITHUB_RUN_ID` or an explicit per-deploy override, never process startup time    |
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
 `boxlite` workflow label for configured defaults, or

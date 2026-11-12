@@ -4,6 +4,7 @@ import { GitHubInstallation } from '../github-app'
 import { decodeRepository, JobNotice } from '../jobs'
 import { RunnerScope } from '../runners'
 import { StateCorrupt } from '../state/database'
+import { parseResourceLabels } from '../resource-labels'
 
 export interface ExecutionScope {
   binding: string
@@ -19,9 +20,11 @@ export interface Allocation {
   scope: string
   name: string
   job: JobNotice
+  /** Capacity belongs to this label set; job is provenance, not an assignment. */
+  supply?: { labels: string[] }
   createdAt: number
   box: { phase: ResourcePhase; id: string | null }
-  runner: { phase: ResourcePhase; id: number | null }
+  runner: { phase: ResourcePhase; id: number | null; registeredAt?: number }
   delivery: 'none' | 'requested' | 'done'
   closing: boolean
   effect: { id: string; kind: EffectKind } | null
@@ -126,6 +129,24 @@ export function decodeAllocation(value: unknown): Allocation {
     typeof value.closing !== 'boolean'
   )
     throw new StateCorrupt()
+  let supply: Allocation['supply']
+  if (value.supply !== undefined) {
+    if (
+      !object(value.supply) ||
+      !Array.isArray(value.supply.labels) ||
+      !value.supply.labels.length ||
+      !value.supply.labels.every((label) => typeof label === 'string')
+    )
+      throw new StateCorrupt()
+    const labels = value.supply.labels as string[]
+    try {
+      if (!parseResourceLabels(labels) || new Set(labels.map((label) => label.toLowerCase())).size !== labels.length)
+        throw new StateCorrupt()
+    } catch {
+      throw new StateCorrupt()
+    }
+    supply = { labels: [...labels] }
+  }
   for (const [kind, resource] of [
     ['box', value.box],
     ['runner', value.runner],
@@ -144,6 +165,11 @@ export function decodeAllocation(value: unknown): Allocation {
     )
       throw new StateCorrupt()
   }
+  if (
+    value.runner.registeredAt !== undefined &&
+    (!Number.isSafeInteger(value.runner.registeredAt) || (value.runner.registeredAt as number) < 0)
+  )
+    throw new StateCorrupt()
   if (
     (value.runner.phase !== 'none' && value.runner.phase !== 'absent' && value.box.id === null) ||
     (value.delivery !== 'none' && (value.box.id === null || value.runner.id === null))
@@ -172,9 +198,14 @@ export function decodeAllocation(value: unknown): Allocation {
     scope: value.scope,
     name: value.name,
     job: { repository: value.job.repository, run: value.job.run, job: value.job.job },
+    ...(supply ? { supply } : {}),
     createdAt: value.createdAt as number,
     box: { phase: value.box.phase as ResourcePhase, id: value.box.id as string | null },
-    runner: { phase: value.runner.phase as ResourcePhase, id: value.runner.id as number | null },
+    runner: {
+      phase: value.runner.phase as ResourcePhase,
+      id: value.runner.id as number | null,
+      ...(value.runner.registeredAt === undefined ? {} : { registeredAt: value.runner.registeredAt as number }),
+    },
     delivery: value.delivery as Allocation['delivery'],
     closing: value.closing,
     effect: object(value.effect) ? { id: value.effect.id as string, kind: value.effect.kind as EffectKind } : null,

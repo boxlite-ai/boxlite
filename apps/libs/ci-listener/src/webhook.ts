@@ -3,6 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { ListenerState } from './state/store'
 import { Json, StateConflict, StateCorrupt } from './state/database'
 import { parseResourceLabels } from './resource-labels'
+import { DemandIdentityConflict, JobObservation, observeDemand } from './demand'
 
 export interface WakeHint {
   installationId: number
@@ -27,14 +28,14 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
   if (!record(value)) throw new WebhookError(400, 'Invalid GitHub event body')
   const body = value
   if (event === 'workflow_job') {
-    if (body.action !== 'queued') return null
+    if (!['queued', 'in_progress', 'completed'].includes(body.action as string)) return null
     const job = body.workflow_job,
       repo = body.repository
     if (
       !record(job) ||
       !id(job.id) ||
       !id(job.run_id) ||
-      job.status !== 'queued' ||
+      job.status !== body.action ||
       !record(repo) ||
       !id(repo.id) ||
       !record(repo.owner) ||
@@ -46,11 +47,14 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
       !job.labels.every((label: unknown) => typeof label === 'string' && label.length <= 128)
     )
       throw new WebhookError(400, 'Invalid workflow job notification')
-    try {
-      if (!parseResourceLabels(job.labels)) return null
-    } catch {
-      throw new WebhookError(400, 'Invalid CI resource labels')
-    }
+    if (body.action === 'queued')
+      try {
+        if (!parseResourceLabels(job.labels)) return null
+      } catch {
+        throw new WebhookError(400, 'Invalid CI resource labels')
+      }
+    if (job.runner_id !== undefined && job.runner_id !== null && job.runner_id !== 0 && !id(job.runner_id))
+      throw new WebhookError(400, 'Invalid workflow runner identity')
     return {
       installationId: body.installation.id,
       accountId: repo.owner.id,
@@ -82,6 +86,7 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
   return { installationId: body.installation.id, accountId: body.installation.account.id, repositoryId: 0, job: null }
 }
 export interface VerifiedWebhook {
+  observation?: JobObservation
   /** Trusted host provenance; verifyWebhook never reads this field from the body. */
   application?: string
   delivery: string
@@ -112,7 +117,21 @@ export function verifyWebhook(
   }
   const hint = ciWakeHint(event, value)
   return hint
-    ? { delivery: input.delivery.toLowerCase(), digest: createHash('sha256').update(raw).digest('hex'), event, hint }
+    ? {
+        delivery: input.delivery.toLowerCase(),
+        digest: createHash('sha256').update(raw).digest('hex'),
+        event,
+        hint,
+        ...(event === 'workflow_job'
+          ? {
+              observation: {
+                status: (value as { workflow_job: { status: JobObservation['status'] } }).workflow_job.status,
+                labels: [...(value as { workflow_job: { labels: string[] } }).workflow_job.labels],
+                runner: (value as { workflow_job: { runner_id?: number | null } }).workflow_job.runner_id || null,
+              },
+            }
+          : {}),
+      }
     : null
 }
 
@@ -145,6 +164,9 @@ export class ListenerInbox {
     }
   }
   async receive(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
+    const observation = notification.observation
+      ? { ...notification.observation, labels: [...notification.observation.labels] }
+      : undefined
     const { digest, event, delivery } = notification,
       supplied = notification.hint
     const hint: WakeHint = {
@@ -173,10 +195,8 @@ export class ListenerInbox {
     const receipt = `receipt/${delivery}`,
       wake = `wake/${hint.installationId}/${hint.repositoryId}`,
       notice = hint.job ? `notice/${hint.installationId}/${hint.job.id}` : undefined
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const rows = new Map(
-        (await this.state.read([receipt, wake, ...(notice ? [notice] : [])])).map((row) => [row.key, row]),
-      )
+    return this.state.ingress(`${hint.installationId}/${hint.repositoryId}`, async (tx) => {
+      const rows = new Map((await tx.read([receipt, wake, ...(notice ? [notice] : [])])).map((row) => [row.key, row]))
       const previous = rows.get(receipt)
       if (previous) {
         if (
@@ -210,27 +230,38 @@ export class ListenerInbox {
           priorNotice.payload.job.runId !== hint.job!.runId)
       )
         throw new WebhookError(409, 'Job identity conflicts with a previous notification')
+      let changes
       try {
-        await this.state.ingest([
-          { key: receipt, expected: null, payload: { digest, event } },
-          {
-            key: wake,
-            expected: priorWake?.version ?? null,
-            payload: {
-              installationId: hint.installationId,
-              accountId: hint.accountId,
-              repositoryId: hint.repositoryId,
-            },
-          },
-          ...(notice
-            ? [{ key: notice, expected: priorNotice?.version ?? null, payload: hint as unknown as Json }]
-            : []),
-        ])
-        return 'stored'
+        changes = observation && hint.job ? await observeDemand(tx, hint, observation) : []
       } catch (error) {
-        if (!(error instanceof StateConflict) || attempt === 3) throw error
+        if (error instanceof DemandIdentityConflict) throw new WebhookError(409, error.message)
+        throw error
       }
-    }
-    throw new StateConflict()
+      await tx.write([
+        { key: receipt, expected: null, payload: { digest, event } },
+        {
+          key: wake,
+          expected: priorWake?.version ?? null,
+          payload: {
+            installationId: hint.installationId,
+            accountId: hint.accountId,
+            repositoryId: hint.repositoryId,
+          },
+        },
+        ...changes,
+        ...(notice && (!observation || observation.status === 'queued')
+          ? [
+              {
+                key: notice,
+                expected: priorNotice?.version ?? null,
+                payload: { ...hint, ...(observation ? { counted: true } : {}) } as unknown as Json,
+              },
+            ]
+          : notice && priorNotice
+            ? [{ key: notice, expected: priorNotice.version }]
+            : []),
+      ])
+      return 'stored'
+    })
   }
 }

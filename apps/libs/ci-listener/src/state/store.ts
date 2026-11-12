@@ -7,6 +7,7 @@ export interface ExecutionLease {
   namespace: string
   owner: string
   epoch: number
+  deployment?: number
 }
 export interface StateChange {
   key: string
@@ -18,12 +19,16 @@ export interface StateCheck {
   key: string
   version: string
 }
-type Owner = { owner: string; epoch: number }
+export interface IngressTransaction {
+  read(keys: readonly string[]): Promise<StateRecord[]>
+  write(changes: StateChange[]): Promise<StateRecord[]>
+}
+type Owner = { owner: string; epoch: number; deployment?: number }
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-const record = (key: string, payload: Json): StateRecord => ({
+const record = (key: string, payload: Json, schema = key === '@owner' ? 2 : 1): StateRecord => ({
   key,
   payload,
-  schema: key === '@owner' ? 2 : 1,
+  schema,
   version: randomUUID(),
 })
 
@@ -35,8 +40,31 @@ export class ListenerState {
   constructor(
     private readonly database: StateDatabase,
     private readonly namespace: string,
+    private readonly deployment?: number,
   ) {
     if (!/^[A-Za-z0-9:._/-]{1,200}$/.test(namespace)) throw new Error('Invalid Listener namespace')
+    if (deployment !== undefined && (!Number.isSafeInteger(deployment) || deployment < 1))
+      throw new Error('Invalid Listener deployment')
+  }
+
+  /** Call after the host listens. Deployment order comes from the release workflow, never process start time. */
+  async activate(): Promise<boolean> {
+    return this.database.transaction(this.namespace, async (tx) => {
+      this.anchor(await tx.get('@anchor'))
+      // Execution transactions hold this same lock through their final check and commit.
+      const row = await tx.get('@owner', true),
+        current = this.owner(row),
+        expiry = await tx.get('@lease')
+      this.until(expiry)
+      if (current.deployment === this.deployment) return true
+      if (this.deployment === undefined || (current.deployment ?? 0) > this.deployment) return false
+      if (current.epoch === Number.MAX_SAFE_INTEGER) throw new StateCorrupt()
+      const next = { owner: '', epoch: current.epoch + 1, deployment: this.deployment }
+      // Schema 3 fences binaries that predate deployment-aware ownership.
+      if (!(await tx.put(record('@owner', next, 3), row!.version))) throw new StateConflict()
+      if (!(await tx.put(record('@lease', { until: 0 }), expiry!.version))) throw new StateConflict()
+      return true
+    })
   }
 
   async initialize(initial: { key: string; payload: Json }[] = []): Promise<void> {
@@ -84,11 +112,13 @@ export class ListenerState {
         until = this.until(expiry),
         now = await tx.now()
       if (until > now) return undefined
+      if (previous.deployment !== this.deployment) return undefined
       if (previous.epoch === Number.MAX_SAFE_INTEGER) throw new StateCorrupt()
-      const next = { owner: ownerId, epoch: previous.epoch + 1 }
-      if (!(await tx.put(record('@owner', next), row!.version))) throw new StateConflict()
+      const next: Owner = { owner: ownerId, epoch: previous.epoch + 1 }
+      if (this.deployment !== undefined) next.deployment = this.deployment
+      if (!(await tx.put(record('@owner', next, row!.schema), row!.version))) throw new StateConflict()
       if (!(await tx.put(record('@lease', { until: now + ttlMs }), expiry!.version))) throw new StateConflict()
-      return { namespace: this.namespace, owner: next.owner, epoch: next.epoch }
+      return { namespace: this.namespace, ...next }
     })
   }
 
@@ -229,6 +259,42 @@ export class ListenerState {
   }
 
   /** Host adapters must check the live binding in this same database transaction. */
+  async ingress<T>(target: string, work: (tx: IngressTransaction) => Promise<T>, lease?: ExecutionLease): Promise<T> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,200}$/.test(target)) throw new Error('Invalid ingress target')
+    return this.database.transaction(this.namespace, async (tx) => {
+      if (lease) await this.assertLease(tx, lease)
+      if (tx.lock) await tx.lock('ingress/' + target)
+      else await tx.get('@anchor', true)
+      this.anchor(await tx.get('@anchor'))
+      this.owner(await tx.get('@owner'))
+      this.until(await tx.get('@lease'))
+      const result = await work({
+        read: async (keys) => {
+          const rows: StateRecord[] = []
+          for (const key of keys) {
+            if (!/^(receipt|notice|wake|demand|job-fact|runner-claim)\/[A-Za-z0-9:._/-]+$/.test(key))
+              throw new Error('Invalid ingress record kind')
+            const row = await tx.get(key)
+            if (row) {
+              this.valid(row)
+              rows.push(row)
+            }
+          }
+          return rows
+        },
+        write: async (changes) => {
+          const prepared = this.prepare(changes)
+          if (prepared.some(({ key }) => !/^(receipt|notice|wake|demand|job-fact|runner-claim)\//.test(key)))
+            throw new Error('Invalid ingress record kind')
+          return this.apply(tx, prepared)
+        },
+      })
+      if (lease) await this.assertLease(tx, lease)
+      return result
+    })
+  }
+
+  /** Host adapters must check the live binding in this same database transaction. */
   async ingest(changes: StateChange[]): Promise<StateRecord[]> {
     const prepared = this.prepare(changes)
     if (prepared.some(({ key }) => !/^(receipt|notice|wake)\//.test(key)))
@@ -261,7 +327,13 @@ export class ListenerState {
     const current = this.owner(await tx.get('@owner', true)),
       expiry = await tx.get('@lease'),
       until = this.until(expiry)
-    if (current.owner !== lease.owner || current.epoch !== lease.epoch || until <= (await tx.now()))
+    if (
+      current.deployment !== this.deployment ||
+      lease.deployment !== this.deployment ||
+      current.owner !== lease.owner ||
+      current.epoch !== lease.epoch ||
+      until <= (await tx.now())
+    )
       throw new LeaseLost()
     return expiry!
   }
@@ -276,11 +348,13 @@ export class ListenerState {
     )
       throw new StateCorrupt()
   }
-  private owner(row?: StateRecord, schema = 2): Owner {
+  private owner(row?: StateRecord, schema = row?.schema === 3 ? 3 : 2): Owner {
     this.valid(row, schema)
     const value = row!.payload as Owner | null
     if (!value || typeof value.owner !== 'string' || !Number.isSafeInteger(value.epoch) || value.epoch < 0)
       throw new StateCorrupt()
+    if (schema === 3 && (!Number.isSafeInteger(value.deployment) || value.deployment! < 1)) throw new StateCorrupt()
+    if (schema !== 3 && value.deployment !== undefined) throw new StateCorrupt()
     return value
   }
   private until(row?: StateRecord): number {
@@ -289,7 +363,7 @@ export class ListenerState {
     if (!Number.isSafeInteger(until) || until! < 0) throw new StateCorrupt()
     return until!
   }
-  private valid(row?: StateRecord, schema = row?.key === '@owner' ? 2 : 1): void {
+  private valid(row?: StateRecord, schema = row?.key === '@owner' ? (row.schema === 3 ? 3 : 2) : 1): void {
     if (!row || row.schema !== schema || !uuid.test(row.version)) throw new StateCorrupt()
   }
 

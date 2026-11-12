@@ -28,6 +28,7 @@ export class CiNativeState {
   readonly apps: string[]
   readonly registry: CiGitHubService
   readonly state: ListenerState
+  private readonly deployment?: number
   constructor(
     private readonly db: DataSource,
     config: TypedConfigService,
@@ -37,6 +38,12 @@ export class CiNativeState {
     this.registry = new CiGitHubService(config)
     this.apps = [...new Set(this.registry.ids)]
     this.namespace = 'ci:' + (this.app || 'disabled')
+    const generation = config.get('ci.schedulerGeneration')
+    if (generation !== undefined) {
+      if (!/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation)))
+        throw new Error('Invalid hosted CI scheduler generation')
+      this.deployment = Number(generation)
+    }
     this.state = new ListenerState(
       new PostgresStateDatabase({
         transaction: (isolation, work) =>
@@ -47,6 +54,7 @@ export class CiNativeState {
           }),
       }),
       this.namespace,
+      this.deployment,
     )
   }
   onApplicationShutdown(): Promise<void> {
@@ -83,7 +91,11 @@ export class CiNativeState {
     })
   }
   inside(tx: EntityManager): ListenerState {
-    return new ListenerState(new PostgresStateDatabase({ transaction: (_isolation, work) => work(tx) }), this.namespace)
+    return new ListenerState(
+      new PostgresStateDatabase({ transaction: (_isolation, work) => work(tx) }),
+      this.namespace,
+      this.deployment,
+    )
   }
   /** Trusted connect ingress; binding authority is locked by the caller's transaction. */
   async wakeInventory(

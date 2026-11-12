@@ -11,6 +11,8 @@ export interface StateRecord {
 
 /** Internal storage port; transactions contain no GitHub or Box network calls. */
 export interface StateTransaction {
+  /** Serialize a logical ingress target, including its first absent row. */
+  lock?(key: string): Promise<void>
   now(): Promise<number>
   get(key: string, lock?: boolean): Promise<StateRecord | undefined>
   page(after: string, limit: number, prefix?: string, lock?: 'skip-locked'): Promise<StateRecord[]>

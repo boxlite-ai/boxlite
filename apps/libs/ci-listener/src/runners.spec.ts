@@ -64,6 +64,44 @@ describe('CI shared GitHub JIT runners', () => {
       ['self-hosted', 'linux', 'x64', 'boxlite'],
       journal,
     )
+  it('reads busy, idle and offline supply without invoking the mutation guard', async () => {
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/actions/runners')
+        ? {
+            total_count: 2,
+            runners: [
+              { id: 91, name, busy: true, status: 'online', labels: [{ name: 'BOXLITE' }, { name: 'linux' }] },
+              { id: 92, name: other, busy: false, status: 'offline', labels: [{ name: 'boxlite' }] },
+            ],
+          }
+        : previous(url, method)
+    expect(await registry().list()).toEqual([
+      { id: 91, name, busy: true, status: 'online', labels: ['boxlite', 'linux'] },
+      { id: 92, name: other, busy: false, status: 'offline', labels: ['boxlite'] },
+    ])
+    expect(journal).not.toHaveBeenCalled()
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+  it.each([
+    { busy: undefined },
+    { busy: 'false' },
+    { status: 'unknown' },
+    { labels: [{}] },
+    { labels: [{ name: '' }] },
+    { name: '' },
+  ])('rejects malformed supply inventory %j', async (change) => {
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/actions/runners')
+        ? {
+            total_count: 1,
+            runners: [{ id: 91, name, busy: false, status: 'online', labels: [{ name: 'boxlite' }], ...change }],
+          }
+        : previous(url, method)
+    await expect(registry().list()).rejects.toThrow('supply inventory')
+    expect(journal).not.toHaveBeenCalled()
+  })
   it('registers in the original repository only after durable intent admission', async () => {
     const jit = await registry().create(name)
     expect({ id: jit.id, name: jit.name, usable: jit.usable }).toEqual({ id: 91, name, usable: true })

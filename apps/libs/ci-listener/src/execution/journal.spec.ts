@@ -13,6 +13,7 @@ import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
 import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
+import { observeDemand } from '../demand'
 
 const definition: ExecutionScope = {
   binding: 'binding-a',
@@ -86,6 +87,105 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           pg = undefined
         }
       }
+    })
+    it('does not bind counted supply reservations to the triggering job', async () => {
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      const reserve = () => journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })
+      const first = await reserve()
+      const second = await reserve()
+      expect(first).toBeDefined()
+      expect(second).toBeDefined()
+      expect(second!.record.key).not.toBe(first!.record.key)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect(await reserve()).toBeUndefined()
+    })
+    const recordClaim = (installationId: number, repositoryId: number, runner: number) =>
+      state.ingress(`${installationId}/${repositoryId}`, async (tx) => {
+        await tx.write(
+          await observeDemand(
+            tx,
+            { installationId, accountId: 7, repositoryId, job: { id: demand.job, runId: demand.run } },
+            { status: 'in_progress', labels: ['boxlite'], runner },
+          ),
+        )
+      })
+    it('reads claims only from the original installation and requested runners', async () => {
+      await recordClaim(1, 21, 91)
+      await recordClaim(2, 21, 92)
+      expect(await journal.claimedRunners(lease, definition, [91, 92, 93])).toEqual(new Set([91]))
+      expect(await journal.claimedRunners(lease, definition, [])).toEqual(new Set())
+      expect(await journal.claimedRunners(lease, definition, [93])).toEqual(new Set())
+    })
+    it('withholds runner claim certainty when running observations overlap', async () => {
+      await recordClaim(1, 21, 91)
+      await state.ingress('1/21', async (tx) =>
+        tx.write(
+          await observeDemand(
+            tx,
+            { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 56, runId: 33 } },
+            { status: 'in_progress', labels: ['boxlite'], runner: 91 },
+          ),
+        ),
+      )
+      expect(await journal.claimedRunners(lease, definition, [91])).toEqual(new Set())
+    })
+    it.each(['repository', 'organization'] as const)('rejects a claim outside the %s scope', async (kind) => {
+      await recordClaim(1, 22, 91)
+      const scope: ExecutionScope =
+        kind === 'repository'
+          ? definition
+          : {
+              ...definition,
+              installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
+              runners: {
+                kind: 'organization',
+                account: { id: 7, login: 'owner' },
+                group: 5,
+                repositories: [21],
+                allowPrivate: true,
+                allowPublic: false,
+              },
+            }
+      await expect(journal.claimedRunners(lease, scope, [91])).rejects.toBeInstanceOf(StateCorrupt)
+      if (scope.runners.kind === 'organization') {
+        scope.runners.repositories.push(22)
+        expect(await journal.claimedRunners(lease, scope, [91])).toEqual(new Set([91]))
+      }
+    })
+    it.each([{ repository: 0 }, { run: null }, { job: '55' }, { status: 'queued' }, { ambiguous: 'true' }])(
+      'rejects malformed persisted runner claims: %j',
+      async (change) => {
+        await recordClaim(1, 21, 91)
+        const [row] = await state.read(['runner-claim/1/91'])
+        await state.commit(lease, [
+          {
+            key: row.key,
+            expected: row.version,
+            payload: JSON.parse(JSON.stringify({ ...(row.payload as object), ...change })),
+          },
+        ])
+        await expect(journal.claimedRunners(lease, definition, [91])).rejects.toBeInstanceOf(StateCorrupt)
+      },
+    )
+    it.each([
+      null,
+      { labels: null },
+      { labels: [] },
+      { labels: [17] },
+      { labels: ['linux'] },
+      { labels: ['boxlite', 'linux', 'LINUX'] },
+      { labels: ['boxlite-0vcpu-4gbmem-10gbdisk'] },
+    ])('rejects malformed supply persisted on a real reservation: %j', async (supply) => {
+      const row = (await journal.reserve(lease, key, demand, limits, { labels: ['boxlite'] }))!
+      await state.commit(lease, [
+        {
+          key: row.record.key,
+          expected: row.record.version,
+          payload: JSON.parse(JSON.stringify({ ...row.value, supply })),
+        },
+      ])
+      await expect(journal.allocation(lease, row.record.key)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await journal.used(definition.organization)).toBe(1)
     })
     it('defines known and new scopes without enumerating retained history', async () => {
       for (let generation = 2; generation <= 6; generation++) await journal.define(lease, { ...definition, generation })
@@ -555,6 +655,49 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       ).rejects.toThrow('replayed')
       expect(await journal.reserve(lease, key, { ...demand, job: 56 }, limits)).toBeUndefined()
     })
+    const registeredAllocation = async () => {
+      let row = (await journal.reserve(lease, key, demand, limits))!
+      row = await journal.advance(lease, row.record.key, row.record.version, {
+        box: { phase: 'requested', id: null },
+        effect: { id: randomUUID(), kind: 'box-create' },
+      })
+      row = await journal.advance(lease, row.record.key, row.record.version, { box: { phase: 'known', id: 'box' } })
+      row = await journal.advance(lease, row.record.key, row.record.version, {
+        runner: { phase: 'requested', id: null },
+        effect: { id: randomUUID(), kind: 'runner-register' },
+      })
+      return journal.advance(lease, row.record.key, row.record.version, { runner: { phase: 'known', id: 91 } })
+    }
+    it.each([0, Number.MAX_SAFE_INTEGER])(
+      'preserves a persisted runner registration timestamp: %s',
+      async (registeredAt) => {
+        const row = await registeredAllocation()
+        await state.commit(lease, [
+          {
+            key: row.record.key,
+            expected: row.record.version,
+            payload: JSON.parse(JSON.stringify({ ...row.value, runner: { ...row.value.runner, registeredAt } })),
+          },
+        ])
+        expect((await journal.allocation(lease, row.record.key))?.value.runner).toMatchObject({ registeredAt })
+        expect(await journal.used(definition.organization)).toBe(1)
+      },
+    )
+    it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1', null])(
+      'rejects an invalid persisted runner registration timestamp: %s',
+      async (registeredAt) => {
+        const row = await registeredAllocation()
+        await state.commit(lease, [
+          {
+            key: row.record.key,
+            expected: row.record.version,
+            payload: JSON.parse(JSON.stringify({ ...row.value, runner: { ...row.value.runner, registeredAt } })),
+          },
+        ])
+        await expect(journal.allocation(lease, row.record.key)).rejects.toBeInstanceOf(StateCorrupt)
+        expect(await journal.used(definition.organization)).toBe(1)
+      },
+    )
     it('recovery regression: returns physical quota after confirmed Box absence while retaining runner debt and job dedup', async () => {
       let row = (await journal.reserve(lease, key, demand, limits))!
       const change = async (value: Parameters<ExecutionJournal['advance']>[3]) => {

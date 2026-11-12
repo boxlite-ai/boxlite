@@ -6,6 +6,13 @@ JIT runner configuration. The official GitHub runner executes the job and report
 logs and results directly to GitHub.
 
 The shared controller lives in [`../libs/ci-listener`](../libs/ci-listener/README.md).
+Its [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
+also runs in this image. A runner taking another matching job no longer blocks
+replenishment for its trigger job. Independent resources advance concurrently
+within `CI_WORKER_MAX` and the organization's actual quota, without another fixed
+management concurrency ceiling. PAT mode rebuilds counts when busy supply lacks
+webhook observations.
+
 The hosted API imports the same controller and supplies native PostgreSQL/BoxService
 adapters; its deployed acceptance is still pending. The Node image is a local development artifact until the
 real deployment checks below have been recorded.

@@ -13,6 +13,7 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
   private controller?: Listener
   private stop?: AbortController
   private task?: Promise<void>
+  private starting?: Promise<void>
   private failure?: unknown
   constructor(
     private readonly store: CiNativeState,
@@ -38,10 +39,17 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
       },
       capacity: this.settings,
     })
-    this.task = this.controller.run(this.stop.signal).catch((error) => {
-      this.failure = error
-      this.host.report(error, 'hosted-listener-stopped')
-    })
+  }
+  /** Called by the serving host after HTTP starts listening, never during module initialization. */
+  start(): Promise<void> {
+    return (this.starting ??= (async () => {
+      if (!this.controller || this.stop!.signal.aborted) return
+      if (!(await this.store.state.activate()) || this.stop!.signal.aborted) return
+      this.task = this.controller.run(this.stop!.signal).catch((error) => {
+        this.failure = error
+        this.host.report(error, 'hosted-listener-stopped')
+      })
+    })())
   }
   async receive(notification: VerifiedWebhook, application: string = this.store.app): Promise<'stored' | 'duplicate'> {
     if (!this.controller) throw new ServiceUnavailableException('Hosted CI Listener is not configured')
@@ -51,8 +59,12 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
   }
   async onModuleDestroy(): Promise<void> {
     this.stop?.abort()
-    await this.task
-    await this.host.close()
+    try {
+      await this.starting
+      await this.task
+    } finally {
+      await this.host.close()
+    }
     if (this.failure) throw this.failure
   }
 }
