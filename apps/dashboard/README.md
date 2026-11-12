@@ -1053,3 +1053,7 @@ Checkpoints belongs to the Boxes group. Primary and secondary labels align; text
 Hover or keyboard focus can temporarily expand the compact sidebar. Pin keeps it open; leaving a preview restores the compact rail without changing routes. Only one compact tooltip can be visible, and tooltips clear when labels expand. Selected icon effects respect reduced motion.
 
 Desktop mock examples: [expanded navigation](../../docs/contributing/investigations/assets/console-navigation/topic02-navigation-dark.png) and [temporary hover preview](../../docs/contributing/investigations/assets/console-navigation/topic02-hover-dark.png). Captured at 1440 × 900 from the navigation topic preview; the accompanying Tab changes are delivered separately.
+
+## Tabs and selection feedback
+
+Content tabs use a persistent underline. Compact choices, such as theme and chart/list mode, use a selected surface. Hover previews interaction without replacing selected feedback. Navigation links preserve route semantics; in-page tabs retain tab/panel keyboard behavior. Icon effects respect reduced motion. Billing, Organization and Quickstart use the same choice rules.
