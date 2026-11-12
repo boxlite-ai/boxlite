@@ -21,6 +21,8 @@ var _ MappedNullable = &CreateVolume{}
 // CreateVolume struct for CreateVolume
 type CreateVolume struct {
 	Name *string `json:"name,omitempty"`
+	// The Filestore instance the volume stores its data on; filestore volumes only
+	Instance *string `json:"instance,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -75,6 +77,38 @@ func (o *CreateVolume) SetName(v string) {
 	o.Name = &v
 }
 
+// GetInstance returns the Instance field value if set, zero value otherwise.
+func (o *CreateVolume) GetInstance() string {
+	if o == nil || IsNil(o.Instance) {
+		var ret string
+		return ret
+	}
+	return *o.Instance
+}
+
+// GetInstanceOk returns a tuple with the Instance field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateVolume) GetInstanceOk() (*string, bool) {
+	if o == nil || IsNil(o.Instance) {
+		return nil, false
+	}
+	return o.Instance, true
+}
+
+// HasInstance returns a boolean if a field has been set.
+func (o *CreateVolume) HasInstance() bool {
+	if o != nil && !IsNil(o.Instance) {
+		return true
+	}
+
+	return false
+}
+
+// SetInstance gets a reference to the given string and assigns it to the Instance field.
+func (o *CreateVolume) SetInstance(v string) {
+	o.Instance = &v
+}
+
 func (o CreateVolume) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -87,6 +121,9 @@ func (o CreateVolume) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
+	}
+	if !IsNil(o.Instance) {
+		toSerialize["instance"] = o.Instance
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -111,6 +148,7 @@ func (o *CreateVolume) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
+		delete(additionalProperties, "instance")
 		o.AdditionalProperties = additionalProperties
 	}
 

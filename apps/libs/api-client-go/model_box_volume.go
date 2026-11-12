@@ -102,12 +102,12 @@ func (o *BoxVolume) SetMountPath(v string) {
 }
 
 // GetFilestore returns the Filestore field value if set, zero value otherwise.
-func (o *BoxVolume) GetFilestore() *BoxVolumeFilestoreRef {
+func (o *BoxVolume) GetFilestore() BoxVolumeFilestoreRef {
 	if o == nil || IsNil(o.Filestore) {
-		var ret *BoxVolumeFilestoreRef
+		var ret BoxVolumeFilestoreRef
 		return ret
 	}
-	return o.Filestore
+	return *o.Filestore
 }
 
 // GetFilestoreOk returns a tuple with the Filestore field value if set, nil otherwise
