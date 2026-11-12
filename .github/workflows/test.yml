@@ -588,6 +588,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      id-token: write
     services:
       postgres:
         image: postgres:17-alpine
@@ -608,7 +609,15 @@ jobs:
       - name: Run Secret Server PostgreSQL integration tests
         env:
           SECRET_TEST_DATABASE_URL: postgresql://boxlite:boxlite@127.0.0.1:${{ job.services.postgres.ports[5432] }}/boxlite
-        run: make test:apps:secret-server:integration
+        run: make coverage:apps:secret-server:integration
+      - name: Upload Secret Server integration coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/secret-server-integration.out
+          flags: go
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
 
   # Go SDK unit tests
   go:

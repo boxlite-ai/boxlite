@@ -127,6 +127,7 @@ help:
 	@echo "    make coverage:report       - Render collected Rust profiles as LCOV and HTML"
 	@echo "    make coverage:bindings:external - Measure native SDK calls from C, Python and Node"
 	@echo "    make coverage:go           - Collect Go SDK, bridge, runner, image-service and Secret Server coverage"
+	@echo "    make coverage:apps:secret-server:integration - Collect Secret Server PostgreSQL integration coverage"
 	@echo "    make coverage:python       - Collect Python SDK coverage"
 	@echo "    make coverage:node         - Collect Node.js SDK coverage"
 	@echo "    make coverage:infra        - Test infrastructure tooling and collect LCOV coverage"

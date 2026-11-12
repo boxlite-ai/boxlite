@@ -142,6 +142,7 @@ Run from the repository root with Go 1.25.4 or newer:
 ```sh
 make test:apps:secret-server
 make test:apps:secret-server:integration
+make coverage:apps:secret-server:integration
 make lint:apps:secret-server
 make fmt:apps:secret-server
 make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=5s -parallel=2'
@@ -151,6 +152,7 @@ The unit test target runs with the race detector and `GOWORK=off`. The integrati
 target requires infra-local PostgreSQL and permission to create a temporary database.
 It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
 creates a uniquely named database and drops it after the test.
+The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
 Database and command tests share the temporary database setup and cleanup helper.
 It also checks that SIGTERM cancels the migration command while it waits for a lock.
 CI runs the same integration target against a PostgreSQL 17 service on Ubuntu,
