@@ -459,6 +459,11 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                               onClick={() => {
                                 if (!showLabels && item.children) setExpanded(true)
                               }}
+                              aria-label={
+                                !showLabels && currentChild
+                                  ? `${item.label}, current section: ${currentChild.label}`
+                                  : undefined
+                              }
                               aria-current={
                                 isActive(item.path) && !(showLabels && item.children && groupOpen) ? 'page' : undefined
                               }
