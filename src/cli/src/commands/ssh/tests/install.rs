@@ -634,6 +634,54 @@ fn uppercase_negated_host_does_not_exclude_normalized_alias_identity() {
     assert!(!managed(home.path()).exists());
 }
 
+#[rstest::rstest]
+#[case::key("IdentityFile", "identityfile")]
+#[case::certificate("CertificateFile", "certificatefile")]
+fn escaped_host_negation_does_not_hide_extra_identities(
+    #[case] directive: &str,
+    #[case] effective_keyword: &str,
+) {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    fs::write(
+        root(home.path()),
+        format!("Host * !d\\ev\n  {directive} /manual/escaped\n"),
+    )
+    .unwrap();
+    let resolved = effective(home.path(), "dev");
+    assert!(
+        resolved
+            .lines()
+            .any(|line| line == format!("{effective_keyword} /manual/escaped")),
+        "OpenSSH must actually apply this identity: {resolved}"
+    );
+    assert!(
+        plan(home.path(), "dev", "A", false).is_err(),
+        "an escaped exclusion hid an identity that OpenSSH applies to dev"
+    );
+    assert!(!managed(home.path()).exists());
+}
+
+#[test]
+fn literal_backslash_host_does_not_claim_the_managed_alias() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    fs::write(
+        root(home.path()),
+        "Host \"d\\ev\"\n  IdentityFile /manual/other\n",
+    )
+    .unwrap();
+    assert!(
+        !effective(home.path(), "dev")
+            .lines()
+            .any(|line| line == "identityfile /manual/other")
+    );
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+}
+
 #[test]
 fn inactive_include_still_rejects_ambiguous_match_without_execution() {
     let home = test_home();

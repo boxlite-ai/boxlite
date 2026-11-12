@@ -661,7 +661,7 @@ fn directive(line: &str) -> Result<(String, &str)> {
 }
 
 /// Parse supported control-directive quoting without evaluating shell syntax.
-/// Ambiguous single quotes, escapes and unterminated quotes fail closed.
+/// Single-quoted controls and malformed quotes or escapes fail closed.
 fn words(value: &str) -> Result<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
@@ -678,6 +678,10 @@ fn words(value: &str) -> Result<Vec<String>> {
                     !escaped.is_control(),
                     "unsupported SSH configuration escape"
                 );
+                // OpenSSH preserves unknown escapes instead of interpreting them.
+                if !matches!(escaped, '\\' | '"' | '\'') && (quoted || escaped != ' ') {
+                    word.push('\\');
+                }
                 word.push(escaped);
                 started = true;
             }

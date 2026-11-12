@@ -250,9 +250,14 @@ boxlite ssh dev --install-ssh-config --overwrite
 handwritten Host block. Matching explicit Host patterns in user configuration,
 including conventional nested Includes, are conflicts. General `Host *` defaults
 are permitted unless they add authentication identities for the alias. Host
-patterns use OpenSSH's case-sensitive matching. User Includes support conventional
-quoting, relative paths, `~/` and globbing. Relative system Includes resolve under
-the selected OpenSSH client's compiled configuration directory, without `~`
+patterns use OpenSSH's case-sensitive matching.
+Unknown backslash escapes in Host patterns remain literal, matching OpenSSH.
+Exclude an alias with its exact spelling (`!dev`), not an escaped spelling such
+as `!d\ev`.
+
+User Includes support conventional quoting, relative paths, `~/` and globbing.
+Relative system Includes resolve under the selected OpenSSH client's compiled
+configuration directory, without `~`
 expansion. Other token/environment expansions and Match conditions other than
 `Match all` are refused; the installer never executes `Match exec`.
 
