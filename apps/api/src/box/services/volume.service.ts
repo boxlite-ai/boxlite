@@ -74,6 +74,16 @@ export class VolumeService {
       throw new ServiceUnavailableException('Object storage is not configured')
     }
 
+    // The API's FILESTORE_INSTANCES configuration is the instance truth
+    // source, so an unknown name fails the create here — loud, and before the
+    // volume row exists — instead of surfacing as a runner mount failure at
+    // box create.
+    if (isFilestore && !this.configService
+        .getOrThrow('volume.filestoreInstances')
+        .some((inst) => inst.name === createVolumeDto.instance)) {
+      throw new BadRequestError(`unknown Filestore instance '${createVolumeDto.instance}'`)
+    }
+
     this.organizationService.assertOrganizationIsNotSuspended(organization)
 
     const volume = new Volume()

@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
@@ -81,26 +80,26 @@ func probeLog(t *testing.T, logPath string) []string {
 
 // The mount options are the contract with the operator's provisioning: the
 // instance is pinned to NFSv4.1 (the only version the Zonal/Regional tiers
-// serve) and hard, with registry mountOptions joined into the same -o list.
+// serve) and hard, with the dispatch's mountOptions joined into the same -o list.
 // A quiet change here silently hands boxes a mount the instance cannot serve,
 // so the whole argv is pinned, not the parts someone remembered.
 func TestNfsMountArgsPinsTheProtocol(t *testing.T) {
 	path := "/mnt/boxlite-filestore-ml"
 
 	t.Run("defaults pin vers and hard", func(t *testing.T) {
-		inst := config.FilestoreInstance{Name: "ml", Server: "10.0.0.7", Export: "/vol1"}
+		ref := &dto.FilestoreRef{Instance: "ml", Server: "10.0.0.7", Export: "/vol1"}
 		want := []string{"-t", "nfs", "-o", "vers=4.1,hard", "10.0.0.7:/vol1", path}
 
-		if got := nfsMountArgs(inst, path); !reflect.DeepEqual(got, want) {
+		if got := nfsMountArgs(ref, path); !reflect.DeepEqual(got, want) {
 			t.Errorf("nfsMountArgs mismatch\n got: %v\nwant: %v", got, want)
 		}
 	})
 
-	t.Run("registry mountOptions join the same -o list", func(t *testing.T) {
-		inst := config.FilestoreInstance{Name: "ml", Server: "10.0.0.7", Export: "/vol1", MountOptions: []string{"ro"}}
+	t.Run("dispatch mountOptions join the same -o list", func(t *testing.T) {
+		ref := &dto.FilestoreRef{Instance: "ml", Server: "10.0.0.7", Export: "/vol1", MountOptions: []string{"ro"}}
 		want := []string{"-t", "nfs", "-o", "vers=4.1,hard,ro", "10.0.0.7:/vol1", path}
 
-		if got := nfsMountArgs(inst, path); !reflect.DeepEqual(got, want) {
+		if got := nfsMountArgs(ref, path); !reflect.DeepEqual(got, want) {
 			t.Errorf("nfsMountArgs mismatch\n got: %v\nwant: %v", got, want)
 		}
 	})
@@ -115,9 +114,9 @@ func TestNfsMountArgsPinsTheProtocol(t *testing.T) {
 // exec.CommandContext sets and exec.Command leaves nil.
 func TestNfsMountCmdIsNotSystemdWrappedAndIsContextBound(t *testing.T) {
 	c := testClient(t)
-	inst := config.FilestoreInstance{Name: "ml", Server: "10.0.0.7", Export: "/vol1"}
+	ref := &dto.FilestoreRef{Instance: "ml", Server: "10.0.0.7", Export: "/vol1"}
 
-	cmd := c.getNfsMountCmd(context.Background(), inst, "/mnt/boxlite-filestore-ml")
+	cmd := c.getNfsMountCmd(context.Background(), ref, "/mnt/boxlite-filestore-ml")
 
 	if filepathBase(cmd.Args[0]) != "mount" {
 		t.Errorf("nfs mount command = %q, want plain mount with no systemd-run scope", filepathBase(cmd.Args[0]))
@@ -128,29 +127,6 @@ func TestNfsMountCmdIsNotSystemdWrappedAndIsContextBound(t *testing.T) {
 	if cmd.WaitDelay != volumeMountWaitDelay {
 		t.Errorf("nfs mount command WaitDelay = %s, want %s (a hard mount parks mount(8) in D state; the kill lands late)",
 			cmd.WaitDelay, volumeMountWaitDelay)
-	}
-}
-
-// An unknown name fails the create carrying the reference — same contract as a
-// failed mount — and the error has to say it was the registry that rejected
-// the name, or the reader goes looking for a server that was never contacted.
-func TestLookupFilestoreInstance(t *testing.T) {
-	c := filestoreTestClient(t)
-	registered := config.FilestoreInstance{Name: "ml", Server: "10.0.0.7", Export: "/vol1"}
-	c.filestoreInstances = []config.FilestoreInstance{registered}
-
-	got, err := c.lookupFilestoreInstance("ml")
-	if err != nil {
-		t.Fatalf("lookupFilestoreInstance(ml) failed: %v", err)
-	}
-	if !reflect.DeepEqual(got, registered) {
-		t.Errorf("lookupFilestoreInstance(ml) = %#v, want the registry entry %#v", got, registered)
-	}
-
-	if _, err := c.lookupFilestoreInstance("ghost"); err == nil {
-		t.Fatal("lookupFilestoreInstance(ghost) succeeded, want an error")
-	} else if !strings.Contains(err.Error(), "unknown Filestore instance") {
-		t.Errorf("error %q must say the name was unknown to the registry", err)
 	}
 }
 
@@ -340,13 +316,10 @@ func TestConcurrentGetVolumeMountsRunsFilestoreMountOnce(t *testing.T) {
 	ctx := context.Background()
 	useVolumeMountBasePath(t, t.TempDir())
 
-	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
-
 	c := filestoreTestClient(t)
-	c.filestoreInstances = []config.FilestoreInstance{inst}
 	fake := installFakeFilestoreMounts(c)
 
-	volumes := []dto.VolumeDTO{{VolumeId: "vol-concurrent", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}}}
+	volumes := []dto.VolumeDTO{{VolumeId: "vol-concurrent", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}}}
 
 	const goroutines = 10
 	errs := make([]error, goroutines)
@@ -384,16 +357,14 @@ func TestGetVolumeMountsPreparesFilestoreVolumes(t *testing.T) {
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
 
-	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
-	root := filepath.Join(base, filestoreMountPrefix+inst.Name)
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 
 	c := filestoreTestClient(t)
-	c.filestoreInstances = []config.FilestoreInstance{inst}
 	fake := installFakeFilestoreMounts(c)
 
 	mounts, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
-		{VolumeId: "vol-b", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-a", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		{VolumeId: "vol-b", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 	})
 	if err != nil {
 		t.Fatalf("getVolumeMounts failed: %v", err)
@@ -491,14 +462,11 @@ func TestFilestoreVolumesShareTheDirectoryByVolumeId(t *testing.T) {
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
 
-	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
-
 	c := filestoreTestClient(t)
-	c.filestoreInstances = []config.FilestoreInstance{inst}
 	installFakeFilestoreMounts(c)
 
 	box1, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 	})
 	if err != nil {
 		t.Fatalf("box1 getVolumeMounts failed: %v", err)
@@ -507,7 +475,7 @@ func TestFilestoreVolumesShareTheDirectoryByVolumeId(t *testing.T) {
 	// A second box mounting the same volume derives the same data directory:
 	// what makes cross-box sharing (and post-destroy remount) real.
 	box2, err := c.getVolumeMounts(ctx, "box2", []dto.VolumeDTO{
-		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-shared", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 	})
 	if err != nil {
 		t.Fatalf("box2 getVolumeMounts failed: %v", err)
@@ -519,8 +487,8 @@ func TestFilestoreVolumesShareTheDirectoryByVolumeId(t *testing.T) {
 	// One box declaring the same volume twice binds the same directory at
 	// both guest paths.
 	oneBox, err := c.getVolumeMounts(ctx, "box3", []dto.VolumeDTO{
-		{VolumeId: "vol-shared", MountPath: "/x", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
-		{VolumeId: "vol-shared", MountPath: "/y", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol-shared", MountPath: "/x", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		{VolumeId: "vol-shared", MountPath: "/y", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 	})
 	if err != nil {
 		t.Fatalf("box3 getVolumeMounts failed: %v", err)
@@ -542,15 +510,13 @@ func TestRecordWriteHappensUnderTheInstanceLock(t *testing.T) {
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
 
-	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
-	root := filepath.Join(base, filestoreMountPrefix+inst.Name)
+	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 
 	c := filestoreTestClient(t)
-	c.filestoreInstances = []config.FilestoreInstance{inst}
 	fake := installFakeFilestoreMounts(c)
 
 	if _, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+		{VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 	}); err != nil {
 		t.Fatalf("getVolumeMounts failed: %v", err)
 	}
@@ -698,14 +664,12 @@ func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
 
-	inst := config.FilestoreInstance{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}
 	c := filestoreTestClient(t)
-	c.filestoreInstances = []config.FilestoreInstance{inst}
 	fake := installFakeFilestoreMounts(c)
 
 	for _, id := range []string{"", "../escape", "a/b", "a\\b", ".."} {
 		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-			{VolumeId: id, MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+			{VolumeId: id, MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 		})
 		if err == nil {
 			t.Fatalf("volume id %q: expected the path guard to refuse it, got nil", id)
@@ -734,7 +698,6 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 	useVolumeMountBasePath(t, base)
 
 	c := filestoreTestClient(t)
-	c.filestoreInstances = []config.FilestoreInstance{{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}}
 	installFakeFilestoreMounts(c)
 
 	outbound := true
@@ -742,15 +705,15 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 		Id:              "abc123def456",
 		OutboundEnabled: &outbound,
 		Volumes: []dto.VolumeDTO{
-			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
-			{VolumeId: "vol-late", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "not-in-registry"}},
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 		},
 	})
 	if err == nil {
-		t.Fatal("expected the unknown-instance failure from the second volume, got nil")
+		t.Fatal("expected the volume-id guard failure from the second volume, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown Filestore instance") {
-		t.Fatalf("expected the unknown-instance error, got %q", err)
+	if !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("expected the volume-id guard error, got %q", err)
 	}
 
 	// The first volume's entry was already on disk inside its instance

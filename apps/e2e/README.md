@@ -298,9 +298,10 @@ export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 export BOXLITE_E2E_EXPANDED_DISK_RUNNER_ID=<runner-id>
 export BOXLITE_E2E_EXPANDED_DISK_TARGET_GIB=<new-size-in-gib>
 
-# The filestore happy-path case uses this instance name from the runner's
-# FILESTORE_INSTANCES registry instead of its probe name. Without it the case
-# probes and skips when the runner has no registry (see the Filestore section):
+# The filestore happy-path case uses this instance name from the API's
+# FILESTORE_INSTANCES configuration instead of its probe name. Without it the
+# case probes and skips when the API configures no instance (see the Filestore
+# section):
 export FILESTORE_E2E_INSTANCE=dev-filestore-1
 
 # The private image case runs only with a real private image and its login,
@@ -405,21 +406,21 @@ moves to another target during the test is left intact and reported as a failure
 data directory lives on a Filestore NFS instance, created through
 `POST /volumes` with an `instance` field. They mount by box volume references
 that carry only `managed_volume`, exactly like bucket-backed volumes.
-Instances themselves are **ops-provisioned runner env config**
-(`FILESTORE_INSTANCES`, a JSON registry of named NFS instances on the runner),
-not API objects the suite can create.
+Instances themselves are **ops-provisioned API env config**
+(`FILESTORE_INSTANCES`, a JSON list of named NFS instances the API dispatches
+against), not API objects the suite can create.
 
-A module gate probes for an instance ONCE before any test runs (the registry
-is runner env config with no listing API, so one box create attempt is the
+A module gate probes for an instance ONCE before any test runs (the config
+is deployment env with no listing API, so one volume create attempt is the
 only honest probe). The gate's outcome decides the whole file:
 
-- **Registry holds the instance** → the probe box and volume are deleted and
+- **Configured instance** → the probe box and volume are deleted and
   four cases run: the unknown-instance refusal is pinned, the happy path
   (write → stop → start → read back) runs on the proven instance, two boxes
   prove data sharing (write in one, read in the other, read again after the
   first is destroyed), and the lifecycle rules are pinned (in-use refusal →
   409, free removal → 204, force re-delete → 204).
-- **No registry** (probing the generated default name) → one warning —
+- **No configured instance** (probing the generated default name) → one warning —
   `GCP FileStore instance=[<name>] not existed. Skip test_filestore.py .` —
   and the entire module skips.
 - **`FILESTORE_E2E_INSTANCE` set but unknown** → hard failure, not a skip:
@@ -428,11 +429,11 @@ only honest probe). The gate's outcome decides the whole file:
 
 All cases skip when the API key cannot attach volumes (403 without
 READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. None is
-marked `smoke` — prod's runner has no Filestore registry either.
+marked `smoke` — prod's API configures no Filestore instance either.
 
 Set `FILESTORE_E2E_INSTANCE` to name the instance the gate should probe and
-the cases should use, when the runner's registry holds one under a name other
-than the generated probe default.
+the cases should use, when the API configuration declares one under a name
+other than the generated probe default.
 
 ## The cloud legs (CI)
 

@@ -51,10 +51,9 @@ export class CreateVolumeDto {
   /**
    * The Filestore instance this volume's data directory lives on. Presence
    * makes the volume a filestore volume (data on NFS); absence keeps it an
-   * object-storage volume (data in `boxlite-volume-<id>`). The instance must
-   * appear in the target runner's FILESTORE_INSTANCES registry — the API does
-   * not check existence, and a box create referencing an unregistered
-   * instance fails loudly at mount time.
+   * object-storage volume (data in `boxlite-volume-<id>`). The name must
+   * appear in the API's FILESTORE_INSTANCES configuration, which is checked
+   * at create time.
    */
   @ApiPropertyOptional({
     description: 'The Filestore instance the volume stores its data on; filestore volumes only',
@@ -66,8 +65,8 @@ export class CreateVolumeDto {
   @Matches(FILESTORE_INSTANCE_PATTERN, {
     message:
       'instance must be the logical name of a Filestore instance: 1-63 characters of ' +
-      '[a-z0-9] and -, starting alphanumeric. It must match the instance entry in the ' +
-      "target runner's FILESTORE_INSTANCES registry.",
+      '[a-z0-9] and -, starting alphanumeric. It must match an instance entry in the ' +
+      "API's FILESTORE_INSTANCES configuration.",
   })
   instance?: string
 }

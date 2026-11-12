@@ -16,20 +16,19 @@ import (
 // guards on Create/Start/Destroy —
 // a traversal-shaped id is rejected before any mount or record work runs.
 //
-// createDtoWithUnknownFilestore carries a filestore volume naming an
-// instance that is not in the registry: once an id passes the guard,
-// getVolumeMounts fails with the instance-lookup error instead, which is
-// what distinguishes "the guard rejected it" from "the call got into mount
-// work".
-func createDtoWithUnknownFilestore(id string) dto.CreateBoxDTO {
+// createDtoWithBadVolumeId carries a filestore volume whose volume id is
+// traversal-shaped: once an id passes the guard, getVolumeMounts fails with
+// the volume-id guard error instead, which is what distinguishes "the guard
+// rejected it" from "the call got into mount work".
+func createDtoWithBadVolumeId(id string) dto.CreateBoxDTO {
 	outbound := true
 	return dto.CreateBoxDTO{
 		Id:              id,
 		OutboundEnabled: &outbound,
 		Volumes: []dto.VolumeDTO{
-			// A well-formed volume id: the helper probes the later failure
-			// (unknown instance), so the volume id guard must admit it.
-			{VolumeId: "vol-probe", Filestore: &dto.FilestoreRef{Instance: "not-in-registry"}},
+			// A traversal-shaped volume id: the volume-id guard fails it after
+			// the box-id guard admits the id.
+			{VolumeId: "../escape", Filestore: &dto.FilestoreRef{Instance: "ml", Server: "10.0.0.7", Export: "/vol1"}},
 		},
 	}
 }
@@ -38,15 +37,15 @@ func TestCreateRejectsTraversalShapedBoxId(t *testing.T) {
 	c := testClient(t)
 
 	for _, id := range []string{"bad/id", "bad\\id", "../etc", "box..id"} {
-		_, _, err := c.Create(context.Background(), createDtoWithUnknownFilestore(id))
+		_, _, err := c.Create(context.Background(), createDtoWithBadVolumeId(id))
 		if err == nil {
 			t.Fatalf("Create with id %q: expected the box id guard to reject it, got nil", id)
 		}
 		if !strings.Contains(err.Error(), "invalid box id") {
 			t.Fatalf("Create with id %q: expected the box id guard error, got %q", id, err)
 		}
-		if strings.Contains(err.Error(), "unknown Filestore instance") {
-			t.Fatalf("Create with id %q: reached volume mount work (instance lookup) although the guard should have rejected it", id)
+		if strings.Contains(err.Error(), "invalid filestore volume id") {
+			t.Fatalf("Create with id %q: reached volume mount work (volume id guard) although the box-id guard should have rejected it", id)
 		}
 	}
 }
@@ -59,15 +58,15 @@ func TestCreateAdmitsWellFormedBoxId(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := testClient(t)
 
-	// A registry-conforming id passes the guard, so the failure must come
-	// from the later mount work — here the unknown filestore instance. That
-	// contrast is what proves the guard is what rejected the ids above.
-	_, _, err := c.Create(context.Background(), createDtoWithUnknownFilestore("abc123def456"))
+	// A well-formed box id passes the guard, so the failure must come from
+	// the later mount work — here the volume-id guard. That contrast is what
+	// proves the guard is what rejected the ids above.
+	_, _, err := c.Create(context.Background(), createDtoWithBadVolumeId("abc123def456"))
 	if err == nil {
-		t.Fatal("expected the unknown-instance error once the guard admits the id, got nil")
+		t.Fatal("expected the volume-id guard error once the guard admits the id, got nil")
 	}
-	if !strings.Contains(err.Error(), "unknown Filestore instance") {
-		t.Fatalf("expected the unknown-instance error after the guard admitted the id, got %q", err)
+	if !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("expected the volume-id guard error after the guard admitted the id, got %q", err)
 	}
 }
 

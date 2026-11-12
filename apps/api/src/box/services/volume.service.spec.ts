@@ -212,11 +212,19 @@ describe('VolumeService filestore volumes', () => {
       }),
     }
     const organizationService = { assertOrganizationIsNotSuspended: jest.fn() }
+    // The instance the tests create against must exist in the API's
+    // FILESTORE_INSTANCES configuration, which the create consults.
+    const configService = {
+      getOrThrow: jest.fn((key: string) => {
+        expect(key).toBe('volume.filestoreInstances')
+        return [{ name: 'ml-scratch', server: '10.0.0.7', export: '/vol1' }]
+      }),
+    }
     const service = new VolumeService(
       volumeRepository as never,
       boxRepository as never,
       organizationService as never,
-      {} as never,
+      configService as never,
       {} as never,
     )
     return { service, volumeRepository }

@@ -559,23 +559,27 @@ A box mounts a **Filestore volume** — a Volume row whose data directory lives
 on a Filestore NFS instance, created through the volume API with an
 `instance` field and mounted by the same `managed_volume` selector as
 bucket-backed volumes. The reference carries the instance's **logical name**;
-the address is resolved from the runner's registry at mount time, so
-recreating an instance under the same name requires no change to historical
-boxes.
+the API resolves the address from its own configuration and dispatches it to
+the runner with the mount, so recreating an instance under the same name
+requires a configuration update, not a change to historical boxes.
 
-### Registry
+### Instance configuration (API side)
 
-`FILESTORE_INSTANCES` (JSON array) declares what this runner may mount:
+`FILESTORE_INSTANCES` is an environment variable of the **API** deployment —
+a JSON array declaring which Filestore instances its mount dispatch may
+resolve to:
 
 ```json
 [{"name": "ml-scratch", "server": "10.x.x.x", "export": "/vol1", "mountOptions": []}]
 ```
 
-Validation runs at startup: malformed JSON, a duplicate name, a name outside
-`^[a-z0-9][a-z0-9-]{0,62}$`, an empty `server` or `export`, or a
+Validation runs when the API starts: malformed JSON, a duplicate name, a name
+outside `^[a-z0-9][a-z0-9-]{0,62}$`, an empty `server` or `export`, or a
 `mountOptions` entry carrying a pinned option (`vers`, `nfsvers`, `proto`,
 `soft`, `hard` — the protocol is NFSv4.1 and the retry posture is hard)
-refuses to start the runner.
+refuses to start the API. A volume create naming an instance outside the list
+fails loudly; the runner configures no instances of its own and mounts what
+the dispatch carries.
 
 ### How it mounts
 
@@ -601,15 +605,15 @@ Start re-mounts lost mounts (e.g. after a host reboot) and logs failures
 without failing the start — the same policy as the object-storage backends.
 A box that started while its NFS instance was unreachable therefore shows an
 **empty directory** at the guest path: stop the box, fix connectivity or the
-registry, start again. NFS mounts are `hard`: with the network down, IO in
+API's instance configuration, start again. NFS mounts are `hard`: with the network down, IO in
 the box hangs instead of erroring — by design, not a crash.
 
-Changing an instance's `server` in the registry does not touch an existing
-mount: the runner reuses whatever is already mounted at
+Changing an instance's `server` in the API configuration does not touch an
+existing mount: the runner reuses whatever is already mounted at
 `/mnt/boxlite-filestore-<instance>`. A dead address therefore leaves a
 hard-mounted stale mount that times out every probe — unmount the old mount
 (`umount /mnt/boxlite-filestore-<instance>`) or reboot the host after editing
-the registry.
+the configuration.
 
 ### Ops prerequisites
 
@@ -624,8 +628,8 @@ the registry.
 - **Deploy order: runners before the API.** An API upgraded ahead of its
   runners can dispatch filestore volumes to a runner that predates the
   feature; the old binary treats the reference as a bucket id and fails the
-  create with a confusing mount error. Runners that already understand
-  `FILESTORE_INSTANCES` make the window harmless.
+  create with a confusing mount error. An API older than its runners simply
+  dispatches no filestore volumes at all, which is harmless.
 
 ## Background services
 
