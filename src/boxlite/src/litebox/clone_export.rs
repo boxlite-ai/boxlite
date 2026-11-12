@@ -67,6 +67,17 @@ impl BoxImpl {
             )));
         }
 
+        let owner = self.operation_owner()?;
+        tokio::spawn(async move { owner.clone_boxes_inner(count, names).await })
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("Clone task failed: {error}")))?
+    }
+
+    async fn clone_boxes_inner(
+        &self,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<crate::LiteBox>> {
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 
@@ -191,6 +202,17 @@ impl BoxImpl {
     pub(crate) async fn export_box(
         &self,
         _options: crate::runtime::options::ExportOptions,
+        dest: &std::path::Path,
+    ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        let owner = self.operation_owner()?;
+        let dest = dest.to_path_buf();
+        tokio::spawn(async move { owner.export_box_inner(&dest).await })
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("Export task failed: {error}")))?
+    }
+
+    async fn export_box_inner(
+        &self,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();

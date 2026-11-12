@@ -1685,7 +1685,7 @@ impl RuntimeImpl {
         // Create new BoxImpl and cache in both maps
         // Pass a child token so box can be cancelled independently or via runtime shutdown
         let box_token = self.shutdown_token.child_token();
-        let box_impl = Arc::new(BoxImpl::new(config, state, Arc::clone(self), box_token));
+        let box_impl = BoxImpl::new(config, state, Arc::clone(self), box_token).into_shared();
         let weak = Arc::downgrade(&box_impl);
 
         sync.active_boxes_by_id.insert(box_id.clone(), weak.clone());

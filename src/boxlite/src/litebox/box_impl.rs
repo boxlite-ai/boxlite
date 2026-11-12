@@ -5,8 +5,8 @@
 // ============================================================================
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -140,6 +140,7 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
+    owner: Weak<Self>,
     network_updates: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
@@ -200,6 +201,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
+            owner: Weak::new(),
             network_updates: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
@@ -210,6 +212,19 @@ impl BoxImpl {
             #[cfg(test)]
             background_start_finished: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    pub(crate) fn into_shared(mut self) -> SharedBoxImpl {
+        Arc::new_cyclic(|owner| {
+            self.owner = owner.clone();
+            self
+        })
+    }
+
+    pub(crate) fn operation_owner(&self) -> BoxliteResult<SharedBoxImpl> {
+        self.owner.upgrade().ok_or_else(|| {
+            BoxliteError::Internal("BoxImpl must be published through into_shared".into())
+        })
     }
 
     /// Watch this box's main command, if it is running and nobody is watching it
@@ -1880,6 +1895,7 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     mod execution_recovery;
+    mod quiesce_cancel;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

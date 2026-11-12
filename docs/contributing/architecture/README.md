@@ -93,6 +93,28 @@ with the box and rechecked on every local start. The VMM exposes virtualization
 extensions to the guest, then the guest agent grants only its `/dev/kvm` device
 to the OCI workload.
 
+### Disk-operation cancellation ownership
+
+Snapshot creation, clone, and export keep their existing per-handle `disk_ops`
+mutex. Each complete operation runs in a Tokio owner task retaining the original
+`BoxImpl`; dropping the caller detaches its wait, not the task. Disk work,
+resume/thaw, snapshot-marker cleanup, and final clone/export phases finish before
+the task releases the mutex. Cancellation can therefore still produce a completed
+snapshot or export even when the caller no longer receives its result.
+
+A weak self-reference resolves the original facade instead of reconstructing a
+handle with a different disk mutex. Runtime-created facades initialize that
+reference through `into_shared`. The owner task holds the strong reference only
+for the operation's duration.
+
+This changes cancellation ownership, not disk formats, quiesce ordering, or
+lifecycle admission. It adds no cross-handle disk registry and requires a live
+Tokio executor; executor/process destruction is not a resume/thaw guarantee.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=quiesce_cancel` for host
+regressions using a stand-in shim, loopback guest RPCs, real disk helpers, and an
+archive FIFO. These tests do not establish real-VM filesystem correctness.
+
 ### Reader/writer locks
 
 `LockGuard::new_async` and `ReadLockGuard::new_async` retry nonblocking acquisition
