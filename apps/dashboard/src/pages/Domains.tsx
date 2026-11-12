@@ -1,3 +1,4 @@
+import { DomainResourceIcon } from '@/components/ResourceStateIcon'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
 import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
@@ -147,7 +148,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                       >
                         <td className="px-4 py-3 font-semibold text-foreground">
                           <div className="flex items-center gap-3">
-                            <Globe className="size-6 shrink-0 text-muted-foreground" />
+                            <DomainResourceIcon bound={Boolean(domain.target)} />
                             <span className="min-w-0 truncate" title={domain.hostname}>
                               {domain.hostname}
                             </span>

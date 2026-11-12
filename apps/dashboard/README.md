@@ -1057,3 +1057,7 @@ Desktop mock examples: [expanded navigation](../../docs/contributing/investigati
 ## Tabs and selection feedback
 
 Content tabs use a persistent underline. Compact choices, such as theme and chart/list mode, use a selected surface. Hover previews interaction without replacing selected feedback. Navigation links preserve route semantics; in-page tabs retain tab/panel keyboard behavior. Icon effects respect reduced motion. Billing, Organization and Quickstart use the same choice rules.
+
+## Resource icon state accents
+
+Box and Volume icons show restrained lifecycle accents while retaining adjacent status text and existing action rules. Only transitional work animates; pending Volume work stays static. Domain accents mean a binding exists, not that DNS or the endpoint is healthy. Unknown states remain neutral. Decorative SVGs are hidden from assistive technology, and reduced-motion preferences disable their animations.

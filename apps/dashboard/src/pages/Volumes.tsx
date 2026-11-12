@@ -1,3 +1,4 @@
+import { VolumeResourceIcon } from '@/components/ResourceStateIcon'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -236,7 +237,7 @@ const Volumes: React.FC = () => {
             <div key={volume.id}>
               <div className={cn(ROW_GRID, 'resource-list-row')}>
                 <span className="flex min-w-0 items-center gap-3">
-                  <HardDrive className="size-6 shrink-0 text-muted-foreground" />
+                  <VolumeResourceIcon state={volume.state} />
                   <span className="resource-name" title={volume.name}>
                     {volume.name}
                   </span>

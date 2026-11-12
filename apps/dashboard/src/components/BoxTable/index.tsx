@@ -1,10 +1,12 @@
+import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
+import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { isCheckpointBoxIdle } from '@/lib/checkpoints'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -14,7 +16,7 @@ import { toast } from 'sonner'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
-import { OrganizationRolePermissionsEnum, Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
+import { OrganizationRolePermissionsEnum, Box } from '@boxlite-ai/api-client'
 import {
   Check,
   Container,
@@ -30,46 +32,6 @@ import {
 import { useState } from 'react'
 import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
-
-// Business states choose semantic colors; shared presentation owns geometry.
-const STATUS = {
-  running: 'hsl(var(--success))',
-  stopped: 'hsl(var(--muted-foreground))',
-  error: 'hsl(var(--destructive))',
-  idle: 'hsl(var(--warning))',
-  dim: 'hsl(var(--muted-foreground))',
-} as const
-
-function statusOf(box: Box): { label: string; color: string } {
-  switch (box.state) {
-    case BoxState.STARTED:
-      return { label: 'RUNNING', color: STATUS.running }
-    case BoxState.STOPPED:
-      return { label: 'STOPPED', color: STATUS.stopped }
-    case BoxState.ERROR:
-      return { label: 'ERROR', color: STATUS.error }
-    case BoxState.CREATING:
-      // A first pull is the one slow step the API reports; name it, so a box
-      // that sits in CREATING for a minute is not mistaken for a stuck one.
-      if (box.progress?.phase === BoxProgressPhase.PREPARING_IMAGE) {
-        return { label: 'PULLING IMAGE', color: STATUS.idle }
-      }
-      return { label: 'STARTING', color: STATUS.idle }
-    case BoxState.STARTING:
-    case BoxState.RESTORING:
-      return { label: 'STARTING', color: STATUS.idle }
-    case BoxState.STOPPING:
-      return { label: 'STOPPING', color: STATUS.idle }
-    case BoxState.DESTROYING:
-      return { label: 'DELETING', color: STATUS.idle }
-    case BoxState.RESIZING:
-      return { label: 'RESIZING', color: STATUS.idle }
-    case BoxState.DESTROYED:
-      return { label: 'DELETED', color: STATUS.dim }
-    default:
-      return { label: (box.state ?? 'UNKNOWN').toUpperCase(), color: STATUS.dim }
-  }
-}
 
 // Proportional columns so the gaps stay even as the table widens, instead of
 // dumping all the slack into the Name column.
@@ -105,7 +67,7 @@ function CopyNameButton({ name, className }: { name: string; className?: string 
       }}
       className={`inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className ?? ''}`}
     >
-      {copied ? <Check className="size-[13px]" style={{ color: STATUS.running }} /> : <Copy className="size-[13px]" />}
+      {copied ? <Check className="size-[13px]" style={{ color: 'hsl(var(--success))' }} /> : <Copy className="size-[13px]" />}
     </button>
   )
 }
@@ -301,7 +263,6 @@ export function BoxTable({
           : data.length === 0
             ? emptyState
             : data.map((box) => {
-                const st = statusOf(box)
                 const name = getBoxDisplayName(box)
                 const busy = boxIsLoading[box.id]
 
@@ -318,7 +279,7 @@ export function BoxTable({
                   >
                     {/* the box: its shape drawn, then its name */}
                     <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
-                      <Container className="size-6 shrink-0 text-muted-foreground" />
+                      <BoxResourceIcon box={box} />
                       <a
                         className="resource-link"
                         href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
@@ -342,7 +303,7 @@ export function BoxTable({
                     </span>
 
                     {/* status */}
-                    <StatusIndicator label={st.label} color={st.color} />
+                    <BoxStatusIndicator box={box} />
 
                     {/* actions */}
                     <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
@@ -369,7 +330,6 @@ export function BoxTable({
           : data.length === 0
             ? emptyState
             : data.map((box) => {
-                const st = statusOf(box)
                 const name = getBoxDisplayName(box)
                 const created = getRelativeTimeString(box.createdAt).relativeTimeString
                 const busy = boxIsLoading[box.id]
@@ -405,7 +365,7 @@ export function BoxTable({
                           {getBoxPublicIdLabel(box)}
                         </span>
                       </span>
-                      <StatusIndicator label={st.label} color={st.color} />
+                      <BoxStatusIndicator box={box} />
                     </div>
 
                     <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">
