@@ -665,6 +665,26 @@ body {
   --scroll-surface: 0 0% 7%;
 }
 
+.quota-ticks {
+  display: inline-grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  width: 64px;
+  height: 8px;
+  flex: none;
+  vertical-align: middle;
+}
+.quota-tick {
+  position: relative;
+  background: hsl(var(--border));
+}
+.quota-tick > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: currentColor;
+  opacity: 0.75;
+}
+
 /* Resource icon animations affect their accents only; existing row feedback is independent. */
 .resource-state-accent,
 .resource-state-trace {
@@ -708,4 +728,3 @@ body {
     stroke-dashoffset: -7;
   }
 }
-
