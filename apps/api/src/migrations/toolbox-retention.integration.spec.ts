@@ -56,8 +56,8 @@ databaseSuite('Toolbox column during rolling API deployment', () => {
     await db.query('ALTER TABLE audit_log DROP COLUMN "leaseExpiresAt"')
     await db.query('DROP INDEX idx_audit_log_pending_created_at')
     await db.query('CREATE TABLE region (id text PRIMARY KEY, "proxyUrl" text, "toolboxProxyUrl" character varying)')
-    // Pending startup migrations also require the existing integer CPU columns.
-    await db.query('CREATE TABLE box (cpu integer NOT NULL DEFAULT 2)')
+    // Pending startup migrations require the existing CPU and memory columns.
+    await db.query('CREATE TABLE box (cpu integer NOT NULL DEFAULT 2, mem integer NOT NULL DEFAULT 4)')
     await db.query('CREATE TABLE warm_pool (cpu integer NOT NULL)')
     await db.query('CREATE TABLE runner (id uuid PRIMARY KEY)')
     await db.query("INSERT INTO region VALUES ('us', 'https://proxy.test', 'https://legacy.test')")
