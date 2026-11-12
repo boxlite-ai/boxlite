@@ -159,7 +159,7 @@ Stored header names, templates and rendered values receive the same validation
 on creation, activation and import. Legacy host-conflict handling remains
 separate. Restart stops a running box first, then starts it. If stored secret
 headers are invalid, start rejects the configuration after the VM has stopped;
-the stored data remains intact.
+the stored data remains intact only if stop did not remove the box.
 
 Pick the header the SDK in the box actually sends. If the configured header is
 absent, no credential is injected and the upstream may return 401.
@@ -180,9 +180,16 @@ absent, no credential is injected and the upstream may return 401.
 Creation applies all these rules. Stored configurations remain readable as metadata.
 Start of a new VM and import validate stored secret headers before
 activation or installation. Running legacy boxes keep running until stopped;
-reattaching to stop them does not validate headers. Restart performs stop first, so rejected activation
+reattaching to stop them does not validate headers.
+
+Restart performs stop first. For boxes not removed on stop, rejected activation
 leaves the box stopped with its stored data intact. Missing, null or empty headers
 produce `secret "x" has no headers; recreate the box with headers`.
+On a local runtime, `auto_delete > 0`, or legacy `auto_remove=true` when
+`auto_delete` is unset, removes the box and its data on stop unless clone dependencies prevent deletion.
+Restart then reports that the box disappeared without calling start.
+Back up data before restarting such legacy boxes.
+
 Other legacy header conflicts retain their existing last-writer behavior and warning.
 
 Recovering a cloud box recreates it, so a stored secret that breaks these rules
@@ -230,8 +237,14 @@ including an empty value, triggers injection on a matching host.
 
 **Required-headers upgrade notice:** local SDK and `boxlite serve` users must recreate
 existing boxes that have secrets, supplying explicit headers. Metadata queries still
-work. Restart stops a running legacy box first, then start rejects missing headers;
-its stored data remains intact, and recreation with explicit headers is required.
+work. Restart stops a running legacy box first; if stop retains the box, start rejects missing headers and its stored data remains intact.
+Recreation with explicit headers is required.
+
+Back up data before restarting legacy boxes configured for removal on stop.
+Local `auto_delete > 0`, or legacy `auto_remove=true` when `auto_delete` is unset,
+deletes the box and its data unless clone dependencies prevent deletion.
+If deleted, restart reports that the box disappeared instead of starting it.
+
 Import still rejects invalid headers before changing stored-data state.
 Running legacy boxes keep running until stopped. The cloud database was confirmed to contain no such boxes;
 local SQLite stores were not checked.
