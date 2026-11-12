@@ -6,6 +6,7 @@
 
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -14,7 +15,7 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, Not, In, FindOptionsWhere } from 'typeorm'
-import { Volume } from '../entities/volume.entity'
+import { Volume, type AppVolumeTarget } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { CreateVolumeDto } from '../dto/create-volume.dto'
 import { v4 as uuidv4 } from 'uuid'
@@ -50,11 +51,16 @@ export class VolumeService {
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
 
-  async create(organization: Organization, createVolumeDto: CreateVolumeDto, ctx: Context): Promise<Volume> {
+  async create(
+    organization: Organization,
+    createVolumeDto: CreateVolumeDto,
+    ctx: Context,
+    target?: AppVolumeTarget,
+  ): Promise<Volume> {
     const volumeId = uuidv4()
     return recordOutcomes(
       { name: 'volume.create', organizationId: organization.id, correlationId: volumeId, ctx },
-      () => this.enqueueCreation(organization, createVolumeDto, volumeId),
+      () => this.enqueueCreation(organization, createVolumeDto, volumeId, target),
       mutationFailureType,
     )
   }
@@ -63,6 +69,7 @@ export class VolumeService {
     organization: Organization,
     createVolumeDto: CreateVolumeDto,
     volumeId: string,
+    target?: AppVolumeTarget,
   ): Promise<Volume> {
     if (!isVolumeStorageConfigured(this.configService)) {
       throw new ServiceUnavailableException('Object storage is not configured')
@@ -92,6 +99,13 @@ export class VolumeService {
     }
 
     volume.organizationId = organization.id
+    if (target) {
+      const appId = await this.appForEnvironment(organization.id, target.environmentId)
+      if (appId !== target.appId) throw new NotFoundException('App environment not found')
+      volume.targetType = 'app'
+      volume.appId = appId
+      volume.environmentId = target.environmentId
+    }
     volume.state = VolumeState.PENDING_CREATE
 
     const savedVolume = await this.volumeRepository.save(volume)
@@ -211,6 +225,28 @@ export class VolumeService {
     })
   }
 
+  async findAllForApp(organizationId: string, target: AppVolumeTarget): Promise<Volume[]> {
+    return this.volumeRepository.find({
+      where: {
+        organizationId,
+        targetType: 'app',
+        appId: target.appId,
+        environmentId: target.environmentId,
+        state: Not(VolumeState.DELETED),
+      },
+    })
+  }
+
+  private async appForEnvironment(organizationId: string, environmentId: string): Promise<string> {
+    const [environment] = await this.volumeRepository.manager.query(
+      `SELECT a.id FROM cloud_app.apps a JOIN cloud_app.envs e ON e.app_id = a.id
+       WHERE a.org_id = $1 AND e.id = $2 AND a.deleted_at IS NULL`,
+      [organizationId, environmentId],
+    )
+    if (!environment) throw new NotFoundException('App environment not found')
+    return environment.id
+  }
+
   /**
    * Resolve each selector to the volume it names, or throw.
    *
@@ -221,7 +257,11 @@ export class VolumeService {
    * Persisting the caller's selector instead would let one tenant name a volume
    * after another tenant's id and have the runner resolve it there.
    */
-  async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Map<string, string>> {
+  async validateVolumes(
+    organizationId: string,
+    volumeIdOrNames: string[],
+    appEnvironmentId?: string,
+  ): Promise<Map<string, string>> {
     if (!volumeIdOrNames.length) {
       return new Map()
     }
@@ -254,6 +294,16 @@ export class VolumeService {
         throw new NotFoundException(`Volume '${selector}' not found`)
       }
       selected.set(selector, volume)
+    }
+
+    const appVolumes = [...new Set(selected.values())].filter((volume) => volume.targetType === 'app')
+    if (appVolumes.length) {
+      const appId = appEnvironmentId ? await this.appForEnvironment(organizationId, appEnvironmentId) : null
+      for (const volume of appVolumes) {
+        if (!appId || volume.appId !== appId) {
+          throw new ForbiddenException(`Volume '${volume.name}' belongs to App '${volume.appId}'`)
+        }
+      }
     }
 
     // Readiness is checked on the volumes actually selected, not on every row

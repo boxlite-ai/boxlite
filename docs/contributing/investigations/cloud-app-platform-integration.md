@@ -58,6 +58,37 @@ The first ingress includes an API forwarding hop to preserve the existing TypeSc
 
 The existing platform uses TypeORM 0.3.31, PostgreSQL and ioredis. PostgreSQL's [row locking](https://www.postgresql.org/docs/18/sql-select.html#SQL-FOR-UPDATE-SHARE) supports transactional queue claiming. [Neon's official project API](https://neon.com/docs/reference/api/projects/create-project) retains the current provider contract. [Cloud Run CPU allocation](https://docs.cloud.google.com/run/docs/configuring/billing-settings) requires an explicit hosting decision for background work; request handling alone does not provide a persistent worker.
 
+## App-owned volumes
+
+Platform `volume` rows carry `target_type`, `app_id`, and `environment_id`.
+Ordinary organization volumes use `target_type = 'box'` with null App references.
+App volumes use `target_type = 'app'` and both stable references. The row records
+the provisioning environment, while the App is the sharing boundary. A Box of
+that App can mount the volume across environments. Other Apps and standalone
+Boxes receive a permission error at the shared Box creation boundary.
+
+Cloud App creation passes its environment as an internal `BoxService` option.
+The volume service resolves its App and organization from PostgreSQL before
+authorizing mounts. Request labels and environment variables supplied to the
+public Box API grant no App ownership. App volume provisioning, listing and
+cleanup query the platform volume owner directly. Runtime code uses this owner
+instead of an environment-to-volume mapping table or name-based adoption.
+
+The pre-deploy migration adds the ownership columns, backfills existing mappings,
+and installs a temporary trigger for mappings written by old API instances during
+rollout. The post-deploy migration removes the trigger and mapping table. An
+existing volume claimed by multiple environments or mounted outside its App
+requires the conflicting mount to be removed before migration. The migration
+rolls back on such a conflict. Row checks enforce complete ownership fields, and
+the volume service checks the live App and environment at creation and mounting.
+This follows the [platform migration lifecycle](../../../apps/api/src/migrations/README.md)
+and PostgreSQL's distinction between [row constraints](https://www.postgresql.org/docs/18/ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS)
+and [transactional triggers](https://www.postgresql.org/docs/18/trigger-definition.html).
+
+Validation covers migration backfill and rollback on real PostgreSQL, rollout
+writes, same-App mounts, denied standalone and other-App mounts, misleading public
+labels, and environment cleanup preserving another environment's volumes.
+
 ## Validation and rollout
 
 1. Repository tests verify organization isolation, organization credential permissions, atomic deployment allocation, callbacks and worker recovery against actual production services/repositories.

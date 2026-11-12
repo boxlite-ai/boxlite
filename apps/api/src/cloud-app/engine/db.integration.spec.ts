@@ -288,7 +288,6 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
         },
         boxlite: {
           getBox: async () => null,
-          listVolumes: async () => [],
           createBox: async () => {
             throw new Error('apply has no build')
           },
@@ -298,10 +297,13 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
           tunnel: async () => {
             throw new Error('unused')
           },
-          createVolume: async () => {
+        },
+        volumes: {
+          list: async () => [],
+          create: async () => {
             throw new Error('unused')
           },
-          deleteVolume: async () => undefined,
+          remove: async () => undefined,
         },
         neon: {} as never,
         supervisor: {} as never,
