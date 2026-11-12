@@ -123,8 +123,11 @@ export class Listener {
       scanStop.abort()
       try {
         if (superseded) {
-          // Failed scan retirement must not skip the other local owners.
-          await scans?.catch((error) => this.options.host.report(error, 'compensation-retirement'))
+          // A pending scan must not delay retirement of independent owners.
+          const [drain, scan] = await Promise.allSettled([this.drain(signal), scans])
+          if (scan.status === 'rejected') this.options.host.report(scan.reason, 'compensation-retirement')
+          if (drain.status === 'rejected') throw drain.reason
+          // A scan may return a reader after the first drain has finished.
           await this.drain(signal)
         } else await scans
       } finally {

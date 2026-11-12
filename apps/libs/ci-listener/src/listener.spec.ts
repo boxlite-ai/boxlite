@@ -739,7 +739,7 @@ describe('CI shared Listener orchestration', () => {
       clearTimeout(deadline)
       release.resolve()
       abort.abort()
-      await running
+      await running.catch(() => {})
     }
   })
   it('compensates a missed webhook by recording the scanned job before dispatching it', async () => {
@@ -1075,7 +1075,7 @@ describe('CI shared Listener orchestration', () => {
     try {
       await listener.run(abort.signal)
       expect(abort.signal.aborted).toBe(false)
-      expect(close).toHaveBeenCalledTimes(1)
+      expect(close).toHaveBeenCalledTimes(2)
       expect(backend.close).toHaveBeenCalled()
       expect(backend.workers.stop).not.toHaveBeenCalled()
       expect(backend.workers.remove).not.toHaveBeenCalled()
@@ -1104,12 +1104,66 @@ describe('CI shared Listener orchestration', () => {
     try {
       await listener.run(abort.signal)
       expect(abort.signal.aborted).toBe(false)
-      expect(close).toHaveBeenCalledTimes(1)
+      expect(close).toHaveBeenCalledTimes(2)
       expect(host.discover).not.toHaveBeenCalled()
       expect(host.backend).not.toHaveBeenCalled()
     } finally {
       clearTimeout(deadline)
       abort.abort()
+    }
+  })
+  it.each([false, true])('drains known owners while a scan is opening (revocation retries: %s)', async (retry) => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const opening = deferred(),
+      release = deferred(),
+      closed = deferred()
+    let closes = 0
+    const reader = {
+      queued: jest.fn(async () => []),
+      publish: jest.fn(async () => {}),
+      close: jest.fn(async () => {
+        if (++closes <= (retry ? 2 : 0)) throw new Error('Late reader revocation pending')
+      }),
+    }
+    jest.mocked(host.scan).mockImplementation(async () => {
+      opening.resolve()
+      await release.promise
+      return reader
+    })
+    const close = jest.fn(async () => closed.resolve())
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+      await opening.promise
+      await replacement.activate()
+    })
+    const running = listener.run(abort.signal)
+    try {
+      const result = await Promise.race([
+        closed.promise.then(() => 'closed'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 500)),
+      ])
+      expect(result).toBe('closed')
+      expect(backend.close).toHaveBeenCalled()
+      expect(reader.close).not.toHaveBeenCalled()
+      release.resolve()
+      await running
+      expect(reader.close).toHaveBeenCalled()
+      expect(reader.queued).not.toHaveBeenCalled()
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+    } finally {
+      release.resolve()
+      abort.abort()
+      await running.catch(() => {})
     }
   })
   it('drains every local owner after takeover despite compensation retirement failures', async () => {
@@ -1161,7 +1215,7 @@ describe('CI shared Listener orchestration', () => {
     try {
       await listener.run(abort.signal)
       expect(abort.signal.aborted).toBe(false)
-      expect(close).toHaveBeenCalledTimes(2)
+      expect(close).toHaveBeenCalledTimes(3)
       expect(reader.close).toHaveBeenCalledTimes(4)
       expect(trace.indexOf('host-close')).toBeLessThan(trace.indexOf('scan-close-4'))
       expect(backend.workers.remove).not.toHaveBeenCalled()
