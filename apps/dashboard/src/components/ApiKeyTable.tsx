@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceFilterEmptyState, ResourceEmptyState } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { getRelativeTimeString } from '@/lib/utils'
@@ -30,6 +30,7 @@ interface DataTableProps {
   loading: boolean
   isLoadingKey: (key: ApiKeyList) => boolean
   onRevoke: (key: ApiKeyList) => void
+  onClearFilter?: () => void
 }
 
 // Mirrors the Boxes (BoxTable) layout: borderless full-height column, header with a
@@ -40,7 +41,7 @@ const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
  * Lists API keys with a confirmation step before calling the owner's revoke handler.
  * Per-key loading state disables revocation while its request is in flight.
  */
-export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
+export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilter }: DataTableProps) {
   const hasRows = loading || data.length > 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -67,6 +68,8 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
                   <div className="h-4 w-3/4 animate-pulse bg-card" />
                 </div>
               ))
+            ) : data.length === 0 && onClearFilter ? (
+              <ResourceFilterEmptyState title="No API keys match your search" onClear={onClearFilter} />
             ) : data.length === 0 ? (
               <ResourceEmptyState
                 title="No API keys yet."

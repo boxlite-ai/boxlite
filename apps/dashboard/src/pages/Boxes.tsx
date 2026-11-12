@@ -8,10 +8,10 @@ import { ResourceFilter } from '@/components/ResourceLayout'
 import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
 import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { OrganizationSuspendedError } from '@/api/errors'
-import { AsciiButton, StatCard } from '@/components/ascii'
+import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
-import { Plus } from '@/components/ui/icon'
+import { Activity, Container, Plus, Square } from '@/components/ui/icon'
 
 import {
   AlertDialog,
@@ -737,11 +737,29 @@ const Boxes: React.FC = () => {
       </div>
 
       {(totalBoxesQuery.data ?? 0) >= FLEET_THRESHOLD && (
-        <div className="mb-6 grid shrink-0 grid-cols-3 gap-3" aria-label="Boxes overview">
-          <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
-          <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
-          <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
-        </div>
+        <dl
+          className="mb-4 grid shrink-0 grid-cols-3 border-y border-border bg-gradient-to-r from-card/80 to-card/20 py-3"
+          aria-label="Boxes overview"
+        >
+          {[
+            { label: 'Total boxes', value: totalBoxesDisplay, icon: Container, color: 'text-brand' },
+            { label: 'Running', value: runningBoxesDisplay, icon: Activity, color: 'text-success' },
+            { label: 'Stopped', value: stoppedBoxesDisplay, icon: Square, color: 'text-muted-foreground' },
+          ].map(({ label, value, icon: Icon, color }) => (
+            <div key={label} className="relative min-w-0 border-border px-3 sm:px-5 [&:not(:first-child)]:border-l">
+              <dt className="font-sans text-meta leading-4 tracking-[0.06em] text-muted-foreground">
+                {label}
+                <Icon
+                  aria-hidden="true"
+                  className={`absolute right-5 top-1/2 hidden size-[18px] -translate-y-1/2 sm:block ${color}`}
+                />
+              </dt>
+              <dd className="break-all font-mono text-section font-medium leading-6 tracking-tight tabular-nums sm:pr-7">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       )}
 
       {/* toolbar */}

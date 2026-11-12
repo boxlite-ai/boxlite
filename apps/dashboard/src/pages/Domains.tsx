@@ -1,3 +1,4 @@
+import { QuotaTicks } from '@/components/QuotaTicks'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
 import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
@@ -66,7 +67,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </p>
       </div>
 
-      <div className="resource-toolbar">
+      <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">
         <ResourceFilter
           label="Filter domains"
           value={filter}
@@ -74,10 +75,21 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           count={query.isSuccess ? rows.length : '—'}
           disabled={!canManage || !query.isSuccess}
         />
+        <AsciiButton
+          variant="primary"
+          className="h-11 shrink-0 justify-self-start sm:h-9 sm:justify-self-end"
+          disabled={!canClaim}
+          onClick={openForm}
+        >
+          <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
+        </AsciiButton>
         {canManage && query.isSuccess && data && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground">
-            <span className="font-mono tabular-nums">
-              {data.used} / {data.limit} domains held · {data.remaining} available
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground sm:col-span-2">
+            <span className="inline-flex items-center gap-2 font-mono tabular-nums">
+              <span>
+                {data.used} / {data.limit} domains held · {data.remaining} available
+              </span>
+              <QuotaTicks used={data.used} limit={data.limit} />
             </span>
             {!data.domain_suffix ? (
               <span>Domain requests are unavailable on this deployment.</span>
@@ -86,10 +98,6 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
             ) : null}
           </div>
         )}
-        <div className="flex-1" />
-        <AsciiButton variant="primary" className="h-11 sm:h-9" disabled={!canClaim} onClick={openForm}>
-          <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
-        </AsciiButton>
       </div>
 
       {!canManage ? (
