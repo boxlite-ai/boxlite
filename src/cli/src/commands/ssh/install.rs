@@ -890,6 +890,30 @@ fn include_pattern(value: &str, home: &Path, base: &Path, expand_tokens: bool) -
         !value.is_empty() && !value.contains('$') && !value.contains('`'),
         "unsupported SSH Include environment expansion"
     );
+    // Native glob supports POSIX bracket expressions that Rust glob treats as
+    // literal characters, which can hide files from both configuration scans.
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '[' {
+            continue;
+        }
+        if matches!(characters.peek(), Some('!' | '^')) {
+            characters.next();
+        }
+        // A leading closing bracket is a literal member of the set.
+        if characters.peek() == Some(&']') {
+            characters.next();
+        }
+        while let Some(member) = characters.next() {
+            if member == ']' {
+                break;
+            }
+            ensure!(
+                member != '[' || !matches!(characters.peek(), Some(':' | '.' | '=')),
+                "unsupported SSH Include POSIX bracket expression; use ordinary wildcards instead"
+            );
+        }
+    }
     // Native and Rust globbing agree on our literal-backslash bracket class,
     // but other backslash escapes are ambiguous between the two parsers.
     ensure!(

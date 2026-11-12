@@ -256,6 +256,9 @@ Exclude an alias with its exact spelling (`!dev`), not an escaped spelling such
 as `!d\ev`.
 
 User Includes support conventional quoting, relative paths, `~/` and globbing.
+POSIX named character classes such as `[[:alpha:]]`, collating symbols and
+equivalence classes are refused because the static scanner cannot expand them
+like OpenSSH. Use ordinary wildcards such as `config.d/*.conf` instead.
 Relative system Includes resolve under the selected OpenSSH client's compiled
 configuration directory, without `~`
 expansion. Other token/environment expansions and Match conditions other than

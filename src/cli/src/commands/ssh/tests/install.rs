@@ -49,6 +49,90 @@ fn effective(home: &Path, alias: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+#[rstest::rstest]
+#[case::user_preflight(false, false)]
+#[case::system_preflight(true, false)]
+#[case::user_commit(false, true)]
+#[case::system_commit(true, true)]
+fn posix_class_includes_cannot_hide_personal_identities(
+    #[case] system: bool,
+    #[case] rescan: bool,
+) {
+    let home = test_home();
+    let directory = home.path().join(".ssh/config.d");
+    fs::create_dir_all(&directory).unwrap();
+    let control = directory.join("control.inc");
+    fs::write(&control, "").unwrap();
+    fs::write(
+        directory.join("personal.conf"),
+        "Host *\n  IdentityFile /manual/personal\n",
+    )
+    .unwrap();
+    let source = if system {
+        system_root(home.path())
+    } else {
+        root(home.path())
+    };
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let original = format!("Include {}\n", control.display());
+    fs::write(&source, &original).unwrap();
+    let installation = rescan.then(|| plan(home.path(), "dev", "A", false).unwrap());
+    fs::write(
+        &control,
+        format!("Include {}/[[:alpha:]]*.conf\n", directory.display()),
+    )
+    .unwrap();
+    let output = Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(&source)
+        .arg("dev")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let effective = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        effective
+            .lines()
+            .any(|line| line == "identityfile /manual/personal"),
+        "OpenSSH must actually include the personal identity: {effective}"
+    );
+    let result = match installation {
+        Some(installation) => installation.commit(&stanza("dev", "127.0.0.1")),
+        None => plan(home.path(), "dev", "A", false).map(drop),
+    };
+    assert!(
+        result.is_err(),
+        "installer accepted an Include that hides an active personal identity"
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+    assert!(!managed(home.path()).exists());
+    assert!(!home.path().join(".ssh/config.boxlite-backup").exists());
+}
+
+#[test]
+fn include_patterns_distinguish_posix_expressions_from_literal_brackets() {
+    let home = Path::new("/home/test");
+    for pattern in ["[.]", "[=]", "[[]", "[]]", "[!]]", "[abc]", "[a-z]"] {
+        assert!(
+            include_pattern(pattern, home, home, false).is_ok(),
+            "{pattern}"
+        );
+    }
+    for pattern in [
+        "[[:alpha:]]",
+        "[![:digit:]]",
+        "[][:alpha:]]",
+        "[a[:alpha:]]",
+        "[[.a.]]",
+        "[[=a=]]",
+    ] {
+        assert!(
+            include_pattern(pattern, home, home, false).is_err(),
+            "{pattern}"
+        );
+    }
+}
+
 /// Reinstalling the same identity preserves handwritten bytes and backup.
 #[test]
 fn same_identity_updates_without_duplicate_include_or_rewriting_original() {

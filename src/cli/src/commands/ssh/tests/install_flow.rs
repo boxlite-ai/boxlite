@@ -56,6 +56,27 @@ fn assert_installed_proxy(cloud: &Cloud, root: &str, token: &str) {
     );
 }
 
+#[rstest::rstest]
+#[case::context("BOXLITE_CONTEXT", "ambient")]
+#[case::profile("BOXLITE_PROFILE", "ambient")]
+#[case::url("BOXLITE_REST_URL", "http://127.0.0.1:1")]
+#[case::prefix("BOXLITE_REST_PATH_PREFIX", "ambient")]
+#[case::bearer("BOXLITE_API_KEY", "ambient-key")]
+fn cloud_install_ignores_ambient_settings(#[case] name: &str, #[case] value: &str) {
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    isolated(&mut command, home.path());
+    command
+        .args([
+            "--exact",
+            "commands::ssh::setup::tests::install_flow::cloud_install_prepares_without_connecting_and_repeats_idempotently",
+            "--nocapture",
+        ])
+        .env(name, value)
+        .assert()
+        .success();
+}
+
 /// Managed aliases must not inherit a host-key helper from handwritten defaults.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_install_does_not_inherit_host_key_commands() {
@@ -169,10 +190,9 @@ async fn cloud_install_prepares_without_connecting_and_repeats_idempotently() {
         );
         assert!(state.connects.is_empty());
         assert!(
-            state
-                .requests
-                .iter()
-                .all(|(_, path, _)| !path.contains("/network/tunnel")),
+            state.requests.iter().all(|(_, path, auth)| {
+                !path.contains("/network/tunnel") && auth == "Bearer stored-key"
+            }),
             "{:?}",
             state.requests
         );

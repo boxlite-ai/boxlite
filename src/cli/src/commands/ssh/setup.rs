@@ -26,7 +26,11 @@ pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Resu
     } else {
         None
     };
-    execute_inner(args, global, installation).await
+    let connection = ConnectionTarget {
+        context: global.resolved_context(),
+        rest: global.rest_options()?,
+    };
+    execute_inner(args, global, connection, installation).await
 }
 
 struct InstallationTarget {
@@ -37,12 +41,9 @@ struct InstallationTarget {
 async fn execute_inner(
     args: &super::SshArgs,
     global: &GlobalFlags,
+    connection: ConnectionTarget,
     installation: Option<InstallationTarget>,
 ) -> Result<i32> {
-    let connection = ConnectionTarget {
-        context: global.resolved_context(),
-        rest: global.rest_options()?,
-    };
     let (runtime, home) = match &connection.rest {
         Some(options) => {
             let home = global
