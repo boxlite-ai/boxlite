@@ -22,7 +22,6 @@ import type {
   ServiceView,
   VolumeView,
 } from './console-view-types'
-import type { VolumeInfo } from './boxlite'
 import { BOX_SIZES } from './platform'
 import { storedServices } from './resources'
 import { volumeName } from './resources/volumes'
@@ -72,33 +71,18 @@ function failureLine(d: Deployment): string | undefined {
 
 // ---- BoxLite volumes (size/state when the API reports them) ------------------
 
-/** The org's volume list, per CP (tests get their own), for 15 s: every console poll would list them. */
-const volumeCache = new WeakMap<object, { at: number; list: VolumeInfo[] }>()
-
-async function boxliteVolumes(ctx: Pick<Ctx, 'boxlite'>): Promise<VolumeInfo[] | null> {
-  const hit = volumeCache.get(ctx.boxlite)
-  if (hit && Date.now() - hit.at < 15_000) return hit.list
-  try {
-    const list = await ctx.boxlite.listVolumes()
-    volumeCache.set(ctx.boxlite, { at: Date.now(), list })
-    return list
-  } catch {
-    return null
-  }
-}
-
 export async function volumeViews(
-  ctx: Pick<Ctx, 'boxlite'>,
+  ctx: Pick<Ctx, 'volumes'>,
   app: AppRow,
   env: EnvRow,
   spec: Spec | undefined,
 ): Promise<VolumeView[]> {
   const declared = spec?.volumes ?? []
   if (!declared.length) return []
-  const remote = await boxliteVolumes(ctx)
+  const remote = await ctx.volumes.list(app, env)
   return declared.map((v) => {
     const name = volumeName(app.name, env.name, v.name)
-    const r = remote?.find((x) => x.name === name)
+    const r = remote.find((x) => x.name === name)
     return {
       name: v.name,
       mountPath: v.mount,

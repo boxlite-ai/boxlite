@@ -742,18 +742,34 @@ null.
 Persistent storage, backed one-to-one by an object-store bucket whose name is
 derived from the row id (`boxlite-volume-<id>`).
 
-| Column                    | Type                | Notes                              |
-| ------------------------- | ------------------- | ---------------------------------- |
-| `id`                      | `uuid`              | primary key                        |
-| `organizationId`          | `uuid`              | nullable                           |
-| `name`                    | `character varying` | unique per organization            |
-| `state`                   | `enum`              | 7 values, default `pending_create` |
-| `errorReason`             | `character varying` | nullable                           |
-| `lastUsedAt`              | `timestamp`         | nullable                           |
-| `createdAt` / `updatedAt` | `timestamptz`       |                                    |
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | nullable |
+| `name` | `character varying` | unique per organization |
+| `state` | `enum` | 7 values, default `pending_create` |
+| `target_type` | `character varying` | `box` for ordinary organization volumes, `app` for App-owned volumes |
+| `app_id` | `text` | stable App ID, required for an App target |
+| `environment_id` | `text` | stable provisioning environment ID, required for an App target |
+| `errorReason` | `character varying` | nullable |
+| `lastUsedAt` | `timestamp` | nullable |
+| `createdAt` / `updatedAt` | `timestamptz` | |
 
 Attachment lives in `box.volumes`, so attaching or detaching a volume never
 writes to this table.
+
+`volume_target` requires both ownership references for `target_type = 'app'` and
+null references for `target_type = 'box'`. `volume_app_environment_idx` indexes
+the App/environment owner. `BoxService.create` resolves the trusted App
+environment before permitting an App-owned mount. The App is the sharing
+boundary, including Boxes from another environment of the same App. Ordinary
+Boxes and Boxes of another App receive 403.
+
+App provisioning, listing and cleanup use these columns directly. The
+pre-deploy migration backfills ownership and synchronizes old mapping writes
+during rollout. The post-deploy migration drops `cloud_app.env_volumes` and its
+temporary synchronization trigger. Purging an App destroys all its Boxes before
+deleting its volumes, so same-App sharing cannot block cleanup on another Box.
 
 ### `image`
 

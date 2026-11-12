@@ -1,7 +1,62 @@
 import { Context } from '../../common/context/context'
-import { NotFoundException, RequestTimeoutException } from '@nestjs/common'
+import { ForbiddenException, NotFoundException, RequestTimeoutException } from '@nestjs/common'
 import { VolumeState } from '../enums/volume-state.enum'
 import { VolumeService } from './volume.service'
+import type { Volume } from '../entities/volume.entity'
+
+describe('App volume ownership', () => {
+  async function ownedVolume() {
+    let stored: Volume
+    const repository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      save: jest.fn(async (volume: Volume) => (stored = volume)),
+      find: jest.fn(async () => [stored]),
+      manager: {
+        query: jest.fn(async (_sql, [organizationId, environmentId]) => {
+          if (organizationId !== 'org-1' || environmentId === 'missing') return []
+          return [{ id: environmentId === 'other-app' ? 'app-b' : 'app-a' }]
+        }),
+      },
+    }
+    const service = new VolumeService(
+      repository as never,
+      {} as never,
+      { assertOrganizationIsNotSuspended: jest.fn() } as never,
+      { get: () => 'gcs' } as never,
+      {} as never,
+    )
+    const volume = await service.create({ id: 'org-1' } as never, { name: 'uploads' }, Context.user(), {
+      appId: 'app-a',
+      environmentId: 'main',
+    })
+    volume.state = VolumeState.READY
+    return { service, volume, repository }
+  }
+
+  it('persists the complete App and environment target with creation', async () => {
+    const { volume } = await ownedVolume()
+    expect(volume).toMatchObject({ targetType: 'app', appId: 'app-a', environmentId: 'main' })
+  })
+
+  it.each([undefined, 'other-app'])('refuses a Box outside the App (%s)', async (environmentId) => {
+    const { service, volume } = await ownedVolume()
+    await expect(service.validateVolumes('org-1', [volume.id], environmentId)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    )
+  })
+
+  it.each(['main', 'staging'])('allows the owning App from its %s environment', async (environmentId) => {
+    const { service, volume } = await ownedVolume()
+    await expect(service.validateVolumes('org-1', [volume.name], environmentId)).resolves.toEqual(
+      new Map([[volume.name, volume.id]]),
+    )
+  })
+
+  it('refuses a missing environment', async () => {
+    const { service, volume } = await ownedVolume()
+    await expect(service.validateVolumes('org-1', [volume.id], 'missing')).rejects.toBeInstanceOf(NotFoundException)
+  })
+})
 
 describe('VolumeService delete', () => {
   function createService(volume: { id: string; state: VolumeState } | null) {

@@ -95,6 +95,7 @@ export class CloudAppService implements OnModuleInit {
         blobs: this.sources,
         credentials: this.credentials,
         domains: this.domains,
+        volumes: this.resources.volumesForOrganization(organizationId),
         boxlite: this.resources.forOrganization(organizationId),
         neon,
         appdb,

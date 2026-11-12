@@ -18,7 +18,6 @@ const TABLES = new Set([
   'app_sessions',
   'open_tickets',
   'auth_handoffs',
-  'env_volumes',
   'db_readers',
   'console_access',
   'feedback',
@@ -647,32 +646,6 @@ export class Store {
       id,
     )
     return r ? { ...r, manifest: JSON.parse(r.manifest) } : undefined
-  }
-
-  // ---- volumes (F10) -----------------------------------------------------
-
-  /** BoxLite volumes this CP created (or adopted from its own pre-F10 records) for the env. */
-  async envVolumes(envId: string): Promise<{ name: string; volume_id: string }[]> {
-    return (
-      await this.all<{ name: string; volume_id: string }>(
-        'SELECT name, volume_id FROM env_volumes WHERE env_id = ? ORDER BY name',
-        envId,
-      )
-    ).map((r) => ({ name: r.name, volume_id: r.volume_id }))
-  }
-
-  async recordVolume(envId: string, name: string, volumeId: string): Promise<void> {
-    await this.run(
-      'INSERT INTO env_volumes (env_id, name, volume_id, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (env_id, name) DO UPDATE SET volume_id = excluded.volume_id',
-      envId,
-      name,
-      volumeId,
-      now(),
-    )
-  }
-
-  async forgetVolume(envId: string, name: string): Promise<void> {
-    await this.run('DELETE FROM env_volumes WHERE env_id = ? AND name = ?', envId, name)
   }
 
   // ---- secrets -----------------------------------------------------------

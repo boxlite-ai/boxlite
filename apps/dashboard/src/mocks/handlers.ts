@@ -9,6 +9,7 @@ import { domainHandlers } from './domain-handlers'
 import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handlers'
 import { sshHandlers } from './ssh-handlers'
 import { ciHandlers } from './ci-handlers'
+import { cloudAppHandlers } from './cloud-app-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -91,6 +92,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 
 export const handlers = [
   ...ciHandlers(),
+  ...cloudAppHandlers(),
   ...sshHandlers,
   ...domainHandlers(),
   ...checkpointHandlers,

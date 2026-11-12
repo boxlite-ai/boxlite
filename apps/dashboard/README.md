@@ -3,6 +3,10 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+From `apps/`, `npm run start:dev` starts the local console at
+`http://localhost:3000` and proxies `/api` to the dev control plane. An unset or
+empty `VITE_BASE_API_URL` uses the current origin's `/api` prefix.
+
 ## Apps
 
 Apps sits after Boxes in the main navigation and uses the same OIDC session,
@@ -375,6 +379,10 @@ in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end i
 `/api`: `ConfigProvider` appends routes to that base directly, while the
 handlers are mounted under `VITE_API_URL`. When the two disagree, `/config`
 goes unanswered and the console never leaves its loading screen.
+
+The Apps preview includes a live `demo-shop` and a draft `starter`, with local
+App creation and the detail tabs. Its data resets on reload. Runtime operations
+require the Cloud Apps API.
 
 The image catalog mock answers the way the API does, so the console can be
 judged against real refusals rather than happy paths: a tenant image is listed

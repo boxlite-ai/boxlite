@@ -1,8 +1,8 @@
 import type { AppDatabase } from './appdb'
-import type { BoxliteClient } from './boxlite'
+import type { BoxliteClient, VolumeInfo } from './boxlite'
 import type { AccessLog } from './console-access'
 import type { Config } from './config'
-import type { Store } from './db'
+import type { AppRow, EnvRow, Store } from './db'
 import type { EventBus } from './events'
 import type { NeonClient } from './neon'
 import type { Orchestrator } from './orchestrator'
@@ -14,6 +14,11 @@ import type { SupervisorClient } from './supervisor'
 export interface AppCredentials {
   /** A recognized platform key is never forwarded, even if it cannot access Apps. */
   authenticate(token: string): Promise<{ organizationId: string; canReadApps: boolean } | null>
+}
+export interface AppVolumes {
+  list(app: AppRow, environment: EnvRow): Promise<VolumeInfo[]>
+  create(app: AppRow, environment: EnvRow, name: string): Promise<VolumeInfo>
+  remove(app: AppRow, environment: EnvRow, volumeId: string): Promise<void>
 }
 export interface AppSourceStore {
   has(appId: string, sha: string): Promise<boolean>
@@ -32,6 +37,7 @@ export interface Deps {
   credentials: AppCredentials
   origins: Origins
   domains: import('./services/domains').AppDomains
+  volumes: AppVolumes
   tunnelHeaders?: (boxUrl: string) => Promise<Record<string, string>>
   organizationMember?: (organizationId: string, provider: string, providerUserId: string) => Promise<boolean>
   boxlite: BoxliteClient

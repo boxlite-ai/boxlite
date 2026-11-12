@@ -1,9 +1,7 @@
-import { filterAsync } from '../async'
-/** An env's BoxLite managed volumes: naming, creating or adopting them for a new Box, and deleting them by recorded id (F10). */
+/** Platform volumes owned by an App and provisioned for an environment. */
 import type { VolumeSpec } from '@boxlite-ai/cloud-app-shared'
 import type { AppRow, EnvRow } from '../db'
 import type { Ctx } from '../ctx'
-import { UpstreamError, fail } from '../errors'
 
 /** The BoxLite managed volume of an env's `[[volume]]` (contracts §4.1 "Volumes"). */
 export const volumeName = (app: string, env: string, volume: string) => `mc-${app}-${env}-${volume}`
@@ -16,7 +14,7 @@ export function volumeKey(volumes: VolumeSpec[]): string {
     .join(',')
 }
 
-/** The mounts for a new Box: each declared volume, created on first use or adopted when this CP made it before ids were recorded. */
+/** Resolve declared mounts through platform volume ownership, creating missing volumes. */
 export async function volumeMounts(
   ctx: Omit<Ctx, 'resources' | 'orchestrator' | 'scheduler'>,
   app: AppRow,
@@ -25,77 +23,28 @@ export async function volumeMounts(
   log: (line: string) => void,
   signal?: AbortSignal,
 ): Promise<{ managed_volume: string; guest_path: string }[]> {
-  const { store, boxlite } = ctx
   const mounts: { managed_volume: string; guest_path: string }[] = []
-  const existing = await boxlite.listVolumes()
-  const recorded = new Map((await store.envVolumes(env.id)).map((r) => [r.name, r.volume_id]))
-  // Pre-F10 envs: the CP's own record of what it mounted (`name:mount,…`).
-  const legacy = new Set(
-    (env.box_volumes ?? '')
-      .split(',')
-      .filter(Boolean)
-      .map((e) => e.slice(0, e.indexOf(':'))),
-  )
+  const existing = await ctx.volumes.list(app, env)
   for (const v of volumes) {
     signal?.throwIfAborted()
     const name = volumeName(app.name, env.name, v.name)
-    const id = recorded.get(name)
-    const byId = id ? existing.find((x) => x.id === id) : undefined
-    if (!byId) {
-      const sameName = existing.find((x) => x.name === name)
-      if (sameName && !id && legacy.has(v.name)) {
-        // Created by this CP before volume ids were recorded; adopt it by its id.
-        log(`recording volume ${name} (${sameName.id})`)
-        await store.recordVolume(env.id, name, sameName.id)
-      } else if (sameName) {
-        // Never mount (or later delete) a volume this CP did not create (F10).
-        throw fail(
-          'conflict',
-          `a BoxLite volume named ${name} already exists and was not created for this environment`,
-          'rename the [[volume]] in boxlite.toml, or remove that volume in BoxLite',
-        )
-      } else {
-        log(`creating volume ${name}`)
-        const created = await boxlite.createVolume(name)
-        await store.recordVolume(env.id, name, created.id)
-      }
+    let volume = existing.find((volume) => volume.name === name)
+    if (!volume) {
+      log(`creating volume ${name}`)
+      volume = await ctx.volumes.create(app, env, name)
     }
-    // BoxLite mounts managed volumes by name.
-    mounts.push({ managed_volume: name, guest_path: v.mount })
+    mounts.push({ managed_volume: volume.id, guest_path: v.mount })
   }
   return mounts
 }
 
-/**
- * Deletes the BoxLite volumes recorded for the env, by id (F10). A volume is recorded when this CP
- * creates it; nothing is ever matched by name, so another resource in the org is never touched.
- * Volumes of an env created before ids were recorded, and not deployed since, are left in place
- * and reported.
- */
+/** Delete the platform volumes owned by this App environment. */
 export async function deleteVolumes(
   ctx: Omit<Ctx, 'resources' | 'orchestrator' | 'scheduler'>,
   app: AppRow,
   env: EnvRow,
-): Promise<string[]> {
-  const { store, boxlite } = ctx
-  for (const v of await store.envVolumes(env.id)) {
-    try {
-      await boxlite.deleteVolume(v.volume_id)
-    } catch (err) {
-      if (!(err instanceof UpstreamError && err.status === 404)) throw err
-    }
-    await store.forgetVolume(env.id, v.name)
+): Promise<void> {
+  for (const volume of await ctx.volumes.list(app, env)) {
+    await ctx.volumes.remove(app, env, volume.id)
   }
-  const unrecorded = await filterAsync(
-    (env.box_volumes ?? '')
-      .split(',')
-      .filter(Boolean)
-      .map((e) => volumeName(app.name, env.name, e.slice(0, e.indexOf(':')))),
-    async (name) => !(await store.envVolumes(env.id)).some((r) => r.name === name),
-  )
-  if (unrecorded.length)
-    console.warn(
-      `[resources] env ${env.id}: volumes without a recorded id were left in place: ${unrecorded.join(', ')}`,
-    )
-  return unrecorded
 }

@@ -26,7 +26,7 @@ import { MockAuthProvider } from '../mocks/MockAuthProvider'
  * `vite dev` and `boxlite serve`. Nothing rewrites there, and the container
  * still mounts every route under `/api`, so this is the one case that adds it.
  */
-const apiUrl = import.meta.env.VITE_BASE_API_URL ?? `${window.location.origin}/api`
+const apiUrl = import.meta.env.VITE_BASE_API_URL || `${window.location.origin}/api`
 const isMocking = import.meta.env.VITE_ENABLE_MOCKING === 'true'
 
 type Props = {

@@ -481,7 +481,7 @@ export const gcpApiProvider =
         containers: [
           {
             image: request.image,
-            resources: continuousCi ? { cpuIdle: false } : {},
+            ...(continuousCi ? { resources: { cpuIdle: false } } : {}),
             ports: { name: 'http1', containerPort: request.port },
             volumeMounts: [
               { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },

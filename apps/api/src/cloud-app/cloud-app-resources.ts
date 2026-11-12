@@ -10,6 +10,7 @@ import { createBoxToCreateBox, boxToBoxResponse } from '../boxlite-rest/mappers/
 import { Context } from '../common/context/context'
 import { EncryptionService } from '../encryption/encryption.service'
 import type { BoxliteClient, BoxInfo, CreateBoxRequest } from './engine/boxlite'
+import type { AppVolumes } from './engine/ctx'
 
 @Injectable()
 export class CloudAppResources {
@@ -42,7 +43,10 @@ export class CloudAppResources {
         const maxCreatedBoxes = await this.limits.resolveMaxCreatedBoxes(organizationId)
         const dto = createBoxToCreateBox(request)
         dto.labels = { 'boxlite.io/managed-by': 'cloud-app' }
-        const box = await this.boxes.create(dto, org, Context.user(), { maxCreatedBoxes })
+        const box = await this.boxes.create(dto, org, Context.user(), {
+          maxCreatedBoxes,
+          appEnvironmentId: request.env.BOXLITE_ENV_ID,
+        })
         await this.waiter.waitForStarted(box.id, organizationId, 120)
         return info(box.id)
       },
@@ -92,16 +96,47 @@ export class CloudAppResources {
         )
         return url
       },
-      createVolume: async (name) => {
-        const volume = await this.volumes.create(await organization(), { name }, Context.user())
+    }
+  }
+
+  volumesForOrganization(organizationId: string): AppVolumes {
+    return {
+      list: async (app, environment) => {
+        if (app.org_id !== organizationId || environment.app_id !== app.id) {
+          throw new NotFoundException('App environment not found')
+        }
+        return (
+          await this.volumes.findAllForApp(organizationId, {
+            appId: app.id,
+            environmentId: environment.id,
+          })
+        ).map((volume) => ({ id: volume.id, name: volume.name, state: volume.state }))
+      },
+      create: async (app, environment, name) => {
+        if (app.org_id !== organizationId || environment.app_id !== app.id) {
+          throw new NotFoundException('App environment not found')
+        }
+        const organization = await this.organizations.findOne(organizationId)
+        if (!organization) throw new NotFoundException('Organization not found')
+        const volume = await this.volumes.create(organization, { name }, Context.user(), {
+          appId: app.id,
+          environmentId: environment.id,
+        })
         await this.volumes.waitForReady(volume.id, 120)
         return { id: volume.id, name: volume.name }
       },
-      listVolumes: async () =>
-        (await this.volumes.findAll(organizationId)).map((v) => ({ id: v.id, name: v.name, state: v.state })),
-      deleteVolume: async (id) => {
+      remove: async (app, environment, id) => {
         const volume = await this.volumes.findOne(id)
-        if (volume.organizationId !== organizationId) throw new NotFoundException('Volume not found')
+        if (
+          app.org_id !== organizationId ||
+          environment.app_id !== app.id ||
+          volume.organizationId !== organizationId ||
+          volume.targetType !== 'app' ||
+          volume.appId !== app.id ||
+          volume.environmentId !== environment.id
+        ) {
+          throw new NotFoundException('App volume not found')
+        }
         await this.volumes.delete(id, Context.user(), true)
       },
     }

@@ -65,6 +65,8 @@ export async function purgeApp(ctx: Ctx, app: AppRow): Promise<void> {
   const envs = await store.envs(app.id)
   for (const env of envs) {
     if (env.box_id) await ctx.boxlite.deleteBox(env.box_id)
+  }
+  for (const env of envs) {
     await ctx.resources.deleteVolumes(app, env)
     await ctx.domains.releaseEnvironment(app, env)
   }

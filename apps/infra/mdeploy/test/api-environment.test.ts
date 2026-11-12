@@ -45,7 +45,11 @@ for (const home of ['aws', 'gcp'] as const) {
         groups: declared.envSelectGroup,
         optional: declared.envOptional.api,
         where: path.pathname,
-        values: { ...required, ...(enabled === undefined ? {} : { CHECKPOINTS_ENABLED: enabled }) },
+        values: {
+          ...required,
+          ...appSecretAddresses(home),
+          ...(enabled === undefined ? {} : { CHECKPOINTS_ENABLED: enabled }),
+        },
       })
       const { environment, secrets } = apiEnvironmentFrom({
         environment: { ...base, ...selected },
