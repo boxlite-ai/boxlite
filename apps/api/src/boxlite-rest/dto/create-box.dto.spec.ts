@@ -38,7 +38,7 @@ describe('CreateBoxDto cpu ceiling', () => {
 describe('CreateBoxDto resource minimums', () => {
   it.each([
     ['cpus', { cpus: 0 }],
-    ['memory_mib', { memory_mib: 128 }],
+    ['memory_mib', { memory_mib: 127 }],
     ['disk_size_gb', { disk_size_gb: 0 }],
   ])('rejects undersized %s with a min constraint', async (field, body) => {
     const errors = await validate(plainToInstance(CreateBoxDto, body))
@@ -48,7 +48,7 @@ describe('CreateBoxDto resource minimums', () => {
   })
 
   it('accepts values exactly at the minimum boundary', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { cpus: 1, memory_mib: 256, disk_size_gb: 1 }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { cpus: 1, memory_mib: 128, disk_size_gb: 1 }))
 
     expect(errors).toHaveLength(0)
   })

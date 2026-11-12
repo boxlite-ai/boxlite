@@ -12,7 +12,7 @@ The conversion rejects non-integral MiB, non-finite values, values below 128 MiB
 and values beyond the runtime option's unsigned 32-bit MiB range before runtime side effects.
 Backend and host limits still apply. Internal callers that omit memory retain the
 historical 128 MiB default; HTTP requests must supply at least `0.125` GiB.
-Cloud separately enforces its 256 MiB minimum and organization quotas.
+Cloud enforces the same 128 MiB minimum and its organization quotas.
 Upgrade Runners before Cloud starts sending fractional-GiB quotas; older Runners
 decode this field as an integer and reject them.
 

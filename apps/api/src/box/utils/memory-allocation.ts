@@ -16,8 +16,8 @@ export function memoryGiBOf(box: MemoryAllocation): number {
 
 export function requestedMemoryMib(gib: number): number {
   const mib = gib * 1024
-  if (!Number.isInteger(mib) || mib < 256 || mib > 2147483647) {
-    throw new BadRequestException('Memory must represent whole MiB between 256 and 2147483647')
+  if (!Number.isInteger(mib) || mib < 128 || mib > 2147483647) {
+    throw new BadRequestException('Memory must represent whole MiB between 128 and 2147483647')
   }
   return mib
 }

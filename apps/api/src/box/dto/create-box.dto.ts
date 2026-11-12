@@ -166,7 +166,7 @@ export class CreateBoxDto {
     description: 'Memory allocated to the box in GiB, in whole MiB increments',
     example: 1,
     type: 'number',
-    minimum: 0.25,
+    minimum: 0.125,
     multipleOf: 1 / 1024,
   })
   @IsOptional()

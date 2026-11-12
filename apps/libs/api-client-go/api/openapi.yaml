@@ -1918,7 +1918,7 @@ paths:
         name: minMemoryGiB
         required: false
         schema:
-          minimum: 0.25
+          minimum: 0.125
           type: number
         style: form
       - description: Maximum memory in GiB
@@ -1927,7 +1927,7 @@ paths:
         name: maxMemoryGiB
         required: false
         schema:
-          minimum: 0.25
+          minimum: 0.125
           type: number
         style: form
       - description: Minimum disk space in GiB

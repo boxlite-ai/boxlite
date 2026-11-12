@@ -54,7 +54,7 @@ Available runner capacity still determines whether an allowed request can run.
 
 ### Exact Cloud memory allocations
 
-Cloud preserves whole-MiB requests from 256 MiB through the organization's limit.
+Cloud preserves whole-MiB requests from 128 MiB through the organization's limit.
 For example, `memory_mib=300` creates a 300 MiB Box and returns `memory_mib=300`.
 The internal API and Runner carry this allocation as `300 / 1024 = 0.29296875` GiB.
 Omitting memory retains the existing default; fractional MiB requests are rejected.

@@ -50,7 +50,7 @@ describe('Cloud MiB allocation regression', () => {
     })
   })
 
-  it.each([256, 300, 512, 1536])(
+  it.each([128, 300, 512, 1536])(
     'creates and returns exactly %s MiB through the REST and service boundary',
     async (memory_mib) => {
       const response = await service.create(
@@ -109,7 +109,7 @@ describe('Cloud MiB allocation regression', () => {
   })
 
   it('accepts fractional GiB range filters', async () => {
-    const query = plainToInstance(ListBoxesQueryDto, { minMemoryGiB: 0.25, maxMemoryGiB: 0.5 })
+    const query = plainToInstance(ListBoxesQueryDto, { minMemoryGiB: 0.125, maxMemoryGiB: 0.125 })
     expect(await validate(query)).toEqual([])
   })
 })
