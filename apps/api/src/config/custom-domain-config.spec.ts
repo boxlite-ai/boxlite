@@ -6,23 +6,23 @@ describe('custom domain deployment configuration', () => {
   const valid = {
     CUSTOM_DOMAIN_GCP_PROJECT: 'boxlite-dev-project',
     CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: 'boxlite-app-dev-proxy',
-    CUSTOM_DOMAIN_TRAFFIC_HOST: 'custom.proxy.example.com',
+    PROXY_DOMAIN: 'proxy.example.com:443',
   }
   it('leaves custom-domain onboarding disabled without provider settings', () => {
-    expect(customDomainConfig({}).enabled).toBe(false)
+    expect(customDomainConfig({ PROXY_DOMAIN: 'localhost:28080' }).enabled).toBe(false)
   })
   it('requires all deployment resources together', () => {
     for (const key of Object.keys(valid)) {
       expect(() => customDomainConfig({ ...valid, [key]: '' })).toThrow()
     }
   })
-  it('accepts the configured traffic hostname', () => {
-    expect(customDomainConfig(valid)).toMatchObject({ enabled: true, trafficHost: valid.CUSTOM_DOMAIN_TRAFFIC_HOST })
+  it('uses the proxy hostname without its port', () => {
+    expect(customDomainConfig(valid)).toMatchObject({ enabled: true, trafficHost: 'proxy.example.com' })
   })
-  it.each(['https://example.com', '127.0.0.1', 'example.com:443', '-invalid.example.com', 'x..example.com'])(
+  it.each(['https://example.com', '127.0.0.1', 'example.com:65536', '-invalid.example.com', 'x..example.com'])(
     'refuses an invalid traffic hostname %s',
     (host) => {
-      expect(() => customDomainConfig({ ...valid, CUSTOM_DOMAIN_TRAFFIC_HOST: host })).toThrow()
+      expect(() => customDomainConfig({ ...valid, PROXY_DOMAIN: host })).toThrow()
     },
   )
 })

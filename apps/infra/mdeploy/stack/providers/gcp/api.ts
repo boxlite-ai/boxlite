@@ -346,37 +346,31 @@ export const gcpApiProvider =
     const hosts = publicHostsFor({ domain, dashboardDomain })
     const apiHost = hosts.api
     const continuousCi = Boolean(request.environment.CI_GITHUB_APP_CLIENT_ID)
-    const customDomains = !!request.environment.CUSTOM_DOMAIN_GCP_PROJECT
-    const customDomainGrants: any[] = []
-    if (customDomains) {
-      const role = new gcp.projects.IAMCustomRole('CustomDomainRuntimeRole', {
-        project: request.environment.CUSTOM_DOMAIN_GCP_PROJECT,
-        roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domains' }).replaceAll('-', '_'),
-        title: 'Reconcile customer domain certificates',
-        permissions: [
-          'resourcemanager.projects.get',
-          'certificatemanager.dnsauthorizations.create',
-          'certificatemanager.dnsauthorizations.get',
-          'certificatemanager.dnsauthorizations.delete',
-          'certificatemanager.certs.create',
-          'certificatemanager.certs.get',
-          'certificatemanager.certs.delete',
-          'certificatemanager.certs.use',
-          'certificatemanager.dnsauthorizations.use',
-          'certificatemanager.certmapentries.create',
-          'certificatemanager.certmapentries.get',
-          'certificatemanager.certmapentries.delete',
-          'certificatemanager.operations.get',
-        ],
-      })
-      customDomainGrants.push(
-        new gcp.projects.IAMMember('CustomDomainRuntimeGrant', {
-          project: request.environment.CUSTOM_DOMAIN_GCP_PROJECT,
-          role: role.name,
-          member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
-        }),
-      )
-    }
+    const role = new gcp.projects.IAMCustomRole('CustomDomainRuntimeRole', {
+      project,
+      roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domains' }).replaceAll('-', '_'),
+      title: 'Reconcile customer domain certificates',
+      permissions: [
+        'resourcemanager.projects.get',
+        'certificatemanager.dnsauthorizations.create',
+        'certificatemanager.dnsauthorizations.get',
+        'certificatemanager.dnsauthorizations.delete',
+        'certificatemanager.certs.create',
+        'certificatemanager.certs.get',
+        'certificatemanager.certs.delete',
+        'certificatemanager.certs.use',
+        'certificatemanager.dnsauthorizations.use',
+        'certificatemanager.certmapentries.create',
+        'certificatemanager.certmapentries.get',
+        'certificatemanager.certmapentries.delete',
+        'certificatemanager.operations.get',
+      ],
+    })
+    const customDomainGrant = new gcp.projects.IAMMember('CustomDomainRuntimeGrant', {
+      project,
+      role: role.name,
+      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+    })
 
     /*
      * Every name this container is handed by reference, in one place.
@@ -500,7 +494,7 @@ export const gcpApiProvider =
           containers: [
             {
               image: request.image,
-              ...(continuousCi || customDomains ? { resources: { cpuIdle: false } } : {}),
+              resources: { cpuIdle: false },
               ports: { name: 'http1', containerPort: request.port },
               volumeMounts: [
                 { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },
@@ -509,7 +503,16 @@ export const gcpApiProvider =
               startupProbe: { httpGet: { path: '/api/health', port: request.port }, failureThreshold: 30 },
               livenessProbe: { httpGet: { path: '/api/health', port: request.port } },
               envs: containerEnvironment({
-                values: request.environment,
+                values: {
+                  ...request.environment,
+                  CUSTOM_DOMAIN_GCP_PROJECT: project,
+                  // The edge creates and attaches the map with this same resource name.
+                  CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: instanceFor({
+                    app: $app.name,
+                    stage: $app.stage,
+                    artifact: 'proxy',
+                  }),
+                },
                 addresses,
               }),
             },
@@ -522,7 +525,7 @@ export const gcpApiProvider =
          * while creating the revision, so a binding that lands a moment later is
          * a binding that lands after the refusal.
          */
-        dependsOn: [...dependencies.waitFor, ...customDomainGrants, ...readable],
+        dependsOn: [...dependencies.waitFor, customDomainGrant, ...readable],
       },
     )
 
@@ -984,7 +987,7 @@ export const gcpApiProvider =
         publicInvoker,
         ...readable,
         ...granted,
-        ...customDomainGrants,
+        customDomainGrant,
         vendingCeiling,
         forwarding,
         record,

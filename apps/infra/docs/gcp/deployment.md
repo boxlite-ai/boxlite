@@ -78,21 +78,16 @@ For locks, refresh or removal, follow [shared recovery](../deployment.md#recover
 
 ## Customer domain HTTPS
 
-Set all three values in the stage's plain API environment group to enable custom domains;
-leave all three unset to disable onboarding.
-
-| Setting | Required value |
-| --- | --- |
-| `CUSTOM_DOMAIN_GCP_PROJECT` | Project containing the proxy's Certificate Manager resources |
-| `CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP` | Existing global map ID attached to the proxy TargetSSLProxy, not a resource URL |
-| `CUSTOM_DOMAIN_TRAFFIC_HOST` | Stable public hostname resolving to the proxy entry, e.g. the proxy root |
+The GCP deployment automatically supplies the certificate project and the existing proxy certificate map to the API.
+These are deployment-owned values, not stage inputs. Customer traffic uses the existing `PROXY_DOMAIN` hostname;
+there is no separate custom-domain traffic-host setting. AWS and local deployments without certificate resources leave onboarding disabled.
 
 Customers use a traffic CNAME to this hostname. HTTPS checks resolve the platform hostname's IPv4/IPv6 addresses
 and connect with the customer hostname as SNI, requiring certificate validation; no fixed IP list is configured.
 The existing edge address, forwarding rule and DNS records retain their resource identities.
 
-Enable Certificate Manager and Resource Manager in the certificate project, attach the map to the proxy,
-and deploy the API service account's custom role before enabling onboarding.
+The GCP bootstrap enables Certificate Manager and Resource Manager, and the edge attaches its certificate map to the proxy.
+The API service account's custom role is deployed before the API revision.
 The provider grants DNS authorization, certificate and map-entry operations plus `resourcemanager.projects.get`;
 it does not grant certificate-map mutation. The API also requires its existing Commerce connection for subscription eligibility.
 Customer CNAME records must use DNS-only mode; see the [DNS guide](../../../../docs/concepts/networking.md#bring-your-own-domain).

@@ -84,20 +84,6 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   ...overrides,
 })
 
-test('the proxy namespace is supplied independently of API certificate setup', () => {
-  for (const providerConfigured of [false, true]) {
-    const providers = bundle()
-    deployStack({
-      providers: providers.providers,
-      config,
-      inputs: inputs({
-        apiEnvironment: providerConfigured ? { CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project' } : {},
-      }),
-    })
-    assert.equal(providers.seen.edge.request.domain, 'box.dev.boxlite.ai')
-  }
-})
-
 test('retention is resolved once, and only a self-hosted ClickHouse accepts one', () => {
   const retentionSeen = (clickHouseRetentionHours: number | null, mode = config.clickhouse.mode) => {
     const providers = bundle()

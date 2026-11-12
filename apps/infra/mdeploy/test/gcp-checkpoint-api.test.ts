@@ -35,7 +35,7 @@ for (const checkpointAccess of [false, true]) {
     target.gcp = Object.fromEntries(
       Object.entries({
         storage: ['BucketIAMMember'],
-        projects: ['IAMMember'],
+        projects: ['IAMMember', 'IAMCustomRole'],
         secretmanager: ['SecretIamMember'],
         cloudrunv2: ['Service', 'ServiceIamMember'],
         certificatemanager: ['DnsAuthorization', 'Certificate'],
