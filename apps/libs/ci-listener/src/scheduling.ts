@@ -58,7 +58,7 @@ export class FairSelection {
     }
     const names = [...tenants.keys()].sort(),
       result: T[] = [],
-      used = new Set<string>()
+      selected = new Map<string, number>()
     let misses = 0
     while (result.length < limit && names.length && misses < names.length) {
       const tenant = names[this.tenant++ % names.length],
@@ -69,7 +69,7 @@ export class FairSelection {
         const cursor = this.account.get(tenant) ?? 0,
           id = ids[cursor % ids.length]
         this.account.set(tenant, cursor + 1)
-        if (!used.has(`${tenant}/${id}`)) {
+        if ((selected.get(`${tenant}/${id}`) ?? 0) < accounts.get(id)!.length) {
           chosen = id
           break
         }
@@ -84,7 +84,7 @@ export class FairSelection {
         cursor = this.item.get(key) ?? 0
       result.push(items[cursor % items.length])
       this.item.set(key, cursor + 1)
-      used.add(key)
+      selected.set(key, (selected.get(key) ?? 0) + 1)
     }
     return result
   }

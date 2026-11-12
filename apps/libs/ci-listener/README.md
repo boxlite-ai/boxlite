@@ -437,8 +437,12 @@ original authority. Settlement uses the captured notice version, so a concurrent
 delivery stays pending.
 
 Queued jobs are selected by platform tenant, then GitHub account, then job; a
-large repository list earns no extra turns. The controller processes at most one
-job per account in a round, up to 32 accounts. Capacity exhaustion retains the
+large repository list earns no extra turns. Selection continues rotating across
+tenants and accounts until it selects 32 candidates or exhausts the current input.
+An account can supply multiple distinct candidates in one batch; a short batch
+returns immediately without waiting to fill. Admission still checks each job's
+capacity and recovery readiness separately, and resource operations remain sequential.
+Capacity exhaustion retains the
 notice and skips admission-time GitHub job reads while the durable account or
 tenant quota is full. Independent compensation scans continue recording pending
 jobs without reading or reserving capacity. Other tenants can still admit jobs;
