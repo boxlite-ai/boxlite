@@ -462,9 +462,10 @@ concurrently. It does not rescan the pool before every reservation. Custom
 backends without inventory retain their clean-round and membership-version
 admission guard. Unknown resources retain their original identity and quota.
 
-The native API can also record a definitive creation refusal when the typed
-Box creation-limit error occurs before `onPersist` begins. It stores the original
-scope and creation-operation UUID in the same ledger key that would hold a Box ID;
+The native API records a definitive creation refusal for any failure before
+`onPersist` begins, including throttling, placement, image policy and prerequisite
+lookups. It stores the original scope and creation-operation UUID in the same
+ledger key that would hold a Box ID;
 an expected-null CAS makes those outcomes mutually exclusive. Only this durable
 fact yields `ConfirmedWorkerCreationRejected`. Hosted authority revocation can
 use the same fence before dispatch or after a rejected native persistence
@@ -475,6 +476,12 @@ over refusal and remains available for cleanup. Restart can recover the fact thr
 the original worker lookup. The kernel checks the original pending operation and
 atomically retires its allocation and scope reference, leaving queued demand pending.
 It emits `ci-worker-create-rejected`; a later attempt gets a new allocation/name.
+
+Native lookup also corrects historical pending creates after five minutes from
+reservation. It verifies the original operation and absence of a Box/ledger before
+conditionally recording that refusal. A delayed Box transaction must acquire the
+same ledger key and rolls back if correction wins. Time alone is not absence proof;
+known IDs and unexpected same-name Boxes retain their existing ownership checks.
 
 Ordinary HTTP errors, timeouts, failed proof persistence and uncertain persistence
 outcomes keep the reservation. The standalone REST adapter does not infer this

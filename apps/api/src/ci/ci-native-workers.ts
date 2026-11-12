@@ -20,8 +20,6 @@ import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxService } from '../box/services/box.service'
-import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
-import { PerBoxResourceLimitExceededError } from '../box/services/per-box-limits'
 import { RunnerService } from '../box/services/runner.service'
 import { CreateBoxDto } from '../box/dto/create-box.dto'
 import { OrganizationService } from '../organization/services/organization.service'
@@ -32,6 +30,7 @@ import { PlatformReason } from '../common/context/platform-reason.enum'
 import { CiNativeState } from './ci-native-state'
 import { uploadJitFile } from './ci-runner-files'
 type Effect = 'box-create' | 'box-stop' | 'box-remove' | 'jit-deliver'
+const CREATION_RECOVERY_DELAY_MS = 5 * 60 * 1000
 
 class CreationAdmissionDenied extends ForbiddenException {
   constructor(
@@ -142,7 +141,17 @@ export class CiNativeWorkers {
     const owned = async (name: string, effect?: Effect) => {
       const value = await this.store.transaction((tx, state) => inspect(tx, state, name, effect))
       if (value.rejected) throw new ConfirmedWorkerCreationRejected(value.rejected)
-      if (!value.box) throw new ConflictException('Original CI Box ID is not durably known')
+      if (!value.box) {
+        if (
+          !effect &&
+          !value.record &&
+          value.allocation.box.phase === 'requested' &&
+          value.allocation.effect?.kind === 'box-create' &&
+          Date.now() - value.allocation.createdAt >= CREATION_RECOVERY_DELAY_MS
+        )
+          return rejectUndispatchedCreate(name, value.allocation.effect.id)
+        throw new ConflictException('Original CI Box ID is not durably known')
+      }
       let box: Box
       try {
         box = await this.boxes.findOne(value.box, true)
@@ -167,10 +176,16 @@ export class CiNativeWorkers {
           original.record ||
           original.allocation.box.phase !== 'requested' ||
           original.allocation.box.id !== null ||
+          original.allocation.runner.phase !== 'none' ||
+          original.allocation.delivery !== 'none' ||
           original.allocation.effect?.kind !== 'box-create' ||
           original.allocation.effect.id !== effect
         )
           throw new ConflictException('CI creation rejection cannot replace the original operation')
+        if (await tx.getRepository(Box).existsBy({ organizationId: scope.organization, name }))
+          throw new ConflictException('CI Box exists without its original ledger')
+        // Box insertion and onPersist share one transaction. Winning this key
+        // prevents a delayed create from committing after its slot is returned.
         await state.commit(lease, [
           {
             key: original.key,
@@ -219,8 +234,6 @@ export class CiNativeWorkers {
           if (error instanceof CreationAdmissionDenied) return rejectUndispatchedCreate(launch.name, error.effect)
           throw error
         }
-        const organization = await this.organizations.findOne(scope.organization)
-        const maxCreatedBoxes = await this.limits.resolveMaxCreatedBoxes(scope.organization)
         const dto = Object.assign(new CreateBoxDto(), {
           name: launch.name,
           image: launch.image,
@@ -237,6 +250,8 @@ export class CiNativeWorkers {
         let persistenceEntered = false
         let created: Awaited<ReturnType<BoxService['create']>>
         try {
+          const organization = await this.organizations.findOne(scope.organization)
+          const maxCreatedBoxes = await this.limits.resolveMaxCreatedBoxes(scope.organization)
           created = await this.boxes.create(dto, organization, context(), {
             maxCreatedBoxes,
             onPersist: async (tx, box) => {
@@ -259,11 +274,9 @@ export class CiNativeWorkers {
         } catch (error) {
           if (error instanceof CreationAdmissionDenied && error.effect === creationEffect)
             return rejectUndispatchedCreate(launch.name, creationEffect)
-          if (
-            !(error instanceof BoxCreationLimitExceededError || error instanceof PerBoxResourceLimitExceededError) ||
-            persistenceEntered
-          )
-            throw error
+          // Classify by the effect boundary, so new error types cannot strand
+          // a reservation. A failed COMMIT after onPersist remains uncertain.
+          if (persistenceEntered) throw error
           return rejectUndispatchedCreate(launch.name, creationEffect)
         }
         return boxToBoxResponse(created)
