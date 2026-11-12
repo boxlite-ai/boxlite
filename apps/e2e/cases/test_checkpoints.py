@@ -1,7 +1,8 @@
 """Real REST/API/runner/VM checkpoint acceptance; requires configured storage.
 
 No fallback or missing-capability skip: run against the branch's deployed stack.
-This case creates two concurrent Boxes and is deliberately outside smoke tests.
+This case uses checkpoint storage and multiple guest lifecycles, so it is
+deliberately outside smoke tests.
 """
 
 from __future__ import annotations
@@ -13,8 +14,54 @@ import uuid
 import boxlite
 import pytest
 import pytest_asyncio
-from conftest import drain
+from conftest import E2E_AUTO_DELETE_SECONDS, E2E_AUTO_STOP_SECONDS, drain
 from e2e_auth import request_json
+
+
+LIFECYCLE_TIMEOUT_SECONDS = 30
+
+
+async def wait_stopped(rt, key):
+    async def wait():
+        while True:
+            info = await rt.get_info(key)
+            assert info is not None, f"Box {key} disappeared before stopping"
+            state = info.state.status
+            assert state not in {"failed", "unknown"}, f"Box {key} entered {state} while stopping"
+            if state == "stopped":
+                return
+            await asyncio.sleep(0.2)
+
+    try:
+        await asyncio.wait_for(wait(), timeout=LIFECYCLE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as error:
+        raise AssertionError(f"Box {key} did not stop within {LIFECYCLE_TIMEOUT_SECONDS}s") from error
+
+
+async def remove_box(rt, key):
+    async def remove():
+        info = await rt.get_info(key)
+        if info is None:
+            return
+        # Admission renames the Box; only its stable ID proves deletion finished.
+        box_id = info.id
+        while True:
+            try:
+                await rt.remove(box_id, force=True)
+                break
+            except boxlite.NotFoundError:
+                return
+            except boxlite.InvalidArgumentError as error:
+                if "state change in progress" not in str(error).lower():
+                    raise
+                await asyncio.sleep(0.2)
+        while await rt.get_info(box_id) is not None:
+            await asyncio.sleep(0.2)
+
+    try:
+        await asyncio.wait_for(remove(), timeout=LIFECYCLE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as error:
+        raise AssertionError(f"Box {key} was not removed within {LIFECYCLE_TIMEOUT_SECONDS}s") from error
 
 
 async def ready_checkpoint(checkpoints, key):
@@ -52,9 +99,7 @@ async def checkpoint_resources(rt):
     # Removing the copy first also releases failed import-use records.
     for key in ["copy", "source"]:
         try:
-            info = await rt.get_info(names[key])
-            if info is not None:
-                await rt.remove(info.id, force=True)
+            await remove_box(rt, names[key])
         except boxlite.NotFoundError:
             pass
         except Exception as error:
@@ -93,19 +138,24 @@ async def test_checkpoint_archive_survives_source_deletion_and_creates_boxes(
         "printf '%s' \"$CHECKPOINT_E2E\" > /workspace/checkpoint-e2e.txt; sync",
     )
     await source.stop()
+    await wait_stopped(rt, source.id)
     checkpoint = await rt.checkpoints.create(source.id, names["archive"])
     checkpoint = await ready_checkpoint(rt.checkpoints, checkpoint.id)
     # The immutable archive must retain the captured disk, not this later write.
     source = await rt.get(source.id)
     await source.start()
     await shell(source, "printf changed-after-capture > /workspace/checkpoint-e2e.txt; sync")
-    await rt.remove(source.id, force=True)
+    await remove_box(rt, source.id)
     assert (await rt.checkpoints.get(checkpoint.id)).state == "ready"
 
     copy = await rt.create(
         boxlite.BoxOptions(checkpoint=checkpoint.id), name=names["copy"]
     )
     assert copy.id != source.id
+    copy_info = await rt.get_info(copy.id)
+    assert copy_info is not None
+    assert copy_info.auto_stop == E2E_AUTO_STOP_SECONDS
+    assert copy_info.auto_delete == E2E_AUTO_DELETE_SECONDS
     read_captured = (
         "printf '%s\n%s\n' \"$CHECKPOINT_E2E\" \"$BOXLITE_BOX_ID\"; "
         "cat /workspace/checkpoint-e2e.txt"

@@ -104,6 +104,7 @@ def bound_box_lifetime(options) -> None:
     which is the same policy for the same reason.
 
     A case that sets either window owns both: see the module comment above.
+    A checkpoint create inherits the captured policy and forbids overrides.
 
     Boxes created by the polyglot drivers (`apps/e2e/sdks/`) and the CLI pass
     through neither, and `apps/e2e/sweep.py` will not reclaim them either: it
@@ -117,6 +118,8 @@ def bound_box_lifetime(options) -> None:
     `os.Exit`/`DIE` paths that skip their cleanup entirely; both legs
     `--ignore` those cases, so they never create a cloud box.
     """
+    if getattr(options, "checkpoint", None) is not None:
+        return
     if getattr(options, "auto_stop", None) is None and getattr(options, "auto_delete", None) is None:
         options.auto_stop = E2E_AUTO_STOP_SECONDS
         options.auto_delete = E2E_AUTO_DELETE_SECONDS
