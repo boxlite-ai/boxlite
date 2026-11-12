@@ -31,7 +31,7 @@ or other network forwarding. For component diagrams and implementation details, 
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
 The SDKs expose `configure`, `status`, `enable`, and `disable`.
-Automatic credential management belongs to the CLI's [default setup](#cli) command.
+Automatic credential management belongs to the CLI's [default login](#cli) command.
 `enable()` uses saved configuration, errors if none exists, and preserves
 connections when SSH is already healthy. It requires a running box on both local
 and REST backends; it never starts or auto-resumes the box.
@@ -86,66 +86,84 @@ boxlite run -d --name dev alpine:latest tail -f /dev/null
 boxlite ssh dev
 ```
 
-Default setup takes no key options. It generates Ed25519 client and host keys under
-`<home>/boxes/<box-id>/ssh/` for local boxes, with a 0700 directory and 0600 private files.
-The client private key stays on the host. Subsequent setup reuses both identities;
-corrupt, incomplete, or unsafe key files cause an error instead of replacement.
-Setup calls the existing complete configuration API, enabling `box` on
-`0.0.0.0:22` with the generated client public key and no CA. It replaces any
-previous configuration, including a host key supplied through `--configure`.
-Login `box` still executes as the container's configured user.
+Default login takes no key options and requires `ssh` and `ssh-keygen` on PATH.
+The CLI checks execute access using its effective user/group before creating
+credentials or changing guest SSH. Inaccessible tool files are skipped rather
+than accepted because another permission class has an execute bit. PATH entries
+that are not directories or cannot be searched do not block tools in later
+entries. If no tool is found, a directory search permission error is preserved
+rather than reported as a missing installation.
 
-On success, setup prints an English connection summary, the private-key path,
-login, actual guest address and server host-key fingerprint, followed by a complete
-command to copy and execute:
+It generates Ed25519 client and host keys under `<home>/boxes/<box-id>/ssh/`
+for local boxes, with a 0700 directory and 0600 private files. The client private
+key stays on the host. Corrupt, incomplete, symlinked or unsafe credentials fail
+instead of being regenerated.
+
+OpenSSH file paths must be UTF-8 and contain neither control characters nor
+literal `${`. These checks run before managed keys are created or guest SSH is
+configured/enabled, so an unusable path leaves existing SSH configuration unchanged.
+
+The CLI prepares SSH before connecting:
+
+| Managed credentials and status | Service operation |
+| --- | --- |
+| New identity | Configure once with `box` on `0.0.0.0:22`, no CA |
+| Existing identity, enabled | Read status only |
+| Existing identity, disabled, generation greater than zero | Enable saved configuration once |
+| Existing identity, disabled, generation zero | Configure once using saved keys |
+
+Generation zero can describe idle boxes with persisted configuration; it is not
+proof that no configuration exists. Configuration follows the startup rules above
+and can disconnect existing clients. A first managed configuration replaces any
+prior custom configuration. Later healthy connections never reconfigure a changed
+host identity: they fail instead. Authentication failure also does not trigger
+reconfiguration. Failed configuration retains generated keys for the next invocation;
+service operations are not retried within one command.
+
+OpenSSH logs in directly as `box`, which still executes as the container's
+configured user. During login or alias installation, credential preparation
+validates the local host private key and derives its public key once. The CLI
+reuses that public key for status identity verification and
+`<credential-directory>/known_hosts`, not the user's known-hosts file.
+Local aliases use the canonical box ID; remote aliases include the credential
+scope. Status identity must match this local key before connection.
+
+The parent CLI retains its runtime and an ephemeral loopback forwarder until
+OpenSSH exits. OpenSSH inherits stdin/stdout/stderr, automatically selects PTY
+behavior, handles terminal resizing and sends interactive Ctrl-C to the guest.
+Piped stdin works without forcing a PTY:
 
 ```bash
-ssh -o 'IdentityFile="/boxlite-home/boxes/BOX_ID/ssh/client_key"' -o IdentitiesOnly=yes \
-  -o 'ProxyCommand=/usr/local/bin/boxlite --home /boxlite-home ssh --proxy -- BOX_ID' box@BOX_ID
+printf '%s\n' 'printf "direct-ssh-ok\n"; exit 42' | boxlite ssh dev
+echo $? # 42
 ```
 
-The actual command includes absolute paths, the selected context, and the box ID.
-It preserves normal SSH host-key verification. `ssh-keygen` must be installed.
-The `--proxy` command connects stdin/stdout to the enabled guest SSH listener
-without opening a local port. Diagnostics use stderr. It reads status and refuses
-disabled SSH; it never configures or enables SSH.
-
-Local client credentials belong to this host's box directory: deleting the box removes
-them, and clone/export does not transfer the CLI-managed client key. Failed guest
-configuration retains generated keys for retry. Repeated setup disconnects existing
-clients, as complete configuration does.
+Automatic login ignores user and system SSH config (`-F /dev/null`), disables
+agent authentication and connection sharing, and enforces strict host checking.
+Default login does not edit `~/.ssh/config`. To use plain `ssh BOX`, explicitly
+[install a managed alias](#managed-openssh-aliases). Use `--proxy` or `--tunnel`
+with your own OpenSSH invocation when custom client options are needed.
 
 For a cloud box, select its existing connection context:
 
 ```bash
 boxlite --context cloud ssh dev
-# Copy and run the complete printed ssh command.
-# Explicit endpoint/routing overrides also carry into the printed command:
 boxlite --url https://api.example.com --path-prefix team ssh dev
 ```
 
-Setup uses the context's authentication and the same URL/prefix precedence as
-other commands. It stores keys on this machine under
-`<home>/ssh/remote/<scope>/<box-id>/`, isolated by context, endpoint and routing
-prefix. Repeating setup with the same selection reuses keys, including after a
-failed configure request. Deleting a remote box leaves these files on the client;
-remove that box's credential directory when no longer needed.
+The same resolved authentication, URL and prefix are used throughout the session.
+Keys live under `<home>/ssh/remote/<scope>/<box-id>/`, isolated by context,
+effective endpoint and routing prefix. Repeating the same selection reuses both
+keys, including after a failed configure request. Local runtime config is ignored
+for REST login. Deleting a remote box leaves client files for manual cleanup;
+deleting a local box removes its credentials. Clone/export does not transfer the
+managed client identity.
 
-The generated command preserves a named context or an explicit URL, plus the
-routing prefix, while loading credentials normally at execution time. Named
-contexts reload their saved endpoint; URL selection uses default credentials.
-An empty routing prefix is explicitly pinned with `--path-prefix=''`; adding a
-prefix to the saved context later does not change the printed command's route.
-The command does not embed API keys or access tokens. Keep
-`BOXLITE_API_KEY` available if that is your authentication source. A scoped SSH
-hostname separates remote host-key records. Local runtime configuration is
-ignored for cloud setup, and remote CLI exit does not stop the box.
-
-Cloud proxy needs enabled SSH, server tunnel support and inbound access. Setup
-configures SSH without opening a tunnel; proxy opens the public tunnel on
-connection. `boxlite serve` supports setup but has no tunnel endpoint for proxy.
-Use `boxlite --context cloud ssh --enable dev` to reactivate saved configuration
-on a running box without replacing keys or interrupting healthy SSH connections.
+Default cloud login requires SSH control, tunnel support and inbound access.
+`boxlite serve` has no tunnel endpoint: explicit SSH control works, but default
+login fails when creating its tunnel. It does not report setup success as a
+substitute for connecting. `--proxy` reads status and relays only SSH bytes on
+stdin/stdout; it never configures or enables SSH.
 
 For custom credentials, keep using `boxlite ssh --configure dev --ssh-config ssh.json`
 or `boxlite ssh --configure dev --host-key host_key --login alice --authorized-key alice.pub`.
@@ -157,22 +175,137 @@ boxlite ssh --disable dev
 boxlite ssh --enable dev
 ```
 
-Stop the foreground proxy/tunnel process before issuing another local CLI command
-against the same home: the runtime holds an exclusive home lock for the connection.
+Stop a local login, proxy or tunnel before issuing another local CLI command
+against the same home: the runtime holds an exclusive home lock for the session.
 
-- `--configure` replaces the whole configuration once, which disconnects
-  every SSH client, including those connected through another tunnel.
-- `--tunnel` reads status and targets the port SSH actually bound, so a guest
-  listener on port `0` works. It leaves configuration and generation unchanged.
-  Ctrl-C ends only local forwarding; guest SSH stays enabled.
-- A local CLI exit stops boxes that are not detached (plain `boxlite run`, SDK
-  boxes with `detach=false`). Saved SSH intent is restored when the box restarts.
-  Boxes from `boxlite create` and `run -d` keep running. Setup prints this warning
-  before its connection command: successful configuration alone does not mean a
-  non-detached box will remain available after setup exits.
-- Over REST, proxy/tunnel open the box's public tunnel for the SSH port and leave it
-  open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
-  remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.
+- `--configure` replaces the whole configuration once, disconnecting every SSH
+  client, including clients using other tunnels.
+- `--tunnel` targets the actual guest port, including when configuration requested
+  port `0`. It leaves configuration and generation unchanged. Ctrl-C ends only
+  local forwarding; guest SSH stays enabled.
+- Non-detached local boxes stay alive until login finishes, then stop when the
+  CLI exits. Boxes from `boxlite create` and `run -d` keep running. Saved SSH
+  intent is restored when the box restarts.
+- The CLI returns the SSH exit code. INT/TERM/HUP/QUIT also cancel a pending tunnel
+  preparation request, before OpenSSH is launched. During a session, these signals
+  are forwarded to the child, which is reaped before forwarding closes and the
+  runtime is released. Cancelling preparation does not roll back a server-side
+  public tunnel or revoke one used by other connections.
+- REST login, proxy and tunnel leave the public tunnel open. Anyone reaching it can
+  attempt a login and wake a stopped box; SSH keys remain the access control.
+  Revoke it with `boxlite network tunnel BOX PORT --revoke`. CLI exit does not stop
+  the remote box.
+
+### Managed OpenSSH aliases
+
+Install an alias without opening an interactive session:
+
+```bash
+boxlite ssh dev --install-ssh-config
+ssh dev
+
+boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
+ssh dev-cloud
+```
+
+The installer uses the same credentials, host-key verification and SSH preparation
+rules as default login, but does not open a tunnel or launch SSH. It adds one
+leading Include to `~/.ssh/config` and writes its entries in
+`~/.boxlite/ssh/config`, independently of the runtime/credential `--home`.
+New installations save the original user configuration in
+`~/.boxlite/ssh/config.backup`, outside ordinary `~/.ssh/config.*` Includes.
+Reinstalling never replaces an existing backup; older
+`~/.ssh/config.boxlite-backup` files remain untouched. New managed
+directories/files use 0700/0600 permissions. Unsafe ownership, writable
+permissions and symlink destinations fail rather than being silently repaired.
+Marked entries are checked for manual edits; use the CLI to update their target
+instead of editing the generated stanza.
+
+Installation requires `HOME` to resolve to the real user's account home, where
+plain OpenSSH reads its default configuration. Different symlink spellings of
+the same directory are accepted. A different directory is rejected before runtime
+creation, key generation, or guest changes; restore `HOME` and retry. This does
+not change the independent BoxLite `--home` or `BOXLITE_HOME` credential directory.
+
+Include paths containing `%` work with both older and newer OpenSSH clients.
+The installer detects the client version: Include treats `%` literally before
+OpenSSH 9.9, while newer clients require `%%` for a literal percent sign.
+After changing OpenSSH versions, reinstall the alias. Reinstallation also repairs
+the previous managed Include encoding without changing handwritten configuration
+or replacing the original backup.
+
+The default SSH alias is the resolved box name, falling back to its complete ID.
+Aliases must be a single ASCII hostname-like value; unsupported names require
+`--alias NAME`. Aliases are stored in lowercase; use that spelling with `ssh`.
+The actual proxy target is always the complete, case-sensitive box ID.
+Installing the same alias for the same home and
+target updates it idempotently. A different target gives two choices:
+
+```bash
+# Retain the original alias and install another.
+boxlite ssh dev --install-ssh-config --alias dev-cloud
+# Repoint only the existing BoxLite-managed alias.
+boxlite ssh dev --install-ssh-config --overwrite
+```
+
+`--overwrite` changes only a conflicting BoxLite-managed target. Handwritten Host
+entries remain unchanged, including entries matching the installed alias. The
+leading managed Include takes precedence for most explicitly configured options;
+other user and system settings still participate in normal OpenSSH resolution.
+Choose another alias if the existing name should retain its handwritten target.
+
+The installer does not parse user/system Include graphs or evaluate Match
+conditions. OpenSSH handles `Match final all`, `Match canonical all`, other Match
+forms and Include expansion when the alias is used. Installation validates only
+the generated managed file with `ssh -G -F`; it never executes handwritten
+`Match exec` commands. OpenSSH itself may execute them when connecting or inspecting
+the combined configuration with `ssh -G`.
+
+Personal `IdentityFile` and `CertificateFile` settings may add authentication
+identities, even with the managed `IdentitiesOnly yes` setting. The generated entry
+still selects its managed client key, disables agent authentication and connection
+sharing, and supplies strict host-key checking with a dedicated `known_hosts`
+file, fixed `HostKeyAlias`, `GlobalKnownHostsFile /dev/null` and
+`KnownHostsCommand none`.
+
+These settings are defaults, not complete isolation from user configuration.
+`CanonicalizeHostname no` disables hostname canonicalization, but does not prevent
+a `Match final` second pass from activating more user settings. In particular,
+Apple's `NoHostAuthenticationForProxyCommand yes` can bypass host-key checking:
+do not enable it for BoxLite connections. The installer no longer detects or
+rejects these inherited settings, and explicit SSH command-line options can
+override managed values.
+
+Installation success does not validate the combined configuration or guarantee
+that a later connection will succeed. Keep handwritten Includes from loading
+BoxLite's private backups or repeatedly loading its managed file. The installer
+checks its own marker placement, file ownership, permissions and unchanged-file
+snapshots, but does not diagnose arbitrary Include cycles or configuration
+conflicts. Use `boxlite ssh BOX` instead when you need the existing isolated
+login path that ignores user and system SSH configuration.
+
+Generated ProxyCommands use the CLI's absolute executable path and capture runtime
+home/configuration for local boxes, or credential home, context, effective URL and
+routing prefix for remote boxes. Changing the saved default context cannot
+redirect the alias. Local aliases force the embedded runtime without introducing
+a `local` context. Remote aliases retain their installed endpoint even if the
+context's endpoint later changes; authentication still reads that context's
+current credentials. No API token or private key is embedded in SSH configuration.
+Reinstall after moving the CLI executable or intentionally changing the target.
+
+OpenSSH owns the session, so its normal command/PTY options work:
+
+```bash
+ssh dev 'printf "installed-alias-ok\n"'
+```
+
+The installed proxy only connects to enabled SSH; it never configures or enables
+it. Use `boxlite ssh dev` to prepare it again when needed. Installation releases
+the local runtime when it exits, so use a detached box if it must remain running.
+An active local alias connection holds the same exclusive home lock as `--proxy`.
+Remove an alias from the managed file to stop using it; deleting a remote box does
+not automatically remove its SSH configuration or local credentials.
+
 
 ## HTTP control with `boxlite serve`
 
@@ -337,7 +470,7 @@ it off while retaining credentials, `enable()` activates saved configuration,
 and `status()` observes the live listener.
 The local runtime's `BoxImpl` translates complete configuration to
 `Control(enable=true, config=...)`, enable/disable to `Control(enable=true/false)`
-on an existing VM, and status to an empty `Control()` request. The CLI's setup
-builds a complete configuration and uses the same configure operation. No setup API or RPC is exposed. The portal forwards each RPC once.
+on an existing VM, and status to an empty `Control()` request. Default CLI login
+selects the existing status/configure/enable operations; no setup API or RPC is exposed. The portal forwards each RPC once.
 Other partial updates remain internal. REST uses POST, DELETE and GET on `/ssh`,
 and a bodyless POST on `/ssh/enable`.

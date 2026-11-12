@@ -66,6 +66,10 @@ fn read_preferences(store: &CredentialStore) -> Result<Preferences> {
 /// Resolve once before dispatch. Workload commands also snapshot credentials so
 /// a concurrent switch/login cannot split backend checks from runtime creation.
 pub fn initialize(cli: &mut Cli) -> Result<()> {
+    // Installed local SSH aliases must not read a saved remote context or credentials.
+    if matches!(&cli.command, Commands::Ssh(args) if args.proxy_local) {
+        return Ok(());
+    }
     if matches!(
         cli.command,
         Commands::Serve(_)

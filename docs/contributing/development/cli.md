@@ -64,6 +64,12 @@ The `serve` command has two test surfaces with different responsibilities:
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit tests
 and the `auth`, `ssh_cloud`, `custom_kernel_rc`, and `checkpoint` integration
 targets, excluding VM suites such as `ssh_rest.rs`.
+It also excludes inline `::vm_install::` tests, even when a caller's filter
+selects them; those remain in `make test:integration:cli` on a VM-capable host.
+In-process alias-installation tests parse the real CLI schema with environment
+bindings removed and resolve saved credentials without an ambient API-key
+override. Child-process regressions inject CLI settings to check this isolation
+without changing the parallel test runner's environment.
 
 The `checkpoint` target runs real CLI commands against loopback HTTP without a
 guest. It checks checkpoint management, import creation/replacement, tenant and

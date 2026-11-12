@@ -9,6 +9,10 @@ pub mod terminal;
 pub mod util;
 mod volumespec;
 
+#[cfg(test)]
+#[path = "../tests/fixtures/ssh_cloud.rs"]
+mod ssh_cloud_fixture;
+
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::OnceLock;
@@ -55,6 +59,10 @@ fn main() {
     process::exit(code);
 }
 
+/// Resolve command context and return its exit code after command-owned cleanup.
+///
+/// Unit-success commands map to zero; shell/session commands retain their exit
+/// status. Errors print their cause chain and return one without exiting early.
 async fn run_cli(mut cli: Cli) -> i32 {
     if let Err(error) = contexts::initialize(&mut cli) {
         eprintln!("Error: {error:#}");
@@ -103,11 +111,8 @@ async fn run_cli(mut cli: Cli) -> i32 {
         .init();
 
     let global = cli.global;
-    // Only `run`/`exec` carry a meaningful shell exit code (the box's
-    // mapped command exit); the rest are unit-success commands adapted to
-    // `Ok(0)` here so the dispatcher can produce one `Result<i32>` overall.
-    // Keeping the adapter at the call site (rather than pushing `i32` into
-    // 15 commands that have no exit-code concept) preserves type honesty.
+    // Session commands return their own exit codes; adapt unit-success commands
+    // at the call site without adding an exit-code concept to their APIs.
     let result: anyhow::Result<i32> = match cli.command {
         cli::Commands::Ci(args) => commands::ci::execute(args, &global).await.map(|_| 0),
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
@@ -134,7 +139,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Logs(args) => commands::logs::execute(args, &global).await.map(|_| 0),
         cli::Commands::Stats(args) => commands::stats::execute(args, &global).await.map(|_| 0),
         cli::Commands::Network(args) => commands::network::execute(args, &global).await.map(|_| 0),
-        cli::Commands::Ssh(args) => commands::ssh::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Ssh(args) => commands::ssh::execute(args, &global).await,
         cli::Commands::Agent(args) => commands::agent::execute(args, &global).await.map(|_| 0),
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
