@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -18,6 +18,27 @@ use crate::cli::GlobalFlags;
 /// remains owned here until the direct session and its forwarding cleanup finish.
 pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Result<i32> {
     require_openssh()?;
+    let installation = if args.install_ssh_config {
+        Some(InstallationTarget {
+            home: super::install::installation_home()?,
+            executable: std::env::current_exe().context("locate BoxLite executable")?,
+        })
+    } else {
+        None
+    };
+    execute_inner(args, global, installation).await
+}
+
+struct InstallationTarget {
+    home: PathBuf,
+    executable: PathBuf,
+}
+
+async fn execute_inner(
+    args: &super::SshArgs,
+    global: &GlobalFlags,
+    installation: Option<InstallationTarget>,
+) -> Result<i32> {
     let connection = ConnectionTarget {
         context: global.resolved_context(),
         rest: global.rest_options()?,
@@ -44,7 +65,7 @@ pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Resu
     }
     let home = fs::canonicalize(home).context("resolve runtime home")?;
     let scope = connection.remote_scope()?;
-    let install = if args.install_ssh_config {
+    let install = if let Some(target) = installation {
         let alias = args
             .alias
             .as_deref()
@@ -52,8 +73,9 @@ pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Resu
             .to_ascii_lowercase();
         let identity =
             serde_json::to_string(&(home.as_path(), scope.as_deref(), sandbox.id().as_str()))?;
-        let proxy = connection.proxy_command(global, &home, sandbox.id().as_str())?;
-        Some((alias, identity, proxy))
+        let proxy =
+            connection.proxy_command(global, &home, sandbox.id().as_str(), &target.executable)?;
+        Some((target.home, alias, identity, proxy))
     } else {
         None
     };
@@ -76,16 +98,18 @@ pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Resu
     }
     .to_ascii_lowercase();
     let paths = super::connect::ConnectionPaths::new(&directory)?;
-    let installation = if let Some((alias, identity, proxy)) = install {
+    let installation = if let Some((home, alias, identity, proxy)) = install {
         let stanza = format!(
             "Host {alias}\n\
              \x20 HostName {host_alias}\n\
+             \x20 CanonicalizeHostname no\n\
              \x20 User box\n\
              \x20 BatchMode yes\n\
              \x20 IdentitiesOnly yes\n\
              \x20 IdentityAgent none\n\
              \x20 StrictHostKeyChecking yes\n\
              \x20 GlobalKnownHostsFile /dev/null\n\
+             \x20 KnownHostsCommand none\n\
              \x20 UserKnownHostsFile {}\n\
              \x20 IdentityFile {}\n\
              \x20 HostKeyAlias {host_alias}\n\
@@ -99,7 +123,7 @@ pub(super) async fn execute(args: &super::SshArgs, global: &GlobalFlags) -> Resu
         let overwrite = args.overwrite;
         Some(
             tokio::task::spawn_blocking(move || {
-                let plan = super::install::Installation::new(&alias, &identity, overwrite)?;
+                let plan = super::install::Installation::new(&home, &alias, &identity, overwrite)?;
                 Ok::<_, anyhow::Error>((plan, alias, stanza))
             })
             .await??,
@@ -159,7 +183,13 @@ impl ConnectionTarget {
     /// Freeze routing and box identity in a shell-safe OpenSSH ProxyCommand.
     /// Authentication is resolved at invocation time; percent tokens are escaped
     /// before shell quoting because OpenSSH expands them first.
-    fn proxy_command(&self, global: &GlobalFlags, home: &Path, id: &str) -> Result<String> {
+    fn proxy_command(
+        &self,
+        global: &GlobalFlags,
+        home: &Path,
+        id: &str,
+        executable: &Path,
+    ) -> Result<String> {
         let mut command = String::new();
         let mut argument = |value: &str| -> Result<()> {
             if value.chars().any(char::is_control) {
@@ -180,8 +210,7 @@ impl ConnectionTarget {
             command.push('\'');
             Ok(())
         };
-        let executable = std::env::current_exe().context("locate BoxLite executable")?;
-        argument(super::connect::ssh_path(&executable)?)?;
+        argument(super::connect::ssh_path(executable)?)?;
         argument("--home")?;
         argument(super::connect::ssh_path(home)?)?;
         if self.rest.is_none()
@@ -408,3 +437,11 @@ fn public_key(path: &Path) -> Result<String> {
 #[cfg(test)]
 #[path = "tests/setup.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/install_support.rs"]
+mod install_support;
+
+#[cfg(test)]
+#[path = "tests/vm_install.rs"]
+mod vm_install;

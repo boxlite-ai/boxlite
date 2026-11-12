@@ -9,6 +9,10 @@ pub mod terminal;
 pub mod util;
 mod volumespec;
 
+#[cfg(test)]
+#[path = "../tests/fixtures/ssh_cloud.rs"]
+mod ssh_cloud_fixture;
+
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::OnceLock;

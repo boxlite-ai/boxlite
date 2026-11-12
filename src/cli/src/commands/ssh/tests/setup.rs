@@ -220,3 +220,6 @@ fn credential_directory_inspection_errors_are_not_treated_as_missing_keys() {
     assert_eq!(error.to_string(), "inspect SSH key directory");
     assert_eq!(fs::read_to_string(&parent).unwrap(), "keep");
 }
+
+#[path = "install_flow.rs"]
+mod install_flow;

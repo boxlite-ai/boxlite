@@ -267,8 +267,9 @@ test\:unit\:rust:
 	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
-# CLI integration binaries need a VM; this target runs only inline unit-test modules.
+# Inline tests also execute installed proxies through the actual CLI binary.
 test\:unit\:cli:
+	@cargo build -p boxlite-cli --bin boxlite
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
 	else \
@@ -544,6 +545,10 @@ test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 			cargo test -p boxlite-cli --test $$test_name --no-fail-fast -- --test-threads=4 \
 			$(CARGOTEST_FILTER) || rc=$$?; \
 		done; \
+		case 'commands::ssh::setup::vm_install::ssh_local_install_config' in \
+			*"$(FILTER)"*) cargo test -p boxlite-cli --bin boxlite --no-fail-fast -- \
+				--test-threads=1 '::vm_install::' || rc=$$? ;; \
+		esac; \
 		exit $$rc; \
 	fi
 

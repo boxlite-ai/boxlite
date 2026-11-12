@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail, ensure};
 use nix::libc;
+use nix::unistd::{Uid, User};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -18,11 +19,34 @@ const END: &str = "# End BoxLite SSH entry\n";
 const NEUTRAL: &str = "Host *\n";
 const INCLUDE_MARKER: &str = "# BoxLite managed SSH Include v1\n";
 
+/// OpenSSH resolves user configuration against the real account, not $HOME.
+pub(super) fn installation_home() -> Result<PathBuf> {
+    let user = User::from_uid(Uid::current())
+        .context("look up the real user's home for SSH installation")?
+        .context("cannot find the real user account for SSH installation")?;
+    checked_installation_home(&user.dir, dirs::home_dir().as_deref())
+}
+
+fn checked_installation_home(account: &Path, selected: Option<&Path>) -> Result<PathBuf> {
+    let account = fs::canonicalize(account)
+        .with_context(|| format!("resolve account SSH home {}", account.display()))?;
+    let selected = selected.context("cannot locate HOME for SSH installation")?;
+    let selected = fs::canonicalize(selected)
+        .with_context(|| format!("resolve SSH HOME {}", selected.display()))?;
+    ensure!(
+        account == selected,
+        "HOME differs from the account home {}; restore HOME before using --install-ssh-config so OpenSSH reads the installed configuration",
+        account.display()
+    );
+    Ok(account)
+}
+
 pub(super) struct Installation {
     home: PathBuf,
     root: PathBuf,
     managed: PathBuf,
     backup: PathBuf,
+    system_configs: Vec<PathBuf>,
     prefix: String,
     original_prefix_len: usize,
     expand_include_tokens: bool,
@@ -48,16 +72,25 @@ struct ManagedEntry {
 }
 
 impl Installation {
-    /// Acquire the installation lock and reject handwritten conflicts before
-    /// guest preparation or publication can change the SSH configuration.
-    pub(super) fn new(alias: &str, identity: &str, overwrite: bool) -> Result<Self> {
-        let home = dirs::home_dir().context("cannot locate the user home for SSH configuration")?;
-        Self::with_home(&home, alias, identity, overwrite)
+    /// Validate the owning home and both OpenSSH Include graphs while holding
+    /// the installation lock until `commit` or drop.
+    pub(super) fn new(home: &Path, alias: &str, identity: &str, overwrite: bool) -> Result<Self> {
+        let mut roots = Vec::with_capacity(2);
+        roots.push(system_config()?);
+        let vendor = PathBuf::from("/usr/etc/ssh/ssh_config");
+        if roots[0] != vendor {
+            roots.push(vendor);
+        }
+        Self::with_system_configs(home, alias, identity, overwrite, roots)
     }
 
-    /// Validate the owning home, managed identity and complete handwritten
-    /// Include graph while holding the lock until `commit` or drop.
-    fn with_home(home: &Path, alias: &str, identity: &str, overwrite: bool) -> Result<Self> {
+    fn with_system_configs(
+        home: &Path,
+        alias: &str,
+        identity: &str,
+        overwrite: bool,
+        system_configs: Vec<PathBuf>,
+    ) -> Result<Self> {
         let alias = normalize_alias(alias)?;
         ensure!(
             !identity.is_empty(),
@@ -130,6 +163,7 @@ impl Installation {
             root,
             managed,
             backup,
+            system_configs,
             prefix,
             original_prefix_len,
             expand_include_tokens,
@@ -259,16 +293,89 @@ impl Installation {
     /// Scan only handwritten bytes, protecting files that installation may publish.
     fn scan_original(&self) -> Result<()> {
         let original = self.original.as_deref().unwrap_or_default();
-        scan_config(
-            &original[self.original_prefix_len..],
-            &self.home,
-            &self.managed,
-            &self.backup,
-            &self.alias,
-            self.expand_include_tokens,
-            &mut Vec::new(),
-        )
+        let mut scanner = ConfigScanner {
+            home: &self.home,
+            base: self.home.join(".ssh"),
+            managed: &self.managed,
+            backup: &self.backup,
+            alias: &self.alias,
+            expand_include_tokens: self.expand_include_tokens,
+            system: false,
+            stack: Vec::new(),
+        };
+        scanner
+            .scan(&original[self.original_prefix_len..], true, false)
+            .with_context(|| format!("scan SSH config {}", self.root.display()))?;
+        scanner.system = true;
+        // Even vendor configuration resolves relative Includes against SSHDIR.
+        scanner.base = self
+            .system_configs
+            .first()
+            .and_then(|path| path.parent())
+            .context("missing compiled system SSH configuration directory")?
+            .to_owned();
+        for path in &self.system_configs {
+            let system = match fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("read system SSH config {}", path.display()));
+                }
+            };
+            scanner
+                .scan(&system, true, false)
+                .with_context(|| format!("scan system SSH config {}", path.display()))?;
+        }
+        Ok(())
     }
+}
+
+/// Both default host files and ssh_config share OpenSSH's compiled SSHDIR.
+/// -F excludes handwritten configuration, including executable Match conditions.
+fn system_config() -> Result<PathBuf> {
+    let output = Command::new("ssh")
+        .args(["-G", "-F", "/dev/null", "--", "127.0.0.1"])
+        .stdin(Stdio::null())
+        .output()
+        .context("read OpenSSH compiled configuration directory")?;
+    ensure!(
+        output.status.success(),
+        "OpenSSH compiled-default probe failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    system_config_from_defaults(
+        std::str::from_utf8(&output.stdout).context("non-UTF-8 OpenSSH compiled defaults")?,
+    )
+}
+
+fn system_config_from_defaults(defaults: &str) -> Result<PathBuf> {
+    let mut lines = defaults
+        .lines()
+        .filter_map(|line| line.strip_prefix("globalknownhostsfile "));
+    let value = lines
+        .next()
+        .context("OpenSSH did not report compiled system paths; refusing SSH installation")?;
+    let mut files = value.split_ascii_whitespace();
+    let first = Path::new(files.next().unwrap_or_default());
+    let second = Path::new(files.next().unwrap_or_default());
+    ensure!(
+        lines.next().is_none()
+            && files.next().is_none()
+            && first.is_absolute()
+            && first
+                .file_name()
+                .is_some_and(|name| name == "ssh_known_hosts")
+            && second
+                .file_name()
+                .is_some_and(|name| name == "ssh_known_hosts2")
+            && first.parent() == second.parent(),
+        "cannot determine OpenSSH compiled system directory; refusing SSH installation"
+    );
+    Ok(first
+        .parent()
+        .context("missing OpenSSH system directory")?
+        .join("ssh_config"))
 }
 
 /// Detect percent-token support in Include; reject unrecognized client banners
@@ -603,112 +710,143 @@ fn words(value: &str) -> Result<Vec<String>> {
     Ok(words)
 }
 
-/// Reject alias conflicts and unsafe Include graphs without evaluating Match exec.
-///
-/// The backup is protected before enumerating included files, even when it does
-/// not exist yet, so publishing it cannot introduce a new recursive Include.
-fn scan_config(
-    bytes: &[u8],
-    home: &Path,
-    managed: &Path,
-    backup: &Path,
-    alias: &str,
+/// Scan both roots without executing Match conditions. Included files inherit
+/// active state, but changes to their Host/Match scope never escape the file.
+struct ConfigScanner<'a> {
+    home: &'a Path,
+    base: PathBuf,
+    managed: &'a Path,
+    backup: &'a Path,
+    alias: &'a str,
     expand_include_tokens: bool,
-    stack: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let text =
-        std::str::from_utf8(bytes).context("cannot safely scan non-UTF-8 SSH configuration")?;
-    for line in text.lines() {
-        ensure!(
-            !line
-                .trim_start()
-                .starts_with("# BoxLite managed SSH Include"),
-            "BoxLite Include must be the single exact leading prefix; remove misplaced or duplicate Includes manually"
-        );
-        let (keyword, value) = directive(line)?;
-        match keyword.as_str() {
-            "host" => {
-                let patterns = words(value)?;
-                ensure!(
-                    !patterns.is_empty()
-                        && patterns
-                            .iter()
-                            .all(|pattern| !pattern.is_empty() && pattern != "!"),
-                    "invalid SSH Host patterns"
-                );
-                let excluded = patterns
-                    .iter()
-                    .filter_map(|pattern| pattern.strip_prefix('!'))
-                    .any(|pattern| host_matches(pattern, alias));
-                let matched = patterns
-                    .iter()
-                    .filter(|pattern| !pattern.starts_with('!'))
-                    .any(|pattern| host_matches(pattern, alias));
-                ensure!(
-                    excluded || !matched || (patterns.len() == 1 && patterns[0] == "*"),
-                    "SSH alias '{alias}' conflicts with a handwritten Host entry; choose --alias (even --overwrite cannot replace it)"
-                );
-            }
-            "include" => {
-                let paths = words(value)?;
-                ensure!(!paths.is_empty(), "empty SSH Include directive");
-                for path in paths {
-                    let pattern = include_pattern(&path, home, expand_include_tokens)?;
-                    let managed_text = managed.to_str().context("managed SSH path is not UTF-8")?;
+    system: bool,
+    stack: Vec<PathBuf>,
+}
+
+impl ConfigScanner<'_> {
+    fn scan(&mut self, bytes: &[u8], mut active: bool, never_match: bool) -> Result<()> {
+        let text =
+            std::str::from_utf8(bytes).context("cannot safely scan non-UTF-8 SSH configuration")?;
+        for line in text.lines() {
+            ensure!(
+                !line
+                    .trim_start()
+                    .starts_with("# BoxLite managed SSH Include"),
+                "BoxLite Include must be the single exact leading prefix; remove misplaced or duplicate Includes manually"
+            );
+            let (keyword, value) = directive(line)?;
+            match keyword.as_str() {
+                "host" => {
+                    let patterns = words(value)?;
                     ensure!(
-                        !glob::Pattern::new(&pattern)?.matches(managed_text),
-                        "unowned or conditional Include of the BoxLite managed file; remove it manually"
+                        !patterns.is_empty()
+                            && patterns
+                                .iter()
+                                .all(|pattern| !pattern.is_empty() && pattern != "!"),
+                        "invalid SSH Host patterns"
                     );
+                    let excluded = patterns
+                        .iter()
+                        .filter_map(|pattern| pattern.strip_prefix('!'))
+                        .any(|pattern| host_matches(pattern, self.alias));
+                    let matched = patterns
+                        .iter()
+                        .filter(|pattern| !pattern.starts_with('!'))
+                        .any(|pattern| host_matches(pattern, self.alias));
+                    active = !never_match && matched && !excluded;
                     ensure!(
-                        !include_matches_backup(&pattern, backup)?,
-                        "SSH Include matches the BoxLite config backup; narrow it before installing"
+                        self.system || !active || (patterns.len() == 1 && patterns[0] == "*"),
+                        "SSH alias '{}' conflicts with a handwritten Host entry; choose --alias (even --overwrite cannot replace it)",
+                        self.alias
                     );
-                    for included in glob::glob(&pattern).context("unsupported SSH Include glob")? {
-                        let included = included.context("read SSH Include glob")?;
-                        let canonical = fs::canonicalize(&included).with_context(|| {
-                            format!("resolve SSH Include {}", included.display())
-                        })?;
-                        ensure!(
-                            canonical != managed,
-                            "unowned Include of BoxLite configuration"
-                        );
-                        ensure!(
-                            stack.len() < 32 && !stack.contains(&canonical),
-                            "recursive SSH Include: {}",
-                            included.display()
-                        );
-                        ensure!(
-                            fs::metadata(&included)?.is_file(),
-                            "SSH Include is not a regular file: {}",
-                            included.display()
-                        );
-                        let bytes = fs::read(&included)
-                            .with_context(|| format!("read SSH Include {}", included.display()))?;
-                        stack.push(canonical);
-                        scan_config(
-                            &bytes,
-                            home,
-                            managed,
-                            backup,
-                            alias,
-                            expand_include_tokens,
-                            stack,
-                        )?;
-                        stack.pop();
+                }
+                "include" => {
+                    let paths = words(value)?;
+                    ensure!(!paths.is_empty(), "empty SSH Include directive");
+                    for path in paths {
+                        self.include(&path, active)?;
                     }
                 }
+                "match" => {
+                    let conditions = words(value)?;
+                    ensure!(
+                        conditions.len() == 1 && conditions[0].eq_ignore_ascii_case("all"),
+                        "cannot safely install through ambiguous SSH Match conditions; Match exec is never executed"
+                    );
+                    active = !never_match;
+                }
+                "identityfile" | "identityfile2" | "certificatefile" if active => {
+                    // words() removes unknown escapes that OpenSSH preserves;
+                    // never let an escaped filename masquerade as the sentinel.
+                    if keyword != "certificatefile"
+                        && !value.contains('\\')
+                        && !value.chars().any(|c| c.is_control() && c != '\t')
+                    {
+                        let values = words(value)?;
+                        if values.len() == 1 && values[0].eq_ignore_ascii_case("none") {
+                            continue;
+                        }
+                    }
+                    bail!(
+                        "SSH {keyword} applies to alias '{}'; remove the additional identity or exclude this alias before using --install-ssh-config",
+                        self.alias
+                    );
+                }
+                _ => {}
             }
-            "match" => {
-                let conditions = words(value)?;
-                ensure!(
-                    conditions.len() == 1 && conditions[0].eq_ignore_ascii_case("all"),
-                    "cannot safely install through ambiguous SSH Match conditions; Match exec is never executed"
-                );
-            }
-            _ => {}
         }
+        Ok(())
     }
-    Ok(())
+
+    fn include(&mut self, path: &str, active: bool) -> Result<()> {
+        ensure!(
+            !self.system || !path.starts_with('~'),
+            "system SSH Include does not support home expansion: {path}"
+        );
+        let pattern = include_pattern(path, self.home, &self.base, self.expand_include_tokens)?;
+        let managed = self
+            .managed
+            .to_str()
+            .context("managed SSH path is not UTF-8")?;
+        ensure!(
+            !glob::Pattern::new(&pattern)?.matches(managed),
+            "unowned or conditional Include of the BoxLite managed file; remove it manually"
+        );
+        ensure!(
+            !include_matches_backup(&pattern, self.backup)?,
+            "SSH Include matches the BoxLite config backup; narrow it before installing"
+        );
+        for included in glob::glob(&pattern).context("unsupported SSH Include glob")? {
+            let included = included.context("read SSH Include glob")?;
+            let canonical = fs::canonicalize(&included)
+                .with_context(|| format!("resolve SSH Include {}", included.display()))?;
+            ensure!(
+                canonical != self.managed,
+                "unowned Include of BoxLite configuration"
+            );
+            ensure!(
+                self.stack.len() < 32 && !self.stack.contains(&canonical),
+                "recursive SSH Include: {}",
+                included.display()
+            );
+            ensure!(
+                fs::metadata(&included)
+                    .with_context(|| format!("inspect SSH Include {}", included.display()))?
+                    .is_file(),
+                "SSH Include is not a regular file: {}",
+                included.display()
+            );
+            let bytes = fs::read(&included)
+                .with_context(|| format!("read SSH Include {}", included.display()))?;
+            self.stack.push(canonical);
+            let result = self
+                .scan(&bytes, active, !active)
+                .with_context(|| format!("scan SSH Include {}", included.display()));
+            self.stack.pop();
+            result?;
+        }
+        Ok(())
+    }
 }
 
 /// Match a future backup without requiring the backup file to exist.
@@ -744,7 +882,7 @@ fn include_matches_backup(pattern: &str, backup: &Path) -> Result<bool> {
 ///
 /// Leave glob components intact: prospective-file checks and existing-file
 /// enumeration must interpret the same pattern without expanding Match exec.
-fn include_pattern(value: &str, home: &Path, expand_tokens: bool) -> Result<String> {
+fn include_pattern(value: &str, home: &Path, base: &Path, expand_tokens: bool) -> Result<String> {
     ensure!(
         !value.is_empty() && !value.contains('$') && !value.contains('`'),
         "unsupported SSH Include environment expansion"
@@ -766,8 +904,8 @@ fn include_pattern(value: &str, home: &Path, expand_tokens: bool) -> Result<Stri
         }
         literal.push(character);
     }
-    let home = glob::Pattern::escape(home.to_str().context("SSH home must be UTF-8")?);
     if let Some(relative) = literal.strip_prefix("~/") {
+        let home = glob::Pattern::escape(home.to_str().context("SSH home must be UTF-8")?);
         Ok(format!("{home}/{relative}"))
     } else if literal.starts_with('/') {
         Ok(literal)
@@ -776,7 +914,8 @@ fn include_pattern(value: &str, home: &Path, expand_tokens: bool) -> Result<Stri
             !literal.starts_with('~'),
             "unsupported SSH Include user-home expansion"
         );
-        Ok(format!("{home}/.ssh/{literal}"))
+        let base = glob::Pattern::escape(base.to_str().context("SSH Include base must be UTF-8")?);
+        Ok(format!("{base}/{literal}"))
     }
 }
 
@@ -786,7 +925,7 @@ fn host_matches(pattern: &str, alias: &str) -> bool {
     let alias = alias.as_bytes();
     let (mut p, mut a, mut star, mut retry) = (0, 0, None, 0);
     while a < alias.len() {
-        if p < pattern.len() && (pattern[p] == b'?' || pattern[p].eq_ignore_ascii_case(&alias[a])) {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == alias[a]) {
             p += 1;
             a += 1;
         } else if p < pattern.len() && pattern[p] == b'*' {

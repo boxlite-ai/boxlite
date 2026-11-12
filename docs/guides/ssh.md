@@ -219,6 +219,12 @@ permissions, symlinks and ambiguous configurations fail rather than being
 silently rewritten. Marked entries are checked for manual edits; use the CLI
 to update their target instead of editing the generated stanza.
 
+Installation requires `HOME` to resolve to the real user's account home, where
+plain OpenSSH reads its default configuration. Different symlink spellings of
+the same directory are accepted. A different directory is rejected before runtime
+creation, key generation, or guest changes; restore `HOME` and retry. This does
+not change the independent BoxLite `--home` or `BOXLITE_HOME` credential directory.
+
 Include paths containing `%` work with both older and newer OpenSSH clients.
 The installer detects the client version: Include treats `%` literally before
 OpenSSH 9.9, while newer clients require `%%` for a literal percent sign.
@@ -243,9 +249,40 @@ boxlite ssh dev --install-ssh-config --overwrite
 `--overwrite` does not change the old box, delete its keys, or overwrite a
 handwritten Host block. Matching explicit Host patterns in user configuration,
 including conventional nested Includes, are conflicts. General `Host *` defaults
-are permitted. Include paths support conventional quoting, relative paths,
-`~/` and globbing. Other token/environment expansions and Match conditions other
-than `Match all` are refused; the installer never executes `Match exec`.
+are permitted unless they add authentication identities for the alias. Host
+patterns use OpenSSH's case-sensitive matching. User Includes support conventional
+quoting, relative paths, `~/` and globbing. Relative system Includes resolve under
+the selected OpenSSH client's compiled configuration directory, without `~`
+expansion. Other token/environment expansions and Match conditions other than
+`Match all` are refused; the installer never executes `Match exec`.
+
+The installer checks user and system Include graphs before preparing SSH and
+again before publication. It discovers the client's compiled directory using
+`ssh -G -F /dev/null`, without evaluating handwritten configuration, rather than
+assuming `/etc/ssh`. Unrecognized or ambiguous defaults fail installation.
+It also conservatively scans `/usr/etc/ssh/ssh_config` when present to cover
+vendor configuration. Relative Includes in that file still use the compiled
+directory. Reinstall aliases after changing OpenSSH clients.
+
+An `IdentityFile` (including its legacy `IdentityFile2` spelling) or
+`CertificateFile` applying to the alias is rejected: these options accumulate
+despite `IdentitiesOnly yes`. A single `IdentityFile none` is allowed, including
+case variants and supported double quoting; it does not clear other identities.
+Escaped sentinel-like filenames remain rejected, as does `CertificateFile none`,
+which OpenSSH treats as a filename. Keep personal identities in Host blocks that
+exclude managed aliases, for example:
+
+```sshconfig
+Host * !dev !dev-cloud
+  IdentityFile ~/.ssh/personal_key
+```
+
+Managed entries set `CanonicalizeHostname no`, preventing a second configuration
+pass from reactivating identities excluded by the original alias. Other hosts
+retain their canonicalization settings. Entries also set `KnownHostsCommand none`,
+so a handwritten helper cannot add another host-key trust source. Reinstall
+existing aliases to receive these settings. Explicit OpenSSH command-line options
+can override managed settings.
 
 Handwritten Includes must not match `~/.ssh/config.boxlite-backup`, even when
 that backup does not exist yet. For example, narrow `Include config.*` to the

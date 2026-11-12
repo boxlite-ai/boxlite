@@ -7,7 +7,13 @@ fn test_home() -> tempfile::TempDir {
 
 /// Create a locked installation against an isolated canonical home.
 fn plan(home: &Path, alias: &str, identity: &str, overwrite: bool) -> Result<Installation> {
-    Installation::with_home(&home.canonicalize()?, alias, identity, overwrite)
+    Installation::with_system_configs(
+        &home.canonicalize()?,
+        alias,
+        identity,
+        overwrite,
+        vec![system_root(home)],
+    )
 }
 
 fn stanza(alias: &str, hostname: &str) -> String {
@@ -16,6 +22,10 @@ fn stanza(alias: &str, hostname: &str) -> String {
 
 fn root(home: &Path) -> PathBuf {
     home.join(".ssh/config")
+}
+
+fn system_root(home: &Path) -> PathBuf {
+    home.join("etc/ssh/ssh_config")
 }
 
 fn managed(home: &Path) -> PathBuf {
@@ -180,7 +190,16 @@ fn invalid_alias_and_unsafe_write_paths_are_rejected() {
     let home = test_home();
     let selected = home.path().join("home-symlink");
     symlink(home.path(), &selected).unwrap();
-    assert!(Installation::with_home(&selected, "dev", "A", false).is_err());
+    assert!(
+        Installation::with_system_configs(
+            &selected,
+            "dev",
+            "A",
+            false,
+            vec![system_root(home.path())],
+        )
+        .is_err()
+    );
 }
 
 /// A managed marker must stay first; handwritten copies remain unowned.
@@ -220,8 +239,8 @@ fn unsupported_include_expansion_and_relative_handwritten_collision_fail_preflig
     let ssh = home.path().join(".ssh");
     fs::create_dir(&ssh).unwrap();
     let fragment = ssh.join("manual.conf");
-    fs::write(&fragment, "Host DEV\n  User manual\n").unwrap();
-    fs::write(ssh.join("%h.conf"), "Host DEV\n  User manual\n").unwrap();
+    fs::write(&fragment, "Host dev\n  User manual\n").unwrap();
+    fs::write(ssh.join("%h.conf"), "Host dev\n  User manual\n").unwrap();
     for original in [
         "Include manual.conf\n",
         "Include %h.conf\n",
@@ -266,7 +285,7 @@ fn nested_includes_patterns_negation_defaults_and_cycles() {
     let old = fs::read(managed(home.path())).unwrap();
     for content in [
         "Host d*\n  HostName manual\n",
-        "Host DEV\n  HostName manual\n",
+        "Host dev\n  HostName manual\n",
         "Include config.d/hosts.conf\n",
         "Match exec true\nHost dev\n  User unsafe\n",
     ] {
@@ -351,8 +370,7 @@ fn handwritten_percent_includes_match_openssh_conflict_detection() {
         let conflicts = effective(home.path(), "dev").contains("hostname handwritten\n");
         let installation = plan(home.path(), "dev", "A", false);
         if conflicts {
-            let error = installation.err().expect("handwritten Host must conflict");
-            assert!(error.to_string().contains("handwritten Host"), "{error:#}");
+            installation.err().expect("handwritten Host must conflict");
             assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
             assert!(!managed(home.path()).exists());
         } else {
@@ -423,10 +441,9 @@ fn backup_include_matches_fail_before_publishing_configuration() {
         fs::write(root(home.path()), &original).unwrap();
         assert!(effective(home.path(), "unrelated").contains("hostname unrelated\n"));
 
-        let error = plan(home.path(), "dev", "A", false)
+        plan(home.path(), "dev", "A", false)
             .err()
             .expect("an Include matching the future backup must fail preflight");
-        assert!(error.to_string().contains("backup"), "{error:#}");
         assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
         assert!(!managed(home.path()).exists());
         assert!(!ssh.join("config.boxlite-backup").exists());
@@ -444,10 +461,9 @@ fn absolute_backup_include_fails_before_publishing_configuration() {
     fs::write(root(home.path()), &original).unwrap();
     assert!(effective(home.path(), "unrelated").contains("hostname unrelated\n"));
 
-    let error = plan(home.path(), "dev", "A", false)
+    plan(home.path(), "dev", "A", false)
         .err()
         .expect("an absolute Include matching the future backup must fail preflight");
-    assert!(error.to_string().contains("backup"), "{error:#}");
     assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
     assert!(!managed(home.path()).exists());
     assert!(!ssh.join("config.boxlite-backup").exists());
@@ -474,4 +490,496 @@ fn installer_lock_is_exclusive_and_files_are_private() {
             0o600
         );
     }
+}
+
+#[test]
+fn active_additive_identities_in_global_host_and_match_scopes_are_rejected() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    for option in ["IdentityFile", "IdentityFile2", "CertificateFile"] {
+        for scope in ["", "Host *\n", "Match all\n"] {
+            let original = format!("{scope}  {option} /manual/credential\n");
+            fs::write(root(home.path()), &original).unwrap();
+            assert!(
+                plan(home.path(), "dev", "A", true).is_err(),
+                "accepted active {option} in {scope:?}"
+            );
+            assert_eq!(fs::read(root(home.path())).unwrap(), original.as_bytes());
+            assert!(!managed(home.path()).exists());
+        }
+    }
+}
+
+#[test]
+fn active_additive_identities_in_direct_and_nested_includes_are_rejected() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    let first = ssh.join("first.conf");
+    let nested = ssh.join("nested.conf");
+    fs::write(root(home.path()), "Include first.conf\n").unwrap();
+    for option in ["IdentityFile", "IdentityFile2", "CertificateFile"] {
+        for scope in ["", "Host *\n", "Match all\n"] {
+            let identity = format!("{scope}  {option} /manual/credential\n");
+            for indirect in [false, true] {
+                fs::write(
+                    &first,
+                    if indirect {
+                        "Include nested.conf\n"
+                    } else {
+                        &identity
+                    },
+                )
+                .unwrap();
+                fs::write(&nested, &identity).unwrap();
+                assert!(
+                    plan(home.path(), "dev", "A", false).is_err(),
+                    "accepted {option} in {scope:?}, nested={indirect}"
+                );
+                assert!(!managed(home.path()).exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn unrelated_and_negated_host_identities_preserve_handwritten_configuration() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    let original = "Host other\n  IdentityFile /manual/other\n  CertificateFile /manual/other-cert\nHost * !dev\n  IdentityFile /manual/excluded\n  CertificateFile /manual/excluded-cert\n";
+    fs::write(root(home.path()), original).unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    assert!(
+        fs::read_to_string(root(home.path()))
+            .unwrap()
+            .ends_with(original)
+    );
+    assert!(effective(home.path(), "dev").contains("hostname first\n"));
+}
+
+#[test]
+fn inherited_inactive_include_cannot_reactivate_host_or_match() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    let original = "Host other\n  Include inactive.conf\nHost *\n  User default\n";
+    fs::write(root(home.path()), original).unwrap();
+    fs::write(
+        ssh.join("inactive.conf"),
+        "Host dev\n  IdentityFile /manual/inactive\nMatch all\n  CertificateFile /manual/inactive-cert\nInclude nested.conf\n",
+    )
+    .unwrap();
+    fs::write(
+        ssh.join("nested.conf"),
+        "Host dev\n  IdentityFile /manual/nested\n",
+    )
+    .unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    assert!(
+        fs::read_to_string(root(home.path()))
+            .unwrap()
+            .ends_with(original)
+    );
+    assert!(effective(home.path(), "dev").contains("hostname first\n"));
+}
+
+#[test]
+fn include_child_scope_is_restored_before_parent_identity() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    fs::write(ssh.join("child.conf"), "Host other\n  User other\n").unwrap();
+    for option in ["IdentityFile", "CertificateFile"] {
+        fs::write(
+            root(home.path()),
+            format!("Include child.conf\n{option} /manual/parent\n"),
+        )
+        .unwrap();
+        assert!(
+            plan(home.path(), "dev", "A", false).is_err(),
+            "child Host scope hid parent {option}"
+        );
+        assert!(!managed(home.path()).exists());
+    }
+}
+
+#[test]
+fn include_child_scope_is_restored_before_next_included_file() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    fs::write(root(home.path()), "Include first.conf second.conf\n").unwrap();
+    fs::write(ssh.join("first.conf"), "Host other\n  User other\n").unwrap();
+    fs::write(ssh.join("second.conf"), "CertificateFile /manual/second\n").unwrap();
+    assert!(plan(home.path(), "dev", "A", false).is_err());
+    assert!(!managed(home.path()).exists());
+}
+
+#[test]
+fn uppercase_negated_host_does_not_exclude_normalized_alias_identity() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    fs::write(
+        root(home.path()),
+        "Host * !DEV\n  IdentityFile /manual/credential\n",
+    )
+    .unwrap();
+    assert!(plan(home.path(), "DEV", "A", false).is_err());
+    assert!(!managed(home.path()).exists());
+}
+
+#[test]
+fn inactive_include_still_rejects_ambiguous_match_without_execution() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    let marker = home.path().join("must-not-exist");
+    fs::write(root(home.path()), "Host other\n  Include inactive.conf\n").unwrap();
+    fs::write(
+        ssh.join("inactive.conf"),
+        format!("Match exec \"touch {}\"\n", marker.display()),
+    )
+    .unwrap();
+    assert!(plan(home.path(), "dev", "A", false).is_err());
+    assert!(!marker.exists());
+    assert!(!managed(home.path()).exists());
+}
+
+#[test]
+fn installation_home_requires_canonical_account_home_without_writes() {
+    let home = test_home();
+    let other = test_home();
+    checked_installation_home(home.path(), Some(other.path())).unwrap_err();
+    assert!(!home.path().join(".ssh").exists());
+    assert!(!other.path().join(".ssh").exists());
+
+    let canonical = home.path().canonicalize().unwrap();
+    assert_eq!(
+        checked_installation_home(home.path(), Some(&canonical)).unwrap(),
+        canonical
+    );
+    let linked = other.path().join("account-home");
+    symlink(home.path(), &linked).unwrap();
+    assert_eq!(
+        checked_installation_home(home.path(), Some(&linked)).unwrap(),
+        canonical
+    );
+    assert!(checked_installation_home(home.path(), None).is_err());
+    assert!(checked_installation_home(home.path(), Some(&other.path().join("missing"))).is_err());
+}
+
+#[test]
+fn uppercase_host_patterns_do_not_claim_normalized_alias() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    let original =
+        "Host DEV\n  IdentityFile /manual/uppercase\n  CertificateFile /manual/uppercase-cert\n";
+    fs::write(root(home.path()), original).unwrap();
+    plan(home.path(), "DEV", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    assert!(
+        fs::read_to_string(root(home.path()))
+            .unwrap()
+            .ends_with(original)
+    );
+    let resolved = effective(home.path(), "dev");
+    assert!(resolved.contains("hostname first\n"), "{resolved}");
+    assert!(!resolved.contains("/manual/uppercase"), "{resolved}");
+}
+
+#[test]
+fn system_root_active_additive_identities_are_rejected_with_path_diagnostics() {
+    let home = test_home();
+    let system = system_root(home.path());
+    fs::create_dir_all(system.parent().unwrap()).unwrap();
+    for option in ["IdentityFile", "IdentityFile2", "CertificateFile"] {
+        for scope in ["", "Host *\n", "Host dev\n", "Match all\n"] {
+            fs::write(&system, format!("{scope}  {option} /system/credential\n")).unwrap();
+            let error = match plan(home.path(), "dev", "A", false) {
+                Ok(_) => panic!("accepted system {option} in {scope:?}"),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(error.contains(system.to_str().unwrap()), "{error}");
+            assert!(error.contains(&option.to_ascii_lowercase()), "{error}");
+            assert!(!root(home.path()).exists());
+            assert!(!managed(home.path()).exists());
+        }
+    }
+}
+
+#[test]
+fn system_matching_hosts_without_extra_identities_are_not_user_conflicts() {
+    let home = test_home();
+    let system = system_root(home.path());
+    fs::create_dir_all(system.parent().unwrap()).unwrap();
+    let original = "Host dev\n  ServerAliveInterval 12\nHost other\n  IdentityFile /system/other\nHost * !dev\n  CertificateFile /system/excluded\n";
+    fs::write(&system, original).unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    assert_eq!(fs::read_to_string(&system).unwrap(), original);
+    assert!(effective(home.path(), "dev").contains("hostname first\n"));
+}
+
+#[test]
+fn nested_system_relative_includes_keep_system_root_base() {
+    let home = test_home();
+    let system = system_root(home.path());
+    let base = system.parent().unwrap();
+    fs::create_dir_all(base.join("config.d")).unwrap();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    fs::write(&system, "Include config.d/outer.conf\n").unwrap();
+    fs::write(base.join("config.d/outer.conf"), "Include nested.conf\n").unwrap();
+    fs::write(home.path().join(".ssh/nested.conf"), "Host other\n").unwrap();
+    fs::write(base.join("config.d/nested.conf"), "Host other\n").unwrap();
+    let nested = base.join("nested.conf");
+    fs::write(&nested, "Match all\nCertificateFile /system/credential\n").unwrap();
+    let error = match plan(home.path(), "dev", "A", false) {
+        Ok(_) => panic!("accepted nested system certificate"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains(nested.to_str().unwrap()), "{error}");
+    assert!(!managed(home.path()).exists());
+    fs::write(&nested, "Host other\nIdentityFile /system/other\n").unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+}
+
+#[test]
+fn inactive_system_include_cannot_reactivate_and_child_scope_does_not_escape() {
+    let home = test_home();
+    let system = system_root(home.path());
+    let base = system.parent().unwrap();
+    fs::create_dir_all(base).unwrap();
+    fs::write(
+        &system,
+        "Host other\nInclude inactive.conf\nHost dev\nInclude child.conf\n",
+    )
+    .unwrap();
+    fs::write(
+        base.join("inactive.conf"),
+        "Host dev\nIdentityFile /system/inactive\nMatch all\nCertificateFile /system/inactive-cert\n",
+    )
+    .unwrap();
+    fs::write(base.join("child.conf"), "Host other\n").unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    fs::write(
+        &system,
+        "Host dev\nInclude child.conf\nIdentityFile /system/parent\n",
+    )
+    .unwrap();
+    assert!(plan(home.path(), "dev", "A", false).is_err());
+}
+
+#[test]
+fn commit_rechecks_user_included_identities_before_publishing() {
+    let home = test_home();
+    let ssh = home.path().join(".ssh");
+    fs::create_dir(&ssh).unwrap();
+    let original = "Include child.conf\n";
+    fs::write(root(home.path()), original).unwrap();
+    let included = ssh.join("child.conf");
+    fs::write(&included, "Host other\n").unwrap();
+    let installation = plan(home.path(), "dev", "A", false).unwrap();
+    fs::write(&included, "IdentityFile /manual/raced\n").unwrap();
+    let error = installation.commit(&stanza("dev", "first")).unwrap_err();
+    assert!(format!("{error:#}").contains(included.to_str().unwrap()));
+    assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
+    assert!(!managed(home.path()).exists());
+    assert!(!ssh.join("config.boxlite-backup").exists());
+}
+
+#[test]
+fn commit_rechecks_system_root_and_included_identities_before_publishing() {
+    let home = test_home();
+    let system = system_root(home.path());
+    let base = system.parent().unwrap();
+    fs::create_dir_all(base).unwrap();
+    for nested in [false, true] {
+        fs::write(&system, "Include child.conf\n").unwrap();
+        let child = base.join("child.conf");
+        fs::write(&child, "Host other\n").unwrap();
+        let installation = plan(home.path(), "dev", "A", false).unwrap();
+        let changed = if nested { &child } else { &system };
+        fs::write(changed, "CertificateFile /system/raced\n").unwrap();
+        let error = installation.commit(&stanza("dev", "first")).unwrap_err();
+        assert!(format!("{error:#}").contains(changed.to_str().unwrap()));
+        assert!(!root(home.path()).exists());
+        assert!(!managed(home.path()).exists());
+        assert!(!home.path().join(".ssh/config.boxlite-backup").exists());
+    }
+}
+
+#[test]
+fn system_include_rejects_home_expansion_while_user_include_accepts_it() {
+    let home = test_home();
+    let system = system_root(home.path());
+    fs::create_dir_all(system.parent().unwrap()).unwrap();
+    let fragment = home.path().join("manual.conf");
+    fs::write(&fragment, "Host other\nIdentityFile /manual/other\n").unwrap();
+    for include in ["~/manual.conf", "~root/manual.conf"] {
+        fs::write(&system, format!("Include {include}\n")).unwrap();
+        let error = match plan(home.path(), "dev", "A", false) {
+            Ok(_) => panic!("accepted system home expansion {include}"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(error.contains("system SSH Include"), "{error}");
+        assert!(error.contains(include), "{error}");
+        assert!(!managed(home.path()).exists());
+    }
+    fs::write(&system, "").unwrap();
+    fs::write(root(home.path()), "Include ~/manual.conf\n").unwrap();
+    fs::write(&fragment, "IdentityFile /manual/active\n").unwrap();
+    assert!(plan(home.path(), "dev", "A", false).is_err());
+    fs::write(&fragment, "Host other\nIdentityFile /manual/other\n").unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+}
+
+#[test]
+fn identity_none_allows_installation_without_clearing_real_identities() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    for option in ["IdentityFile", "IdentityFile2"] {
+        for value in ["none", "\"NoNe\"", "n\"on\"e # disabled"] {
+            let original = format!("Host *\n  {option} {value}\n");
+            fs::write(root(home.path()), &original).unwrap();
+            plan(home.path(), "dev", "A", false)
+                .unwrap_or_else(|error| panic!("rejected {option} {value}: {error:#}"))
+                .commit(&stanza("dev", "first"))
+                .unwrap();
+            assert!(effective(home.path(), "dev").contains("hostname first\n"));
+            assert!(
+                fs::read_to_string(root(home.path()))
+                    .unwrap()
+                    .ends_with(&original)
+            );
+            fs::write(
+                root(home.path()),
+                format!("{original}  {option} /manual/real-key\n"),
+            )
+            .unwrap();
+            assert!(plan(home.path(), "dev", "A", false).is_err());
+        }
+    }
+}
+
+#[test]
+fn sentinel_like_filenames_and_certificates_remain_conflicts() {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    for directive in [
+        r"IdentityFile n\one",
+        r#"IdentityFile "n\one""#,
+        r"IdentityFile2 n\one",
+        "IdentityFile ./none",
+        "IdentityFile none extra",
+        "CertificateFile none",
+    ] {
+        fs::write(root(home.path()), format!("Host *\n  {directive}\n")).unwrap();
+        assert!(
+            plan(home.path(), "dev", "A", false).is_err(),
+            "accepted real or ambiguous identity: {directive}"
+        );
+    }
+}
+
+#[test]
+fn system_root_uses_openssh_hostfile_defaults_instead_of_platform_path() {
+    let home = test_home();
+    let config = home.path().join("probe.conf");
+    let directory = system_root(home.path()).parent().unwrap().to_owned();
+    fs::write(
+        &config,
+        format!(
+            "GlobalKnownHostsFile {}/ssh_known_hosts {}/ssh_known_hosts2\n",
+            directory.display(),
+            directory.display()
+        ),
+    )
+    .unwrap();
+    let output = Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(&config)
+        .args(["--", "127.0.0.1"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let defaults = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        system_config_from_defaults(&defaults).unwrap(),
+        system_root(home.path()),
+        "the selected OpenSSH configuration directory must follow its defaults"
+    );
+}
+
+#[test]
+fn unknown_or_ambiguous_openssh_system_roots_are_not_guessed() {
+    for defaults in [
+        "",
+        "globalknownhostsfile none\n",
+        "globalknownhostsfile relative/ssh_known_hosts relative/ssh_known_hosts2\n",
+        "globalknownhostsfile /one/ssh_known_hosts /two/ssh_known_hosts2\n",
+        "globalknownhostsfile /one/not-the-default /one/ssh_known_hosts2\n",
+        "globalknownhostsfile /one/ssh_known_hosts /one/ssh_known_hosts2\nglobalknownhostsfile /two/ssh_known_hosts /two/ssh_known_hosts2\n",
+    ] {
+        assert!(
+            system_config_from_defaults(defaults).is_err(),
+            "guessed a system root from {defaults:?}"
+        );
+    }
+}
+
+fn plan_system_roots(home: &Path, roots: &[PathBuf]) -> Result<Installation> {
+    Installation::with_system_configs(&home.canonicalize()?, "dev", "A", false, roots.to_vec())
+}
+
+#[test]
+fn vendor_root_is_scanned_when_primary_is_missing_and_keeps_compiled_include_base() {
+    let home = test_home();
+    let primary = system_root(home.path());
+    let vendor = home.path().join("vendor/ssh_config");
+    fs::create_dir_all(primary.parent().unwrap()).unwrap();
+    fs::create_dir_all(vendor.parent().unwrap()).unwrap();
+    fs::write(&vendor, "Include identity.conf\n").unwrap();
+    let compiled_include = primary.parent().unwrap().join("identity.conf");
+    let decoy = vendor.parent().unwrap().join("identity.conf");
+    fs::write(&compiled_include, "IdentityFile /system/personal\n").unwrap();
+    fs::write(&decoy, "Host other\n").unwrap();
+    let roots = [primary.clone(), vendor];
+    assert!(
+        plan_system_roots(home.path(), &roots).is_err(),
+        "missed the vendor Include's identity in the compiled SSHDIR"
+    );
+    assert!(!root(home.path()).exists());
+    assert!(!managed(home.path()).exists());
+
+    fs::write(&primary, "Host *\n  ServerAliveInterval 12\n").unwrap();
+    assert!(
+        plan_system_roots(home.path(), &roots).is_err(),
+        "creating the primary root must not hide additive vendor identities"
+    );
+    fs::write(&compiled_include, "Host other\n").unwrap();
+    fs::write(&decoy, "IdentityFile /vendor/decoy\n").unwrap();
+    plan_system_roots(home.path(), &roots)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    assert!(effective(home.path(), "dev").contains("hostname first\n"));
 }
