@@ -24,6 +24,9 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	if _, err := dto.CPUAllocation(createDto.CpuQuota); err != nil {
 		return errdefs.ErrInvalidArgument.WithMessage(err.Error())
 	}
+	if _, err := dto.MemoryMiB(createDto.MemoryQuota); err != nil {
+		return errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
 	if _, err := networkSpec(createDto); err != nil {
 		return err
 	}

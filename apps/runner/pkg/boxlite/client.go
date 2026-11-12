@@ -442,6 +442,10 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err != nil {
 		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
 	}
+	memoryMiB, err := dto.MemoryMiB(boxDto.MemoryQuota)
+	if err != nil {
+		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
@@ -472,10 +476,6 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		return "", "", err
 	}
 
-	memoryMiB := int(boxDto.MemoryQuota * 1024)
-	if memoryMiB < 128 {
-		memoryMiB = 128
-	}
 	opts := []boxlite.BoxOption{
 		boxlite.WithName(boxDto.Id),
 		boxlite.WithCPUs(cpus),

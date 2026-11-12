@@ -163,9 +163,11 @@ export class CreateBoxDto {
   gpu?: number
 
   @ApiPropertyOptional({
-    description: 'Memory allocated to the box in GB',
+    description: 'Memory allocated to the box in GiB, in whole MiB increments',
     example: 1,
-    type: 'integer',
+    type: 'number',
+    minimum: 0.125,
+    multipleOf: 1 / 1024,
   })
   @IsOptional()
   @IsNumber()

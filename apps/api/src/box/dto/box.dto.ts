@@ -9,6 +9,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
 import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.constant'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { NetworkInfoResponseDto } from './network-info.dto'
@@ -386,7 +387,7 @@ export class BoxDto {
       env: box.env,
       cpu: box.cpu,
       gpu: box.gpu,
-      memory: box.mem,
+      memory: memoryGiBOf(box),
       disk: box.disk,
       privileged: box.privileged,
       network: NetworkInfoResponseDto.fromBox(box),

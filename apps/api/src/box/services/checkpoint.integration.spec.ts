@@ -231,6 +231,20 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     return service.get(organizationId, checkpoint.id)
   }
 
+  it('preserves exact MiB through checkpoint capture and new-Box recovery', async () => {
+    const original = await source('memory-source')
+    Object.assign(original, { mem: 1, memoryMib: 300 })
+    await boxes.save(original)
+    const captured = await service.create(organizationId, original.id, 'memory-checkpoint')
+    await finish(captured.exportJobId!, archive(captured))
+    const uploading = await service.get(organizationId, captured.id)
+    await finish(uploading.activeJobId!, archive(captured))
+    const checkpoint = await service.get(organizationId, captured.id)
+    expect(checkpoint.environment).toMatchObject({ mem: 1, memoryMib: 300 })
+    const target = await recovery.createBox(organization, checkpoint.id, 'memory-restored', undefined)
+    expect(await boxes.findOneByOrFail({ id: target.id })).toMatchObject({ mem: 1, memoryMib: 300 })
+  })
+
   it.each(['success', 'failed', 'invalid-receipt'])(
     'records the committed checkpoint-create outcome once for %s',
     async (outcome) => {

@@ -10,6 +10,7 @@ import { Redis } from 'ioredis'
 import { Checkpoint, CheckpointArchive } from '../entities/checkpoint.entity'
 import { Job } from '../entities/job.entity'
 import { Box } from '../entities/box.entity'
+import { memoryMibOf } from '../utils/memory-allocation'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
 import { BoxState } from '../enums/box-state.enum'
@@ -183,6 +184,7 @@ export class CheckpointJobReceiver {
         checkpointState.activeJobId = null
         await manager.save(BoxCheckpointState, checkpointState)
         Object.assign(box, operation.environment, {
+          memoryMib: memoryMibOf(operation.environment),
           state: BoxState.STOPPED,
           pending: false,
           errorReason: null,

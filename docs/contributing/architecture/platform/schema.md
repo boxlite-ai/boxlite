@@ -517,7 +517,8 @@ or `archived`.
 | `errorReason` | `character varying` | nullable |
 | `cpu` | `double precision` | default `2`; CPU allocation in cores, precision `0.001` |
 | `gpu` | `integer` | default `0` |
-| `mem` | `integer` | default `4` |
+| `mem` | `integer` | default `4`; compatibility GiB ceiling |
+| `memory_mib` | `integer` | nullable; authoritative exact MiB; null falls back to `mem * 1024` |
 | `disk` | `integer` | default `10` |
 | `autoStop` | `integer` | seconds, default `900`; `0` disables |
 | `autoDelete` | `integer` | default `0` = disabled |
@@ -1026,6 +1027,8 @@ closed and moved to the archive on stop, resize, or destroy.
 | `region`                       | `character varying` |                                                   |
 
 **Partial unique:** `(boxId)` where `endAt IS NULL`.
+Running periods store exact memory GiB from `box.memory_mib / 1024`, with the
+legacy fallback for null rows. Disk-only periods keep memory at zero.
 **Indexes:** `(boxId, endAt)`; `(organizationId, startAt) INCLUDE (boxId, endAt)`
 for compute-bearing periods.
 
@@ -1052,6 +1055,10 @@ Transactional outbox for finalized usage periods. Progress is recorded per row
 rather than as a watermark: neither usage table has a monotonic column, and
 adding one would not help, because Postgres sequences can commit out of order
 and a `seq > cursor` reader would silently skip rows.
+
+The event key retains exact source quantities. Only the outbound payload's
+memory quantity rounds half-up to two decimal GiB places; allocation snapshots
+use the same rule. Existing outbox payloads are immutable across deployment.
 
 | Column        | Type                    | Notes                                                 |
 | ------------- | ----------------------- | ----------------------------------------------------- |

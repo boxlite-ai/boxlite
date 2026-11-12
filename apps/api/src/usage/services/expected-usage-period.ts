@@ -4,6 +4,7 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { memoryGiBOf } from '../../box/utils/memory-allocation'
 
 /** The resources an open usage period charges for. */
 export interface UsagePeriodShape {
@@ -16,6 +17,7 @@ export interface UsagePeriodShape {
 /** The box fields that decide what its open period should charge. */
 export interface BillableBox extends UsagePeriodShape {
   state: BoxState
+  memoryMib?: number | null
 }
 
 export type ExpectedOpenPeriod = UsagePeriodShape | null
@@ -64,7 +66,7 @@ export function expectedOpenPeriod(box: BillableBox | null | undefined): Expecte
     return null
   }
   if (box.state === BoxState.STARTED) {
-    return { cpu: box.cpu, gpu: box.gpu, mem: box.mem, disk: box.disk }
+    return { cpu: box.cpu, gpu: box.gpu, mem: memoryGiBOf(box), disk: box.disk }
   }
   if (BOX_STATES_BILLING_DISK_ONLY.includes(box.state)) {
     return { cpu: 0, gpu: 0, mem: 0, disk: box.disk }

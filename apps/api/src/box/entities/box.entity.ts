@@ -174,6 +174,10 @@ export class Box {
   @Column({ type: 'int', default: 4 })
   mem = 4
 
+  // Authoritative for new writes; mem remains the rounded legacy GiB projection.
+  @Column({ name: 'memory_mib', type: 'int', nullable: true })
+  memoryMib?: number | null
+
   @Column({ type: 'int', default: 10 })
   disk = 10
 

@@ -264,7 +264,7 @@ export class CreateBoxDto {
   @IsOptional()
   @IsNumber()
   @IsInt()
-  @Min(256)
+  @Min(128)
   memory_mib?: number
 
   @IsOptional()

@@ -27,6 +27,8 @@ import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1
 import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
 import { AddNestedVirtualizationAllowlist1793870400000 } from '../../migrations/pre-deploy/1793870400000-add-nested-virtualization-allowlist-migration'
 import { FractionalBoxCpus1794405600000 } from '../../migrations/pre-deploy/1794405600000-fractional-box-cpus-migration'
+import { AddBoxMemoryMib1794484800000 } from '../../migrations/pre-deploy/1794484800000-add-box-memory-mib-migration'
+import { BoxService } from '../../box/services/box.service'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -282,6 +284,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await queryRunner.startTransaction()
       try {
         await new FractionalBoxCpus1794405600000().up(queryRunner)
+        await new AddBoxMemoryMib1794484800000().up(queryRunner)
         await queryRunner.commitTransaction()
       } catch (error) {
         await queryRunner.rollbackTransaction()
@@ -589,6 +592,33 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   // settle the ledger has run. Nothing here reaches for an unwritten method;
   // each drives the shipped roll-over and states what the ledger should hold.
   describe('box state versus the open period', () => {
+    it('meters exact MiB without repeated reconciliation drift', async () => {
+      await insertBox({ state: BoxState.STARTED, mem: 1 })
+      await dataSource.query('UPDATE box SET memory_mib=300 WHERE id=$1', [box.id])
+      await settleLedger()
+      expect(await openPeriods()).toEqual([expect.objectContaining({ mem: 300 / 1024 })])
+      const service = serviceForPersistedBox()
+      expect(await (service as any).findDriftCandidates(null, new Date())).toEqual([])
+      await service.reconcileUsagePeriods()
+      expect(await periods.count()).toBe(1)
+      await dataSource.query('UPDATE box SET state=$1 WHERE id=$2', [BoxState.STOPPED, box.id])
+      await service.reconcileUsagePeriods()
+      expect(await openPeriods()).toEqual([expect.objectContaining({ mem: 0 })])
+    })
+
+    it('filters exact MiB and falls back for rows written by the previous version', async () => {
+      await insertBox({ state: BoxState.STARTED, mem: 1 })
+      const service = Object.create(BoxService.prototype) as BoxService
+      Object.assign(service, { boxRepository: dataSource.getRepository(Box) })
+      const list = (minMemoryGiB: number, maxMemoryGiB: number) =>
+        service.findAll(box.organizationId, 1, 10, { minMemoryGiB, maxMemoryGiB })
+      expect((await list(1, 1)).total).toBe(1)
+      expect((await list(0.25, 0.5)).total).toBe(0)
+      await dataSource.query('UPDATE box SET memory_mib=300 WHERE id=$1', [box.id])
+      expect((await list(0.25, 0.5)).total).toBe(1)
+      expect((await list(1, 1)).total).toBe(0)
+    })
+
     it('opens a period for a running box that has none', async () => {
       // the STARTED event never reached the handler, so nothing was ever opened
       await insertBox({ state: BoxState.STARTED })
