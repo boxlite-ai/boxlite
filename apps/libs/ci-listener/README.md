@@ -209,6 +209,10 @@ under the bootstrap transaction and owner lock. It preserves identity, epoch,
 deadline and journal data while creating `@lease` and writing schema-2 `@owner`.
 An interrupted upgrade rolls back completely; mixed or missing records fail closed.
 Repeated initialization validates the existing records without resetting them.
+Conditional-write conflicts during bootstrap, migration, takeover or renewal
+abort the whole transaction, preserving the previous identity, deadline and journal.
+Malformed identity or deadline payloads block initialization or ingress rather
+than admitting new work with incomplete lease metadata.
 
 Old binaries reject owner schema 2. During rollout, an old scheduler stops renewing
 and an upgraded instance can acquire after the preserved deadline expires.

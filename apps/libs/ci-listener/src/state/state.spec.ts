@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DataSource } from 'typeorm'
-import { StateDatabase, StateConflict, StateCorrupt, LeaseLost } from './database'
+import { Json, StateDatabase, StateConflict, StateCorrupt, LeaseLost } from './database'
 import { ExecutionLease, ListenerState } from './store'
 import { PostgresStateDatabase, postgresStateTable } from './postgres'
 import { SqliteStateDatabase } from './sqlite'
@@ -139,6 +139,74 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await roots()).toEqual(before)
       await expect(state.initialize()).resolves.toBeUndefined()
     })
+    it.each([
+      ['bootstrap', '@owner'],
+      ['bootstrap', '@lease'],
+      ['upgrade', '@lease'],
+      ['upgrade', '@owner'],
+      ['acquire', '@lease'],
+      ['renew', '@lease'],
+    ] as const)('rolls back %s when the conditional %s write loses its version', async (operation, key) => {
+      const target = operation === 'bootstrap' ? namespace + ':fresh' : namespace
+      const lease = operation === 'renew' || operation === 'upgrade' ? await owner() : undefined
+      if (operation === 'upgrade') {
+        await state.ingest([{ key: 'notice/upgrade-conflict', expected: null, payload: { job: 7 } }])
+        await legacy(Date.now() + 30000)
+      }
+      const snapshot = () => database.transaction(target, (tx) => tx.page('', 100))
+      const before = await snapshot()
+      const conflicting: StateDatabase = {
+        transaction: (ns, work, mode) =>
+          database.transaction(
+            ns,
+            (tx) => {
+              const wrapped = Object.create(tx) as typeof tx
+              // Exercise a real conditional-write miss in each storage adapter.
+              wrapped.put = (row, expected) => tx.put(row, row.key === key ? randomUUID() : expected)
+              return work(wrapped)
+            },
+            mode,
+          ),
+      }
+      const attempt = (storage: StateDatabase) => {
+        const candidate = new ListenerState(storage, target)
+        if (operation === 'acquire') return candidate.acquire('successor', 10000)
+        if (operation === 'renew') return candidate.renew(lease!, 20000)
+        return candidate.initialize()
+      }
+      await expect(attempt(conflicting)).rejects.toBeInstanceOf(StateConflict)
+      expect(await snapshot()).toEqual(before)
+      await attempt(database)
+    })
+    it.each<Json>([
+      null,
+      { owner: null, epoch: 0 },
+      { owner: 'scheduler', epoch: '0' },
+      { owner: 'scheduler', epoch: -1 },
+    ])('rejects malformed scheduler identity %j without changing state', async (payload) => {
+      await database.transaction(namespace, async (tx) => {
+        const row = (await tx.get('@owner'))!
+        await tx.put({ ...row, version: randomUUID(), payload }, row.version)
+      })
+      const before = await roots()
+      await expect(state.initialize()).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await roots()).toEqual(before)
+    })
+    it.each<Json>([{ until: null }, {}, { until: 0.5 }])(
+      'rejects malformed expiry %j at the ingress boundary',
+      async (payload) => {
+        await database.transaction(namespace, async (tx) => {
+          const row = (await tx.get('@lease'))!
+          await tx.put({ ...row, version: randomUUID(), payload }, row.version)
+        })
+        const before = await roots()
+        await expect(
+          state.ingest([{ key: 'notice/invalid-expiry', expected: null, payload: {} }]),
+        ).rejects.toBeInstanceOf(StateCorrupt)
+        expect(await roots()).toEqual(before)
+        expect(await database.transaction(namespace, (tx) => tx.get('notice/invalid-expiry'))).toBeUndefined()
+      },
+    )
     it.each(['missing', 'invalid', 'mixed'])('rejects %s lease metadata without repairing it', async (kind) => {
       await owner()
       if (kind === 'mixed') await legacy(Date.now() + 30000)
