@@ -150,14 +150,34 @@ describeWithRedis('custom domain subscription (real Redis)', () => {
     })
     const pending = service.refresh(org)
     await began
+    const read = replica.read.bind(replica)
+    let reads = 0
+    let observed!: () => void
+    const cacheMiss = new Promise<void>((resolve) => {
+      observed = resolve
+    })
+    jest.spyOn(replica, 'read').mockImplementation(async (...args) => {
+      const grant = await read(...args)
+      if (++reads === 2) observed()
+      return grant
+    })
+    let completed = false
+    const concurrent = replica.refresh(org).then((grant) => {
+      completed = true
+      return grant
+    })
     try {
-      expect((await replica.refresh(org)).status).toBe('unavailable')
+      await cacheMiss
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(completed).toBe(false)
       expect(get).toHaveBeenCalledTimes(1)
     } finally {
       finish(activePlan())
+      await Promise.all([pending, concurrent])
     }
     const granted = await pending
     expect(granted.status).toBe('active')
+    expect(await concurrent).toEqual(granted)
     expect(await replica.refresh(org)).toEqual(granted)
     expect(get).toHaveBeenCalledTimes(1)
   })
@@ -198,12 +218,28 @@ describeWithRedis('custom domain subscription (real Redis)', () => {
     expect(get).not.toHaveBeenCalled()
   })
 
-  it('bounds a stalled cache read', async () => {
+  it('bounds stalled cache reads and the total wait for a concurrent refresh', async () => {
     jest.useFakeTimers()
-    jest.spyOn(redis, 'get').mockImplementation(() => new Promise(() => {}))
+    const read = jest.spyOn(redis, 'get').mockImplementation(() => new Promise(() => {}))
     const pending = service.read(org)
     await jest.advanceTimersByTimeAsync(1_000)
     expect(await pending).toEqual({ status: 'unavailable', expiresAt: 0 })
+
+    read.mockResolvedValueOnce(null)
+    jest.spyOn(redis, 'set').mockResolvedValue(null)
+    jest.spyOn(redis, 'eval').mockResolvedValue(0)
+    let completed = false
+    const waiting = replica.refresh(org).then((grant) => {
+      completed = true
+      return grant
+    })
+    await jest.advanceTimersByTimeAsync(2_999)
+    expect(completed).toBe(false)
+    await jest.advanceTimersByTimeAsync(1)
+    expect(await waiting).toEqual({ status: 'unavailable', expiresAt: 0 })
+    const calls = read.mock.calls.length
+    await jest.advanceTimersByTimeAsync(10_000)
+    expect(read).toHaveBeenCalledTimes(calls)
     expect(get).not.toHaveBeenCalled()
   })
 

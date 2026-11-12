@@ -700,6 +700,8 @@ Superseded configurations remain viewable until explicitly deleted and cannot be
 Deletion hides them while retaining provider identities for cleanup; Ready publication requires current ownership, generation and an unexpired lease.
 
 Subscription grants last at most sixty seconds or the paid-cycle end, whichever comes first; denied/unavailable results last thirty seconds.
+Concurrent cache misses wait up to three seconds for the refresh owner's result, including Redis read time;
+they never extend an expired grant, and a wait timeout returns unavailable.
 Binding rechecks the grant deadline after lock waits; routing rereads ownership and target after subscription refresh.
 Setup readiness persists independently of certificate observation deadlines.
 See the [DNS guide](../../../concepts/networking.md#bring-your-own-domain) and [deployment requirements](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).

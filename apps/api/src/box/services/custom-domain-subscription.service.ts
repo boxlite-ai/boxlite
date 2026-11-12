@@ -12,6 +12,7 @@ export type DomainSubscriptionGrant = { status: DomainSubscription; expiresAt: n
 
 const CACHE_TTL_MS = 60_000
 const RETRY_TTL_MS = 30_000
+const REFRESH_WAIT_MS = 3_000
 const CACHE_PREFIX = 'commerce:custom-domain-subscription:v2:'
 
 // Compare and publish together: a timed-out refresher cannot overwrite a newer
@@ -75,9 +76,9 @@ export class CustomDomainSubscriptionService {
   ) {}
 
   /** Cache-only lookup for bind errors; never calls Commerce or renews expiry. */
-  async read(organizationId: string): Promise<DomainSubscriptionGrant> {
+  async read(organizationId: string, timeoutMs = 1_000): Promise<DomainSubscriptionGrant> {
     try {
-      const raw = await this.withCacheTimeout(this.redis.get(this.cacheKey(organizationId)))
+      const raw = await this.withCacheTimeout(this.redis.get(this.cacheKey(organizationId)), timeoutMs)
       if (raw !== null) {
         const grant = JSON.parse(raw) as DomainSubscriptionGrant
         if (
@@ -101,9 +102,11 @@ export class CustomDomainSubscriptionService {
     const key = this.cacheKey(organizationId)
     const lock = `${key}:refresh`
     const owner = randomUUID()
+    let contended = false
     try {
       if (!(await this.withCacheTimeout(this.redis.set(lock, owner, 'PX', 10_000, 'NX')))) {
-        return this.read(organizationId)
+        contended = true
+        return await this.waitForRefresh(organizationId)
       }
       const completed = await this.read(organizationId)
       if (completed.expiresAt > Date.now()) return completed
@@ -143,24 +146,38 @@ export class CustomDomainSubscriptionService {
     } catch {
       this.logger.warn(`Unable to refresh custom-domain subscription cache for organization ${organizationId}`)
     } finally {
-      await this.withCacheTimeout(this.redis.eval(RELEASE_REFRESH, 1, lock, owner)).catch(() => {
-        this.logger.warn(`Unable to release custom-domain subscription refresh for organization ${organizationId}`)
-      })
+      if (!contended) {
+        await this.withCacheTimeout(this.redis.eval(RELEASE_REFRESH, 1, lock, owner)).catch(() => {
+          this.logger.warn(`Unable to release custom-domain subscription refresh for organization ${organizationId}`)
+        })
+      }
     }
     return this.read(organizationId)
+  }
+
+  private async waitForRefresh(organizationId: string): Promise<DomainSubscriptionGrant> {
+    // Bound the whole wait, including Redis reads, independently of wall-clock changes.
+    const deadline = performance.now() + REFRESH_WAIT_MS
+    while (performance.now() < deadline) {
+      const grant = await this.read(organizationId, Math.min(1_000, deadline - performance.now()))
+      if (grant.expiresAt > Date.now()) return grant
+      const delay = Math.min(50, deadline - performance.now())
+      if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
+    }
+    return { status: 'unavailable', expiresAt: 0 }
   }
 
   private cacheKey(organizationId: string): string {
     return `${CACHE_PREFIX}{${encodeURIComponent(organizationId)}}`
   }
 
-  private async withCacheTimeout<T>(operation: Promise<T>): Promise<T> {
+  private async withCacheTimeout<T>(operation: Promise<T>, timeoutMs = 1_000): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
         operation,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Subscription cache timed out')), 1_000)
+          timer = setTimeout(() => reject(new Error('Subscription cache timed out')), timeoutMs)
         }),
       ])
     } finally {
