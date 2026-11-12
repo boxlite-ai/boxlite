@@ -4,20 +4,41 @@ The internal encryption package protects secret values and routing policy with p
 
 ## Scope
 
-This Go module currently contains only `internal/encryption`; it has no server
-entry point, HTTP endpoints, persistence, or deployment resources.
-The existing API encryption service and stored values remain unchanged.
+This Go module contains the encryption package and a Secret Server skeleton.
+The skeleton validates configuration, checks encryption and database connectivity,
+and exposes `/health` and `/ready`. Write and fetch business endpoints are not yet
+implemented. The existing API encryption service and stored values remain unchanged.
+
+## Server skeleton
+
+Set `SECRET_SERVER_ROLE` to `write`, `fetch`, or `all`; set `ENVIRONMENT`,
+`DATABASE_URL`, `SECRET_MASTER_KEY_ID`, `SECRET_MASTER_KEY_BASE64`, and
+`SECRET_SERVER_AUTH_MODE`. Google mode requires `SECRET_SERVER_AUDIENCE` and,
+for write or all roles, `SECRET_SERVER_ALLOWED_CALLERS`. Dev mode requires
+`SECRET_SERVER_DEV_TOKEN` and is limited to local and dev environments. The
+environment key provider is rejected in production.
+
+The write route group validates Google ID tokens and permits only verified emails
+on the allowlist. The reserved fetch path and all business handlers return 404
+until their separate implementations land. `/health` is liveness; `/ready`
+checks database connectivity. Startup also performs an encryption round trip.
+
+Migration and durable canary verification are placeholders. When #2571 is
+integrated, both must succeed before the service reports readiness. Until then,
+readiness does not prove that the database schema or persisted key matches.
+
+Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
+the current service emits only startup and recovery logs. Configuration uses explicit
+environment parsing and validation to keep errors limited to variable names and avoid
+exposing secret values; it does not use envconfig or validator.
+
+For a local run, supply a persistent development key, database URL, and dev token
+through the environment, then run `make run:apps:secret-server`. The role defaults
+to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. Do not commit or print
+the key or token. The local database must use the same key across restarts.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
-
-## Server configuration and write authentication
-
-The service configuration and write authentication middleware are available for
-the server skeleton. Google mode validates token signature, audience, expiry,
-issuer, verified email, and the caller allowlist. Dev mode uses an exact bearer
-token and is permitted only in local and dev environments. The server entry
-point and routes are delivered separately.
 
 ## Calling the package
 

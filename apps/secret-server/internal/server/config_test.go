@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -62,4 +64,19 @@ func TestConfigReportsVariableWithoutValue(t *testing.T) {
 			t.Fatalf("error %v", err)
 		}
 	})
+}
+
+func TestStartupRejectsInvalidEncryptionKey(t *testing.T) {
+	for _, length := range []int{0, 31, 33} {
+		key := base64.StdEncoding.EncodeToString(make([]byte, length))
+		_, err := New(context.Background(), Config{KeyID: "env:test", Key: key, DatabaseURL: "postgres://unused"})
+		if err == nil || !strings.Contains(err.Error(), "SECRET_MASTER_KEY_BASE64") {
+			t.Fatalf("length %d: %v", length, err)
+		}
+	}
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	_, err := New(context.Background(), Config{KeyID: "env:test", Key: key, DatabaseURL: "://invalid"})
+	if err == nil || strings.Contains(err.Error(), "SECRET_MASTER_KEY_BASE64") {
+		t.Fatalf("32-byte key did not pass self-test: %v", err)
+	}
 }

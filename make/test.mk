@@ -691,6 +691,10 @@ PHONY_TARGETS += test\:apps\:secret-server
 test\:apps\:secret-server:
 	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
 
+PHONY_TARGETS += run\:apps\:secret-server
+run\:apps\:secret-server:
+	@cd apps/secret-server && ENVIRONMENT=local SECRET_SERVER_ROLE=$${SECRET_SERVER_ROLE:-write} SECRET_SERVER_AUTH_MODE=dev GOWORK=off go run ./cmd/secret-server
+
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@$(MAKE) test:apps:infra
