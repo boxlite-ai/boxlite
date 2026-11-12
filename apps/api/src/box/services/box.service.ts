@@ -136,6 +136,8 @@ export type BoxCreationOptions = {
   createdBy?: string
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
+  /** Trusted Cloud App provisioning context, supplied independently of the public DTO. */
+  appEnvironmentId?: string
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -364,7 +366,11 @@ export class BoxService {
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        const canonical = await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+        const canonical = await this.volumeService.validateVolumes(
+          organization.id,
+          volumeIdOrNames,
+          options.appEnvironmentId,
+        )
         // Replace the caller's selector with the id it resolved to inside this
         // organization. A name is only unique per organization, but everything
         // downstream (the runner, the `boxlite-volume-<id>` bucket) reads this
