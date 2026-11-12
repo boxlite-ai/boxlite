@@ -229,6 +229,9 @@ type Secret struct {
 	Value       string
 	Hosts       []string
 	Placeholder string
+	// Headers maps names to templates containing exactly one {value}.
+	// Required and non-empty; no default header is supplied.
+	Headers map[string]string
 }
 
 type boxConfig struct {
@@ -543,6 +546,20 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			return nil, &Error{Code: ErrInvalidArgument, Message: "a checkpoint requires a nonempty selector and accepts only WithName"}
 		}
 	}
+	// C strings cannot carry NUL; reject it before conversion can hide it from Rust.
+	for _, secret := range cfg.secrets {
+		if len(secret.Headers) == 0 {
+			return nil, &Error{Code: ErrInvalidArgument, Message: fmt.Sprintf("secret %q has no headers; recreate the box with headers", secret.Name)}
+		}
+		if strings.IndexByte(secret.Value, 0) >= 0 {
+			return nil, &Error{Code: ErrInvalidArgument, Message: "secret value contains NUL"}
+		}
+		for name, template := range secret.Headers {
+			if strings.IndexByte(name, 0) >= 0 || strings.IndexByte(template, 0) >= 0 {
+				return nil, &Error{Code: ErrInvalidArgument, Message: "secret headers contain NUL"}
+			}
+		}
+	}
 	image = strings.TrimSpace(image)
 	rootfsPath := strings.TrimSpace(cfg.rootfsPath)
 
@@ -701,8 +718,18 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		}
 		cPlaceholder := toCString(placeholder)
 		cHosts, hostCount := toCStringArray(secret.Hosts)
-		C.boxlite_options_add_secret(cOpts, cName, cValue, cPlaceholder, cHosts, C.int(hostCount))
+		names := make([]string, 0, len(secret.Headers))
+		templates := make([]string, 0, len(secret.Headers))
+		for name, template := range secret.Headers {
+			names = append(names, name)
+			templates = append(templates, template)
+		}
+		cNames, headerCount := toCStringArray(names)
+		cTemplates, _ := toCStringArray(templates)
+		C.boxlite_options_add_secret_with_headers(cOpts, cName, cValue, cPlaceholder, cHosts, C.int(hostCount), cNames, cTemplates, C.int(headerCount))
 		freeCStringArray(cHosts, hostCount)
+		freeCStringArray(cNames, headerCount)
+		freeCStringArray(cTemplates, headerCount)
 		C.free(unsafe.Pointer(cName))
 		C.free(unsafe.Pointer(cValue))
 		C.free(unsafe.Pointer(cPlaceholder))

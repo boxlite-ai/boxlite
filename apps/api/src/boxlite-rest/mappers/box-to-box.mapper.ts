@@ -73,6 +73,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     value: secret.value,
     hosts: secret.hosts,
     placeholder: secret.placeholder,
+    headers: secret.headers,
   }))
   // Only an explicit inbound.mode=enabled enables inbound access. Omitting
   // inbound (including the legacy flat network shape) leaves it disabled.

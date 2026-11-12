@@ -288,6 +288,22 @@ archive, operation and coordination tables. Enable capture after compatible runn
 available. Rollback refuses while checkpoints or incomplete checkpoint jobs
 remain; it retains the additive, unused PostgreSQL job-resource enum value.
 
+## Secret headers
+
+Both creation APIs require a secret's non-empty `headers` map, for example
+`{"Authorization": "Bot {value}", "X-Key": "{value}"}`. All entries use that
+secret's value; omission, null and empty maps are rejected.
+Validation runs before persistence and applies the shared
+[secret configuration rules](../../docs/reference/configuration.md#secrets),
+including templates, control bytes and case-insensitive host/header conflicts.
+Different secrets may share a host when they configure different headers.
+
+Upgrade every eligible runner before upgrading the API or accepting custom
+`headers`. Old runners silently ignore the map and use the default Authorization
+template; the API currently has no runner capability gate for this feature.
+Do not dispatch creation or recovery with custom headers to old runners,
+including during rollback. Keep such workloads on upgraded runners.
+
 ## User creation transactions
 
 User creation inserts a new row and reads database defaults in the same transaction

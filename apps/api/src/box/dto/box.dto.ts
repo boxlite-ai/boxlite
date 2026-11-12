@@ -79,10 +79,18 @@ export class BoxSecret {
   hosts: string[]
 
   @ApiPropertyOptional({
-    description: 'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
+    description:
+      'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
     example: '<BOXLITE_SECRET:openai>',
   })
   placeholder?: string
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'string' },
+    description: 'Required non-empty header templates containing exactly one {value}.',
+  })
+  headers: Record<string, string>
 }
 
 /** What a conversion reads from outside the box row. See {@link BoxDto.fromBox}. */

@@ -999,10 +999,17 @@ const docTemplate = `{
         "dto.SecretDTO": {
             "type": "object",
             "required": [
+                "headers",
                 "name",
                 "value"
             ],
             "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "hosts": {
                     "type": "array",
                     "items": {

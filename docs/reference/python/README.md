@@ -214,7 +214,7 @@ Configuration options for creating a box.
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
-| `secrets` | `List[Secret]` | `[]` | Secrets injected into the `Authorization` header of outbound HTTPS requests |
+| `secrets` | `List[Secret]` | `[]` | Secrets rendered into configured headers of outbound HTTPS requests |
 | `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `auto_delete` | `int \| None` | `None` | `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. `None` keeps the runtime's default (`auto_remove` locally) |
 | `auto_remove` | `bool` | `True` | Deprecated: use `auto_delete`. Auto cleanup when stopped |
@@ -308,6 +308,7 @@ secrets=[
         name="openai",
         value="sk-...",
         hosts=["api.openai.com"],
+        headers={"Authorization": "Bearer {value}"},
         # placeholder is a dummy guest value, default "<BOXLITE_SECRET:openai>"
     )
 ]
@@ -319,6 +320,11 @@ a credential. It is a by-name dial like any hostname rule, so a host answering
 with a private, loopback or CGNAT address is still refused unless an IP or CIDR
 rule covers that range. Those hosts on port 80, on any other port, or over UDP
 are governed by `allow_net` alone.
+
+`headers` is a required keyword argument containing a non-empty name-to-template dictionary.
+Omission, `None` and empty dictionaries are rejected.
+Each template contains exactly one `{value}`; only headers already present in
+the original request are replaced. See the [validation rules](../configuration.md#secrets).
 
 ---
 

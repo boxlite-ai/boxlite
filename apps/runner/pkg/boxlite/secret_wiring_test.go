@@ -57,8 +57,8 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 		Env:          map[string]string{"FOO": "bar"},
 		Volumes:      []dto.VolumeDTO{{VolumeId: "vol-1", MountPath: "/data"}},
 		Secrets: []dto.SecretDTO{
-			{Name: "openai", Value: "sk-test", Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
-			{Name: "github", Value: "gh-test"},
+			{Name: "openai", Value: "sk-test", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
+			{Name: "github", Value: "gh-test", Headers: map[string]string{"Authorization": "Bearer {value}"}},
 		},
 		OutboundEnabled:  &outboundEnabled,
 		OutboundAllowNet: []string{"10.0.0.0/8"},

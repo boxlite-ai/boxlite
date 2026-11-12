@@ -7,6 +7,10 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
 ## Managed checkpoints
 
 Execution setters are rejected even when they set defaults, such as
@@ -93,6 +97,13 @@ Both APIs support:
 ---
 
 ## Features
+
+Secrets for outbound HTTPS can use `boxlite_options_add_secret_with_headers()`.
+Pass parallel header-name and template arrays, such as `"x-goog-api-key"` and
+`"{value}"`. At least one entry is required; zero entries are rejected at creation. Templates must
+contain exactly one `{value}`; empty strings are rejected at box creation.
+The existing `boxlite_options_add_secret()` remains ABI-compatible, but its
+headerless secret is rejected at creation. Use the plural function above.
 
 ### Core Features
 - **C-compatible FFI bindings** (`cdylib`, `staticlib`)

@@ -2,6 +2,7 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:unit\:openapi\:server
 PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
@@ -520,14 +521,15 @@ test\:unit\:gvproxy:
 # Rust client at, so a class it gets wrong is a class every conformance run
 # gets wrong.
 #
-# Discovery is restricted to the modules that import only the stdlib
-# (openapi/reference-server/errors.py, like config.py). The rest of that
-# directory needs python-dotenv, fastapi and pydantic, which no setup target
-# here installs — discovering the whole directory would fail this suite on
-# every checkout that does not intend to run the server.
+# Run the dependency-backed server contract suite as well as the stdlib-only
+# error mapping checks. The server target supplies its own Python dependencies.
 test\:unit\:openapi:
+	@$(MAKE) test:unit:openapi:server
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+
+test\:unit\:openapi\:server: _ensure-python-deps
+	@. .venv/bin/activate && uv run --with fastapi --with uvicorn --with sse-starlette --with PyJWT --with python-multipart --with python-dotenv --with pyyaml --python .venv/bin/python python -m unittest discover -s openapi/reference-server/tests -p 'test_handle_cache.py' -v
 
 test\:unit\:scripts:
 	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v

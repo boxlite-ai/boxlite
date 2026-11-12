@@ -5,6 +5,10 @@ Go SDK for BoxLite — an embeddable virtual machine runtime for secure, isolate
 Access the [agent API](../../docs/reference/agents.md) through `Box.Agents()`
 for session and turn methods, grouped options and error handling.
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
 ## Install
 
 ```bash
@@ -95,6 +99,7 @@ func main() {
 			Name:  "openai",
 			Value: "sk-...",
 			Hosts: []string{"api.openai.com"},
+			Headers: map[string]string{"Authorization": "Bearer {value}"},
 		}),
 	)
 	if err != nil {
@@ -300,7 +305,7 @@ password field, and `NewRegistryCredential` prints `Password:[redacted]` with
 - The deprecated flat fields `NetworkSpec{Mode, AllowNet}` still configure the outbound direction. Setting them together with `Outbound` is rejected when the options are built. `NetworkInfo.Mode` and `NetworkInfo.AllowNet` likewise remain readable as views onto `NetworkInfo.Outbound`.
 - `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
 - A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
-- `WithSecret(boxlite.Secret{...})` injects a secret into the `Authorization` header of outbound HTTPS requests to `Hosts`, which is required; `Placeholder` is a dummy guest value that defaults to `<BOXLITE_SECRET:{Name}>`.
+- `WithSecret(boxlite.Secret{...})` injects a secret into outbound HTTPS requests to required `Hosts`; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`. Set `Headers: map[string]string{"x-goog-api-key": "{value}"}` for a custom template. `Headers` is required; nil and empty maps are rejected.
 - Container capabilities live under advanced options:
 
   ```go

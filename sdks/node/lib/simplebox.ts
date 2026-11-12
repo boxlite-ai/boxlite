@@ -103,7 +103,7 @@ export interface SecurityOptions {
 }
 
 /**
- * Secret injected into the `Authorization` header of outbound HTTPS requests.
+ * Secret injected into an outbound HTTPS request header.
  */
 export interface Secret {
   /** Human-readable name for the secret. */
@@ -117,6 +117,9 @@ export interface Secret {
 
   /** Placeholder exposed to guest code. */
   placeholder?: string;
+
+  /** Required, non-empty header-name to template map. */
+  headers: Record<string, string>;
 }
 
 /**

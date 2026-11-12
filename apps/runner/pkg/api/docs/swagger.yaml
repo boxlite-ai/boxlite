@@ -274,6 +274,10 @@ definitions:
     type: object
   dto.SecretDTO:
     properties:
+      headers:
+        additionalProperties:
+          type: string
+        type: object
       hosts:
         items:
           type: string
@@ -285,6 +289,7 @@ definitions:
       value:
         type: string
     required:
+      - headers
       - name
       - value
     type: object

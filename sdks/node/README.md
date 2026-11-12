@@ -10,6 +10,10 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 [![npm version](https://badge.fury.io/js/%40boxlite%2Fcore.svg)](https://badge.fury.io/js/boxlite)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
 ## Managed checkpoints
 
 A checkpoint is a source for a new box, like an image: pass it to the ordinary
@@ -242,9 +246,14 @@ const box = new SimpleBox({
       name: 'openai',
       value: process.env.OPENAI_API_KEY!,
       hosts: ['api.openai.com'],
+      headers: { Authorization: 'Bearer {value}' },
     }
   ]
 });
+
+// Use `headers: { 'x-goog-api-key': '{value}' }` for a custom target.
+// Use `headers: { Authorization: 'Bot {value}' }` for a custom format.
+// headers is required; omitted, null and empty maps are rejected.
 
 // Execute command
 const result = await box.exec('ls', '-la', '/');
@@ -728,6 +737,16 @@ Apache 2.0 - See [../../LICENSE](../../LICENSE)
 - [Python SDK](../python/) - Python bindings (Python 3.10+)
 - [C SDK](../c/) - C FFI bindings (early stage)
 - [Core Runtime](../../boxlite/) - Rust runtime implementation
+
+## Testing secret headers
+
+Run `make coverage:node` from the repository root for the JavaScript unit suite.
+Secret-header boundary tests require the native addon and skip when it is absent,
+so they import the native SDK inside each test rather than during discovery.
+To exercise those checks, first run `make dev:node`, then
+`make test:unit:node FILTER=headers`. All three missing/null/empty-header cases
+must execute and reject creation in this native run; an import failure is not a
+successful validation result.
 
 ## Support
 

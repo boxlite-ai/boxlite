@@ -350,6 +350,9 @@ pub struct JsSecret {
 
     /// Placeholder string visible to the guest.
     pub placeholder: Option<String>,
+    /// Required, non-empty header-name to template map.
+    #[napi(ts_type = "Record<string, string>")]
+    pub headers: serde_json::Value,
 }
 
 /// Structured network configuration.
@@ -599,16 +602,28 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .secrets
             .unwrap_or_default()
             .into_iter()
-            .map(|secret| Secret {
-                placeholder: secret
-                    .placeholder
-                    .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", secret.name)),
-                name: secret.name,
-                value: secret.value,
-                hosts: secret.hosts.unwrap_or_default(),
-                header: None,
+            .map(|secret| {
+                // Deserialize the map shape explicitly: N-API's HashMap conversion
+                // also accepts arrays as numeric header names.
+                let headers = serde_json::from_value::<std::collections::BTreeMap<String, String>>(
+                    secret.headers,
+                )
+                .map_err(|_| {
+                    Self::Error::InvalidArgument(
+                        "Secret.headers must map header names to string templates".into(),
+                    )
+                })?;
+                Ok(Secret {
+                    placeholder: secret
+                        .placeholder
+                        .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", secret.name)),
+                    name: secret.name,
+                    value: secret.value,
+                    hosts: secret.hosts.unwrap_or_default(),
+                    headers: Some(headers),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, Self::Error>>()?;
 
         let mut advanced = AdvancedBoxOptions::default();
         advanced.set_privileged(privileged);
@@ -1052,7 +1067,7 @@ mod tests {
     }
 
     #[test]
-    fn box_options_from_js_secrets_default_placeholder() {
+    fn secret_headers_binding_preserves_templates() {
         let js = JsBoxOptions {
             image: Some("python:slim".into()),
             rootfs_path: None,
@@ -1081,6 +1096,7 @@ mod tests {
                 value: "sk-test".into(),
                 hosts: Some(vec!["api.openai.com".into()]),
                 placeholder: None,
+                headers: serde_json::json!({"Authorization": "Bot {value}", "X-Key": "{value}"}),
             }]),
         };
 
@@ -1089,6 +1105,9 @@ mod tests {
         assert_eq!(opts.secrets[0].name, "openai");
         assert_eq!(opts.secrets[0].hosts, vec!["api.openai.com"]);
         assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+        let wire = serde_json::to_value(&opts.secrets[0]).unwrap();
+        assert_eq!(wire["headers"]["Authorization"], "Bot {value}");
+        assert_eq!(wire["headers"]["X-Key"], "{value}");
     }
 
     #[test]

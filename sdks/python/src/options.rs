@@ -450,8 +450,10 @@ impl TryFrom<PyOutboundNetworkSpec> for NetworkSpec {
 
 /// A secret to inject into outbound HTTPS requests via MITM proxy.
 ///
-/// The host-side proxy writes the real value into the ``Authorization`` header
-/// of HTTPS requests to ``hosts``. The guest only holds a dummy placeholder
+/// The host-side proxy replaces configured headers already present in HTTPS
+/// requests to ``hosts``. Required ``headers`` map names to templates containing
+/// exactly one ``{value}``.
+/// The guest only holds a dummy placeholder
 /// (e.g., ``<BOXLITE_SECRET:openai>``); the actual secret never enters the VM
 /// unless an upstream echoes that header back.
 ///
@@ -463,6 +465,7 @@ impl TryFrom<PyOutboundNetworkSpec> for NetworkSpec {
 ///         name="openai",
 ///         value="sk-...",
 ///         hosts=["api.openai.com"],
+///         headers={"Authorization": "Bearer {value}"},
 ///     )
 ///     # Pass to BoxOptions:
 ///     opts = BoxOptions(image="python:3.12", secrets=[secret])
@@ -487,19 +490,34 @@ pub(crate) struct PySecret {
     /// Defaults to ``<BOXLITE_SECRET:{name}>`` if not set explicitly.
     #[pyo3(get, set)]
     pub(crate) placeholder: Option<String>,
+    /// Required, non-empty header names and templates.
+    #[pyo3(get, set)]
+    pub(crate) headers: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[pymethods]
 impl PySecret {
     #[new]
-    #[pyo3(signature = (name, value, hosts=vec![], placeholder=None))]
-    fn new(name: String, value: String, hosts: Vec<String>, placeholder: Option<String>) -> Self {
-        Self {
+    #[pyo3(signature = (name, value, hosts=vec![], placeholder=None, *, headers))]
+    fn new(
+        name: String,
+        value: String,
+        hosts: Vec<String>,
+        placeholder: Option<String>,
+        headers: std::collections::BTreeMap<String, String>,
+    ) -> PyResult<Self> {
+        if headers.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "secret {name:?} has no headers; recreate the box with headers"
+            )));
+        }
+        Ok(Self {
             name,
             value,
             hosts,
             placeholder,
-        }
+            headers: Some(headers),
+        })
     }
 
     /// Return the effective placeholder string.
@@ -819,7 +837,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
                     .placeholder
                     .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
                 value: s.value,
-                header: None,
+                headers: s.headers,
             })
             .collect();
 
@@ -1315,6 +1333,28 @@ mod tests {
             network_enabled: true,
             close_fds: true,
         }
+    }
+
+    #[test]
+    fn secret_headers_binding_preserves_templates() {
+        let mut options = py_box_options_with_tty(None);
+        options.secrets = vec![
+            PySecret::new(
+                "bot".into(),
+                "token".into(),
+                vec!["api.example.com".into()],
+                None,
+                std::collections::BTreeMap::from([
+                    ("Authorization".into(), "Bot {value}".into()),
+                    ("X-Key".into(), "{value}".into()),
+                ]),
+            )
+            .unwrap(),
+        ];
+        let core = BoxOptions::try_from(options).unwrap();
+        let wire = serde_json::to_value(&core.secrets[0]).unwrap();
+        assert_eq!(wire["headers"]["Authorization"], "Bot {value}");
+        assert_eq!(wire["headers"]["X-Key"], "{value}");
     }
 
     /// A caller who only sets `security=` (never mentions `capabilities=`)

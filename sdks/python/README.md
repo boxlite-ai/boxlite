@@ -5,6 +5,10 @@ Python bindings for BoxLite - an embeddable virtual machine runtime for secure, 
 Access the [agent API](../../docs/reference/agents.md) through `Box.agents`
 and `SimpleBox.agents`, including synchronous wrappers, grouped options and error handling.
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
 ## Managed checkpoints
 
 Checkpoint settings must be omitted, including explicit defaults such as
@@ -324,7 +328,10 @@ Configuration options for creating a box.
     pass `False` for a private cloud tunnel. Call `forward()` for a listener;
     connections reuse the declaration and cannot undo revocation. See
     [private tunnel examples](../../docs/concepts/networking.md#private-cloud-tunnels).
-- `secrets: List[Secret]` - Secrets injected into the `Authorization` header of outbound HTTPS requests
+- `secrets: List[Secret]` - Secrets overwrite configured headers already present on outbound HTTPS requests.
+  `Secret(..., headers={"x-goog-api-key": "{value}"})` selects a raw API key header;
+  multiple entries share the same secret value. Each template must contain exactly one `{value}`.
+  `headers` is a required keyword argument; omission, `None`, empty maps and strings are rejected.
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
@@ -387,6 +394,7 @@ options = boxlite.BoxOptions(
             name="openai",
             value="sk-...",
             hosts=["api.openai.com"],
+            headers={"Authorization": "Bearer {value}"},
         ),
     ],
 )

@@ -102,9 +102,10 @@ func TestIntegrationSecretHeaderInjection(t *testing.T) {
 			},
 		}),
 		WithSecret(Secret{
-			Name:  "testkey",
-			Value: "super-secret-value",
-			Hosts: []string{"httpbingo.org"},
+			Name:    "testkey",
+			Value:   "super-secret-value",
+			Hosts:   []string{"httpbingo.org"},
+			Headers: map[string]string{"Authorization": "Bearer {value}"},
 		}),
 		WithAutoRemove(false),
 	)

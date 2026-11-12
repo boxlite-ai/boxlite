@@ -1320,7 +1320,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                         .clone()
                         .filter(|p| !p.is_empty())
                         .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
-                    header: None,
+                    headers: Some(s.headers.clone()),
                 })
                 .collect()
         })
@@ -2292,7 +2292,7 @@ mod tests {
     #[test]
     fn build_box_options_carries_secrets_from_the_wire() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"sk-test","hosts":["api.openai.com"]}]}"#,
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"sk-test","hosts":["api.openai.com"],"headers":{"Authorization":"Bearer {value}"}}]}"#,
         )
         .expect("body with secrets must deserialize");
 
@@ -2308,9 +2308,22 @@ mod tests {
     }
 
     #[test]
+    fn build_box_options_carries_secret_headers_from_the_wire() {
+        let body = serde_json::json!({"image":"alpine:latest","secrets":[{
+            "name":"bot","value":"token","hosts":["api.example.com"],
+            "headers":{"Authorization":"Bot {value}","X-Key":"{value}"}
+        }]});
+        let req: super::types::CreateBoxRequest = serde_json::from_value(body).unwrap();
+        let opts = build_box_options(&req).unwrap();
+        let wire = serde_json::to_value(&opts.secrets[0]).unwrap();
+        assert_eq!(wire["headers"]["Authorization"], "Bot {value}");
+        assert_eq!(wire["headers"]["X-Key"], "{value}");
+    }
+
+    #[test]
     fn build_box_options_preserves_explicit_secret_placeholder() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"image":"alpine:latest","secrets":[{"name":"httpbin","value":"v","placeholder":"<MY_TOKEN>"}]}"#,
+            r#"{"image":"alpine:latest","secrets":[{"name":"httpbin","value":"v","placeholder":"<MY_TOKEN>","headers":{"Authorization":"Bearer {value}"}}]}"#,
         )
         .expect("body with explicit placeholder must deserialize");
 
@@ -2324,7 +2337,7 @@ mod tests {
     #[test]
     fn build_box_options_defaults_an_empty_secret_placeholder() {
         let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"v","placeholder":""}]}"#,
+            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"v","placeholder":"","headers":{"Authorization":"Bearer {value}"}}]}"#,
         )
         .expect("body with empty placeholder must deserialize");
 
@@ -2338,8 +2351,8 @@ mod tests {
     #[test]
     fn build_box_options_rejects_an_empty_secret_name_or_value() {
         for secrets in [
-            r#"[{"name":"","value":"v"}]"#,
-            r#"[{"name":"n","value":""}]"#,
+            r#"[{"name":"","value":"v","headers":{"Authorization":"Bearer {value}"}}]"#,
+            r#"[{"name":"n","value":"","headers":{"Authorization":"Bearer {value}"}}]"#,
         ] {
             let req: super::types::CreateBoxRequest = serde_json::from_str(&format!(
                 r#"{{"image":"alpine:latest","secrets":{secrets}}}"#

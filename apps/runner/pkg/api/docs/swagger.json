@@ -927,8 +927,14 @@
     },
     "dto.SecretDTO": {
       "type": "object",
-      "required": ["name", "value"],
+      "required": ["headers", "name", "value"],
       "properties": {
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "hosts": {
           "type": "array",
           "items": {

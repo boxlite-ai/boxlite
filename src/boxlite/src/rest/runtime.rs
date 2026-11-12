@@ -1440,6 +1440,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn secret_headers_preserve_explicit_templates_on_create() {
+        let (port, server) = capture_server(vec![(200, BOX_RESPONSE), (200, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let mut options = BoxOptions {
+            rootfs: crate::RootfsSpec::Image("alpine:3.21".into()),
+            secrets: vec![crate::Secret {
+                name: "gemini".into(),
+                value: "test-value".into(),
+                hosts: vec!["api.example.com".into()],
+                placeholder: "<BOXLITE_SECRET:gemini>".into(),
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer {value}".into(),
+                )])),
+            }],
+            ..Default::default()
+        };
+        RuntimeBackend::create(&runtime, options.clone(), None)
+            .await
+            .unwrap();
+        options.secrets[0].headers = Some(std::collections::BTreeMap::from([(
+            "x-goog-api-key".into(),
+            "{value}".into(),
+        )]));
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .unwrap();
+
+        let requests = server.await.unwrap();
+        let bodies = requests
+            .iter()
+            .map(|(headers, body)| {
+                assert_eq!(headers.lines().next(), Some("POST /v1/boxes HTTP/1.1"));
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains("content-type: application/json\r\n")
+                );
+                serde_json::from_str::<serde_json::Value>(body).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bodies[0]["secrets"][0]["headers"]["Authorization"],
+            "Bearer {value}"
+        );
+        assert_eq!(
+            bodies[1]["secrets"][0]["headers"]["x-goog-api-key"],
+            "{value}"
+        );
+        let mut before = bodies[0].clone();
+        before["secrets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("headers");
+        let mut with_header = bodies[1].clone();
+        with_header["secrets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("headers");
+        assert_eq!(before, with_header);
+    }
+
+    #[tokio::test]
     async fn advertised_privileged_creates_guest_box_and_rechecks_support() {
         let (port, server) = capture_server(vec![
             (200, r#"{"capabilities":{"privileged_enabled":true}}"#),

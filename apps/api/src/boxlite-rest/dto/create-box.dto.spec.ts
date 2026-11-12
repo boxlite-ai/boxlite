@@ -460,7 +460,13 @@ describe('CreateBoxDto secrets', () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         secrets: [
-          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+          {
+            name: 'openai',
+            value: 'sk-test',
+            hosts: ['api.openai.com'],
+            headers: { Authorization: 'Bearer {value}' },
+            placeholder: '<BOXLITE_SECRET:openai>',
+          },
         ],
       }),
     )
@@ -470,7 +476,11 @@ describe('CreateBoxDto secrets', () => {
 
   it('accepts a secret without a placeholder', async () => {
     const errors = await validate(
-      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }] }),
+      plainToInstance(CreateBoxDto, {
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      }),
     )
 
     expect(errors).toHaveLength(0)
@@ -493,7 +503,9 @@ describe('CreateBoxDto secrets', () => {
 
   it('rejects a secret missing its name', async () => {
     const errors = await validate(
-      plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test', hosts: ['api.openai.com'] }] }),
+      plainToInstance(CreateBoxDto, {
+        secrets: [{ value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } }],
+      }),
     )
 
     expect(errors).not.toHaveLength(0)
@@ -504,18 +516,14 @@ describe('CreateBoxDto secrets', () => {
   })
 
   it('rejects a secret missing its value', async () => {
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }),
-    )
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', hosts: ['api.openai.com'] }] }))
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isString')
   })
 
   it('rejects a secret with an empty value', async () => {
-    const errors = await validate(
-      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }),
-    )
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: '', hosts: ['api.openai.com'] }] }))
 
     expect(errors).not.toHaveLength(0)
     expect(errors[0]?.children?.[0]?.children?.[0]?.constraints).toHaveProperty('isNotEmpty')

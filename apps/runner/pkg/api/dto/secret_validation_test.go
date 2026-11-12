@@ -33,7 +33,7 @@ func TestSecretFieldsValidatePerElement(t *testing.T) {
 		CpuQuota:        cpuQuota(1),
 		MemoryQuota:     1,
 		StorageQuota:    1,
-		Secrets:         []SecretDTO{{Name: "openai", Value: "sk-test"}},
+		Secrets:         []SecretDTO{{Name: "openai", Value: "sk-test", Headers: map[string]string{"Authorization": "Bearer {value}"}}},
 		OutboundEnabled: &outboundEnabled,
 	}
 	if err := v.Struct(valid); err != nil {
@@ -62,10 +62,10 @@ func TestSecretFieldsValidatePerElement(t *testing.T) {
 		name string
 		box  any
 	}{
-		{"create rejects an empty secret name", create(SecretDTO{Name: "", Value: "v"})},
-		{"create rejects an empty secret value", create(SecretDTO{Name: "n", Value: ""})},
-		{"recover rejects an empty secret name", recover(SecretDTO{Name: "", Value: "v"})},
-		{"recover rejects an empty secret value", recover(SecretDTO{Name: "n", Value: ""})},
+		{"create rejects an empty secret name", create(SecretDTO{Name: "", Value: "v", Headers: map[string]string{"Authorization": "Bearer {value}"}})},
+		{"create rejects an empty secret value", create(SecretDTO{Name: "n", Value: "", Headers: map[string]string{"Authorization": "Bearer {value}"}})},
+		{"recover rejects an empty secret name", recover(SecretDTO{Name: "", Value: "v", Headers: map[string]string{"Authorization": "Bearer {value}"}})},
+		{"recover rejects an empty secret value", recover(SecretDTO{Name: "n", Value: "", Headers: map[string]string{"Authorization": "Bearer {value}"}})},
 	} {
 		err := v.Struct(tt.box)
 		if err == nil {

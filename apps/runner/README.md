@@ -31,6 +31,27 @@ Cloud stages deliver process settings through
 
 ---
 
+## Regenerating the runner client
+
+With Java 11 or newer available, run `make generate:runner-client` from the
+repository root after updating the committed runner Swagger schema. This generates the TypeScript client without
+starting the control-plane API or requiring its database configuration.
+
+## Secret recovery safety
+
+Secret `headers` maps survive creation and recovery. Recovery validates all
+header names, templates, control bytes and host/header conflicts before
+destroying the existing Box; invalid saved configuration leaves its identity
+and stored state intact. Direct creation uses the same check, including rejecting
+missing, null and empty maps, with an error asking the caller to recreate the box with headers.
+
+Upgrade every eligible runner before upgrading the API or enabling custom
+`headers` requests. Old runners silently ignore the map and use the default
+Authorization template; there is no capability gate to prevent mixed-version
+dispatch. Creation and recovery with custom headers must remain on upgraded
+runners, including during rollback.
+See the [secret contract](../../docs/reference/configuration.md#secrets).
+
 ## What this README covers
 
 - The runner's overall process model — what the HTTP server handles, what the

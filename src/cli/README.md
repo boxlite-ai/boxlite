@@ -8,6 +8,10 @@ For CLI development (build, test, adding commands), see [CLI Development Guide](
 
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
 ## Overview
 
 The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from the terminal. It targets quick testing, shell scripting and automation, debugging, and demos.
