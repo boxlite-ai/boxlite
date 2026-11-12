@@ -1413,14 +1413,27 @@ checked in the reservation transaction. Dashboard → CI → Runners shows and e
 this account total; Connects shows connected-account setup state.
 Repository-specific limits are not available yet.
 
-If another Box consumes the last Commerce slot after CI admission, the native
-adapter records a definitive refusal for `BoxCreationLimitExceededError`
-before `onPersist` starts. It also fences revocation before dispatch or a rejected
-native persistence transaction. The durable original-operation fact shares the Box-ID
-ledger key, preventing conflicting outcomes. The shared kernel can return the CI
-reservation while keeping its queued notice, including after restart. A failed
-proof write, generic HTTP error or uncertain persistence outcome keeps the
-reservation for recovery. See the shared [worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
+Native creation classifies failures by their persistence boundary, rather than an
+exception whitelist. Any failure before `onPersist` begins records a definitive
+refusal: cold-pull throttling, unavailable placement, image policy, organization
+lookup and Commerce failures all return their CI reservation immediately. Queued
+demand remains eligible for later scheduling. An error after persistence begins
+retains capacity until the original ledger can establish the outcome.
+
+The scheduler's existing background recovery also checks historical native creates
+with no known Box ID. After five minutes from reservation, it rereads the original
+scope, operation and ledger. If no Box or ownership record exists, a conditional
+rejection write fences a delayed creation transaction before the slot is returned.
+The Box row and original-ID ledger commit together, so a creation that loses that
+write must roll back. A committed original Box always retains its ID and capacity;
+a same-name Box without ownership is never adopted or removed.
+
+This correction applies to existing records after deployment, including historical
+scopes after disconnect. Five minutes enables correction; sweep time and temporary
+failures can extend recovery. Lease loss, database/proof-write failures and corrupt
+identity retain capacity for subsequent checks. No timeout alone authorizes release,
+and standalone REST creation retains its original uncertainty contract. See the shared
+[worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
 
 ### Hosted CI management
 
