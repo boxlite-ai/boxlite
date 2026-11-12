@@ -757,11 +757,11 @@ in localStorage, with an in-memory fallback when storage is unavailable.
 Hover the compact logo for 350ms to preview the full sidebar as an overlay;
 content keeps its position. Moving into the menu keeps it open; leaving closes it
 after 150ms, unless a child has keyboard focus. Escape dismisses the preview and
-returns focus to the logo. The top Collapse button also dismisses the preview;
-clicking the logo pins the expanded sidebar.
+returns focus to the logo. The top Pin button keeps the preview expanded;
+clicking the logo also pins the expanded sidebar.
 Hover never changes the saved preference; touch uses the explicit click control.
-Images has an independent disclosure for its existing Images and Private
-registries routes. Child links use 14px thin-line icons, a shared inset and
+Boxes discloses All Boxes and Checkpoints. Images discloses Image library and Private
+registries. Child links use 14px thin-line icons, a shared inset and
 full-width selection; primary icons remain 18px. Navigation data accepts
 second-level children without adding speculative destinations. Entering a child route reveals its group; the active
 route remains highlighted when the whole sidebar collapses.
@@ -772,18 +772,18 @@ contains a 48px header and route content; API Keys is separated from the account
 by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
 Welcome keeps its simplified header.
 
-Management is a primary disclosure after Domains, with Billing and Organization
+Management is a primary disclosure after Applications, with Billing and Organization
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
 Organization switching, theme and logout remain in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
-Quickstart as the last action. Collapse sits beside the logo in both pinned
-expansion and hover preview, and is hidden in the compact rail without a preview.
+Quickstart as the last action. Collapse sits beside the logo in pinned expansion; Pin occupies that position in
+hover preview. Both are hidden in the compact rail without a preview.
 Clicking the compact logo expands navigation without changing the route.
-Keyboard focus moves to the replacement toggle. Selected navigation uses the
-accent surface, distinct from the quieter hover surface.
+Keyboard focus moves to the replacement toggle. Selected navigation uses a quiet neutral surface with icon feedback,
+distinct from transient hover.
 
 Dashboard owns `--app-header-height`, `--app-banner-height` and
 `--app-content-height`. List/detail/fullscreen layouts consume these variables
@@ -1050,7 +1050,7 @@ Desktop mock comparisons: [list before](../../docs/contributing/investigations/a
 
 Checkpoints belongs to the Boxes group. Primary and secondary labels align; text scale and spacing communicate hierarchy. A quiet neutral fill and an accented icon identify the selected destination. The same Checkpoint outline is shared with existing list rows, which retain their status text and actions.
 
-Hover or keyboard focus can temporarily expand the compact sidebar. Pin keeps it open; leaving a preview restores the compact rail without changing routes. Only one compact tooltip can be visible, and tooltips clear when labels expand. Selected icon effects respect reduced motion.
+Hovering the compact logo temporarily expands the sidebar. Keyboard users activate Expand navigation to open it; focusing a rail link shows its tooltip. Pin keeps it open; leaving a preview restores the compact rail without changing routes. Only one compact tooltip can be visible, and tooltips clear when labels expand. Selected icon effects respect reduced motion.
 
 Desktop mock examples: [expanded navigation](../../docs/contributing/investigations/assets/console-navigation/topic02-navigation-dark.png) and [temporary hover preview](../../docs/contributing/investigations/assets/console-navigation/topic02-hover-dark.png). Captured at 1440 × 900 from the navigation topic preview; the accompanying Tab changes are delivered separately.
 
