@@ -16,6 +16,15 @@ For a new OIDC setup, follow the selected cloud’s [GCP](gcp/identity-and-mail.
 Other compatible OIDC providers need equivalent manual setup.
 Application invitation mail and the identity provider's verification/reset mail are separate systems.
 
+The branding target catalog includes dev, stage, and prod. Stage resolves to
+`https://stage.boxlite.ai`, API `https://api.stage.boxlite.ai`, public issuer
+`https://auth.stage.boxlite.ai/`, and customer tenant `boxlite-stage.us.auth0.com`.
+Use `npm run auth0:universal-login -- preview --stage stage` after the stage API
+and branding assets are reachable and the CLI is authenticated to that tenant.
+Declaring a target does not create tenant resources or apply branding.
+Adding a target changes the catalog-wide source digest; create a fresh preview
+before applying, including when targeting an unchanged dev/prod entry.
+
 Invitation emails reuse the black BoxLite wordmark at
 `<DASHBOARD_URL>/auth0/boxlite-black-3f7875da.png`, served by the dashboard's public assets.
 It displays at 32 pixels high with proportional width, matching the Auth0 reset email.

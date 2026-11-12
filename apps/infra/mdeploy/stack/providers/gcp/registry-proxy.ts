@@ -61,6 +61,7 @@ export const gcpRegistryProxyProvider =
         name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'registry-proxy' }),
         project,
         location: region,
+        ...($app.stage === 'stage' ? { labels: { stage: 'stage' } } : {}),
         /*
          * The whole of the restriction, because the invoker below admits
          * everyone. Read the note on that invoker before widening this: the two
@@ -92,7 +93,7 @@ export const gcpRegistryProxyProvider =
           containers: [
             {
               image: request.image,
-              ports: [{ name: 'h2c', containerPort: REGISTRY_PROXY_PORT }],
+              ports: { name: 'h2c', containerPort: REGISTRY_PROXY_PORT },
               startupProbe: probe,
               livenessProbe: probe,
               envs: containerEnvironment({ values: request.environment, addresses: {} }),

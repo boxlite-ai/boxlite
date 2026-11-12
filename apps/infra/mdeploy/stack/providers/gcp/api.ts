@@ -328,6 +328,7 @@ export const gcpApiProvider =
         name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
         project,
         location: region,
+        ...($app.stage === 'stage' ? { labels: { stage: 'stage' } } : {}),
         /*
          * The ingress *is* the restriction. Read the note on `publicInvoker`
          * below before widening this: the two are one decision, and a value
@@ -397,7 +398,7 @@ export const gcpApiProvider =
             {
               image: request.image,
               ...(continuousCi ? { resources: { cpuIdle: false } } : {}),
-              ports: [{ name: 'http1', containerPort: request.port }],
+              ports: { name: 'http1', containerPort: request.port },
               volumeMounts: [
                 { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },
                 { name: CACHE_CA_VOLUME, mountPath: dirname(CACHE_CA_PATH) },

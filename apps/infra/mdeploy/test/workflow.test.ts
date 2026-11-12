@@ -318,9 +318,9 @@ test('a callee trusts no ref it was handed, and resolves none of its own', () =>
   )
 })
 
-test('the only stage a deploy workflow runs for off main is dev', () => {
+test('only dev and stage deploy workflows run off main', () => {
   /*
-   * dev is shaken out from the branch that is changing it, so its jobs run
+   * Dev and stage are shaken out from the branch that is changing them, so their jobs run
    * wherever they were dispatched. Every other stage reaches a protected
    * Environment and the cloud role behind it, and runs from main alone.
    *
@@ -340,6 +340,7 @@ test('the only stage a deploy workflow runs for off main is dev', () => {
     assert.ok(guards.length > 0, `${name} guards no job by branch`)
     for (const guard of guards) {
       assert.match(guard, /== 'dev'/, `${name} leaves main for a stage it does not name:\n${guard}`)
+      assert.match(guard, /== 'stage'/, `${name} does not give stage the dev branch policy`)
       assert.equal(
         /!= 'prod'/.test(guard),
         false,
