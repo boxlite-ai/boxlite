@@ -22,7 +22,6 @@ import {
   IsIn,
   MaxLength,
   MinLength,
-  Matches,
   Validate,
   ValidateIf,
   ValidateNested,

@@ -43,6 +43,12 @@ precondition here the way test_volumes has. The permission precondition is
 real though: attaching any volume requires the key to hold volume permissions
 (boxlite-box.controller.ts::assertCanAttachVolumes), and that 403 names a
 skip, mirroring test_volumes.
+
+Deployment reality, so nobody mistakes a green local run for coverage: the
+FILESTORE_INSTANCES registry is provisioned only on stage/prod runner hosts
+today. A local single-machine e2e runner has no registry, so the module only
+ever exercises its skip path locally — the four cases need a stage runner to
+actually run.
 """
 
 from __future__ import annotations

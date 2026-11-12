@@ -575,6 +575,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Id, boxDto.Volumes)
 	if err != nil {
+		// A filestore volume earlier in the list may already have written its
+		// record entry inside the instance critical section. The failed create
+		// must not leave it behind: no box ever exists to destroy, so the
+		// dangling entry would count a reference forever and keep the NFS
+		// mount from reclaiming.
+		if hasFilestoreRef(boxDto.Volumes) {
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+		}
 		return "", "", err
 	}
 	for _, vol := range volumeMounts {
@@ -594,9 +602,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if len(volumeMounts) > 0 {
 			cleanupCtx, cancel := cleanupContext(ctx)
 			defer cancel()
-			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(cleanupCtx, "failed to remove cancelled box volume mount record", "box", boxDto.Id, "error", cleanupErr)
-			}
+			c.rollbackVolumeMountRecord(cleanupCtx, boxDto.Id, boxDto.Volumes)
 		}
 		return "", "", err
 	}
@@ -628,15 +634,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
-			var filestoreInstances []string
-			for _, vol := range boxDto.Volumes {
-				if vol.Filestore != nil {
-					filestoreInstances = append(filestoreInstances, vol.Filestore.Instance)
-				}
-			}
-			if cleanupErr := c.removeBoxVolumeMountRecordLocked(ctx, boxDto.Id, filestoreInstances); cleanupErr != nil {
-				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
-			}
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
