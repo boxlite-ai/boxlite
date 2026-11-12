@@ -386,9 +386,15 @@ stopping its running job solely because of the inventory status.
 
 Reservations use rotating counter windows within the database's 100-check budget,
 including scope and host-policy fences. Only fenced counters add demand and all
-compatible supply is deducted. Wide repository sets can therefore fill capacity
-conservatively across rounds; the window does not cap runners represented by one
-counter or replace organization quota.
+compatible supply is deducted. Wide repository sets can therefore underfill while
+compatible idle runners cover every individual window, even when total queued
+demand is larger. Rotation admits later repositories as that supply becomes busy;
+it does not guarantee filling the entire queue across windows. The window does
+not cap runners represented by one counter or replace organization quota.
+
+Only current counted scopes settle their repository notices. Retired scopes may
+recover existing resources but leave notices pending, so a replacement scope can
+admit the work even if its backend uses the job-driven fallback.
 
 A fallback replaces or removes a malformed aggregate only after a version-fenced
 queue snapshot. Terminal job observations prevent stale scans from recreating

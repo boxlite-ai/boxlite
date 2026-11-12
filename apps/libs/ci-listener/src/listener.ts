@@ -484,7 +484,7 @@ export class Listener {
         demands = readCounts()
         await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
       }
-      for (const notice of notices)
+      for (const notice of current ? notices : [])
         if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))
           await this.settle(session.lease, notice)
     })

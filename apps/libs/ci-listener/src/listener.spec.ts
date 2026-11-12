@@ -804,6 +804,35 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).not.toHaveBeenCalled()
     expect((await ingressRows()).some((row) => row.key === 'notice/9/55')).toBe(true)
   })
+  it('keeps notices pending while only a retired counted scope can recover resources', async () => {
+    const journal = new ExecutionJournal(state)
+    await journal.initialize()
+    const previous = (await state.acquire('previous-owner', 3000))!
+    const key = await journal.define(previous, scope)
+    await journal.reserve(previous, key, { repository: 21, run: 33, job: 54 }, testCapacity({ account: 1, tenant: 2 }))
+    await db.transaction(namespace, async (tx) => {
+      const row = (await tx.get('@lease', true))!
+      await tx.put({ ...row, version: randomUUID(), payload: { until: 0 } }, row.version)
+    })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(backend.workers.create).mockRejectedValue(new Error('Original creation outcome pending'))
+    jest.mocked(backend.workers.get).mockRejectedValue(new Error('Original Box not yet observed'))
+    jest.mocked(host.discover).mockImplementation(async (owner) => {
+      lease = owner
+      return { scopes: [], completed: [], pending: true, ready: true }
+    })
+    const observed = deferred(),
+      recover = state.recover.bind(state)
+    let cycles = 0
+    jest.spyOn(state, 'recover').mockImplementation(async (owner, maximum, prefixes) => {
+      const rows = await recover(owner, maximum, prefixes)
+      if (prefixes?.includes('notice/') && ++cycles === 3) observed.resolve()
+      return rows
+    })
+    await listener.receive(notification())
+    await runUntil(observed.promise)
+    expect((await ingressRows()).some((row) => row.key === 'notice/1/55')).toBe(true)
+  })
   it('keeps notices pending after an incomplete directory refresh', async () => {
     await listener.receive(notification())
     const failed = deferred()
