@@ -332,7 +332,7 @@ async def test_filestore_volume_shares_data_across_boxes(rt, filestore_instance)
 
 
 @pytest.mark.asyncio
-async def test_filestore_volume_lifecycle_rules(filestore_instance):
+async def test_filestore_volume_lifecycle_rules(rt, filestore_instance):
     """Volume removal follows the same rules as bucket volumes: in-use refusal,
     removal once free.
 
