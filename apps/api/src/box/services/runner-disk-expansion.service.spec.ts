@@ -94,11 +94,11 @@ describe('water-level planning functions', () => {
     expect(resolveCapGiB(undefined, undefined)).toBeUndefined()
   })
 
-  it('resolveEffectiveCapGiB prefers explicit caps, then defaults to twice the disk size', () => {
+  it('resolveEffectiveCapGiB prefers explicit caps, then defaults to twice the baseline size', () => {
     // Explicit cap and admission limit keep their precedence over the default.
     expect(resolveEffectiveCapGiB(4096, 2048, 200)).toBe(4096)
     expect(resolveEffectiveCapGiB(undefined, 2048, 200)).toBe(2048)
-    // No explicit cap: twice the current size.
+    // No explicit cap: twice the fixed baseline.
     expect(resolveEffectiveCapGiB(undefined, undefined, 200)).toBe(400)
     // Clamped to the Hyperdisk ceiling for large disks.
     expect(resolveEffectiveCapGiB(undefined, undefined, 100_000)).toBe(HYPERDISK_BALANCED_MAX_GIB)
@@ -150,6 +150,8 @@ function makeService(opts: {
   hasRecentRateLimit?: boolean
   samples?: RunnerDiskUsageSample[]
   acquireLease?: boolean
+  /** The MIN(fromGiB) the cap-baseline query reports; null (default) means no attempts yet. */
+  minFromGiB?: number | null
 }) {
   const expansion = {
     ...runnerDiskConfig({ RUNNER_DISK_EXPANSION_ENABLED: 'true' }).expansion,
@@ -166,6 +168,11 @@ function makeService(opts: {
   }
   const configService = { getOrThrow: (key: string) => values[key] } as unknown as TypedConfigService
 
+  const baselineQuery = {
+    select: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn(async () => ({ min: opts.minFromGiB === undefined ? null : opts.minFromGiB })),
+  }
   const expansions = {
     find: jest.fn(async () => opts.pendingExpansions ?? []),
     count: jest.fn(async () => opts.acceptedCount ?? 0),
@@ -174,8 +181,9 @@ function makeService(opts: {
         ? (opts.hasPending ?? false)
         : (opts.hasRecentRateLimit ?? false),
     ),
-    insert: jest.fn(),
+    insert: jest.fn(async () => ({ identifiers: [{ id: 'inserted-row' }], generatedMaps: [], raw: [] })),
     update: jest.fn(async () => ({ affected: 1, raw: [], generatedMaps: [] })),
+    createQueryBuilder: jest.fn(() => baselineQuery),
   }
 
   const samplesRepository = {
@@ -261,16 +269,19 @@ describe('RunnerDiskExpansionService round', () => {
     await service.evaluateAndConfirm()
 
     expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    // The intent row lands before the cloud call and carries no operation yet;
+    // the accepted update follows a successful resize.
     expect(expansions.insert).toHaveBeenCalledWith(
       expect.objectContaining({
         runnerId: '11111111-1111-4111-8111-111111111111',
         fromGiB: 200,
         toGiB: 250,
-        accepted: true,
-        operation: 'op-1',
+        accepted: false,
+        operation: null,
         status: RunnerDiskExpansionStatus.PENDING,
       }),
     )
+    expect(expansions.update).toHaveBeenCalledWith('inserted-row', { accepted: true, operation: 'op-1' })
   })
 
   it('leaves a runner alone above the water level', async () => {
@@ -369,13 +380,28 @@ describe('RunnerDiskExpansionService round', () => {
 
       await service.evaluateAndConfirm()
 
-      // Default ceiling = 2 × 200 = 400; the natural step (250) fits under it,
-      // so the expansion proceeds with the sane relative default.
+      // Default ceiling = 2 × baseline 200 = 400 (no attempts yet, so the
+      // baseline is the current size); the natural step (250) fits under it.
       expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
-      expect(expansions.insert).toHaveBeenCalledWith(
-        expect.objectContaining({ fromGiB: 200, toGiB: 250, accepted: true }),
-      )
+      expect(expansions.update).toHaveBeenCalledWith('inserted-row', { accepted: true, operation: 'op-1' })
       expect((service as unknown as { gaugeValues: { uncapped: number } }).gaugeValues.uncapped).toBe(0)
+    })
+
+    it('anchors the default cap to the first attempt, not the grown size', async () => {
+      // The first attempt grew the disk toward 200 GiB and the filesystem now
+      // reports 380. A cap recomputed from the live size would be 760 and let
+      // growth double forever in generations; anchored to the first attempt
+      // it stays 400, and the next request clamps to exactly that ceiling.
+      const runner = gcpRunner({ diskGiB: 380, currentAllocatedDiskGiB: 370 })
+      const { service, gcpDiskClient } = makeService({
+        readyRunners: [runner],
+        expansion: { capGiB: undefined },
+        minFromGiB: 200,
+      })
+
+      await service.evaluateAndConfirm()
+
+      expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 400)
     })
 
     it('skips and gauges only for a nonsensical disk size', async () => {
@@ -489,7 +515,7 @@ describe('RunnerDiskExpansionService round', () => {
   })
 
   describe('resize failures', () => {
-    it('records a rate-limited rejection and does not spend the budget', async () => {
+    it('records a rate-limited rejection on the intent row and does not spend the budget', async () => {
       const { service, expansions, gcpDiskClient } = makeService({})
       // Rejected lazily: an eagerly-created rejected promise can surface as an
       // unhandled rejection before the service awaits it.
@@ -499,12 +525,14 @@ describe('RunnerDiskExpansionService round', () => {
 
       await service.evaluateAndConfirm()
 
+      // The intent row was written first, then closed on this runner as a
+      // cloud-side rejection; `accepted` stays false, so the budget is intact.
       expect(expansions.insert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          accepted: false,
-          status: RunnerDiskExpansionStatus.FAILED,
-          error: EXPANSION_ERROR.RATE_LIMITED,
-        }),
+        expect.objectContaining({ accepted: false, status: RunnerDiskExpansionStatus.PENDING, operation: null }),
+      )
+      expect(expansions.update).toHaveBeenCalledWith(
+        'inserted-row',
+        expect.objectContaining({ status: RunnerDiskExpansionStatus.FAILED, error: EXPANSION_ERROR.RATE_LIMITED }),
       )
     })
 
@@ -516,13 +544,39 @@ describe('RunnerDiskExpansionService round', () => {
 
       await service.evaluateAndConfirm()
 
-      expect(expansions.insert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          accepted: false,
-          status: RunnerDiskExpansionStatus.FAILED,
-          error: EXPANSION_ERROR.NOT_ACCEPTED,
-        }),
+      expect(expansions.update).toHaveBeenCalledWith(
+        'inserted-row',
+        expect.objectContaining({ status: RunnerDiskExpansionStatus.FAILED, error: EXPANSION_ERROR.NOT_ACCEPTED }),
       )
+    })
+
+    it('does not classify a persistence failure as a GCP rejection', async () => {
+      // The intent-row insert failing means no request was ever issued: the
+      // cloud client must not have been called, and nothing may be recorded
+      // as not_accepted or rate_limited.
+      const { service, expansions, gcpDiskClient } = makeService({})
+      ;(expansions.insert as jest.Mock).mockRejectedValueOnce(new Error('db down'))
+
+      await service.evaluateAndConfirm()
+
+      expect(gcpDiskClient.resizeDisk).not.toHaveBeenCalled()
+      expect(expansions.insert).toHaveBeenCalledTimes(1)
+      expect(expansions.update).not.toHaveBeenCalled()
+    })
+
+    it('survives a lost accepted-update after a successful resize', async () => {
+      // GCP accepted and grew the disk, but writing accepted=true back failed.
+      // The round must not crash and must not label the accepted resize a
+      // rejection; the intent row stays pending without an operation and the
+      // confirm timeout closes it as unconfirmed on a later round.
+      const { service, expansions, gcpDiskClient } = makeService({})
+      ;(expansions.update as jest.Mock).mockRejectedValueOnce(new Error('db down'))
+
+      await service.evaluateAndConfirm()
+
+      expect(gcpDiskClient.resizeDisk).toHaveBeenCalledTimes(1)
+      expect(expansions.insert).toHaveBeenCalledTimes(1)
+      expect(expansions.update).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -641,7 +695,89 @@ describe('RunnerDiskExpansionService round', () => {
 
       await service.evaluateAndConfirm()
 
-      expect(expansions.update).not.toHaveBeenCalled()
+      // The evaluation half of this round issues an accepted-update for the
+      // resize it makes; scope the assertion to the pending row's close.
+      expect(expansions.update).not.toHaveBeenCalledWith(
+        { id: 'row-1', status: RunnerDiskExpansionStatus.PENDING },
+        expect.anything(),
+      )
+    })
+
+    it('closes an attempt stuck RUNNING past the confirm timeout', async () => {
+      // A zone operation may stay RUNNING well past its expected lifetime;
+      // the deadline is the only thing keeping the runner's next request
+      // unblocked.
+      const row = pendingRow()
+      row.requestedAt = new Date(Date.now() - 11 * 60_000)
+      const { service, expansions } = makeService({
+        readyRunners: [gcpRunner()],
+        pendingExpansions: [row],
+        zoneOperation: { status: 'RUNNING' },
+      })
+
+      await service.evaluateAndConfirm()
+
+      expect(expansions.update).toHaveBeenCalledWith(
+        { id: 'row-1', status: RunnerDiskExpansionStatus.PENDING },
+        expect.objectContaining({ status: RunnerDiskExpansionStatus.FAILED, error: EXPANSION_ERROR.UNCONFIRMED }),
+      )
+    })
+
+    it('closes an attempt past the confirm timeout even when every poll fails', async () => {
+      // Persistent poll failures must not park the row: the deadline closes it
+      // the same as any other unresolved state.
+      const row = pendingRow()
+      row.requestedAt = new Date(Date.now() - 11 * 60_000)
+      const { service, expansions, gcpDiskClient } = makeService({
+        readyRunners: [gcpRunner()],
+        pendingExpansions: [row],
+      })
+      ;(gcpDiskClient.getZoneOperation as jest.Mock).mockRejectedValue(new Error('network down'))
+
+      await service.evaluateAndConfirm()
+
+      expect(expansions.update).toHaveBeenCalledWith(
+        { id: 'row-1', status: RunnerDiskExpansionStatus.PENDING },
+        expect.objectContaining({ status: RunnerDiskExpansionStatus.FAILED, error: EXPANSION_ERROR.UNCONFIRMED }),
+      )
+    })
+
+    it('does not poll an intent row that never received its operation', async () => {
+      // initiate() writes the intent row before the cloud call; a row without
+      // an operation has nothing to poll. The confirm timeout is its only way
+      // out.
+      const row = pendingRow()
+      row.operation = null
+      const { service, expansions, gcpDiskClient } = makeService({
+        readyRunners: [gcpRunner()],
+        pendingExpansions: [row],
+      })
+
+      await service.evaluateAndConfirm()
+
+      expect(gcpDiskClient.getZoneOperation).not.toHaveBeenCalled()
+      expect(expansions.update).not.toHaveBeenCalledWith(
+        { id: 'row-1', status: RunnerDiskExpansionStatus.PENDING },
+        expect.anything(),
+      )
+    })
+
+    it('closes an intent row past the confirm timeout without polling', async () => {
+      const row = pendingRow()
+      row.operation = null
+      row.requestedAt = new Date(Date.now() - 11 * 60_000)
+      const { service, expansions, gcpDiskClient } = makeService({
+        readyRunners: [gcpRunner()],
+        pendingExpansions: [row],
+      })
+
+      await service.evaluateAndConfirm()
+
+      expect(gcpDiskClient.getZoneOperation).not.toHaveBeenCalled()
+      expect(expansions.update).toHaveBeenCalledWith(
+        { id: 'row-1', status: RunnerDiskExpansionStatus.PENDING },
+        expect.objectContaining({ status: RunnerDiskExpansionStatus.FAILED, error: EXPANSION_ERROR.UNCONFIRMED }),
+      )
     })
 
     it('still waits out the timeout when the runner identity disappeared', async () => {

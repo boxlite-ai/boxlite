@@ -666,6 +666,14 @@ One data-disk expansion attempt per row, created by pre-deploy migration
 `1794528002000-add-runner-disk-expansion`. Written only by the runner-disk-expansion
 cron (`runner-disk-expansion.service.ts`); everything else reads it.
 
+The disk identity the controller expands is the runner's own report
+(`dataDiskRef`, refreshed on each heartbeat that carries it). The API records
+no independent binding between a runner and its disk, so a compromised runner
+can point the controller at another disk within the service account's IAM
+reach; GCP disks cannot shrink, so such a misdirected resize persists until an
+operator intervenes. Closing this needs an authoritative disk identity
+recorded at provisioning (boxlite#2602).
+
 | Column | Type | Notes |
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
@@ -683,11 +691,13 @@ rate-limit cooldown, and per-runner history all query by it.
 ### `runner_disk_usage_sample`
 
 Per-runner disk usage history for the expansion water level, created by pre-deploy
-migration `1794528003000-add-runner-disk-usage-sample`. Each heartbeat-derived
-sample upserts into its bucket keeping the maximum usage seen in it, so a spike
-between rounds survives into the growth calculation; the expansion cron deletes
-rows past the retention window (48h by default). `usedGiB` is the `df` Used
-figure the runner reports as `currentAllocatedDiskGiB`, not a sum of box sizes.
+migration `1794528003000-add-runner-disk-usage-sample`. Once per round the expansion
+cron samples each READY runner that reports an expandable disk, upserting into the
+runner's current bucket and keeping the maximum usage seen in it: a spike is
+preserved when a round still sees it as the runner's latest heartbeat state, while
+one that appears and recovers entirely between two rounds is lost. The expansion
+cron deletes rows past the retention window (48h by default). `usedGiB` is the `df`
+Used figure the runner reports as `currentAllocatedDiskGiB`, not a sum of box sizes.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |

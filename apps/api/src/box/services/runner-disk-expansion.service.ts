@@ -163,21 +163,29 @@ export const HYPERDISK_BALANCED_MAX_GIB = 65536
 
 /**
  * Cap applied when neither RUNNER_DISK_EXPANSION_CAP_GIB nor the admission
- * expand limit is configured: twice the disk's current size, clamped to the
+ * expand limit is configured: twice the disk's baseline size, clamped to the
  * Hyperdisk ceiling, so RUNNER_DISK_EXPANSION_ENABLED alone turns the feature
- * on with a sane ceiling instead of a configuration-gap dead end. Undefined
- * only for a nonsensical diskGiB (0 or less), which the uncapped gauge then
- * surfaces as the defensive counter it is.
+ * on with a sane ceiling instead of a configuration-gap dead end. The
+ * baseline is fixed — the size the disk had at its first expansion attempt —
+ * not the live reported size, which would raise the cap with every confirmed
+ * expansion and bound nothing.
+ *
+ * Undefined only for a nonsensical baseline (0 or less), which the uncapped
+ * gauge then surfaces as the defensive counter it is. Note the scale mix:
+ * fromGiB and the fallback report a filesystem total that sits ~2% below the
+ * device (the same ext4 gap the confirm tolerance bridges), so "twice the
+ * baseline" reads as roughly 1.9–2.05 times the device size. Accepted: it is
+ * a cost ceiling, not an SLA.
  */
 export function resolveEffectiveCapGiB(
   capGiB: number | undefined,
   expandLimitGiB: number | undefined,
-  diskGiB: number,
+  baselineGiB: number,
 ): number | undefined {
   const explicit = resolveCapGiB(capGiB, expandLimitGiB)
   if (explicit !== undefined) return explicit
-  if (!Number.isFinite(diskGiB) || diskGiB <= 0) return undefined
-  return Math.min(HYPERDISK_BALANCED_MAX_GIB, diskGiB * CAP_DEFAULT_MULTIPLIER)
+  if (!Number.isFinite(baselineGiB) || baselineGiB <= 0) return undefined
+  return Math.min(HYPERDISK_BALANCED_MAX_GIB, baselineGiB * CAP_DEFAULT_MULTIPLIER)
 }
 
 /** New size: capacity plus the larger of headroom and the step share, clamped to the cap, rounded up to whole GiB. */
@@ -281,18 +289,31 @@ export class RunnerDiskExpansionService {
     for (const row of pendings) {
       signal.throwIfAborted()
       try {
+        // The deadline is checked before anything else and applies to every
+        // pending attempt alike: an operation stuck RUNNING, a poll that keeps
+        // throwing, a filesystem that never catches up, or an intent row that
+        // never received its operation all close here, instead of parking the
+        // row — and with it the runner's next request — forever.
+        if (now.getTime() - row.requestedAt.getTime() > confirmTimeoutMs) {
+          await this.closePending(row, RunnerDiskExpansionStatus.FAILED, EXPANSION_ERROR.UNCONFIRMED, now)
+          resultCounter().add(1, { result: EXPANSION_ERROR.UNCONFIRMED })
+          continue
+        }
+        if (!row.operation) {
+          // An intent row from initiate(): written before the cloud call, so
+          // there is nothing to poll. The deadline above is its only exit;
+          // until then the pending gate keeps the runner quiet.
+          continue
+        }
         const runner = await this.runnerRepository.findOne({
           where: { id: row.runnerId },
           select: ['id', 'diskGiB', 'dataDiskRef'],
         })
         if (!runner || !isDiskCapacityExpandable(runner.dataDiskRef)) {
-          // Runner gone, or its disk identity changed under the pending attempt.
-          // Wait out the confirm timeout rather than failing fast: the identity
-          // may arrive with the next heartbeat.
-          if (now.getTime() - row.requestedAt.getTime() > confirmTimeoutMs) {
-            await this.closePending(row, RunnerDiskExpansionStatus.FAILED, EXPANSION_ERROR.UNCONFIRMED, now)
-            resultCounter().add(1, { result: EXPANSION_ERROR.UNCONFIRMED })
-          }
+          // Runner gone, or its disk identity changed under the pending
+          // attempt: wait out the deadline rather than failing fast, the
+          // identity may arrive with the next heartbeat. The deadline check
+          // above closes the attempt when it elapses.
           continue
         }
 
@@ -306,16 +327,14 @@ export class RunnerDiskExpansionService {
           if (deviceReachedGiB(runner.diskGiB, row.toGiB)) {
             await this.closePending(row, RunnerDiskExpansionStatus.CONFIRMED, null, now)
             resultCounter().add(1, { result: 'confirmed' })
-          } else if (now.getTime() - row.requestedAt.getTime() > confirmTimeoutMs) {
-            await this.closePending(row, RunnerDiskExpansionStatus.FAILED, EXPANSION_ERROR.UNCONFIRMED, now)
-            resultCounter().add(1, { result: EXPANSION_ERROR.UNCONFIRMED })
           }
         }
-        // PENDING/RUNNING, or DONE while the filesystem has not caught up yet
-        // within the timeout: leave it pending.
+        // PENDING/RUNNING, or DONE while the filesystem has not caught up
+        // within the deadline: leave it pending; the deadline check at the top
+        // of a later round closes it.
       } catch (e) {
-        // A failed zoneOperations.get is transient; the timeout path above
-        // eventually closes the attempt if it persists.
+        // A failed zoneOperations.get is transient; the deadline above closes
+        // the attempt if it persists, whether or not any poll ever succeeds.
         this.logger.warn(`Zone operation poll failed for runner ${row.runnerId}: ${errorMessage(e)}`)
       }
     }
@@ -413,8 +432,9 @@ export class RunnerDiskExpansionService {
     const { expansion, expandLimitGiB, windowMs, retentionCutoff, now } = ctx
     const budgetWindowStart = new Date(now.getTime() - expansion.growthWindowHours * 3600_000)
     // Lift and cap gates share the effective cap: explicit cap, admission
-    // limit, or the per-runner relative default — never an undefined dead end.
-    const cap = resolveEffectiveCapGiB(expansion.capGiB, expandLimitGiB, runner.diskGiB)
+    // limit, or the per-runner relative default anchored to the disk's first
+    // attempt — never an undefined dead end.
+    const cap = resolveEffectiveCapGiB(expansion.capGiB, expandLimitGiB, await this.capBaselineGiB(runner.id, runner.diskGiB))
 
     // 0) Lift first, ahead of every skip: a recovered runner returns to the
     // pool as soon as usage, budget, and cap allow, even if this round will
@@ -487,50 +507,75 @@ export class RunnerDiskExpansionService {
     return true
   }
 
+  /**
+   * The relative-default cap's fixed anchor: the fromGiB of the runner's
+   * first expansion attempt (MIN over the rows — fromGiB never decreases,
+   * disk sizes do not shrink), falling back to the current reported size
+   * before the first attempt. Computed from the live reported size instead,
+   * the default cap would rise with every confirmed expansion and stop
+   * bounding anything.
+   */
+  private async capBaselineGiB(runnerId: string, fallbackGiB: number): Promise<number> {
+    const row = await this.expansions
+      .createQueryBuilder('expansion')
+      .select('MIN(expansion.fromGiB)', 'min')
+      .where('expansion.runnerId = :runnerId', { runnerId })
+      .getRawOne()
+    const min = row?.min
+    return min === null || min === undefined ? fallbackGiB : Number(min)
+  }
+
   private async initiate(runner: Runner, ref: RunnerDataDiskRef, toGiB: number, now: Date): Promise<void> {
+    // The intent row lands before the cloud call. It is what keeps a later
+    // round from re-requesting this resize while one is in flight (the
+    // pending gate reads it), and it separates persistence failures from
+    // cloud failures: an insert failure here propagates as itself instead of
+    // being classified as a GCP rejection. A crash between the insert and
+    // the GCP call leaves a pending row without an operation; the confirm
+    // timeout closes that as unconfirmed.
+    const inserted = await this.expansions.insert({
+      runnerId: runner.id,
+      fromGiB: runner.diskGiB,
+      toGiB,
+      accepted: false,
+      operation: null,
+      status: RunnerDiskExpansionStatus.PENDING,
+      error: null,
+      requestedAt: now,
+      confirmedAt: null,
+    })
+    const rowId = inserted.identifiers[0].id as string
+    let operation: string
     try {
-      const { operation } = await this.gcpDiskClient.resizeDisk(ref, toGiB)
-      await this.expansions.insert({
-        runnerId: runner.id,
-        fromGiB: runner.diskGiB,
-        toGiB,
-        accepted: true,
-        operation,
-        status: RunnerDiskExpansionStatus.PENDING,
-        error: null,
-        requestedAt: now,
-        confirmedAt: null,
-      })
-      this.logger.log(`Runner ${runner.id} data disk expansion requested`, {
-        'event.name': 'runner.disk_expansion',
-        'runner.id': runner.id,
-        'disk.from_gib': runner.diskGiB,
-        'disk.to_gib': toGiB,
-        'disk.expansion_result': 'requested',
-      })
+      ({ operation } = await this.gcpDiskClient.resizeDisk(ref, toGiB))
     } catch (e) {
+      // Only cloud-side failures land here; persistence failures propagate
+      // unclassified.
       const mapped = toExpansionClientError(e)
       const rateLimited = mapped instanceof GcpDiskRateLimitedError
-      await this.expansions.insert({
-        runnerId: runner.id,
-        fromGiB: runner.diskGiB,
-        toGiB,
-        accepted: false,
-        operation: null,
+      const errorKey = rateLimited ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED
+      await this.expansions.update(rowId, {
         status: RunnerDiskExpansionStatus.FAILED,
-        error: rateLimited ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED,
-        requestedAt: now,
-        confirmedAt: null,
+        error: errorKey,
       })
-      resultCounter().add(1, { result: rateLimited ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED })
+      resultCounter().add(1, { result: errorKey })
       this.logger.error(`Runner ${runner.id} data disk resize to ${toGiB}GiB rejected: ${errorMessage(mapped)}`, {
         'event.name': 'runner.disk_expansion',
         'runner.id': runner.id,
         'disk.from_gib': runner.diskGiB,
         'disk.to_gib': toGiB,
-        'disk.expansion_result': rateLimited ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED,
+        'disk.expansion_result': errorKey,
       })
+      return
     }
+    await this.expansions.update(rowId, { accepted: true, operation })
+    this.logger.log(`Runner ${runner.id} data disk expansion requested`, {
+      'event.name': 'runner.disk_expansion',
+      'runner.id': runner.id,
+      'disk.from_gib': runner.diskGiB,
+      'disk.to_gib': toGiB,
+      'disk.expansion_result': 'requested',
+    })
   }
 
   private async upsertSample(runner: Runner, now: Date): Promise<void> {

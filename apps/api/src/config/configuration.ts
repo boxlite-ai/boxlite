@@ -427,9 +427,9 @@ function boundedNumber(
  * own key rather than reusing `expandLimitGiB` because that key feeds the
  * placement admission formula: sharing it would widen the admission ceiling
  * the moment expansion is enabled. Resolution order:
- * `expansion.capGiB ?? expandLimitGiB ?? diskGiB` — both unset means no cap,
- * which the controller treats as a configuration gap (skip + gauge) rather
- * than an unbounded ceiling.
+ * `expansion.capGiB ?? expandLimitGiB ?? twice the disk's baseline size` —
+ * both unset means no cap, which the controller treats as a configuration
+ * gap (skip + gauge) rather than an unbounded ceiling.
  *
  * Exported so its rules can be tested directly rather than through an import
  * whose side effect is reading the process environment.
@@ -460,9 +460,11 @@ export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
       // sampling and unschedulable marks all stay dormant.
       enabled: env.RUNNER_DISK_EXPANSION_ENABLED === 'true',
       // Expansion ceiling. Unset resolves at evaluation time to the admission
-      // expand limit, then to a per-runner default of twice the disk's current
-      // size (clamped to the Hyperdisk Balanced maximum) — ENABLED alone turns
-      // the feature on with a sane ceiling.
+      // expand limit, then to a per-runner default of twice the disk's
+      // baseline size — the size at its first expansion attempt, fixed across
+      // expansions so the ceiling bounds total growth (clamped to the
+      // Hyperdisk Balanced maximum). ENABLED alone turns the feature on with
+      // a sane ceiling.
       capGiB: env.RUNNER_DISK_EXPANSION_CAP_GIB?.trim()
         ? requiredCount(env.RUNNER_DISK_EXPANSION_CAP_GIB, 0, 'RUNNER_DISK_EXPANSION_CAP_GIB')
         : undefined,
