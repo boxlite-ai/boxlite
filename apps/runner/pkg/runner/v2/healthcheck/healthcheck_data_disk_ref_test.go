@@ -130,7 +130,7 @@ func TestServiceDataDiskRefAssemblyContract(t *testing.T) {
 			}
 
 			// Wire assertions through the production request path.
-			healthcheck := service.newHealthcheck()
+			healthcheck := service.newHealthcheck(false)
 			req := service.client.RunnersAPI.RunnerHealthcheck(context.Background()).RunnerHealthcheck(*healthcheck)
 			_, err = req.Execute()
 			if err != nil {
