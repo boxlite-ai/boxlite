@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -12,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/boxlite-ai/secret-server/internal/testdb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3/lock"
 )
@@ -53,23 +51,12 @@ func TestMigrateSIGTERM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
-	var nonce [8]byte
-	rand.Read(nonce[:])
-	name := fmt.Sprintf("secret_signal_%x", nonce)
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-			t.Error(err)
-		}
-	}()
-	u, err := url.Parse(dsn)
+	t.Cleanup(admin.Close)
+	name, databaseURL := testdb.Create(t, ctx, admin, dsn, false)
+	u, err := url.Parse(databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	u.Path = "/" + name
 	q := u.Query()
 	q.Set("application_name", "secret-signal-test")
 	u.RawQuery = q.Encode()

@@ -3,7 +3,6 @@ package database
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,7 +16,8 @@ import (
 	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/encryption"
-	"github.com/jackc/pgx/v5"
+	"github.com/boxlite-ai/secret-server/internal/testdb"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
@@ -74,19 +74,9 @@ func TestIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
+	t.Cleanup(admin.Close)
 	t.Run("reject non-UTF8 database", func(t *testing.T) {
-		var suffix [8]byte
-		rand.Read(suffix[:])
-		name := fmt.Sprintf("secret_ascii_%x", suffix)
-		if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()+" ENCODING 'SQL_ASCII' TEMPLATE template0"); err != nil {
-			t.Fatal(err)
-		}
-		defer func() {
-			if _, err := admin.Exec(context.Background(), "DROP DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-				t.Errorf("drop ASCII database: %v", err)
-			}
-		}()
+		name, _ := testdb.Create(t, ctx, admin, url, true)
 		asciiConfig := config.Copy()
 		asciiConfig.ConnConfig.Database = name
 		asciiPool, err := pgxpool.NewWithConfig(ctx, asciiConfig)
@@ -98,19 +88,7 @@ func TestIntegration(t *testing.T) {
 			t.Fatalf("non-UTF8 database migration = %v; want encoding error", err)
 		}
 	})
-	var nonce [8]byte
-	rand.Read(nonce[:])
-	name := fmt.Sprintf("secret_test_%x", nonce)
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if _, err := admin.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-			t.Errorf("drop test database: %v", err)
-		}
-	}()
+	name, _ := testdb.Create(t, ctx, admin, url, false)
 	config.ConnConfig.Database = name
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -345,11 +323,18 @@ func TestIntegration(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE secret_version SET encrypted_dek='new', key_id='env:new' WHERE secret_id=$1`, id); err != nil {
 			t.Error(err)
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','open_ai',$2,1,'test')`, org, normalized); err == nil {
-			t.Error("duplicate normalized name accepted")
-		}
-		if _, err := pool.Exec(ctx, `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','abc','OTHER',1,'test')`, org); err == nil {
-			t.Error("incorrect normalization accepted")
+		for _, tc := range []struct {
+			name, statement, code, constraint string
+			args                              []any
+		}{
+			{"duplicate normalized name", `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','open_ai',$2,1,'test')`, "23505", "secret_org_name_uq", []any{org, normalized}},
+			{"incorrect normalization", `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','abc','OTHER',1,'test')`, "23514", "secret_check1", []any{org}},
+		} {
+			_, err := pool.Exec(ctx, tc.statement, tc.args...)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != tc.code || pgErr.ConstraintName != tc.constraint {
+				t.Errorf("%s: got %v, want SQLSTATE %s constraint %s", tc.name, err, tc.code, tc.constraint)
+			}
 		}
 		if _, err := pool.Exec(ctx, `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','missing','MISSING',1,'test')`, org); err == nil {
 			t.Error("missing current version accepted")

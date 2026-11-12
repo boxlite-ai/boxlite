@@ -151,6 +151,7 @@ The unit test target runs with the race detector and `GOWORK=off`. The integrati
 target requires infra-local PostgreSQL and permission to create a temporary database.
 It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
 creates a uniquely named database and drops it after the test.
+Database and command tests share the temporary database setup and cleanup helper.
 It also checks that SIGTERM cancels the migration command while it waits for a lock.
 CI runs the same integration target against a PostgreSQL 17 service on Ubuntu,
 including on draft PRs when Go-related files change. This checks database behavior;
