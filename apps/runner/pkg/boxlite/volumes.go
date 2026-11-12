@@ -36,6 +36,16 @@ const volumeMountTimeout = 90 * time.Second
 // stat and umount indefinitely, which is exactly the state these run in.
 const volumeProbeTimeout = 10 * time.Second
 
+// Bound on how long Run may wait for a mount process past its context
+// deadline. A hard mount to an unreachable server parks mount(8) in
+// uninterruptible kernel sleep: SIGKILL does not land until the kernel
+// returns the syscall, so without this bound Run would block until the
+// kernel gives up -- minutes, on a blackholed server -- after the 90s
+// deadline has already fired. Past the delay the wait returns, the
+// lingering process is abandoned to the kernel, and the eventual mount
+// still lands or fails on its own.
+const volumeMountWaitDelay = 5 * time.Second
+
 // Bound for the readiness loop as a whole. It has to be a deadline rather than
 // a retry count: each probe can now burn volumeProbeTimeout against a wedged
 // mount, so counting attempts would multiply into minutes of holding the
@@ -439,6 +449,9 @@ func nfsMountArgs(inst config.FilestoreInstance, path string) []string {
 func (c *Client) getNfsMountCmd(ctx context.Context, inst config.FilestoreInstance, path string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "mount", nfsMountArgs(inst, path)...)
 	cmd.Env = os.Environ()
+	// The deadline kills a wedged mount; this bounds the wait when the kill
+	// itself is delayed by the kernel (see volumeMountWaitDelay).
+	cmd.WaitDelay = volumeMountWaitDelay
 	cmd.Stderr = io.Writer(&log.ErrorLogWriter{})
 	cmd.Stdout = io.Writer(&log.InfoLogWriter{})
 	return cmd
@@ -584,6 +597,11 @@ func (c *Client) probeMounted(ctx context.Context, path string) (bool, error) {
 func (c *Client) volumeMutexFor(key string) *sync.Mutex {
 	c.volumeMutexesMutex.Lock()
 	defer c.volumeMutexesMutex.Unlock()
+	// Tests construct Clients without the map; lazily create it so every
+	// lock-taking path is safe on any Client. NewClient still initializes it.
+	if c.volumeMutexes == nil {
+		c.volumeMutexes = make(map[string]*sync.Mutex)
+	}
 	volumeMutex, exists := c.volumeMutexes[key]
 	if !exists {
 		volumeMutex = &sync.Mutex{}
@@ -925,6 +943,40 @@ func (c *Client) removeBoxVolumeMountRecordLocked(ctx context.Context, boxID str
 		return c.removeBoxVolumeMountRecord(ctx, boxID)
 	}
 	return firstErr
+}
+
+// hasFilestoreRef answers whether the box declares any Filestore volume.
+// Only a filestore volume writes its record entry inside the instance
+// critical section -- before the volume list completes -- so it is the only
+// kind that can leave a partial record behind a getVolumeMounts failure; an
+// object-storage-only list writes its record only after the list succeeds.
+func hasFilestoreRef(volumes []dto.VolumeDTO) bool {
+	for _, vol := range volumes {
+		if vol.Filestore != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// rollbackVolumeMountRecord removes a box's record after a failed create.
+// Filestore volumes write their record entries inside the instance critical
+// section, so a failure later in the same volume list -- or after the list --
+// leaves an earlier entry already on disk. Without deletion no box ever
+// exists to destroy, the dangling entry counts a reference forever, and the
+// reclaimer never reclaims the NFS mount. Deleting a record that was never
+// written is a no-op; the call sites guard on a volume list that could have
+// written one.
+func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, volumes []dto.VolumeDTO) {
+	var filestoreInstances []string
+	for _, vol := range volumes {
+		if vol.Filestore != nil {
+			filestoreInstances = append(filestoreInstances, vol.Filestore.Instance)
+		}
+	}
+	if err := c.removeBoxVolumeMountRecordLocked(ctx, boxID, filestoreInstances); err != nil {
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxID, "error", err)
+	}
 }
 
 // readFilestoreInstancesFromRecord parses a box's record and returns the

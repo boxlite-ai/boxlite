@@ -52,6 +52,11 @@ func TestCreateRejectsTraversalShapedBoxId(t *testing.T) {
 }
 
 func TestCreateAdmitsWellFormedBoxId(t *testing.T) {
+	// The rollback on getVolumeMounts failure removes the box's record file,
+	// which resolves the mount base path — without the override that reaches
+	// the config package global, which no test initializes. The override keeps
+	// the test hermetic; the guard assertions below are untouched.
+	useVolumeMountBasePath(t, t.TempDir())
 	c := testClient(t)
 
 	// A registry-conforming id passes the guard, so the failure must come

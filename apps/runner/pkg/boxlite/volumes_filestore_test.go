@@ -125,6 +125,10 @@ func TestNfsMountCmdIsNotSystemdWrappedAndIsContextBound(t *testing.T) {
 	if cmd.Cancel == nil {
 		t.Error("nfs mount command is not context-bound; a hard mount to an unreachable server could not be killed")
 	}
+	if cmd.WaitDelay != volumeMountWaitDelay {
+		t.Errorf("nfs mount command WaitDelay = %s, want %s (a hard mount parks mount(8) in D state; the kill lands late)",
+			cmd.WaitDelay, volumeMountWaitDelay)
+	}
 }
 
 // An unknown name fails the create carrying the reference — same contract as a
@@ -683,7 +687,6 @@ func TestCleanupOrphanedVolumeMountsEndToEnd(t *testing.T) {
 	})
 }
 
-
 // The volume id names the data directory under the instance's mount root, so
 // the id is path material from the dispatching API's hands. A
 // traversal-shaped id would escape the mount root entirely; an empty one
@@ -715,5 +718,47 @@ func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
 	// The refusal must precede all mount and directory work: nothing ran.
 	if fake.mounts.Load() != 0 {
 		t.Errorf("mount command ran %d times; the guard must refuse before any mount work", fake.mounts.Load())
+	}
+}
+
+// A create that fails partway through its volume list must not leave the
+// partial record behind. Filestore volumes write their record entries inside
+// the instance critical section, so a failure at a later volume leaves an
+// earlier volume's entry already on disk. Without deletion no box ever exists
+// to destroy, the dangling entry counts a reference forever, and the
+// reclaimer never reclaims the NFS mount. This pins the rollback wiring on
+// Create's getVolumeMounts failure path.
+func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	c.filestoreInstances = []config.FilestoreInstance{{Name: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}}
+	installFakeFilestoreMounts(c)
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id:              "abc123def456",
+		OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch"}},
+			{VolumeId: "vol-late", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "not-in-registry"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected the unknown-instance failure from the second volume, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown Filestore instance") {
+		t.Fatalf("expected the unknown-instance error, got %q", err)
+	}
+
+	// The first volume's entry was already on disk inside its instance
+	// critical section. The failed create must remove it: no box exists to
+	// ever destroy, so the dangling entry would count a reference forever and
+	// keep the NFS mount from ever reclaiming.
+	recordPath := filepath.Join(getVolumeMountRecordDir(), "abc123def456.json")
+	if _, statErr := os.Stat(recordPath); !os.IsNotExist(statErr) {
+		t.Fatalf("volume mount record survived the failed create: %v", statErr)
 	}
 }
