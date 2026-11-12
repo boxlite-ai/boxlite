@@ -4,6 +4,18 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
+## Memory quotas
+
+Create and recovery `memoryQuota` values are GiB numbers, including exact fractions:
+`0.29296875` maps to 300 MiB in the runtime's `WithMemory` option.
+The conversion rejects non-integral MiB, non-finite values, values below 128 MiB,
+and values beyond the runtime option's unsigned 32-bit MiB range before runtime side effects.
+Backend and host limits still apply. Internal callers that omit memory retain the
+historical 128 MiB default; HTTP requests must supply at least `0.125` GiB.
+Cloud separately enforces its 256 MiB minimum and organization quotas.
+Upgrade Runners before Cloud starts sending fractional-GiB quotas; older Runners
+decode this field as an integer and reject them.
+
 ## Nested virtualization capability
 
 Cloud requests nesting when creating a Box. Runner captures its process

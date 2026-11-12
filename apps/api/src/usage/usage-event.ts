@@ -161,8 +161,17 @@ export function usageEventKey(period: FinalizedUsagePeriod): string {
 export function toUsageEventDto(period: FinalizedUsagePeriod): UsageEventDto {
   return {
     ...keyFields(period),
+    mem: billingMemoryString(period.mem),
     eventKey: usageEventKey(period),
   }
+}
+
+/** Round half-up only at the billing boundary; identity and ledger retain exact GiB. */
+export function billingMemoryString(gib: number): string {
+  quantityString(gib, 'mem')
+  const rounded = Math.round(gib * 100) / 100
+  if (gib > 0 && rounded === 0) throw new InvalidUsagePeriodError('mem is too small to bill without rounding away')
+  return quantityString(rounded, 'mem')
 }
 
 /**

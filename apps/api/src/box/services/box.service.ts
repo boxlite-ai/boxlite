@@ -5,9 +5,10 @@
  */
 
 import { assertCpuAllocation } from '../utils/cpu-allocation'
+import { requestedMemoryMib } from '../utils/memory-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager } from 'typeorm'
+import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager, Raw } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
@@ -228,6 +229,7 @@ export class BoxService {
     box.cpu = warmPoolItem.cpu
     box.gpu = warmPoolItem.gpu
     box.mem = warmPoolItem.mem
+    box.memoryMib = warmPoolItem.mem * 1024
     box.disk = warmPoolItem.disk
 
     box.pending = true
@@ -259,6 +261,7 @@ export class BoxService {
 
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
+      const memoryMib = requestedMemoryMib(mem)
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
       // Reject over-limit requests at the boundary (the "security option"
@@ -353,7 +356,8 @@ export class BoxService {
       box.imageIsOrgOwned = resolvedImage.isOrgOwned
       box.cpu = cpu
       box.gpu = gpu
-      box.mem = mem
+      box.mem = Math.ceil(mem)
+      box.memoryMib = memoryMib
       box.disk = disk
 
       // POL-205: unset inbound access on the internal create DTO defaults disabled.
@@ -578,7 +582,21 @@ export class BoxService {
     }
 
     baseFindOptions.cpu = createRangeFilter(minCpu, maxCpu)
-    baseFindOptions.mem = createRangeFilter(minMemoryGiB, maxMemoryGiB)
+    if (minMemoryGiB !== undefined || maxMemoryGiB !== undefined) {
+      baseFindOptions.memoryMib = Raw(
+        (alias) => {
+          const legacy = `${alias.slice(0, alias.lastIndexOf('.') + 1)}mem`
+          const gib = `COALESCE(${alias}, ${legacy} * 1024) / 1024.0`
+          return [
+            minMemoryGiB !== undefined && `${gib} >= :minMemoryGiB`,
+            maxMemoryGiB !== undefined && `${gib} <= :maxMemoryGiB`,
+          ]
+            .filter(Boolean)
+            .join(' AND ')
+        },
+        { minMemoryGiB, maxMemoryGiB },
+      )
+    }
     baseFindOptions.disk = createRangeFilter(minDiskGiB, maxDiskGiB)
     baseFindOptions.updatedAt = createRangeFilter(lastEventAfter, lastEventBefore)
 

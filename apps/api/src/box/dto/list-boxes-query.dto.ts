@@ -143,12 +143,12 @@ export class ListBoxesQueryDto {
     description: 'Minimum memory in GiB',
     required: false,
     type: Number,
-    minimum: 1,
+    minimum: 0.25,
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsNumber()
+  @Min(0.25)
   minMemoryGiB?: number
 
   @ApiProperty({
@@ -156,12 +156,12 @@ export class ListBoxesQueryDto {
     description: 'Maximum memory in GiB',
     required: false,
     type: Number,
-    minimum: 1,
+    minimum: 0.25,
   })
   @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsNumber()
+  @Min(0.25)
   maxMemoryGiB?: number
 
   @ApiProperty({

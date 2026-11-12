@@ -14,6 +14,7 @@ export type CheckpointEnvironment = Pick<
   | 'class'
   | 'cpu'
   | 'mem'
+  | 'memoryMib'
   | 'disk'
   | 'gpu'
   | 'osUser'

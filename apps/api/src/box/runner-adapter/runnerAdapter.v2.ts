@@ -10,6 +10,7 @@ import { Repository, IsNull } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf } from '../utils/memory-allocation'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
@@ -144,7 +145,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
-      memoryQuota: box.mem,
+      memoryQuota: memoryGiBOf(box),
       storageQuota: box.disk,
       env: box.env,
       runAsUser: box.runAsUser,

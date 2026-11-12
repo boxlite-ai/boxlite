@@ -47,8 +47,8 @@ definitions:
       image:
         type: string
       memoryQuota:
-        minimum: 1
-        type: integer
+        minimum: 0.125
+        type: number
       metadata:
         additionalProperties:
           type: string
@@ -161,8 +161,8 @@ definitions:
         minimum: 0
         type: integer
       memoryQuota:
-        minimum: 1
-        type: integer
+        minimum: 0.125
+        type: number
       osUser:
         type: string
       outboundAllowNet:

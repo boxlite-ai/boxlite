@@ -11,6 +11,7 @@ import { OrganizationBoxLimitsService } from '../../organization/services/organi
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { upstreamRefOf } from '../../image/utils/image-ref.util'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf, memoryMibOf } from '../utils/memory-allocation'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { Runner } from '../entities/runner.entity'
 import { Checkpoint } from '../entities/checkpoint.entity'
@@ -60,6 +61,7 @@ export class CheckpointRecoverService {
     })
     if (runner.apiVersion !== '2') throw new ConflictException('Checkpoint creation requires a v2 runner')
     const box = Object.assign(new Box(selected.environment.region, name), selected.environment, {
+      memoryMib: memoryMibOf(selected.environment),
       organizationId: organization.id,
       runnerId: runner.id,
       state: BoxState.RESTORING,
@@ -114,7 +116,7 @@ export class CheckpointRecoverService {
     const limits = await this.limits.resolve(organization)
     assertWithinPerBoxLimits(
       checkpoint.environment.cpu,
-      checkpoint.environment.mem,
+      memoryGiBOf(checkpoint.environment),
       checkpoint.environment.disk,
       limits,
     )
@@ -134,7 +136,7 @@ export class CheckpointRecoverService {
       runner.class !== env.class ||
       (env.privileged && !runner.supportsPrivileged) ||
       env.cpu > runner.cpu ||
-      env.mem > runner.memoryGiB ||
+      memoryGiBOf(env) > runner.memoryGiB ||
       env.disk > runner.diskGiB ||
       env.gpu > (runner.gpu ?? 0)
     )

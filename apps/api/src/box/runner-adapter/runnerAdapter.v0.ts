@@ -20,6 +20,7 @@ import {
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
 
@@ -269,7 +270,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
-      memoryQuota: box.mem,
+      memoryQuota: memoryGiBOf(box),
       storageQuota: box.disk,
       env: box.env,
       runAsUser: box.runAsUser,
@@ -347,7 +348,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
-      memoryQuota: box.mem,
+      memoryQuota: memoryGiBOf(box),
       storageQuota: box.disk,
       env: box.env,
       privileged: box.privileged,

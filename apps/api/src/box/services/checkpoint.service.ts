@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { DataSource, In, IsNull, MoreThan, Not } from 'typeorm'
 import { isUUID } from 'class-validator'
 import { Box } from '../entities/box.entity'
+import { memoryMibOf } from '../utils/memory-allocation'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { Checkpoint, CheckpointEnvironment } from '../entities/checkpoint.entity'
 import { Runner } from '../entities/runner.entity'
@@ -234,6 +235,7 @@ function captureEnvironment(box: Box): CheckpointEnvironment {
     class: box.class,
     cpu: box.cpu,
     mem: box.mem,
+    memoryMib: memoryMibOf(box),
     disk: box.disk,
     gpu: box.gpu,
     osUser: box.osUser,

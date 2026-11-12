@@ -37,7 +37,7 @@ Quota reads have a 10-second timeout and do not show loading or error toasts.
 REST and SDK creation requests are independently
 checked by the server; over-limit requests return HTTP 400.
 The REST maximum is `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
-Memory and disk use binary units (GiB), including the historical `disk_size_gb` name.
+`memory_mib` uses binary MiB; disk uses GiB despite the historical `disk_size_gb` name.
 
 Canceling renewal retains the higher limits until the paid period ends. Payment
 grace also retains them; suspended subscription entitlements or expiry restore
@@ -51,6 +51,42 @@ request within each API process. If no valid cache entry exists and the billing
 service cannot verify a grant, the default limits apply. Existing Boxes keep
 their resources and may be restarted.
 Available runner capacity still determines whether an allowed request can run.
+
+### Exact Cloud memory allocations
+
+Cloud preserves whole-MiB requests from 256 MiB through the organization's limit.
+For example, `memory_mib=300` creates a 300 MiB Box and returns `memory_mib=300`.
+The internal API and Runner carry this allocation as `300 / 1024 = 0.29296875` GiB.
+Omitting memory retains the existing default; fractional MiB requests are rejected.
+Restart, recovery, and checkpoints retain the exact allocation.
+Fractional-GiB requests bypass integer-GiB warm pools and their miss cache.
+
+The database's nullable integer `box.memory_mib` is authoritative.
+Legacy `box.mem` remains an integer GiB ceiling for compatibility.
+The migration backfills existing rows with `mem * 1024`; readers use that fallback
+for null rows and checkpoints written by previous versions.
+Memory range filters, quotas, admin byte counts, and usage periods use the exact allocation.
+
+Billing event and open-allocation responses round memory GiB half-up to two decimal places:
+
+| Requested memory | Exact GiB in the ledger | Billing `mem` string |
+| --- | --- | --- |
+| 300 MiB | 0.29296875 | `"0.29"` |
+| 512 MiB | 0.5 | `"0.5"` |
+| 640 MiB | 0.625 | `"0.63"` |
+| 1536 MiB | 1.5 | `"1.5"` |
+
+Trailing zeros are omitted. Event identity uses the exact source quantity, so
+allocations that round to the same billing value retain distinct event keys.
+Existing queued billing payloads and historical usage periods are not rewritten.
+
+For rollout, pause fractional-memory admissions until all Runners, API instances,
+and metering workers support this contract. Upgrade Runners first, run the
+pre-deploy migration, then replace every API and metering worker before enabling admissions.
+The migration uses a five-second lock timeout; retry during a quiet window if it fails.
+Rollback refuses to drop the column while Boxes or retained checkpoints contain
+allocations that differ from their legacy GiB values. Reverting application binaries
+also requires disabling fractional admissions and resolving those allocations first.
 
 ## CPU configuration
 
