@@ -1,0 +1,83 @@
+/* Shape selectors follow lucide-react 0.561.0 and CheckpointGlyph. Keep them local:
+   open paths and drawing order make a blanket SVG fill incorrect. */
+.navigation-icon {
+  --navigation-icon-inverse: hsl(var(--sidebar-accent));
+}
+.navigation-icon > svg {
+  stroke-width: 1.5;
+  transform-origin: center;
+}
+.navigation-icon-face {
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+.navigation-icon-cutout {
+  fill: none;
+  stroke: var(--navigation-icon-inverse);
+}
+.navigation-icon[data-selected='true'] > svg {
+  animation: navigation-icon-settle 260ms ease-out;
+}
+.navigation-icon[data-selected='true'] .navigation-icon-face {
+  opacity: 1;
+}
+
+/* Only these closed contours fill; all other strokes retain the thin outline. */
+.navigation-icon[data-icon='images'] > svg > path:first-child,
+.navigation-icon[data-icon='ci'] > svg > path,
+.navigation-icon[data-icon='github'] > svg > path:first-child,
+.navigation-icon[data-icon='management'] > svg > path,
+.navigation-icon[data-icon='domain'] > svg > circle,
+.navigation-icon[data-icon='registry'] > svg > rect,
+.navigation-icon[data-icon='billing'] > svg > rect,
+.navigation-icon[data-icon='checkpoint'] > svg > circle {
+  fill: transparent;
+  transition: fill 160ms ease-out;
+}
+.navigation-icon[data-selected='true'][data-icon='images'] > svg > path:first-child,
+.navigation-icon[data-selected='true'][data-icon='ci'] > svg > path,
+.navigation-icon[data-selected='true'][data-icon='github'] > svg > path:first-child,
+.navigation-icon[data-selected='true'][data-icon='management'] > svg > path,
+.navigation-icon[data-selected='true'][data-icon='domain'] > svg > circle,
+.navigation-icon[data-selected='true'][data-icon='registry'] > svg > rect,
+.navigation-icon[data-selected='true'][data-icon='billing'] > svg > rect,
+.navigation-icon[data-selected='true'][data-icon='checkpoint'] > svg > circle {
+  fill: currentColor;
+}
+.navigation-icon[data-icon='domain'] > svg > path,
+.navigation-icon[data-icon='registry'] > svg > line,
+.navigation-icon[data-icon='billing'] > svg > line,
+.navigation-icon[data-icon='checkpoint'] > svg > path:last-child {
+  transition: stroke 160ms ease-out;
+}
+.navigation-icon[data-selected='true'][data-icon='domain'] > svg > path,
+.navigation-icon[data-selected='true'][data-icon='registry'] > svg > line,
+.navigation-icon[data-selected='true'][data-icon='billing'] > svg > line,
+.navigation-icon[data-selected='true'][data-icon='checkpoint'] > svg > path:last-child {
+  stroke: var(--navigation-icon-inverse);
+}
+.navigation-icon[data-selected='true'][data-icon='management'] > svg > circle {
+  fill: var(--navigation-icon-inverse);
+  stroke: var(--navigation-icon-inverse);
+}
+
+@keyframes navigation-icon-settle {
+  0% {
+    transform: scale(0.94);
+  }
+  55% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .navigation-icon[data-selected='true'] > svg {
+    animation: none;
+  }
+  .navigation-icon-face,
+  .navigation-icon > svg > * {
+    transition: none !important;
+  }
+}

@@ -1044,3 +1044,12 @@ later page retains Previous. CI URLs and OAuth callback routes remain unchanged.
 The console self-hosts Inter for interface text and Commit Mono for exact technical values and code. Navigation, labels, search fields and table headings use the sans role; identifiers and commands retain the monospace role. Font provenance and licenses are in `public/fonts/README.md`. Use the shared Tailwind font roles rather than hard-coded family names. Quickstart code surfaces use the structural border token in both themes. Terminal-specific font loading is handled in the Box terminal migration.
 
 Desktop mock comparisons: [list before](../../docs/contributing/investigations/assets/console-typography/main-boxes-light.png), [list after](../../docs/contributing/investigations/assets/console-typography/topic01-boxes-light.png), [Quickstart before](../../docs/contributing/investigations/assets/console-typography/main-quickstart-light.png), [Quickstart after](../../docs/contributing/investigations/assets/console-typography/topic01-quickstart-light.png), and [dark Quickstart](../../docs/contributing/investigations/assets/console-typography/topic01-quickstart-dark.png). These 1440 × 900 screenshots isolate typography and code surfaces against main `ed367805d`; navigation and resource workflows are separate changes.
+
+
+## Sidebar navigation hierarchy
+
+Checkpoints belongs to the Boxes group. Primary and secondary labels align; text scale and spacing communicate hierarchy. A quiet neutral fill and an accented icon identify the selected destination. The same Checkpoint outline is shared with existing list rows, which retain their status text and actions.
+
+Hover or keyboard focus can temporarily expand the compact sidebar. Pin keeps it open; leaving a preview restores the compact rail without changing routes. Only one compact tooltip can be visible, and tooltips clear when labels expand. Selected icon effects respect reduced motion.
+
+Desktop mock examples: [expanded navigation](../../docs/contributing/investigations/assets/console-navigation/topic02-navigation-dark.png) and [temporary hover preview](../../docs/contributing/investigations/assets/console-navigation/topic02-hover-dark.png). Captured at 1440 × 900 from the navigation topic preview; the accompanying Tab changes are delivered separately.
