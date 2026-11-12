@@ -533,9 +533,22 @@ fn reading_empty_c_preserves_an_overdue_unprocessed_match() {
 #[test]
 fn stopped_clocks_do_not_schedule_disabled_matches() {
     for (register, value) in [(0x0b, 0x82), (0x0a, 0x76)] {
-        let (mut rtc, _, changes) = disabled_alarm();
+        let (mut rtc, clock, changes) = rtc_with_line(0);
+        // Keep the worker from latching AF if this test is descheduled
+        // between configuring the alarm and stopping the clock.
+        let idle_worker = rtc.idle_worker.take();
+        advance(&clock, NANOS - 100_000_000);
+        for index in [0x01, 0x03, 0x05] {
+            write(&mut rtc, index, 0xff);
+        }
+        assert!(rtc.alarm.state().armed.is_some());
+        assert!(rtc.worker.is_none());
         write(&mut rtc, register, value);
         assert!(rtc.next_alarm().is_none());
+        assert!(rtc.alarm.state().armed.is_none());
+        rtc.idle_worker = idle_worker;
+        rtc.start_worker();
+        assert!(rtc.worker.is_some());
         assert_eq!(
             changes.recv_timeout(Duration::from_millis(250)),
             Err(RecvTimeoutError::Timeout)
