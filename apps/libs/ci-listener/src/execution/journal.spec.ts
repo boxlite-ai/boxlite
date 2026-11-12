@@ -13,6 +13,7 @@ import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
 import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
+import { observeDemand } from '../demand'
 
 const definition: ExecutionScope = {
   binding: 'binding-a',
@@ -97,6 +98,81 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(second!.record.key).not.toBe(first!.record.key)
       expect(await journal.used(definition.organization)).toBe(2)
       expect(await reserve()).toBeUndefined()
+    })
+    const recordClaim = (installationId: number, repositoryId: number, runner: number) =>
+      state.ingress(`${installationId}/${repositoryId}`, async (tx) => {
+        await tx.write(
+          await observeDemand(
+            tx,
+            { installationId, accountId: 7, repositoryId, job: { id: demand.job, runId: demand.run } },
+            { status: 'in_progress', labels: ['boxlite'], runner },
+          ),
+        )
+      })
+    it('reads claims only from the original installation and requested runners', async () => {
+      await recordClaim(1, 21, 91)
+      await recordClaim(2, 21, 92)
+      expect(await journal.claimedRunners(lease, definition, [91, 92, 93])).toEqual(new Set([91]))
+      expect(await journal.claimedRunners(lease, definition, [])).toEqual(new Set())
+      expect(await journal.claimedRunners(lease, definition, [93])).toEqual(new Set())
+    })
+    it.each(['repository', 'organization'] as const)('rejects a claim outside the %s scope', async (kind) => {
+      await recordClaim(1, 22, 91)
+      const scope: ExecutionScope =
+        kind === 'repository'
+          ? definition
+          : {
+              ...definition,
+              installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
+              runners: {
+                kind: 'organization',
+                account: { id: 7, login: 'owner' },
+                group: 5,
+                repositories: [21],
+                allowPrivate: true,
+                allowPublic: false,
+              },
+            }
+      await expect(journal.claimedRunners(lease, scope, [91])).rejects.toBeInstanceOf(StateCorrupt)
+      if (scope.runners.kind === 'organization') {
+        scope.runners.repositories.push(22)
+        expect(await journal.claimedRunners(lease, scope, [91])).toEqual(new Set([91]))
+      }
+    })
+    it.each([{ repository: 0 }, { run: null }, { job: '55' }, { status: 'queued' }])(
+      'rejects malformed persisted runner claims: %j',
+      async (change) => {
+        await recordClaim(1, 21, 91)
+        const [row] = await state.read(['runner-claim/1/91'])
+        await state.commit(lease, [
+          {
+            key: row.key,
+            expected: row.version,
+            payload: JSON.parse(JSON.stringify({ ...(row.payload as object), ...change })),
+          },
+        ])
+        await expect(journal.claimedRunners(lease, definition, [91])).rejects.toBeInstanceOf(StateCorrupt)
+      },
+    )
+    it.each([
+      null,
+      { labels: null },
+      { labels: [] },
+      { labels: [17] },
+      { labels: ['linux'] },
+      { labels: ['boxlite', 'linux', 'LINUX'] },
+      { labels: ['boxlite-0vcpu-4gbmem-10gbdisk'] },
+    ])('rejects malformed supply persisted on a real reservation: %j', async (supply) => {
+      const row = (await journal.reserve(lease, key, demand, limits, { labels: ['boxlite'] }))!
+      await state.commit(lease, [
+        {
+          key: row.record.key,
+          expected: row.record.version,
+          payload: JSON.parse(JSON.stringify({ ...row.value, supply })),
+        },
+      ])
+      await expect(journal.allocation(lease, row.record.key)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await journal.used(definition.organization)).toBe(1)
     })
     it('defines known and new scopes without enumerating retained history', async () => {
       for (let generation = 2; generation <= 6; generation++) await journal.define(lease, { ...definition, generation })

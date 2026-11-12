@@ -350,6 +350,11 @@ also requires a rebuild before replenishment, covering PAT hosts and missed
 running events. Job queries support recovery instead of ordinary per-allocation
 admission. Custom backends without supply inventory retain job-driven fallback.
 
+A fallback replaces or removes a malformed aggregate only after a version-fenced
+queue snapshot. Terminal job observations prevent stale scans from recreating
+completed demand. Rejected ingress changes leave receipts, facts and counters
+uncommitted.
+
 The label-count upgrade preserves an existing version-2 journal and outstanding
 resources. It adds no state-table DDL and requires no journal reset. Legacy
 allocations recover through original identifiers and job-label fallback. Revision

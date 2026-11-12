@@ -208,6 +208,65 @@ describe('CI shared Listener orchestration', () => {
       secret,
     )!
   }
+  it('refreshes aged positive counts before reserving from the current queue', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    await listener.receive(notification())
+    await db.transaction(namespace, async (tx) => {
+      const [row] = await tx.page('', 10, 'demand/')
+      await tx.put(
+        {
+          ...row,
+          version: randomUUID(),
+          payload: {
+            ...(row.payload as object),
+            queued: 99,
+            updatedAt: Date.now() - 30001,
+          },
+        },
+        row.version,
+      )
+    })
+    await runUntil(delivered.promise)
+    const [counter] = await state.recover(lease, 1000, ['demand/'])
+    expect(counter.payload).toMatchObject({ queued: 1, dirty: false })
+    expect(backend.queued).toHaveBeenCalledWith(21, expect.any(AbortSignal))
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(backend.job).not.toHaveBeenCalled()
+  })
+  it('rebuilds a legacy notice without an aggregate before label admission', async () => {
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    const { observation: _observation, ...legacy } = notification()
+    await listener.receive(legacy)
+    await runUntil(delivered.promise)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(backend.job).not.toHaveBeenCalled()
+    expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 1, dirty: false })
+  })
+  it('repairs an unreadable aggregate without carrying its deleted snapshot into admission', async () => {
+    const repaired = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    await listener.receive(notification())
+    await db.transaction(namespace, async (tx) => {
+      const [row] = await tx.page('', 10, 'demand/')
+      await tx.put({ ...row, version: randomUUID(), payload: { broken: true } }, row.version)
+    })
+    const ingress = state.ingress.bind(state)
+    jest.spyOn(state, 'ingress').mockImplementation(async (...args) => {
+      const result = await ingress(...args)
+      if (!(await state.recover(lease, 1000, ['demand/'])).length) repaired.resolve()
+      return result
+    })
+    await runUntil(repaired.promise)
+    expect(await state.recover(lease, 1000, ['demand/'])).toEqual([])
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect(host.report).not.toHaveBeenCalledWith(expect.any(StateCorrupt), 'label-capacity-balance')
+  })
   it('rebuilds dirty demand before reserving capacity', async () => {
     Object.assign(backend, { inventory: jest.fn(async () => []) })
     jest

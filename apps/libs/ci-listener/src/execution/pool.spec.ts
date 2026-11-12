@@ -13,6 +13,7 @@ import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected, WorkerState } f
 import { ExecutionJournal } from './journal'
 import { ExecutionScope } from './model'
 import { PoolBackend, WorkerPool } from './pool'
+import { observeDemand } from '../demand'
 
 describe('CI shared worker lifecycle', () => {
   const definition: ExecutionScope = {
@@ -197,6 +198,82 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.job).not.toHaveBeenCalled()
   })
+  it('does not open a backend for an empty clean scope and zero queued demand', async () => {
+    const open = jest.fn(async () => backend)
+    pool = new WorkerPool(journal, key, open, settings, observe)
+    await pool.balance(lease, limits, [])
+    await pool.balance(lease, limits, countedDemand(0))
+    expect(open).not.toHaveBeenCalled()
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect(await journal.used(definition.organization)).toBe(0)
+  })
+  it('withholds creation when the backend cannot enumerate runner supply', async () => {
+    await expect(pool.balance(lease, limits, countedDemand())).rejects.toThrow('supply inventory is unavailable')
+    expect(backend.admit).not.toHaveBeenCalled()
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect(await journal.used(definition.organization)).toBe(0)
+  })
+  it('recovers legacy allocation labels while balancing an initially empty runner inventory', async () => {
+    supplyInventory()
+    const reserved = (await journal.reserve(lease, key, demand, limits))!
+    const label = 'boxlite-4vcpu-8gbmem-20gbdisk'
+    customJob([label])
+    await pool.balance(lease, limits, countedDemand(1, [label]))
+    expect(backend.job).toHaveBeenCalledWith(demand, undefined)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(backend.workers.create).toHaveBeenCalledWith(
+      expect.objectContaining({ name: reserved.value.name, cpus: 4, memoryMiB: 8192, diskGiB: 20 }),
+    )
+    expect(backend.runners).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      undefined,
+      ['self-hosted', 'linux', 'x64', label],
+      reserved.value.name,
+    )
+    expect((await allocation()).value.delivery).toBe('done')
+    expect(await journal.used(definition.organization)).toBe(1)
+  })
+  it.each(['legacy', 'snapshot'])(
+    'rejects unsupported %s supply before creating or retiring resources',
+    async (kind) => {
+      supplyInventory()
+      const retire = jest.fn(async () => {})
+      backend.retire = retire
+      customJob(['boxlite', 'macOS'])
+      await journal.reserve(
+        lease,
+        key,
+        demand,
+        limits,
+        kind === 'snapshot' ? { labels: ['boxlite', 'macOS'] } : undefined,
+      )
+      await expect(pool.balance(lease, limits, countedDemand())).rejects.toBeInstanceOf(StateCorrupt)
+      expect(backend.workers.create).not.toHaveBeenCalled()
+      expect(retire).not.toHaveBeenCalled()
+      expect(await journal.used(definition.organization)).toBe(1)
+    },
+  )
+  it('replaces busy supply with a persisted running claim without requiring fallback', async () => {
+    const busy = new Set<string>()
+    supplyInventory(busy)
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    await pool.balance(lease, capacity, countedDemand())
+    const row = await allocation()
+    busy.add(row.value.name)
+    await state.ingress('1/21', async (tx) => {
+      await tx.write(
+        await observeDemand(
+          tx,
+          { installationId: 1, accountId: 7, repositoryId: 21, job: { id: demand.job, runId: demand.run } },
+          { status: 'in_progress', labels: ['boxlite'], runner: row.value.runner.id },
+        ),
+      )
+    })
+    await pool.balance(lease, capacity, countedDemand())
+    expect(backend.workers.create).toHaveBeenCalledTimes(2)
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+    expect((await rows()).allocations.size).toBe(2)
+  })
   it('requires queue fallback before replacing busy supply without a running observation', async () => {
     const busy = new Set<string>()
     supplyInventory(busy)
@@ -271,6 +348,38 @@ describe('CI shared worker lifecycle', () => {
     await pool.balance(lease, capacity, countedDemand(2))
     expect(backend.workers.create).toHaveBeenCalledTimes(2)
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'ci-worker-recovery-deferred' })]))
+  })
+  it.each([new LeaseLost(), new StateCorrupt()])('propagates fatal counted creation failure %s', async (failure) => {
+    supplyInventory()
+    jest.mocked(backend.workers.create).mockRejectedValueOnce(failure)
+    await expect(pool.balance(lease, limits, countedDemand())).rejects.toBe(failure)
+    expect((await allocation()).value.box.phase).toBe('requested')
+    expect(await journal.used(definition.organization)).toBe(1)
+    expect(backend.workers.deliverJit).not.toHaveBeenCalled()
+  })
+  it('retains uncertain creation and retires credentials after a non-Error provider rejection', async () => {
+    supplyInventory()
+    const retire = jest.fn(async () => {})
+    backend.retire = retire
+    jest.mocked(backend.workers.create).mockRejectedValueOnce('private-provider-response')
+    await pool.balance(lease, limits, countedDemand())
+    const row = await allocation()
+    expect(row.value.box.phase).toBe('requested')
+    expect(await journal.used(definition.organization)).toBe(1)
+    expect(retire.mock.calls).toEqual([[row.value.name], [row.value.name]])
+    expect(events).toContainEqual(
+      expect.objectContaining({ event: 'ci-worker-recovery-deferred', errorType: 'Unknown' }),
+    )
+    expect(JSON.stringify(events)).not.toContain('private-provider-response')
+    expect(backend.workers.deliverJit).not.toHaveBeenCalled()
+  })
+  it('rejects a recovered supply snapshot incompatible with current pool labels', async () => {
+    const reserved = (await journal.reserve(lease, key, demand, limits, { labels: ['boxlite', 'macOS'] }))!
+    await expect(reconcile()).rejects.toBeInstanceOf(StateCorrupt)
+    expect((await journal.allocation(lease, reserved.record.key))?.value.box.phase).toBe('none')
+    expect(await journal.used(definition.organization)).toBe(1)
+    expect(backend.job).not.toHaveBeenCalled()
+    expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('uses the original job resource selection for both launch and registration', async () => {
     customJob()

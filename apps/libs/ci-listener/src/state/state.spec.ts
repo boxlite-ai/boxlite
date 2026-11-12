@@ -459,6 +459,68 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await expect(state.ingest([{ key: '@owner', expected: null, payload: {} }])).rejects.toThrow('key')
       expect(await state.recover(await owner())).toEqual([notice])
     })
+    it('limits transactional ingress to its validated target and record kinds', async () => {
+      await expect(state.ingress('../escape', async () => undefined)).rejects.toThrow('Invalid ingress target')
+      for (const key of ['worker/1', '@owner', 'notice/../bad?'])
+        await expect(state.ingress('9/21', (tx) => tx.read([key]))).rejects.toThrow('Invalid ingress record kind')
+      await expect(
+        state.ingress('9/21', (tx) =>
+          tx.write([
+            { key: 'notice/a', expected: null, payload: {} },
+            { key: 'worker/1', expected: null, payload: {} },
+          ]),
+        ),
+      ).rejects.toThrow('Invalid ingress record kind')
+      expect(await state.recover(await owner())).toEqual([])
+    })
+    it('reads and writes supported ingress records under an execution lease', async () => {
+      const lease = await owner()
+      const written = await state.ingress(
+        '9/21',
+        async (tx) => {
+          expect(await tx.read(['job-fact/9/55'])).toEqual([])
+          const rows = await tx.write([
+            { key: 'job-fact/9/55', expected: null, payload: { status: 'queued' } },
+            { key: 'demand/9/21/profile', expected: null, payload: { queued: 1 } },
+            { key: 'runner-claim/9/91', expected: null, payload: { job: 55 } },
+          ])
+          expect(await tx.read(rows.map((row) => row.key))).toEqual(rows)
+          return rows
+        },
+        lease,
+      )
+      expect(await state.recover(lease)).toEqual(written)
+      await expect(
+        state.ingress('9/21', async () => undefined, { ...lease, epoch: lease.epoch + 1 }),
+      ).rejects.toBeInstanceOf(LeaseLost)
+    })
+    it('locks the namespace anchor when a custom adapter has no logical ingress lock', async () => {
+      const anchorLocks: string[] = []
+      const adapter: StateDatabase = {
+        transaction: (ns, work, mode) =>
+          database.transaction(
+            ns,
+            (tx) =>
+              work({
+                now: () => tx.now(),
+                get: (key, locked) => {
+                  if (locked) anchorLocks.push(key)
+                  return tx.get(key, locked)
+                },
+                page: (...args) => tx.page(...args),
+                put: (...args) => tx.put(...args),
+                remove: (...args) => tx.remove(...args),
+              }),
+            mode,
+          ),
+      }
+      const custom = new ListenerState(adapter, namespace)
+      const rows = await custom.ingress('9/21', (tx) =>
+        tx.write([{ key: 'notice/custom', expected: null, payload: { job: 55 } }]),
+      )
+      expect(anchorLocks).toEqual(['@anchor'])
+      expect(await state.read(['notice/custom'])).toEqual(rows)
+    })
     it('rolls back a whole receipt batch on conflict', async () => {
       await state.ingest([{ key: 'notice/z', expected: null, payload: { job: 7 } }])
       await expect(

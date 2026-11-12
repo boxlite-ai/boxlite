@@ -205,6 +205,41 @@ describe('CI shared execution authority', () => {
     await again.close()
     await backend.retire(name)
   })
+  it('rejects foreign worker names before issuing runner credentials', async () => {
+    await expect(backend.runners(async () => {}, undefined, ['boxlite'], 'foreign')).rejects.toThrow(
+      'credential isolation',
+    )
+    expect(calls.some((call) => call.path.endsWith('/access_tokens'))).toBe(false)
+  })
+  it('retires the issued credential if runner session construction rejects labels', async () => {
+    await expect(backend.runners(async () => {}, undefined, [], name)).rejects.toThrow('runner labels')
+    expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(1)
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(1)
+    const again = await backend.runners(async () => {}, undefined, ['boxlite'], name)
+    await again.close()
+    expect(calls.filter((call) => call.path.endsWith('/access_tokens'))).toHaveLength(2)
+  })
+  it('attempts every worker retirement and retains failed revocation for a later close', async () => {
+    const other = 'ci-jit-' + 'b'.repeat(32)
+    await backend.runners(async () => {}, undefined, ['boxlite'], name)
+    await backend.runners(async () => {}, undefined, ['boxlite'], other)
+    const fetcher = global.fetch
+    let failed = false
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname === '/installation/token' && !failed) {
+        failed = true
+        return new Response(null, { status: 503 })
+      }
+      return fetcher(input, options)
+    }) as typeof fetch
+    await expect(backend.close()).rejects.toThrow('Runner credential retirement is incomplete')
+    expect(failed).toBe(true)
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(1)
+    expect(await state.recover(lease, 1000, ['credential/'])).toHaveLength(1)
+    await backend.close()
+    expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(2)
+    expect(await state.recover(lease, 1000, ['credential/'])).toEqual([])
+  })
   it('sends the same resource selection to the host and the actual GitHub JIT request', async () => {
     const label = 'boxlite-2vcpu-4gbmem-10gbdisk'
     const fetcher = global.fetch

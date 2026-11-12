@@ -3,7 +3,7 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { decodeDemand, rebuildDemand } from './demand'
+import { decodeDemand, JobObservation, observeDemand, rebuildDemand } from './demand'
 import { ListenerInbox, verifyWebhook } from './webhook'
 import { ListenerState, ExecutionLease } from './state/store'
 import { SqliteStateDatabase } from './state/sqlite'
@@ -87,6 +87,83 @@ describe('CI label demand counters and fallback', () => {
     await send('queued')
     expect(await counters()).toEqual([])
     expect((await state.read(['job-fact/1/55']))[0].payload).toMatchObject({ status: 'in_progress', runner: 91 })
+  })
+  it.each([
+    { status: 'unknown' },
+    { labels: null },
+    { labels: [''] },
+    { labels: [1] },
+    { labels: ['x'.repeat(129)] },
+    { labels: Array(101).fill('boxlite') },
+    { labels: [] },
+    { runner: 0 },
+  ])('rejects invalid internal observations without changing durable facts %j', async (change) => {
+    await expect(
+      state.ingress('1/21', async (tx) => {
+        const changes = await observeDemand(tx, { ...target, job: { id: 55, runId: 33 } }, {
+          status: 'queued',
+          labels: ['boxlite'],
+          runner: null,
+          ...change,
+        } as JobObservation)
+        await tx.write(changes)
+      }),
+    ).rejects.toBeInstanceOf(StateCorrupt)
+    expect(await state.recover(lease)).toEqual([])
+  })
+  it('requires a job identity for an internal observation', async () => {
+    await expect(
+      state.ingress('1/21', (tx) =>
+        observeDemand(
+          tx,
+          { ...target, job: null },
+          {
+            status: 'queued',
+            labels: ['boxlite'],
+            runner: null,
+          },
+        ),
+      ),
+    ).rejects.toBeInstanceOf(StateCorrupt)
+    expect(await state.recover(lease)).toEqual([])
+  })
+  it.each([
+    null,
+    {},
+    { hint: {} },
+    { hint: { job: {} }, status: 'invalid', labels: [] },
+    { hint: { job: {} }, status: 'queued', labels: null },
+    { hint: { job: {} }, status: 'queued', labels: [1] },
+  ])('rejects malformed persisted observations before applying a transition %j', async (payload) => {
+    await send('queued')
+    const [fact] = await state.read(['job-fact/1/55'])
+    await state.commit(lease, [{ key: fact.key, expected: fact.version, payload: payload as Json }])
+    const before = await state.recover(lease)
+    await expect(send('completed')).rejects.toBeInstanceOf(StateCorrupt)
+    expect(await state.recover(lease)).toEqual(before)
+  })
+  it.each([
+    null,
+    {},
+    { repository: 22, run: 33, job: 55 },
+    { repository: 21, run: 34, job: 55 },
+    { repository: 21, run: 33, job: 56 },
+  ])('rejects a runner claimed by another identity without consuming queued demand %j', async (payload) => {
+    await send('queued')
+    await state.commit(lease, [{ key: 'runner-claim/1/91', expected: null, payload: payload as Json }])
+    const before = await state.recover(lease)
+    await expect(send('in_progress', 55, ['boxlite'], 91)).rejects.toBeInstanceOf(StateCorrupt)
+    expect(await state.recover(lease)).toEqual(before)
+  })
+  it('advances an existing runner claim from running to completed for the same job', async () => {
+    await send('queued')
+    await send('in_progress', 55, ['boxlite'], 91)
+    const [running] = await state.read(['runner-claim/1/91'])
+    await send('completed', 55, [], 91)
+    const [completed] = await state.read(['runner-claim/1/91'])
+    expect(completed.version).not.toBe(running.version)
+    expect(completed.payload).toEqual({ repository: 21, run: 33, job: 55, status: 'completed' })
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 0, dirty: false })
   })
   it('marks a missing aggregate dirty instead of publishing a negative count', async () => {
     await send('queued')
