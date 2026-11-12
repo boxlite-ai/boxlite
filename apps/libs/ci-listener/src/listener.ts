@@ -15,6 +15,7 @@ import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity } fro
 import { RepositoryCompensation, RepositoryScanSession } from './compensation/scanner'
 import { ScanClaim } from './compensation/queue'
 import { decodeDemand, DemandUncertain, LabelDemand, rebuildDemand } from './demand'
+import { CredentialCollector } from './credential-retirement'
 
 export interface ListenerBackend extends PoolBackend {
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -29,6 +30,8 @@ export interface ListenerHost {
   accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'>
   report(error: unknown, operation: string): void
   observe?(event: WorkerEvent): void
+  /** Permanently retire background discovery/replay and their local handles. */
+  close?(): Promise<void>
 }
 interface Runtime {
   backend: ListenerBackend
@@ -57,12 +60,14 @@ export class Listener {
   private readonly journal: ExecutionJournal
   private readonly worker: PoolSettings
   private readonly compensation: RepositoryCompensation
+  private readonly credentials: CredentialCollector
   private readonly timing: { tickMs: number; leaseMs: number; discoveryMs: number; compensationMs: number }
   private running = false
   private readonly retiring = new Set<Runtime>()
   private wake?: () => void
   constructor(private readonly options: ListenerOptions) {
     this.journal = new ExecutionJournal(options.state)
+    this.credentials = new CredentialCollector(options.state)
     this.worker = { ...options.worker, labels: [...options.worker.labels] }
     this.timing = { tickMs: 1000, leaseMs: 30000, discoveryMs: 300000, compensationMs: 300000, ...options.timing }
     if (
@@ -95,10 +100,15 @@ export class Listener {
     this.running = true
     const scanStop = new AbortController()
     let scans: Promise<void> | undefined
+    let superseded = false
     try {
       while (!signal.aborted) {
         try {
           await this.journal.initialize()
+          if (await this.options.state.superseded()) {
+            superseded = true
+            break
+          }
           scans ??= this.compensation.run(AbortSignal.any([signal, scanStop.signal]))
           await this.retireKnown()
           const lease = await this.options.state.acquire(randomUUID(), this.timing.leaseMs)
@@ -112,10 +122,35 @@ export class Listener {
     } finally {
       scanStop.abort()
       try {
-        await scans
+        if (superseded) {
+          // Failed scan retirement must not skip the other local owners.
+          await scans?.catch((error) => this.options.host.report(error, 'compensation-retirement'))
+          await this.drain(signal)
+        } else await scans
       } finally {
         this.running = false
       }
+    }
+  }
+  private async drain(signal: AbortSignal): Promise<void> {
+    let backoff = this.timing.tickMs
+    for (;;) {
+      const results = await Promise.allSettled([
+        this.retireKnown(),
+        this.compensation.close(),
+        this.options.host.close?.(),
+      ])
+      const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+      if (!failures.length) return
+      const error = new AggregateError(failures, 'Superseded Listener retirement remains pending')
+      if (signal.aborted) throw error
+      this.options.host.report(error, 'listener-retirement')
+      try {
+        await delay(backoff, undefined, { signal })
+      } catch {
+        throw error
+      }
+      backoff = Math.min(backoff * 2, 60000)
     }
   }
   private async session(lease: ExecutionLease, external: AbortSignal): Promise<void> {
@@ -149,6 +184,12 @@ export class Listener {
       while (!signal.aborted) {
         try {
           await this.cycle(session, signal)
+          try {
+            await this.credentials.step(lease)
+          } catch (error) {
+            if (error instanceof LeaseLost) throw error
+            this.options.host.report(error, 'credential-collection')
+          }
         } catch (error) {
           if (error instanceof LeaseLost) throw error
           if (!signal.aborted) this.options.host.report(error, 'listener-cycle')

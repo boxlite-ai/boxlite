@@ -1051,6 +1051,125 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.close).toHaveBeenCalledTimes(2)
     jest.mocked(backend.close).mockResolvedValue()
   })
+  it('ends a superseded deployment after retiring local owners without deleting its running worker', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const close = jest.fn(async () => {})
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    let current!: ExecutionLease
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+      await replacement.activate()
+      current = (await replacement.acquire('new-deployment', 300000))!
+      delivered.resolve()
+    })
+    const deadline = setTimeout(() => abort.abort(), 1000)
+    try {
+      await listener.run(abort.signal)
+      expect(abort.signal.aborted).toBe(false)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(backend.close).toHaveBeenCalled()
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+      expect((await inspectJournal(replacement, current)).allocations.size).toBe(1)
+      await expect(listener.receive(notification(56))).resolves.toBe('stored')
+    } finally {
+      clearTimeout(deadline)
+      abort.abort()
+    }
+  })
+  it('ends an already superseded deployment before opening discovery or worker backends', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const replacement = new ListenerState(db, namespace, 2)
+    await replacement.activate()
+    const close = jest.fn(async () => {})
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    const deadline = setTimeout(() => abort.abort(), 500)
+    try {
+      await listener.run(abort.signal)
+      expect(abort.signal.aborted).toBe(false)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(host.discover).not.toHaveBeenCalled()
+      expect(host.backend).not.toHaveBeenCalled()
+    } finally {
+      clearTimeout(deadline)
+      abort.abort()
+    }
+  })
+  it('drains every local owner after takeover despite compensation retirement failures', async () => {
+    state = new ListenerState(db, namespace, 1)
+    await new ExecutionJournal(state).initialize()
+    await state.activate()
+    const entered = deferred(),
+      trace: string[] = []
+    let closes = 0
+    const reader = {
+      queued: async (signal: AbortSignal) => {
+        entered.resolve()
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve()
+          else signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return []
+      },
+      publish: async () => {},
+      close: jest.fn(async () => {
+        trace.push('scan-close-' + ++closes)
+        if (closes <= 3) throw new Error('Revocation pending')
+      }),
+    }
+    jest.mocked(host.scan).mockResolvedValue(reader)
+    const close = jest.fn(async () => {
+      trace.push('host-close')
+    })
+    listener = new Listener({
+      state,
+      host: Object.assign(withScanCatalog(host), { close }),
+      worker: settings,
+      capacity: { resolve: async () => testCapacity({ account: 1, tenant: 2 }) },
+      timing: { tickMs: 1, leaseMs: 3000 },
+    })
+    await listener.receive(notification())
+    const replacement = new ListenerState(db, namespace, 2)
+    jest.mocked(backend.workers.deliverJit).mockImplementationOnce(async () => {
+      await Promise.race([
+        entered.promise,
+        new Promise<void>((resolve) => {
+          abort.signal.addEventListener('abort', () => resolve(), { once: true })
+        }),
+      ])
+      abort.signal.throwIfAborted()
+      await replacement.activate()
+    })
+    const deadline = setTimeout(() => abort.abort(), 1000)
+    try {
+      await listener.run(abort.signal)
+      expect(abort.signal.aborted).toBe(false)
+      expect(close).toHaveBeenCalledTimes(2)
+      expect(reader.close).toHaveBeenCalledTimes(4)
+      expect(trace.indexOf('host-close')).toBeLessThan(trace.indexOf('scan-close-4'))
+      expect(backend.workers.remove).not.toHaveBeenCalled()
+    } finally {
+      clearTimeout(deadline)
+      abort.abort()
+    }
+  })
   it('renews ownership while a GitHub operation is waiting beyond the original lease expiry', async () => {
     listener = new Listener({
       state,
