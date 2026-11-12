@@ -33,7 +33,7 @@ import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
 
 // Data stays in separate columns; status and actions keep a fixed footprint.
-const GRID = 'grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.5fr)_56px_64px_112px_72px] gap-x-4'
+const GRID = 'min-w-[760px] grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.5fr)_56px_64px_112px_72px] gap-x-4'
 
 // Releasing a drag-selection (e.g. selecting a box name to copy it) fires a
 // click on the row; navigating away then would discard the selection mid-copy.
@@ -237,102 +237,101 @@ export function BoxTable({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* header */}
-      <div
-        className={cn(
-          `hidden ${GRID} resource-list-head flex-none items-center overflow-y-auto [scrollbar-gutter:stable]`,
-          (loading || data.length > 0) && 'md:grid',
-        )}
-      >
-        <span>Name</span>
-        <span>Box ID</span>
-        <span>Image</span>
-        <span>CPU</span>
-        <span>Memory</span>
-        <span>Status</span>
-        <span className="text-right">Actions</span>
-      </div>
+      <div className="scroll-edge hidden min-h-0 flex-1 overflow-auto md:block" aria-busy={loading || isPageFetching}>
+        {/* header */}
+        <div
+          className={cn(
+            `hidden ${GRID} resource-list-head sticky top-0 z-10 flex-none items-center bg-background`,
+            (loading || data.length > 0) && 'md:grid',
+          )}
+        >
+          <span>Name</span>
+          <span>Box ID</span>
+          <span>Image</span>
+          <span>CPU</span>
+          <span>Memory</span>
+          <span>Status</span>
+          <span className="text-right">Actions</span>
+        </div>
 
-      {/* rows */}
-      <div
-        className={cn(
-          'scroll-edge hidden min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable] md:flex',
-          isPageFetching && 'opacity-60 transition-opacity',
-        )}
-        aria-busy={loading || isPageFetching}
-      >
-        {loading
-          ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
-                <div className="h-4 w-40 animate-pulse bg-card" />
-              </div>
-            ))
-          : data.length === 0
-            ? emptyState
-            : data.map((box) => {
-                const name = getBoxDisplayName(box)
-                const image = box.image ?? '—'
-                const busy = boxIsLoading[box.id]
+        {/* rows */}
+        <div
+          className={cn('flex flex-col', isPageFetching && 'opacity-60 transition-opacity')}
+          aria-busy={loading || isPageFetching}
+        >
+          {loading
+            ? Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
+                  <div className="h-4 w-40 animate-pulse bg-card" />
+                </div>
+              ))
+            : data.length === 0
+              ? emptyState
+              : data.map((box) => {
+                  const name = getBoxDisplayName(box)
+                  const image = box.image ?? '—'
+                  const busy = boxIsLoading[box.id]
 
-                return (
-                  <div
-                    key={box.id}
-                    onClick={() => {
-                      if (isSelectingText()) return
-                      onRowClick?.(box)
-                    }}
-                    className={`group grid ${GRID} resource-list-row items-center ${
-                      onRowClick ? 'cursor-pointer' : ''
-                    } ${busy ? 'pointer-events-none' : ''}`}
-                  >
-                    <ResourceIdentity icon={<BoxResourceIcon box={box} />}>
-                      <a
-                        className="resource-link"
-                        title={name}
-                        href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-                          if (onRowClick) {
-                            event.preventDefault()
-                            if (!isSelectingText()) onRowClick(box)
-                          }
-                        }}
-                      >
-                        {name}
-                      </a>
-                      <CopyNameButton
-                        name={name}
-                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                      />
-                    </ResourceIdentity>
-
-                    <span
-                      className="truncate font-mono text-meta text-muted-foreground"
-                      title={getBoxPublicIdLabel(box)}
+                  return (
+                    <div
+                      key={box.id}
+                      onClick={() => {
+                        if (isSelectingText()) return
+                        onRowClick?.(box)
+                      }}
+                      className={`group grid ${GRID} resource-list-row items-center ${
+                        onRowClick ? 'cursor-pointer' : ''
+                      } ${busy ? 'pointer-events-none' : ''}`}
                     >
-                      {getBoxPublicIdLabel(box)}
-                    </span>
-                    <span className="truncate font-mono text-meta" title={box.image ?? undefined}>
-                      <TechnicalText value={image} />
-                    </span>
-                    <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
-                      {box.cpu ?? '—'} vCPU
-                    </span>
-                    <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
-                      {box.memory ?? '—'} GiB
-                    </span>
+                      <ResourceIdentity icon={<BoxResourceIcon box={box} />}>
+                        <a
+                          className="resource-link"
+                          title={name}
+                          href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                            if (onRowClick) {
+                              event.preventDefault()
+                              if (!isSelectingText()) onRowClick(box)
+                            }
+                          }}
+                        >
+                          {name}
+                        </a>
+                        <CopyNameButton
+                          name={name}
+                          className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        />
+                      </ResourceIdentity>
 
-                    {/* status */}
-                    <BoxStatusIndicator box={box} />
+                      <span
+                        className="truncate font-mono text-meta text-muted-foreground"
+                        title={getBoxPublicIdLabel(box)}
+                      >
+                        {getBoxPublicIdLabel(box)}
+                      </span>
+                      <span className="truncate font-mono text-meta" title={box.image ?? undefined}>
+                        <TechnicalText value={image} />
+                      </span>
+                      <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
+                        {box.cpu ?? '—'} vCPU
+                      </span>
+                      <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
+                        {box.memory ?? '—'} GiB
+                      </span>
 
-                    {/* actions */}
-                    <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
-                      {renderActions(box)}
+                      {/* status */}
+                      <BoxStatusIndicator box={box} />
+
+                      {/* actions */}
+                      <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
+                        {renderActions(box)}
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
+        </div>
       </div>
 
       <div
