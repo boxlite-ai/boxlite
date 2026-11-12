@@ -135,7 +135,7 @@ export function ConcurrencyTimeline() {
                 />
               </LineChart>
             </ChartContainer>
-            <p className="mt-2 font-mono text-meta text-muted-foreground">
+            <p className="mt-2 font-sans text-meta text-muted-foreground">
               Daily snapshots from compute-bearing usage periods · the plan limit is informational; excess starts are
               not rejected yet
             </p>

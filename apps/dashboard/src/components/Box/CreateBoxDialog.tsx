@@ -143,7 +143,7 @@ function Stepper({
     setText(String(next))
   }
   const btn =
-    'flex size-11 flex-none items-center justify-center font-mono text-em text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
+    'flex size-11 flex-none items-center justify-center font-sans text-em text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
   return (
     <div className="flex items-stretch border border-border bg-card">
       <button
@@ -205,7 +205,7 @@ function ResourceField({
 }) {
   return (
     <div className="flex flex-col gap-[9px]">
-      <div className="font-mono text-label uppercase tracking-[1px]">
+      <div className="font-sans text-label uppercase tracking-[1px]">
         {label} <span className="normal-case tracking-normal text-muted-foreground">({unit})</span>
       </div>
       <Stepper
@@ -233,7 +233,7 @@ function ResourceField({
 function CappedResourcesNote({ items }: { items: { label: string; unit: string; max: number }[] }) {
   if (items.length === 0) return null
   return (
-    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-meta leading-relaxed text-warning-foreground">
+    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-sans text-meta leading-relaxed text-warning-foreground">
       Adjusted to your organization&apos;s max: {items.map((r) => `${r.label} ${r.max} ${r.unit}`).join(' · ')}. Need
       more?{' '}
       <a
@@ -461,7 +461,7 @@ function SelectField({
   if (customOpen) {
     return (
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-meta font-medium">{label}</span>
+        <span className="font-sans text-meta font-medium">{label}</span>
         <div className="flex items-stretch">
           <input
             autoFocus
@@ -505,7 +505,7 @@ function SelectField({
 
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="font-mono text-meta font-medium">{label}</span>
+      <span className="font-sans text-meta font-medium">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={ariaLabel}
@@ -599,7 +599,7 @@ function MountRow({
           type="button"
           onClick={onRemove}
           aria-label="Remove mount"
-          className="shrink-0 border border-border px-[10px] font-mono text-meta text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+          className="shrink-0 border border-border px-[10px] font-sans text-meta text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
         >
           ✕
         </button>
@@ -857,7 +857,7 @@ export const CreateBoxDialog = ({
               {/* Submitting an empty name is a real, supported path — the API then assigns
                   an adjective-animal name of its own. Say so here, or the placeholder reads
                   as a promise that the box will be called something like "my-new-box". */}
-              <div id="create-box-name-hint" className="font-mono text-meta leading-relaxed text-muted-foreground">
+              <div id="create-box-name-hint" className="font-sans text-meta leading-relaxed text-muted-foreground">
                 Optional — auto-named like <span className="text-foreground">cozy-otter</span>.
               </div>
             </div>
@@ -905,7 +905,7 @@ export const CreateBoxDialog = ({
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <div className="font-mono text-meta leading-relaxed text-muted-foreground">
+              <div className="font-sans text-meta leading-relaxed text-muted-foreground">
                 Optional — any reference your operator allows. The first box on a new image waits for it to be pulled.
               </div>
             </div>
@@ -926,7 +926,7 @@ export const CreateBoxDialog = ({
             </div>
 
             {(limitsError || !confirmedLimits) && (
-              <p role="status" className="font-mono text-meta text-muted-foreground">
+              <p role="status" className="font-sans text-meta text-muted-foreground">
                 {limitsError
                   ? confirmedLimits
                     ? 'Could not refresh limits. Showing last known limits.'
@@ -1011,7 +1011,7 @@ export const CreateBoxDialog = ({
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
               aria-expanded={showAdvanced}
-              className="flex min-h-6 w-full items-center justify-between font-mono text-meta font-medium text-foreground transition-colors hover:text-brand"
+              className="flex min-h-6 w-full items-center justify-between font-sans text-meta font-medium text-foreground transition-colors hover:text-brand"
             >
               <span>
                 <span style={{ color: BRAND }}>{showAdvanced ? '▾' : '▸'}</span> Advanced
@@ -1040,7 +1040,7 @@ export const CreateBoxDialog = ({
                   <button
                     type="button"
                     onClick={() => setMounts((prev) => [...prev, { volumeId: '', mountPath: '/data' }])}
-                    className="inline-flex h-7 items-center border border-border px-[10px] font-mono text-meta transition-colors hover:border-brand"
+                    className="inline-flex h-7 items-center border border-border px-[10px] font-sans text-meta transition-colors hover:border-brand"
                   >
                     + Mount a volume
                   </button>
@@ -1100,7 +1100,7 @@ export const CreateBoxDialog = ({
                   waking even with auto-stop off, so this is its own row, not a
                   modifier of one. */}
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-meta font-medium">Wake on access</span>
+                    <span className="font-sans text-meta font-medium">Wake on access</span>
                     <Switch aria-label="Wake on access" checked={autoResume} onCheckedChange={setAutoResumeEnabled} />
                   </div>
                   {/* Wake is served by the API's own REST/WS proxy
@@ -1124,7 +1124,7 @@ export const CreateBoxDialog = ({
                   {/* Same shape as CappedResourcesNote above — left rule, tinted
                   ground, mono 11px — in the destructive tone. */}
                   {deleteDelaySeconds > 0 && (
-                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-mono text-meta leading-relaxed text-destructive">
+                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-sans text-meta leading-relaxed text-destructive">
                       Permanent. The box and everything on its disk are gone — this cannot be undone.
                     </p>
                   )}
@@ -1141,7 +1141,7 @@ export const CreateBoxDialog = ({
             <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
             {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
             {(lifecycleError || mountError) && (
-              <p className="border-t border-border px-6 pt-3 font-mono text-meta text-destructive">
+              <p className="border-t border-border px-6 pt-3 font-sans text-meta text-destructive">
                 {lifecycleError ?? mountError}
               </p>
             )}

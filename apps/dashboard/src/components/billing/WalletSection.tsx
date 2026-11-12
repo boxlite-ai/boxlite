@@ -126,7 +126,7 @@ function Pager({
   }
 
   return (
-    <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-meta text-muted-foreground">
+    <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-sans text-meta text-muted-foreground">
       <span>
         Page {page}
         {totalPages > 0 && ` of ${totalPages}`}
@@ -424,7 +424,7 @@ export function WalletSection() {
                 <span className="font-mono text-page font-semibold leading-none tracking-tight tabular-nums text-foreground">
                   {formatAmount(wallet.ongoingBalanceCents)}
                 </span>
-                <span className="font-mono text-meta text-muted-foreground">available</span>
+                <span className="font-sans text-meta text-muted-foreground">available</span>
               </div>
 
               <div className="mt-4">
@@ -432,7 +432,7 @@ export function WalletSection() {
                     about promotional credit, it is the absence of one. */}
                 {(wallet.creditGrantedCents ?? 0) > 0 && (
                   <>
-                    <div className="mb-1.5 flex items-center justify-between font-mono text-label uppercase tracking-[1px] text-muted-foreground">
+                    <div className="mb-1.5 flex items-center justify-between font-sans text-label uppercase tracking-[1px] text-muted-foreground">
                       <span>Promotional credit remaining</span>
                       <span className="tabular-nums">
                         {formatAmount(wallet.creditRemainingCents ?? 0)} /{' '}
@@ -455,7 +455,7 @@ export function WalletSection() {
                     href={`${billingPortalUrl}/customer-edit-information`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="mt-2 inline-flex items-center gap-1.5 font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
+                    className="mt-2 inline-flex items-center gap-1.5 font-sans text-meta text-muted-foreground transition-colors hover:text-foreground"
                   >
                     Payment history &amp; billing info
                     <ArrowUpRight className="size-3.5" />
@@ -466,7 +466,7 @@ export function WalletSection() {
               <div className="my-5 h-px bg-border" />
 
               {/* Add funds — presets, custom amount and the action all on one row */}
-              <span className="font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
+              <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <div className="grid grid-cols-2 gap-2 sm:contents">
                   {[25, 100, 500, 1000].map((amount) => (
@@ -529,7 +529,7 @@ export function WalletSection() {
                       <span
                         role="img"
                         aria-label={`${topUpDiscount} off`}
-                        className="absolute right-[-12px] top-1/2 w-[80px] -translate-y-1/2 rotate-[35deg] whitespace-nowrap bg-brand py-[2px] text-center font-mono text-label font-bold leading-none tracking-normal text-[hsl(218_17%_9%)]"
+                        className="absolute right-[-12px] top-1/2 w-[80px] -translate-y-1/2 rotate-[35deg] whitespace-nowrap bg-brand py-[2px] text-center font-sans text-label font-bold leading-none tracking-normal text-[hsl(218_17%_9%)]"
                       >
                         {topUpDiscount} OFF
                       </span>
@@ -537,7 +537,7 @@ export function WalletSection() {
                   )}
                 </div>
               </div>
-              {topUp.reason && <p className="mt-3 font-mono text-meta leading-relaxed text-warning">{topUp.reason}</p>}
+              {topUp.reason && <p className="mt-3 font-sans text-meta leading-relaxed text-warning">{topUp.reason}</p>}
               <PanelNote>
                 Minimum ${MIN_TOP_UP_DOLLARS} · you will be redirected to Stripe to complete the payment.
               </PanelNote>
@@ -553,7 +553,7 @@ export function WalletSection() {
                   aria-expanded={autoReloadOpen}
                   aria-controls="auto-reload-settings"
                   onClick={() => setAutoReloadOpen((wasOpen) => !wasOpen)}
-                  className="flex w-full items-center gap-2 font-mono text-label uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex w-full items-center gap-2 font-sans text-label uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <span style={{ color: BRAND }}>{autoReloadOpen ? '▾' : '▸'}</span>
                   Auto-reload
@@ -648,7 +648,7 @@ export function WalletSection() {
                   (cardConnected ? (
                     <PanelNote>Target must be at least $10 above the threshold · set both to 0 to disable</PanelNote>
                   ) : (
-                    <p className="mt-3 font-mono text-meta leading-relaxed text-warning">
+                    <p className="mt-3 font-sans text-meta leading-relaxed text-warning">
                       Connect a payment method above to turn auto-reload on. Until it is set, nothing warns you before
                       the balance runs out.
                     </p>
@@ -667,22 +667,22 @@ export function WalletSection() {
                     <button
                       type="button"
                       onClick={() => setCouponOpen(true)}
-                      className="font-mono text-meta text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                      className="font-sans text-meta text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
                     >
                       Have a coupon code?
                     </button>
                   ) : (
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex flex-col gap-1.5">
-                        <span className="font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+                        <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
                           Redeem coupon
                         </span>
                         {redeemCouponError ? (
-                          <span className="font-mono text-meta text-destructive">{redeemCouponError}</span>
+                          <span className="font-sans text-meta text-destructive">{redeemCouponError}</span>
                         ) : redeemCouponSuccess ? (
-                          <span className="font-mono text-meta text-success">{redeemCouponSuccess}</span>
+                          <span className="font-sans text-meta text-success">{redeemCouponSuccess}</span>
                         ) : (
-                          <span className="font-mono text-meta text-muted-foreground">
+                          <span className="font-sans text-meta text-muted-foreground">
                             Enter a coupon code to redeem your credits.
                           </span>
                         )}

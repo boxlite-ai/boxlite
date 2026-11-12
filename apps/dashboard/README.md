@@ -271,7 +271,7 @@ links for route navigation.
 | Destructive row action         | `danger` / `sm` or `icon` | Red text/icon, red border on hover        |
 | Final destructive confirmation | `dangerSolid`             | Solid red                                 |
 
-Keep square corners and the shared monospace font. Secondary actions use a cyan
+Keep square corners and the shared sans-serif interface font. Secondary actions use a cyan
 border with a neutral surface on hover/open; they do not turn solid cyan.
 Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
 outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
@@ -1038,3 +1038,9 @@ there, return to BoxLite, and the account refreshes to page one without deleting
 its connection or discarding an unsaved Private checkbox. Ordinary focus does
 not poll repository lists. Errors retain Retry and the settings link; a failed
 later page retains Previous. CI URLs and OAuth callback routes remain unchanged.
+
+## Interface typography
+
+The console self-hosts Inter for interface text and Commit Mono for exact technical values and code. Navigation, labels, search fields and table headings use the sans role; identifiers and commands retain the monospace role. Font provenance and licenses are in `public/fonts/README.md`. Use the shared Tailwind font roles rather than hard-coded family names. Quickstart code surfaces use the structural border token in both themes. Terminal-specific font loading is handled in the Box terminal migration.
+
+Desktop mock comparisons: [list before](../../docs/contributing/investigations/assets/console-typography/main-boxes-light.png), [list after](../../docs/contributing/investigations/assets/console-typography/topic01-boxes-light.png), [Quickstart before](../../docs/contributing/investigations/assets/console-typography/main-quickstart-light.png), [Quickstart after](../../docs/contributing/investigations/assets/console-typography/topic01-quickstart-light.png), and [dark Quickstart](../../docs/contributing/investigations/assets/console-typography/topic01-quickstart-dark.png). These 1440 × 900 screenshots isolate typography and code surfaces against main `ed367805d`; navigation and resource workflows are separate changes.

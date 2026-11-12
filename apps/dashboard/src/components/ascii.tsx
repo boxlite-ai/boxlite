@@ -98,7 +98,7 @@ export function StatCard({
       )}
     >
       <div className="flex items-start justify-between gap-1">
-        <span className="font-mono text-label uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-label sm:tracking-[1.5px]">
+        <span className="font-sans text-label uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-label sm:tracking-[1.5px]">
           <span style={{ color: BRAND }}>▸</span> {label}
         </span>
         {live && (
@@ -122,7 +122,7 @@ export function StatCard({
         ) : (
           <div className="font-mono text-[34px] font-semibold leading-none tracking-[-1px]">{value}</div>
         )}
-        <span className="mb-[2px] font-mono text-label uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
+        <span className="mb-[2px] font-sans text-label uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
       </div>
     </Tag>
   )
@@ -171,13 +171,13 @@ export function SegmentedBar({ used, limit, segments = 40 }: { used: number; lim
 export function Metric({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+      <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
         <span style={{ color: BRAND }}>▸</span> {label}
       </span>
       <span className="font-mono text-page font-semibold leading-none tracking-tight tabular-nums text-foreground">
         {value}
       </span>
-      {sub && <span className="font-mono text-meta text-muted-foreground">{sub}</span>}
+      {sub && <span className="font-sans text-meta text-muted-foreground">{sub}</span>}
     </div>
   )
 }
@@ -266,5 +266,5 @@ export function Panel({ className, children }: { className?: string; children: R
  * and a caption underneath it look like the same kind of line.
  */
 export function PanelNote({ children }: { children: ReactNode }) {
-  return <p className="mt-1.5 font-mono text-meta text-muted-foreground">{children}</p>
+  return <p className="mt-1.5 font-sans text-meta text-muted-foreground">{children}</p>
 }

@@ -20,12 +20,10 @@ module.exports = {
         xs: '480px',
       },
       fontFamily: {
-        // Two faces, two jobs: words are set in Inter, values in Plex Mono. The
-        // marketing site already pairs them this way; the console spoke only
-        // mono, which made every heading read as terminal output.
-        sans: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
-        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
-        display: ['Inter', 'system-ui', 'sans-serif'],
+        // Shared with native CSS and canvas consumers in index.css.
+        sans: ['var(--font-sans)'],
+        mono: ['var(--font-mono)'],
+        display: ['var(--font-sans)'],
       },
       fontSize: {
         // The console's type scale — six steps, nothing in between. Arbitrary

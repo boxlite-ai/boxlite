@@ -50,9 +50,9 @@ export function PlanSection() {
     <div className="flex flex-col gap-8">
       {isError ? (
         <Panel className="flex flex-col items-center gap-3 px-[22px] py-10">
-          <span className="font-mono text-body text-foreground">Oops, something went wrong</span>
-          <span className="font-mono text-meta text-muted-foreground">There was an error loading billing data.</span>
-          <Button variant="outline" onClick={handleRetry} className="mt-1 font-mono text-meta">
+          <span className="font-sans text-body text-foreground">Oops, something went wrong</span>
+          <span className="font-sans text-meta text-muted-foreground">There was an error loading billing data.</span>
+          <Button variant="outline" onClick={handleRetry} className="mt-1 font-sans text-meta">
             <RefreshCcw className="mr-2 size-4" />
             Retry
           </Button>
