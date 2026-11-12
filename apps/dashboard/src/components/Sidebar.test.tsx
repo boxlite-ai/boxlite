@@ -307,6 +307,7 @@ describe('Sidebar primary navigation', () => {
     renderRoute('/dashboard/checkpoints')
     const boxes = document.querySelector('nav[aria-label="Primary"] a[href="/dashboard/boxes"]')!
     expect(boxes.className).toContain('bg-sidebar-accent')
+    expect(boxes.getAttribute('aria-label')).toBe('Boxes, current section: Checkpoints')
     expect(boxes.getAttribute('aria-current')).toBeNull()
     expect(document.querySelector('nav[aria-label="Primary"] a[href="/dashboard/checkpoints"]')).toBeNull()
   })
