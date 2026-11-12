@@ -113,6 +113,9 @@ The old process stops scheduling and new compensation claims, cancels discovery
 and replay, and closes its worker/backend, scanner and host credential owners.
 Every owner is attempted even when another close fails. Pending local revocation
 uses exponential retry delay capped at sixty seconds without restarting scheduling.
+An in-flight scan opening does not delay the other owners' retirement. The old
+Listener still waits for that operation to settle, closes any late reader without
+querying GitHub, and retries failed retirement before returning.
 
 The current owner restores existing Box/runner identities, allocations and quota;
 deployment never resets capacity or stops a running worker merely because its

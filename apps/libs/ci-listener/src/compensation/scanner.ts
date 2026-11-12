@@ -116,6 +116,7 @@ export class RepositoryCompensation {
     try {
       reader = await this.options.open(structuredClone(claim), signal)
       this.retiring.set(index, reader)
+      signal.throwIfAborted()
       const jobs = await reader.queued(signal)
       for (let offset = 0; offset < jobs.length; offset += 50) {
         signal.throwIfAborted()

@@ -190,7 +190,6 @@ integration('CI managed organization group (real Postgres)', () => {
   it.each(['owner', 'generation', 'disabled', 'root', 'lease'])(
     'refuses writes after %s authority changes during inventory reads',
     async (kind) => {
-      const [originalLease] = await db.query("SELECT payload FROM ci_listener_state WHERE record_key='@lease'")
       beforeGroupRead = async () => {
         if (kind === 'owner') await db.query('DELETE FROM organization_user')
         if (kind === 'generation') await db.query('UPDATE ci_installation_binding SET generation=2')
@@ -211,19 +210,22 @@ integration('CI managed organization group (real Postgres)', () => {
       expect(await store.state.read(['group-sync/1'])).toEqual([])
       expect((await db.query('SELECT state FROM ci_installation_binding'))[0].state).not.toBe('ready')
       if (kind === 'lease') {
-        try {
-          await expect(host.close()).rejects.toThrow('credential retirement failed')
-          expect(
-            await db.query("SELECT record_key FROM ci_listener_state WHERE record_key LIKE 'credential/%'"),
-          ).not.toEqual([])
-        } finally {
-          // Restore only the fixture's original lease after checking fencing, so teardown can retire its retained debt.
-          await db.query("UPDATE ci_listener_state SET payload=$1 WHERE record_key='@lease'", [originalLease.payload])
-        }
-        await host.close()
+        await expect(host.close()).resolves.toBeUndefined()
+        const metadata = await db.query("SELECT record_key FROM ci_listener_state WHERE record_key LIKE 'credential/%'")
+        expect(metadata).not.toEqual([])
+        await expect(host.close()).resolves.toBeUndefined()
         expect(await db.query("SELECT record_key FROM ci_listener_state WHERE record_key LIKE 'credential/%'")).toEqual(
-          [],
+          metadata,
         )
+        const requests = jest.mocked(global.fetch).mock.calls
+        const issued = requests.filter(([input]) => new URL(String(input)).pathname.endsWith('/access_tokens'))
+        expect(issued.length).toBeGreaterThan(0)
+        expect(
+          requests.filter(
+            ([input, options]) =>
+              new URL(String(input)).pathname === '/installation/token' && options?.method === 'DELETE',
+          ),
+        ).toHaveLength(issued.length)
       }
     },
   )
