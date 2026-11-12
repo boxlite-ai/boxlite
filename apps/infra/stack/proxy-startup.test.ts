@@ -7,9 +7,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { buildEdge } from './edge.js'
 
-test('the retained SST deployment supplies the proxy namespace', (t) => {
+test('the retained SST deployment supplies the proxy namespace', async (t) => {
+  // Keep SST ambient types outside the tooling-only TypeScript program.
+  const edgeModule = fileURLToPath(new URL('./edge.ts', import.meta.url))
+  const { buildEdge } = await import(edgeModule)
   const globals = globalThis as Record<string, any>
   const previous = { sst: globals.sst, interpolate: globals.$interpolate }
   let environment: Record<string, string> = {}

@@ -121,12 +121,12 @@ describe('GCP custom domain reconciliation', () => {
     for (let index = 0; index < 5; index++) await step()
     expect(row.phase).toBe('ready')
     const calls = request.mock.calls.map(([call]) => call.url as string)
-    expect(calls.filter((url) => url.includes('cloudresourcemanager.googleapis.com'))).toEqual([
+    expect(calls.filter((url) => new URL(url).hostname === 'cloudresourcemanager.googleapis.com')).toEqual([
       'https://cloudresourcemanager.googleapis.com/v1/projects/test-project',
     ])
     expect(
       calls
-        .filter((url) => url.includes('certificatemanager.googleapis.com'))
+        .filter((url) => new URL(url).hostname === 'certificatemanager.googleapis.com')
         .every((url) => url.startsWith(`https://certificatemanager.googleapis.com/v1/${parent}/`)),
     ).toBe(true)
   })
@@ -147,8 +147,8 @@ describe('GCP custom domain reconciliation', () => {
     expect(row.phase).toBe('ready')
     expect(
       request.mock.calls
-        .filter(([call]) => call.url.includes('certificatemanager.googleapis.com'))
-        .every(([call]) => call.url.includes(`/v1/${parent}/`)),
+        .filter(([call]) => new URL(call.url).hostname === 'certificatemanager.googleapis.com')
+        .every(([call]) => new URL(call.url).pathname.startsWith(`/v1/${parent}/`)),
     ).toBe(true)
   })
 
@@ -224,7 +224,7 @@ describe('GCP custom domain reconciliation', () => {
     await step()
     expect(resources.size).toBe(1)
     expect(
-      request.mock.calls.filter(([call]) => call.url.includes('cloudresourcemanager.googleapis.com')),
+      request.mock.calls.filter(([call]) => new URL(call.url).hostname === 'cloudresourcemanager.googleapis.com'),
     ).toHaveLength(2)
   })
 
