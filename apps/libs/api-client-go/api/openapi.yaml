@@ -6029,7 +6029,8 @@ components:
         filestore:
           allOf:
           - $ref: "#/components/schemas/BoxVolumeFilestoreRef"
-          description: The Filestore instance reference; absent for bucket-backed volumes
+          description: The Filestore instance reference; absent for bucket-backed
+            volumes
         subpath:
           description: "Optional subpath within the volume to mount. When specified,\
             \ only this S3 prefix will be accessible. When omitted, the entire volume\
@@ -7059,9 +7060,15 @@ components:
     CreateVolume:
       example:
         name: my-data
+        instance: ml-scratch
       properties:
         name:
           example: my-data
+          type: string
+        instance:
+          description: The Filestore instance the volume stores its data on; filestore
+            volumes only
+          example: ml-scratch
           type: string
       type: object
     JobStatus:

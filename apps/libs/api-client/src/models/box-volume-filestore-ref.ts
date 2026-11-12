@@ -20,3 +20,4 @@ export interface BoxVolumeFilestoreRef {
      */
     'instance': string;
 }
+
