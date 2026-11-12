@@ -112,20 +112,20 @@ const RESPONSE_TIMEOUT_MS = 100_000
  * scheduler and the CLI probe, so they wake a sleeping Box the same way a visitor does.
  */
 export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRequest): Promise<Response> {
-  if (!env.box_id || !env.box_url || !env.live_deployment) {
+  if (!env.active_box_id || !env.box_url || !env.live_deployment) {
     return notDeployedPage(ctx, app, env, req.headers)
   }
   let status = 'unknown'
   try {
-    status = await ctx.resources.boxStatus(env.box_id)
+    status = await ctx.resources.boxStatus(env.active_box_id)
   } catch (err) {
-    console.error(`[proxy] box status ${env.box_id}: ${(err as Error).message}`)
+    console.error(`[proxy] box status ${env.active_box_id}: ${(err as Error).message}`)
   }
   // Neither waits for anything: say so, instead of a "Starting…" page that never ends.
   if (status === 'missing') return notRunningPage(ctx, app, env, 'box_missing', req.headers)
   if (status === 'stopped') {
-    if (ctx.resources.wakeFailure(env.box_id)) return notRunningPage(ctx, app, env, 'wake_failed', req.headers)
-    void (await ctx.resources.wake(env.box_id))
+    if (ctx.resources.wakeFailure(env.active_box_id)) return notRunningPage(ctx, app, env, 'wake_failed', req.headers)
+    void (await ctx.resources.wake(env.active_box_id))
     return startingPage(app, env, req.headers)
   }
 
@@ -170,7 +170,8 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
     if (deadline.signal.aborted) {
       return timeoutPage(ctx, app, env, Math.round(timeoutMs / 1000), req.headers)
     }
-    if (ctx.resources.recentlyWoken(env.box_id) || status !== 'running') return startingPage(app, env, req.headers)
+    if (ctx.resources.recentlyWoken(env.active_box_id) || status !== 'running')
+      return startingPage(app, env, req.headers)
     return badGatewayPage(ctx, app, env, (err as Error).message, req.headers)
   } finally {
     clearTimeout(timer)
@@ -183,10 +184,10 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
     // while the exposed service is (re)starting after a wake or restart.
     const starting =
       /BOX_STARTING|BOX_STOPPED|service_unavailable/.test(text) ||
-      ctx.resources.recentlyWoken(env.box_id) ||
+      ctx.resources.recentlyWoken(env.active_box_id) ||
       status !== 'running'
     if (starting) {
-      if (/BOX_STOPPED/.test(text)) void (await ctx.resources.wake(env.box_id))
+      if (/BOX_STOPPED/.test(text)) void (await ctx.resources.wake(env.active_box_id))
       await res.body?.cancel().catch(() => undefined)
       return startingPage(app, env, req.headers)
     }

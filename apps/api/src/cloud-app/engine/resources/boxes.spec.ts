@@ -5,7 +5,7 @@ import type { BoxWaker } from './wake'
 
 test('a lost worker lease stops supervisor polling after waking the Box', async () => {
   const lease = new AbortController()
-  const env = { id: 'env1', box_id: 'box1', box_url: 'https://box.example.test' } as EnvRow
+  const env = { id: 'env1', active_box_id: 'box1', box_url: 'https://box.example.test' } as EnvRow
   const health = jest.fn()
   const ctx = {
     store: { envById: async () => env },

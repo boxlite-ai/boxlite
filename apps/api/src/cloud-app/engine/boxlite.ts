@@ -31,7 +31,7 @@ export interface VolumeInfo {
 
 /** The slice of the BoxLite /v1 REST API the CP uses. Injected so tests run against a fake. */
 export interface BoxliteClient {
-  createBox(req: CreateBoxRequest): Promise<BoxInfo>
+  createBox(req: CreateBoxRequest, environmentId: string): Promise<BoxInfo>
   getBox(idOrName: string): Promise<BoxInfo | null>
   startBox(id: string): Promise<void>
   stopBox(id: string): Promise<void>

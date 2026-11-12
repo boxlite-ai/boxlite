@@ -3,15 +3,15 @@ import type { Ctx } from './ctx'
 import type { AppRow } from './db'
 
 it('destroys every App Box before deleting a volume shared between its environments', async () => {
-  const consumers = new Set(['box-main', 'box-staging'])
+  const consumers = new Set(['box-main', 'box-worker', 'box-staging'])
   const removeVolume = jest.fn(async () => {
     if (consumers.size) throw new Error('Volume is in use')
   })
   const ctx = {
     store: {
       envs: async () => [
-        { id: 'main', box_id: 'box-main' },
-        { id: 'staging', box_id: 'box-staging' },
+        { id: 'main', active_box_id: 'box-main' },
+        { id: 'staging', active_box_id: 'box-staging' },
       ],
       deploymentsWhere: async () => [],
       tx: async (work) => work(),
@@ -22,6 +22,7 @@ it('destroys every App Box before deleting a volume shared between its environme
         consumers.delete(id)
       },
     },
+    boxes: { list: async () => ['box-main', 'box-worker', 'box-staging'] },
     resources: { deleteVolumes: removeVolume },
     domains: { releaseEnvironment: async () => undefined },
     blobs: { deleteApp: async () => undefined },

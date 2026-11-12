@@ -1,8 +1,20 @@
 import { randomUUID } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, type QueryRunner } from 'typeorm'
 import { AddCloudAppPlatform1793780100000 } from '../../migrations/pre-deploy/1793780100000-add-cloud-app-platform-migration'
 import { EncryptionService } from '../../encryption/encryption.service'
 import { Store, type Deployment, now } from './db'
+import { AddAppBoxOwnership1794500000000 } from '../../migrations/pre-deploy/1794500000000-add-app-box-ownership-migration'
+import { DropAppBoxPointer1794500001000 } from '../../migrations/post-deploy/1794500001000-drop-app-box-pointer-migration'
+
+async function migrateBoxOwnership(runner: QueryRunner, schema: string) {
+  await runner.query(`CREATE TABLE ${schema}.box (id text PRIMARY KEY, "organizationId" uuid)`)
+  const scoped = {
+    query: (sql: string) =>
+      runner.query(sql.replaceAll('cloud_app.', `${schema}.`).replace(/\bbox\b/g, `${schema}.box`)),
+  } as QueryRunner
+  await new AddAppBoxOwnership1794500000000().up(scoped)
+  await new DropAppBoxPointer1794500001000().up(scoped)
+}
 
 const describeDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `cloud_app_${randomUUID().replaceAll('-', '')}`
@@ -39,6 +51,7 @@ describeDatabase('Cloud App PostgreSQL repository', () => {
               .replaceAll('public.organization', `${schema}.organization`),
           ),
       } as never)
+      await migrateBoxOwnership(runner, schema)
     } finally {
       await runner.release()
     }
@@ -232,6 +245,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
               .replaceAll('public.organization', `${routeSchema}.organization`),
           ),
       } as never)
+      await migrateBoxOwnership(runner, routeSchema)
     } finally {
       await runner.release()
     }
@@ -298,6 +312,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
             throw new Error('unused')
           },
         },
+        boxes: { list: async () => [] },
         volumes: {
           list: async () => [],
           create: async () => {

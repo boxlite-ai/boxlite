@@ -4,7 +4,17 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Unique, UpdateDateColumn } from 'typeorm'
+import {
+  Check,
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  PrimaryColumn,
+  OneToOne,
+  Unique,
+  UpdateDateColumn,
+} from 'typeorm'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
@@ -25,6 +35,11 @@ import {
 @Index('box_runnerid_idx', ['runnerId'])
 @Index('box_runner_state_idx', ['runnerId', 'state'])
 @Index('box_organizationid_idx', ['organizationId'])
+@Index('box_app_environment_idx', ['organizationId', 'appId', 'environmentId'])
+@Check(
+  'box_app_owner',
+  '(app_id IS NULL AND environment_id IS NULL) OR (app_id IS NOT NULL AND environment_id IS NOT NULL)',
+)
 @Index('box_region_idx', ['region'])
 @Index('box_resources_idx', ['cpu', 'mem', 'disk', 'gpu'])
 @Index('box_runner_state_desired_idx', ['runnerId', 'state', 'desiredState'], {
@@ -48,6 +63,12 @@ export class Box {
     type: 'uuid',
   })
   organizationId: string
+
+  @Column({ name: 'app_id', type: 'text', nullable: true })
+  appId: string | null = null
+
+  @Column({ name: 'environment_id', type: 'text', nullable: true })
+  environmentId: string | null = null
 
   @Column()
   name: string

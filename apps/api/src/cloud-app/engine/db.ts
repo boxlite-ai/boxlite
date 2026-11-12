@@ -79,7 +79,8 @@ export interface EnvRow {
   with_data: number
   neon_branch_id: string | null
   db_url: string | null
-  box_id: string | null
+  /** Current deployment/ingress target; ownership is recorded on Box rows. */
+  active_box_id: string | null
   box_url: string | null
   box_image: string | null
   box_size: string | null

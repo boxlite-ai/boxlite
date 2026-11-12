@@ -102,7 +102,7 @@ export async function envSummary(
     live_deployment: live
       ? { number: live.number, kind: live.kind, release: live.release, live_at: live.live_at }
       : null,
-    box: env.box_id ? { id: env.box_id, image: env.box_image, size: env.box_size } : null,
+    box: env.active_box_id ? { id: env.active_box_id, image: env.box_image, size: env.box_size } : null,
     database: env.neon_branch_id ? { branch: env.neon_branch_id } : null,
     from: env.from_env,
     created_at: env.created_at,

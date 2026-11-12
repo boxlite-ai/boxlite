@@ -69,7 +69,7 @@ export async function runDeploy(job: Job, sv: SupervisorLink): Promise<number> {
   await job.step(
     'build',
     async () => {
-      await store.updateDeployment(env.id, n, { box_id: env.box_id })
+      await store.updateDeployment(env.id, n, { box_id: env.active_box_id })
       await store.updateEnv(env.id, { requested_deployment: n })
       job.setRelease(n)
       await sv.forget(env.id, n)

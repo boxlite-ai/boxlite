@@ -23,6 +23,7 @@ DO $$ BEGIN
   IF EXISTS (
     SELECT 1 FROM volume v JOIN box b ON b.volumes @> jsonb_build_array(jsonb_build_object('volumeId', v.id::text))
     WHERE v.target_type = 'app' AND b."desiredState" <> 'destroyed'
+      AND (to_jsonb(b)->>'app_id') IS DISTINCT FROM v.app_id
       AND NOT EXISTS (SELECT 1 FROM cloud_app.envs e WHERE e.app_id = v.app_id AND e.box_id = b.id)
   ) THEN
     RAISE EXCEPTION 'Remove Box mounts outside the owning App before migrating volumes';

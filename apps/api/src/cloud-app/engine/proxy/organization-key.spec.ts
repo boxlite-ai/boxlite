@@ -37,7 +37,7 @@ function gateway() {
         id: `env_${app.name}`,
         app_id: app.id,
         name: 'main',
-        box_id: `box_${app.name}`,
+        active_box_id: `box_${app.name}`,
         box_url: 'https://box.example.test',
         live_deployment: 1,
         forward_secret: 'test-forwarding-secret',

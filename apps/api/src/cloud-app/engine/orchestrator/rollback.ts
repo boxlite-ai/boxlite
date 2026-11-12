@@ -50,7 +50,7 @@ export async function runRollback(job: Job, sv: SupervisorLink): Promise<number>
     base_version: version - 1,
     assigned: {
       ...targetSpec.assigned,
-      box_id: env.box_id,
+      box_id: env.active_box_id,
       box_url: env.box_url,
       app_url: await resources.appUrl(job.app.name, env.name),
     },
@@ -103,13 +103,14 @@ export async function rollbackProblem(ctx: Pick<Ctx, 'store'>, env: EnvRow, to: 
   if (!['live', 'superseded', 'rolled_back'].includes(target.status))
     return `deployment #${to} never went live (${target.status})`
   if (!target.release) return `deployment #${to} has no release (it ran before the first deploy)`
-  if (!env.box_id || target.box_id !== env.box_id) return `deployment #${to} ran on a Box that has since been replaced`
+  if (!env.active_box_id || target.box_id !== env.active_box_id)
+    return `deployment #${to} ran on a Box that has since been replaced`
   const live = env.live_deployment ? await store.deployment(env.id, env.live_deployment) : undefined
   const recent = (
     await store.deploymentsWhere(
       "env_id = ? AND kind = 'deploy' AND built = 1 AND box_id = ? ORDER BY number DESC LIMIT 3",
       env.id,
-      env.box_id,
+      env.active_box_id,
     )
   ).map((d) => d.number)
   if (target.release !== live?.release && !recent.includes(target.release))

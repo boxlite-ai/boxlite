@@ -16,6 +16,53 @@ Cloud Apps use the existing cloud API, organization identity, PostgreSQL, resour
 
 The management namespace is `/api/v1/:organizationId/apps`. Console projections use explicit view routes in that namespace; CLI deployment routes retain their manifest and error contracts. Internal Supervisor callbacks are separately authenticated with environment-scoped credentials. HTTP and WebSocket entry points apply equivalent scope checks.
 
+### Box ownership
+
+The platform `box` row owns the App relationship. Nullable `app_id` and
+`environment_id` identify its App and provisioning environment; both are null for
+a standalone Box. A nonunique organization/App/environment index supports several
+Boxes for the same environment. Creating an App Box validates the environment in
+the organization and persists ownership with the Box, before waiting for startup.
+Labels and process environment variables cannot assign ownership.
+
+```mermaid
+erDiagram
+    ORGANIZATION ||--o{ APP : owns
+    ORGANIZATION ||--o{ BOX : owns
+    APP o|--o{ BOX : owns
+    APP ||--|{ ENVIRONMENT : contains
+    ENVIRONMENT o|--o{ BOX : provisions
+```
+
+For example, one App can own `web-main`, `worker-main`, and `web-staging`, while
+an organization's `scratch` Box has no App. Environment `active_box_id` selects
+the Box used by the existing deployment and ingress flow; it does not enumerate
+ownership. Deployment `box_id` remains immutable execution history. Runtime
+replacement changes the active selection without detaching the previous Box.
+
+App deletion stops every owned Box. Purge deletes every owned Box before volumes;
+environment deletion and pause apply to all Boxes of that environment. Queries
+include organization, App and optional environment, and exclude destroyed Boxes.
+
+| Model | Decision | Reason |
+| --- | --- | --- |
+| Nullable references on `box` | Adopt | Same child-owned model as App volumes; supports standalone Boxes and many Boxes per App. |
+| Environment's single Box pointer | Use for active routing only | Selecting a runtime and enumerating owned resources are separate operations. |
+| App/Box join table | Reject | A Box has at most one owning App, so a many-to-many table adds no supported relationship. |
+
+The nullable-column and check-constraint behavior follows
+[PostgreSQL constraints](https://www.postgresql.org/docs/17/ddl-constraints.html#DDL-CONSTRAINTS-CHECK-CONSTRAINTS)
+and the project's pinned [TypeORM 0.3.31 column mapping](https://github.com/typeorm/typeorm/blob/0.3.31/src/decorator/columns/Column.ts).
+Ownership uses application validation, matching App volumes: destroyed Box rows
+remain as history after an App is purged, so cascading App foreign keys would
+remove that history.
+
+The pre-deploy migration backfills current and deployment-recorded Boxes and
+synchronizes old and new active-runtime columns during rollout. The post-deploy
+migration removes `envs.box_id` and the temporary synchronization trigger. Checks
+cover multiple Boxes in one environment, independent Boxes, organization scope,
+ownership persistence, active selection, migration rollback, and complete cleanup.
+
 ### Organization API keys
 
 Apps use the existing organization API keys without adding columns or indexes to `api_key`.
@@ -73,6 +120,9 @@ authorizing mounts. Request labels and environment variables supplied to the
 public Box API grant no App ownership. App volume provisioning, listing and
 cleanup query the platform volume owner directly. Runtime code uses this owner
 instead of an environment-to-volume mapping table or name-based adoption.
+
+Migration consumer checks recognize `box.app_id` when Box ownership is present;
+the older runtime pointer remains usable until that ownership migration runs.
 
 The pre-deploy migration adds the ownership columns, backfills existing mappings,
 and installs a temporary trigger for mappings written by old API instances during

@@ -29,7 +29,7 @@ export async function runApply(job: Job, sv: SupervisorLink): Promise<number | n
 
   const env = (await store.envById(job.envId))!
   const live = env.live_deployment ? await store.deployment(env.id, env.live_deployment) : undefined
-  if (!env.box_id || !live?.release) {
+  if (!env.active_box_id || !live?.release) {
     await job.log('no running release yet; the next deploy starts services with this configuration')
     return null
   }

@@ -508,6 +508,8 @@ or `archived`.
 | ------ | ---- | ----- |
 | `id` | `character varying(12)` | primary key |
 | `organizationId` | `uuid` | |
+| `app_id` | `text` | nullable owning Cloud App; null for standalone Boxes |
+| `environment_id` | `text` | nullable provisioning environment; paired with `app_id` |
 | `name` | `character varying` | unique per organization |
 | `region` | `character varying` | holds `region.id` |
 | `image` | `character varying` | nullable |
@@ -548,6 +550,22 @@ and `network.inbound {mode, allow_net}`, the same `NetworkInfo` schema the `/v1`
 box read returns, and nothing else.
 
 **Unique:** `(organizationId, name)`.
+
+**App ownership:** `box_app_owner` requires `app_id` and `environment_id` to be
+both null or both populated. `BoxService.create` validates the App environment in
+the Box's organization and records both fields before persistence. Ordinary Box
+creation leaves both null; labels and process variables do not assign an owner.
+The nonunique `box_app_environment_idx` covers `(organizationId, app_id,
+environment_id)`, allowing several Boxes per App and per environment.
+
+`cloud_app.envs.active_box_id` selects the current deployment and ingress runtime.
+It is not the ownership relation. App/environment lifecycle operations enumerate
+`box.app_id` and `box.environment_id`, including owned Boxes absent from the active
+selection. `cloud_app.deployments.box_id` and `spec.assigned.box_id` retain their
+execution-history and Supervisor protocol meanings. The post-deploy migration
+removes the former `cloud_app.envs.box_id` column. App references are validated by
+the application, without cascading foreign keys, so destroyed Box history remains
+after the owning App or environment is purged.
 
 **Partial indexes:** `(runnerId, state, desiredState)` where `pending = false`
 · `(id)` where `pending = true` · `(id)` where

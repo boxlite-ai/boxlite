@@ -132,7 +132,7 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     const exposed = spec?.services.find((s) => s.port !== undefined || s.static !== undefined)
     const path = c.req.query('path') || (exposed?.command ? (exposed.health ?? '/') : '/')
     const url = `${(await ctx.resources.appUrl(a.name, env.name)).replace(/\/+$/, '')}${path.startsWith('/') ? path : `/${path}`}`
-    if (!env.live_deployment || !env.box_id)
+    if (!env.live_deployment || !env.active_box_id)
       return c.json({
         url,
         path,
@@ -304,7 +304,7 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     const env = await envOf(ctx, c)
     const volumes = (await ctx.resources.currentSpec(env))?.volumes ?? []
     const target = volumePath(volumes, c.req.param('name') ?? '', c.req.query('path'))
-    if (!env.box_id || !env.box_url || !env.live_deployment)
+    if (!env.active_box_id || !env.box_url || !env.live_deployment)
       throw fail(
         'not_found',
         `nothing is deployed in ${env.name} yet, so its volumes are not mounted`,

@@ -186,7 +186,7 @@ export class Orchestrator implements JobHost {
         finished_at: now(),
         live_at: now(),
         release,
-        box_id: env.box_id,
+        box_id: env.active_box_id,
       })
       await store.updateEnv(env.id, { live_deployment: job.dep.number, requested_deployment: job.dep.number })
     })

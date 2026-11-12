@@ -39,11 +39,10 @@ export async function deleteApp(
   await ctx.store.tx(async () => {
     await ctx.store.run('UPDATE apps SET deleted_at = ?, purge_after = ? WHERE id = ?', at, purgeAfter, app.id)
   })
-  for (const env of await ctx.store.envs(app.id)) {
-    if (env.box_id)
-      await ctx.resources
-        .sleep(env.box_id)
-        .catch((err) => console.error(`[lifecycle] stop ${env.box_id}: ${(err as Error).message}`))
+  for (const boxId of await ctx.boxes.list(app)) {
+    await ctx.resources
+      .sleep(boxId)
+      .catch((err) => console.error(`[lifecycle] stop ${boxId}: ${(err as Error).message}`))
   }
   await ctx.store.recordActivity(app.id, null, actor, 'app.delete', { purge_after: purgeAfter })
   return { deleted_at: at, purge_after: purgeAfter }
@@ -63,9 +62,7 @@ export async function purgeApp(ctx: Ctx, app: AppRow): Promise<void> {
   await assertIdle(ctx, app)
   const { store } = ctx
   const envs = await store.envs(app.id)
-  for (const env of envs) {
-    if (env.box_id) await ctx.boxlite.deleteBox(env.box_id)
-  }
+  for (const boxId of await ctx.boxes.list(app)) await ctx.boxlite.deleteBox(boxId)
   for (const env of envs) {
     await ctx.resources.deleteVolumes(app, env)
     await ctx.domains.releaseEnvironment(app, env)
