@@ -201,9 +201,8 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 }
 
 // filestoreVolumeMount prepares one filestore volume reference for binding:
-// resolve the registry entry, then — under the instance's mutex — ensure the
-// NFS mount exists (once per call), create the volume's data directory and
-// write the referencing record. The data directory is named by the volume's
+// under the instance's mutex it ensures the NFS mount exists (once per call),
+// creates the volume's data directory and writes the referencing record. The data directory is named by the volume's
 // id, not the box's: boxes sharing a volume share the directory (the
 // bucket-alignment contract), and a destroyed box's data stays reachable by
 // mounting the volume into a new box. `ensured` dedups
@@ -228,22 +227,19 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 			vol.VolumeId,
 		)
 	}
-	inst, err := c.lookupFilestoreInstance(vol.Filestore.Instance)
-	if err != nil {
-		return volumeMount{}, err
-	}
+	ref := vol.Filestore
 
-	rootPath := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+inst.Name)
+	rootPath := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+ref.Instance)
 
-	mutex := c.volumeMutexFor(filestoreMountPrefix + inst.Name)
+	mutex := c.volumeMutexFor(filestoreMountPrefix + ref.Instance)
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	if !ensured[inst.Name] {
-		if err := c.ensureFilestoreMounted(ctx, inst, rootPath); err != nil {
+	if !ensured[ref.Instance] {
+		if err := c.ensureFilestoreMounted(ctx, ref, rootPath); err != nil {
 			return volumeMount{}, err
 		}
-		ensured[inst.Name] = true
+		ensured[ref.Instance] = true
 	}
 
 	dataDir := filestoreDataDir(rootPath, vol.VolumeId)
@@ -269,7 +265,7 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 		rootPath:          rootPath,
 		backend:           volumeBackendFilestore,
 		dataDir:           dataDir,
-		filestoreInstance: inst.Name,
+		filestoreInstance: ref.Instance,
 	}
 
 	// The referencing record is written inside the same critical section —
@@ -294,18 +290,6 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 // data stays reachable through the volume id.
 func filestoreDataDir(rootPath string, volumeId string) string {
 	return filepath.Join(rootPath, volumeId)
-}
-
-// lookupFilestoreInstance resolves a logical name against the registry. A
-// create carrying an unknown name fails here (same contract as a failed
-// mount: create fails); a start only logs, per the object-storage precedent.
-func (c *Client) lookupFilestoreInstance(name string) (config.FilestoreInstance, error) {
-	for _, inst := range c.filestoreInstances {
-		if inst.Name == name {
-			return inst, nil
-		}
-	}
-	return config.FilestoreInstance{}, fmt.Errorf("unknown Filestore instance %q: not in the runner's FILESTORE_INSTANCES registry", name)
 }
 
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
@@ -389,15 +373,15 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 // caller holds the instance mutex so that probing, mounting, preparing the
 // data directory and writing the referencing record form ONE critical section
 // against reclaim (design §4.5).
-func (c *Client) ensureFilestoreMounted(ctx context.Context, inst config.FilestoreInstance, mountRoot string) error {
+func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreRef, mountRoot string) error {
 	mounted, err := c.probeMounted(ctx, mountRoot)
 	if err != nil {
 		// Same reasoning as the FUSE twin: guessing here is what makes a stale
 		// mount look absent, and mounting over a live NFS mount wedges both.
-		return fmt.Errorf("cannot determine whether filestore %s is already mounted: %w", inst.Name, err)
+		return fmt.Errorf("cannot determine whether filestore %s is already mounted: %w", ref.Instance, err)
 	}
 	if mounted {
-		c.logger.DebugContext(ctx, "filestore already mounted", "instance", inst.Name, "mountRoot", mountRoot)
+		c.logger.DebugContext(ctx, "filestore already mounted", "instance", ref.Instance, "mountRoot", mountRoot)
 		return nil
 	}
 
@@ -408,15 +392,15 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, inst config.Filesto
 		return fmt.Errorf("failed to create filestore mount root %s: %s", mountRoot, err)
 	}
 
-	c.logger.InfoContext(ctx, "mounting filestore instance", "instance", inst.Name, "server", inst.Server, "export", inst.Export, "mountRoot", mountRoot)
+	c.logger.InfoContext(ctx, "mounting filestore instance", "instance", ref.Instance, "server", ref.Server, "export", ref.Export, "mountRoot", mountRoot)
 
 	mountCtx, cancelMount := context.WithTimeout(ctx, volumeMountTimeout)
 	defer cancelMount()
 
-	cmd := c.getNfsMountCmd(mountCtx, inst, mountRoot)
+	cmd := c.getNfsMountCmd(mountCtx, ref, mountRoot)
 	if err = c.runMount(cmd); err != nil {
 		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
-		return fmt.Errorf("failed to mount filestore %s to %s: %s", inst.Name, mountRoot, err)
+		return fmt.Errorf("failed to mount filestore %s to %s: %s", ref.Instance, mountRoot, err)
 	}
 
 	if err = c.waitForMountReady(ctx, mountRoot); err != nil {
@@ -424,21 +408,21 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, inst config.Filesto
 		return fmt.Errorf("mount %s not ready after mounting: %s", mountRoot, err)
 	}
 
-	c.logger.InfoContext(ctx, "mounted filestore instance", "instance", inst.Name, "mountRoot", mountRoot)
+	c.logger.InfoContext(ctx, "mounted filestore instance", "instance", ref.Instance, "mountRoot", mountRoot)
 	return nil
 }
 
 // nfsMountArgs builds the argv for one mount(8) invocation: NFSv4.1, hard,
-// kernel defaults for timeo/retrans, and any registry mountOptions joined
+// kernel defaults for timeo/retrans, and the dispatch's mountOptions joined
 // into the same -o list. A pure function so a test can pin the argv — the
 // protocol is version-pinned by design (NFSv4.1 only) and these flags are the
 // contract with the operator's provisioning.
-func nfsMountArgs(inst config.FilestoreInstance, path string) []string {
+func nfsMountArgs(ref *dto.FilestoreRef, path string) []string {
 	opts := "vers=4.1,hard"
-	if len(inst.MountOptions) > 0 {
-		opts += "," + strings.Join(inst.MountOptions, ",")
+	if len(ref.MountOptions) > 0 {
+		opts += "," + strings.Join(ref.MountOptions, ",")
 	}
-	return []string{"-t", "nfs", "-o", opts, inst.Server + ":" + inst.Export, path}
+	return []string{"-t", "nfs", "-o", opts, ref.Server + ":" + ref.Export, path}
 }
 
 // getNfsMountCmd wraps nfsMountArgs in the command to run. No systemd-run
@@ -446,8 +430,8 @@ func nfsMountArgs(inst config.FilestoreInstance, path string) []string {
 // so nothing dies with the runner service's cgroup and the plain
 // context-bound exec is the whole story. Output goes to the same log writers
 // the FUSE mounts use, so a failing mount shows up in the runner's logs.
-func (c *Client) getNfsMountCmd(ctx context.Context, inst config.FilestoreInstance, path string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "mount", nfsMountArgs(inst, path)...)
+func (c *Client) getNfsMountCmd(ctx context.Context, ref *dto.FilestoreRef, path string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "mount", nfsMountArgs(ref, path)...)
 	cmd.Env = os.Environ()
 	// The deadline kills a wedged mount; this bounds the wait when the kill
 	// itself is delayed by the kernel (see volumeMountWaitDelay).

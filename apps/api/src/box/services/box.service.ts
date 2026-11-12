@@ -353,9 +353,10 @@ export class BoxService {
         // a filestore data directory `boxlite-filestore-<instance>/<id>`) reads
         // the stored value as a globally canonical id - see
         // VolumeService.validateVolumes. The filestore reference rides along
-        // for the runner's mount dispatch; the instance is deliberately not
-        // checked here — the runner's registry is the source of truth, and the
-        // mount fails loudly there on an unknown name.
+        // for the runner's mount dispatch with the address the API resolves
+        // from its FILESTORE_INSTANCES configuration; the runner configures
+        // no instances of its own. A name that left the configuration between
+        // the volume's create and this dispatch fails loudly here.
         createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
           const resolved = volumes.get(volume.volumeId)
           if (!resolved) {
@@ -365,10 +366,20 @@ export class BoxService {
             // the tenant-controlled passthrough the resolution exists to stop.
             throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
           }
+          const instance = resolved.instance
+            ? this.configService
+                .getOrThrow('volume.filestoreInstances')
+                .find((inst) => inst.name === resolved.instance)
+            : undefined
+          if (resolved.instance && !instance) {
+            throw new BadRequestError(`unknown Filestore instance '${resolved.instance}'`)
+          }
           return {
             ...volume,
             volumeId: resolved.id,
-            ...(resolved.instance ? { filestore: { instance: resolved.instance } } : {}),
+            ...(instance
+              ? { filestore: { instance: instance.name, server: instance.server, export: instance.export, mountOptions: instance.mountOptions } }
+              : {}),
           }
         })
       } else if (image && !needsFreshBox) {

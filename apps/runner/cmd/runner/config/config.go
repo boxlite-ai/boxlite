@@ -5,10 +5,8 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -67,85 +65,6 @@ type Config struct {
 	RegistryProxyUsername              string        `envconfig:"REGISTRY_PROXY_USERNAME"`
 	RegistryProxyPassword              string        `envconfig:"REGISTRY_PROXY_PASSWORD"`
 	MigrateWorkDir                     string        `envconfig:"MIGRATE_WORK_DIR"`
-	FilestoreInstances                 string        `envconfig:"FILESTORE_INSTANCES"`
-
-	// Parsed from FilestoreInstances during GetConfig; empty when the variable
-	// is unset. Kept off envconfig: envconfig cannot populate a struct slice,
-	// which is why the raw JSON arrives as a plain string in the first place.
-	filestoreInstances []FilestoreInstance
-}
-
-// FilestoreInstance is one managed GCP Filestore NFS instance the runner may
-// mount on demand. The runner never creates or deletes instances (the operator
-// provisions them); this is only the declarative list of what it may consume.
-// A box's volume reference carries the Name only — the address is resolved
-// here at mount time, so an instance that is recreated under the same name
-// needs no change to historical boxes.
-type FilestoreInstance struct {
-	Name         string   `json:"name"`
-	Server       string   `json:"server"`
-	Export       string   `json:"export"`
-	MountOptions []string `json:"mountOptions,omitempty"`
-}
-
-// filestoreInstanceNamePattern bounds what a Filestore instance logical name
-// may look like. The name is joined into host mount paths
-// (/mnt/boxlite-filestore-<name>), so this rejects anything that could carry a
-// path separator or relative component into one. The API enforces the same
-// pattern on the box volume reference; the two must stay in agreement.
-const filestoreInstanceNamePattern = `^[a-z0-9][a-z0-9-]{0,62}$`
-
-// ParseFilestoreInstances decodes and validates the FILESTORE_INSTANCES JSON
-// array. An unset or empty value means "this runner consumes no Filestore
-// instances" and is not an error — a runner that never receives a filestore
-// volume reference never consults the registry.
-//
-// Every failure below is a deployment mistake that would otherwise surface as
-// a mystery at first box create: malformed JSON, a duplicate name (the mount
-// point is keyed by name, so duplicates would alias two instances onto one
-// path), or an entry that cannot produce a usable mount. All of them are
-// rejected here so the runner refuses to start rather than half-serve.
-func ParseFilestoreInstances(raw string) ([]FilestoreInstance, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-
-	var instances []FilestoreInstance
-	if err := json.Unmarshal([]byte(raw), &instances); err != nil {
-		return nil, fmt.Errorf("FILESTORE_INSTANCES is not a valid JSON array of instances: %w", err)
-	}
-
-	nameRe := regexp.MustCompile(filestoreInstanceNamePattern)
-	seen := make(map[string]bool, len(instances))
-	for _, inst := range instances {
-		if !nameRe.MatchString(inst.Name) {
-			return nil, fmt.Errorf("FILESTORE_INSTANCES entry has an invalid name %q (must match %s)", inst.Name, filestoreInstanceNamePattern)
-		}
-		if seen[inst.Name] {
-			return nil, fmt.Errorf("FILESTORE_INSTANCES defines instance %q more than once", inst.Name)
-		}
-		seen[inst.Name] = true
-		if inst.Server == "" {
-			return nil, fmt.Errorf("FILESTORE_INSTANCES entry %q has no server", inst.Name)
-		}
-		if inst.Export == "" {
-			return nil, fmt.Errorf("FILESTORE_INSTANCES entry %q has no export", inst.Name)
-		}
-		// The protocol version and retry posture are design-pinned (NFSv4.1,
-		// hard): mount(8) lets a later duplicate option override an earlier
-		// one, so a registry entry carrying them would silently override the
-		// pinned argv. Everything else may be appended via mountOptions.
-		for _, opt := range inst.MountOptions {
-			lower := strings.ToLower(strings.TrimSpace(opt))
-			for _, pinned := range []string{"vers", "nfsvers", "proto", "soft", "hard"} {
-				if strings.HasPrefix(lower, pinned) {
-					return nil, fmt.Errorf("FILESTORE_INSTANCES entry %q sets pinned mount option %q (protocol is NFSv4.1, retry posture is hard; mountOptions may not override them)", inst.Name, opt)
-				}
-			}
-		}
-	}
-
-	return instances, nil
 }
 
 var DEFAULT_API_PORT int = 8080
@@ -189,12 +108,6 @@ func GetConfig() (*Config, error) {
 	}
 
 	defaultRegistryProxyLogin(config)
-
-	filestoreInstances, err := ParseFilestoreInstances(config.FilestoreInstances)
-	if err != nil {
-		return nil, err
-	}
-	config.filestoreInstances = filestoreInstances
 
 	if config.ApiPort == 0 {
 		config.ApiPort = DEFAULT_API_PORT
@@ -251,12 +164,4 @@ func (c *Config) GetOtelHeaders() map[string]string {
 
 func GetEnvironment() string {
 	return config.Environment
-}
-
-// GetFilestoreInstances returns the registry parsed at startup. The slice is
-// nil when FILESTORE_INSTANCES is unset — a runner in that state fails any box
-// that references a Filestore instance, which is the honest outcome for a
-// deployment that never opted in.
-func (c *Config) GetFilestoreInstances() []FilestoreInstance {
-	return c.filestoreInstances
 }

@@ -395,6 +395,12 @@ describe('BoxService inbound defaults', () => {
       imageResolverService: {
         resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
       },
+      configService: {
+        getOrThrow: jest.fn((key: string) => {
+          expect(key).toBe('volume.filestoreInstances')
+          return [{ name: 'ml-scratch', server: '10.0.0.7', export: '/vol1' }]
+        }),
+      },
       ...overrides,
     })
     return { service, boxRepository, runnerService, warmPoolService }
@@ -1271,6 +1277,12 @@ describe('BoxService volume reference resolution', () => {
       imageResolverService: {
         resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
       },
+      configService: {
+        getOrThrow: jest.fn((key: string) => {
+          expect(key).toBe('volume.filestoreInstances')
+          return [{ name: 'ml-scratch', server: '10.0.0.7', export: '/vol1' }]
+        }),
+      },
       ...overrides,
     })
     return { service, boxRepository }
@@ -1297,9 +1309,38 @@ describe('BoxService volume reference resolution', () => {
 
     expect(boxRepository.insert.mock.calls[0][0]).toEqual(
       expect.objectContaining({
-        volumes: [{ volumeId: 'vol-uuid-1', mountPath: '/data', filestore: { instance: 'ml-scratch' } }],
+        volumes: [{
+          volumeId: 'vol-uuid-1',
+          mountPath: '/data',
+          filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+        }],
       }),
     )
+  })
+
+  it('fails the dispatch loudly when the instance left the configuration after the volume was created', async () => {
+    const { service } = makeService({
+      volumeService: {
+        validateVolumes: jest.fn().mockResolvedValue(
+          new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]]),
+        ),
+      },
+      configService: {
+        getOrThrow: jest.fn().mockReturnValue([{ name: 'other-instance', server: '9.9.9.9', export: '/vol1' }]),
+      },
+    })
+
+    await expect(
+      service.create(
+        {
+          name: 'nfs-box',
+          image: 'quay.io/acme/app:v1',
+          volumes: [{ volumeId: 'my-data', mountPath: '/data' }],
+        } as any,
+        { id: 'org-1' } as any,
+        Context.user(),
+      ),
+    ).rejects.toThrow("unknown Filestore instance 'ml-scratch'")
   })
 
   it('keeps a bucket-backed volume entry free of any filestore key', async ()  => {

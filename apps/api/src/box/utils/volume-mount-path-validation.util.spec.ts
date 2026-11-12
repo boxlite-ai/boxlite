@@ -15,7 +15,7 @@ import { validateMountPaths } from './volume-mount-path-validation.util'
 describe('validateMountPaths', () => {
   it.each([
     ['a managed volume', { volumeId: 'volume-123', mountPath: '/data' }],
-    ['a filestore volume', { volumeId: 'volume-123', mountPath: '/nfs', filestore: { instance: 'ml-scratch' } }],
+    ['a filestore volume', { volumeId: 'volume-123', mountPath: '/nfs', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } }],
     ['a managed volume with a subpath', { volumeId: 'volume-123', mountPath: '/data', subpath: 'users/alice' }],
   ])('accepts an absolute mount path on %s', (_label, volume: BoxVolume) => {
     expect(() => validateMountPaths([volume])).not.toThrow()
@@ -30,7 +30,7 @@ describe('validateMountPaths', () => {
     ['a system file', '/etc/passwd', 'cannot mount to system directory'],
     ['a directory under a system path', '/etc/nginx/conf', 'cannot mount to system directory'],
   ])('rejects %s', (_label, mountPath: string, message) => {
-    const volume: BoxVolume = { volumeId: 'volume-123', mountPath, filestore: { instance: 'ml-scratch' } }
+    const volume: BoxVolume = { volumeId: 'volume-123', mountPath, filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } }
 
     expect(() => validateMountPaths([volume])).toThrow(message)
   })
@@ -39,8 +39,8 @@ describe('validateMountPaths', () => {
     expect(() =>
       validateMountPaths([
         { volumeId: 'volume-123', mountPath: '/data' },
-        { volumeId: 'volume-123', mountPath: 'relative', filestore: { instance: 'ml-scratch' } },
-        { volumeId: 'volume-123', mountPath: '/proc', filestore: { instance: 'ml-scratch' } },
+        { volumeId: 'volume-123', mountPath: 'relative', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
+        { volumeId: 'volume-123', mountPath: '/proc', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
       ]),
     ).toThrow('must be absolute')
     // toThrow checks the whole joined message; assert the second error is in
@@ -49,8 +49,8 @@ describe('validateMountPaths', () => {
     try {
       validateMountPaths([
         { volumeId: 'volume-123', mountPath: '/data' },
-        { volumeId: 'volume-123', mountPath: 'relative', filestore: { instance: 'ml-scratch' } },
-        { volumeId: 'volume-123', mountPath: '/proc', filestore: { instance: 'ml-scratch' } },
+        { volumeId: 'volume-123', mountPath: 'relative', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
+        { volumeId: 'volume-123', mountPath: '/proc', filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' } },
       ])
     } catch (error) {
       thrown = error

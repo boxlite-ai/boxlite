@@ -46,7 +46,7 @@ export class Volume {
   lastUsedAt?: Date
 
   // Filestore-only: the Filestore instance's logical name in the runner's
-  // FILESTORE_INSTANCES registry that holds the volume's data directory. Null
+  // FILESTORE_INSTANCES configuration that holds the volume's data directory. Null
   // for object-storage volumes, whose data lives in `boxlite-volume-<id>` on
   // the API's own object storage backend. The volume kind is derived: a row
   // with an instance is a filestore volume, without one an object-storage one.

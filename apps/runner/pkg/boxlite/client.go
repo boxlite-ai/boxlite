@@ -21,7 +21,6 @@ import (
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
-	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
@@ -54,10 +53,6 @@ type Client struct {
 	awsAccessKeyId      string
 	awsSecretAccessKey  string
 	volumeBackend       string
-	// filestoreInstances is the registry of Filestore instances this runner
-	// may mount, parsed from FILESTORE_INSTANCES at startup. A name outside
-	// it fails the create carrying the reference.
-	filestoreInstances []config.FilestoreInstance
 	// mountRunner and probeRunner are the test seams for the NFS mount path:
 	// the concurrency test counts mount commands without a real server, and
 	// the readiness probe reads a host binary (mountpoint) a dev machine may
@@ -81,22 +76,17 @@ type Client struct {
 
 // ClientConfig holds configuration for the BoxLite client.
 type ClientConfig struct {
-	Logger               *slog.Logger
-	HomeDir              string
-	KernelPath           string
-	ExperimentalFeatures string
-	InsecureRegistries   []string
-	RegistryProxy        RegistryProxy
-	AWSRegion            string
-	AWSEndpointUrl       string
-	AWSAccessKeyId       string
-	AWSSecretAccessKey   string
-	VolumeStorageBackend string
-	// FilestoreInstances carries the parsed FILESTORE_INSTANCES registry. It
-	// is a plain field (not parsed here) because the registry belongs to the
-	// runner's startup config, which owns its own validation and reject-on-
-	// failure semantics.
-	FilestoreInstances           []config.FilestoreInstance
+	Logger                       *slog.Logger
+	HomeDir                      string
+	KernelPath                   string
+	ExperimentalFeatures         string
+	InsecureRegistries           []string
+	RegistryProxy                RegistryProxy
+	AWSRegion                    string
+	AWSEndpointUrl               string
+	AWSAccessKeyId               string
+	AWSSecretAccessKey           string
+	VolumeStorageBackend         string
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
@@ -389,7 +379,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		awsAccessKeyId:      config.AWSAccessKeyId,
 		awsSecretAccessKey:  config.AWSSecretAccessKey,
 		volumeBackend:       config.VolumeStorageBackend,
-		filestoreInstances:  config.FilestoreInstances,
 		volumeMutexes:       make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,

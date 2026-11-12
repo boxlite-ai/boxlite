@@ -5,6 +5,7 @@
  */
 
 import { turnstileConfig } from './turnstile-config'
+import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
 
 /**
@@ -544,6 +545,9 @@ const configuration = {
     // Which object store backs volume buckets. Must match the runner's
     // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+    // The Filestore instances a mount dispatch may resolve to; invalid
+    // configuration refuses to start the API.
+    filestoreInstances: parseFilestoreInstances(),
   },
   gcs: {
     // Credentials come from Application Default Credentials, never a key file,

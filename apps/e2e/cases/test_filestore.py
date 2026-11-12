@@ -4,11 +4,11 @@ stop/start, cross-box sharing, and lifecycle rules.
 A Filestore volume is a Volume row like any other (volume.service): created
 through `POST /volumes` with an `instance` naming the NFS instance that holds
 its data directory, mounted by box volume references that carry only
-`managed_volume` — the same selector form as bucket-backed volumes. The runner
-resolves the instance address at mount time from its FILESTORE_INSTANCES
-registry (runner config.go), and an unknown name fails the box create loudly
-(lookupFilestoreInstance). The API deliberately does not pre-validate instance
-existence — the registry is the source of truth.
+`managed_volume` — the same selector form as bucket-backed volumes. The API
+resolves the instance address at dispatch time from its FILESTORE_INSTANCES
+configuration, validates the name at volume create, and hands the runner the
+resolved server and export inside the internal dispatch DTO — the public
+request and the persisted row carry only the logical name.
 
 Data semantics (volumes.go filestoreDataDir): a volume's data directory is
 named by the volume id, so boxes sharing a volume share data, and a destroyed
@@ -45,10 +45,10 @@ real though: attaching any volume requires the key to hold volume permissions
 skip, mirroring test_volumes.
 
 Deployment reality, so nobody mistakes a green local run for coverage: the
-FILESTORE_INSTANCES registry is provisioned only on stage/prod runner hosts
-today. A local single-machine e2e runner has no registry, so the module only
-ever exercises its skip path locally — the four cases need a stage runner to
-actually run.
+FILESTORE_INSTANCES configuration is provisioned on stage/prod API deployments
+today. A local single-machine stack has none, so the module only ever
+exercises its skip path locally — the four cases need an environment whose API
+config declares an instance and whose runner can reach it.
 """
 
 from __future__ import annotations
@@ -68,9 +68,9 @@ from e2e_auth import auth_context, request_json
 
 GUEST_PATH = "/filestore"
 
-# The runner's words for an instance name its registry does not know, pinned
-# verbatim so a softened or reworded refusal cannot pass silently
-# (apps/runner/pkg/boxlite/volumes.go:283).
+# The API's words for an instance name its configuration does not know,
+# pinned verbatim so a softened or reworded refusal cannot pass silently
+# (apps/api/src/box/services/volume.service.ts).
 UNKNOWN_INSTANCE_MARKER = "unknown Filestore instance"
 
 
@@ -79,18 +79,18 @@ def filestore_instance():
     """Module gate: prove the stage runner holds a Filestore instance BEFORE
     any test runs.
 
-    The registry is runner-side env config with no listing API, so the only
-    honest probe is one create attempt: the happy-path box create IS the
-    probe. A refusal carrying "unknown Filestore instance" means no registry —
-    the whole module skips with a warning naming what was tried. Anything else
+    The configuration is deployment-side env config with no listing API, so
+    the only honest probe is one create attempt: the volume create IS the
+    probe, and the box create proves the runner mount chain behind it. A refusal carrying "unknown Filestore instance" means no configured
+    instance — the whole module skips with a warning naming what was tried. Anything else
     that fails is a defect, not a precondition. On success the probe box is
     deleted immediately and the proven instance name is returned for the tests
     to reuse.
     """
     candidate = os.environ.get("FILESTORE_E2E_INSTANCE") or f"e2e-filestore-probe-{uuid.uuid4().hex[:8]}"
     # Whether the candidate was declared by the operator changes what an
-    # unknown-instance refusal means: a declared name that the registry does
-    # not hold is a misconfiguration to fix by hand (correct the env var, or
+    # unknown-instance refusal means: a declared name that the API
+    # configuration does not hold is a misconfiguration to fix by hand (correct the env var, or
     # provision/remove the instance), not a missing precondition to skip past.
     declared = bool(os.environ.get("FILESTORE_E2E_INSTANCE"))
     probe_volume_name = f"e2e-fs-probe-{uuid.uuid4().hex[:10]}"
@@ -103,6 +103,20 @@ def filestore_instance():
             auth_context().v1("volumes"),
             with_bounded_lifetime({"name": probe_volume_name, "instance": candidate}),
         )
+        body_str = json.dumps(body) if body else ""
+        if not (200 <= status < 300) and UNKNOWN_INSTANCE_MARKER in body_str:
+            if declared:
+                pytest.fail(
+                    f"FILESTORE_E2E_INSTANCE={candidate!r} is not in the API's "
+                    "FILESTORE_INSTANCES configuration — fix the injected name, or "
+                    "provision (or remove) the instance; a declared instance is not "
+                    "skipped past"
+                )
+            warnings.warn(f"GCP FileStore instance=[{candidate}] not existed. Skip test_filestore.py .")
+            pytest.skip(
+                f"GCP FileStore instance=[{candidate}] not existed — add it to the "
+                "API's FILESTORE_INSTANCES configuration to enable"
+            )
         assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
         assert body is not None and body.get("id"), f"volume create response has no id: {body}"
         assert body.get("state") == "ready", (
@@ -115,19 +129,6 @@ def filestore_instance():
         status, body = _create_box_with_volume(volume_id, name=probe_box_name)
         _skip_when_key_cannot_attach_volumes(status)
 
-        body_str = json.dumps(body) if body else ""
-        if not (200 <= status < 300) and UNKNOWN_INSTANCE_MARKER in body_str:
-            if declared:
-                pytest.fail(
-                    f"FILESTORE_E2E_INSTANCE={candidate!r} is not in the stage runner's "
-                    "FILESTORE_INSTANCES registry — fix the injected name, or provision "
-                    "(or remove) the instance; a declared instance is not skipped past"
-                )
-            warnings.warn(f"GCP FileStore instance=[{candidate}] not existed. Skip test_filestore.py .")
-            pytest.skip(
-                f"GCP FileStore instance=[{candidate}] not existed — provision the "
-                "instance and add it to the stage runner's FILESTORE_INSTANCES to enable"
-            )
         assert 200 <= status < 300, f"filestore probe box create failed: HTTP {status}: {body_str}"
     finally:
         _delete_box_by_name(probe_box_name)
@@ -208,46 +209,31 @@ async def _exec_ok(box, script: str) -> str:
 
 @pytest.mark.asyncio
 async def test_create_with_unregistered_instance_fails_loudly(filestore_instance):
-    """An instance name outside the runner's registry must fail the box create loudly.
+    """A volume create naming an instance outside the API configuration fails loudly.
 
-    The registry is runner-side env config an API caller cannot inspect, so
-    the only honest outcomes are a mounted instance or a refusal that names
-    the instance. A create that swallowed the unknown name — mounting
-    nothing, or failing with a generic reason — would leave the caller
-    believing /filestore is backed by storage it is not.
+    The configuration is deployment-side env config an API caller cannot
+    inspect, so the only honest outcomes are an accepted name or a refusal
+    that names the instance. A create that swallowed the unknown name —
+    accepting the row and deferring the failure to box create — would leave
+    the caller believing the volume is backed by storage it is not.
 
-    Behind the module gate: on a stage without a registry the whole file
-    skips, so this case only runs where an instance was proven to exist.
+    Behind the module gate: on a deployment without a configured instance the
+    whole file skips, so this case only runs where an instance was proven to
+    exist.
     """
     instance = f"e2e-no-such-instance-{uuid.uuid4().hex[:8]}"
     volume_name = f"e2e-fs-bad-{uuid.uuid4().hex[:10]}"
-    box_name = f"e2e-fs-fail-{uuid.uuid4().hex[:10]}"
-    volume_id = None
 
-    try:
-        status, body = _create_filestore_volume(instance, name=volume_name)
-        assert 200 <= status < 300, f"volume create with an unknown instance still succeeds: HTTP {status}: {body}"
-        assert body is not None and body.get("id")
-        volume_id = body["id"]
-
-        status, body = _create_box_with_volume(volume_id, name=box_name)
-        _skip_when_key_cannot_attach_volumes(status)
-
-        body_str = json.dumps(body) if body else ""
-        assert 400 <= status < 500, (
-            f"an unknown Filestore instance must fail the create with 4xx, "
-            f"got HTTP {status}: {body_str}"
-        )
-        assert UNKNOWN_INSTANCE_MARKER in body_str, (
-            f"the refusal must carry the runner's words ({UNKNOWN_INSTANCE_MARKER!r}), "
-            f"got HTTP {status}: {body_str}"
-        )
-    finally:
-        _delete_box_by_name(box_name)
-        if volume_id:
-            _delete_volume_by_id(volume_id, force=True)
-
-
+    status, body = _create_filestore_volume(instance, name=volume_name)
+    body_str = json.dumps(body) if body else ""
+    assert 400 <= status < 500, (
+        f"an unknown Filestore instance must fail the volume create with 4xx, "
+        f"got HTTP {status}: {body_str}"
+    )
+    assert UNKNOWN_INSTANCE_MARKER in body_str, (
+        f"the refusal must carry the API's words ({UNKNOWN_INSTANCE_MARKER!r}), "
+        f"got HTTP {status}: {body_str}"
+    )
 @pytest.mark.asyncio
 async def test_filestore_volume_data_survives_stop_start(rt, filestore_instance):
     """Bytes written through a filestore volume survive stop → start.

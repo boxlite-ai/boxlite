@@ -2945,7 +2945,7 @@ components:
             The Filestore instance the volume's data directory lives on.
             Presence makes the volume a filestore volume; absence keeps it an
             object-storage volume (data in boxlite-volume-<id>). The instance
-            must appear in the target runner's FILESTORE_INSTANCES registry —
+            must appear in the API's FILESTORE_INSTANCES configuration, which is checked at create time.
             a box referencing an unregistered instance fails loudly at mount
             time.
           example: ml-scratch

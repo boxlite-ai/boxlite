@@ -325,7 +325,6 @@ func buildBoxliteClientConfig(cfg *config.Config, logger *slog.Logger) blclient.
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,
 		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
 		VolumeStorageBackend:         cfg.VolumeStorageBackend,
-		FilestoreInstances:           cfg.GetFilestoreInstances(),
 		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
 		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
 		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
