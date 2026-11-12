@@ -16,6 +16,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, Not, In, FindOptionsWhere } from 'typeorm'
 import { Volume, type AppVolumeTarget } from '../entities/volume.entity'
+import { appForEnvironment } from './app-environment'
 import { VolumeState } from '../enums/volume-state.enum'
 import { CreateVolumeDto } from '../dto/create-volume.dto'
 import { v4 as uuidv4 } from 'uuid'
@@ -100,7 +101,7 @@ export class VolumeService {
 
     volume.organizationId = organization.id
     if (target) {
-      const appId = await this.appForEnvironment(organization.id, target.environmentId)
+      const appId = await appForEnvironment(this.volumeRepository.manager, organization.id, target.environmentId)
       if (appId !== target.appId) throw new NotFoundException('App environment not found')
       volume.targetType = 'app'
       volume.appId = appId
@@ -237,16 +238,6 @@ export class VolumeService {
     })
   }
 
-  private async appForEnvironment(organizationId: string, environmentId: string): Promise<string> {
-    const [environment] = await this.volumeRepository.manager.query(
-      `SELECT a.id FROM cloud_app.apps a JOIN cloud_app.envs e ON e.app_id = a.id
-       WHERE a.org_id = $1 AND e.id = $2 AND a.deleted_at IS NULL`,
-      [organizationId, environmentId],
-    )
-    if (!environment) throw new NotFoundException('App environment not found')
-    return environment.id
-  }
-
   /**
    * Resolve each selector to the volume it names, or throw.
    *
@@ -298,7 +289,9 @@ export class VolumeService {
 
     const appVolumes = [...new Set(selected.values())].filter((volume) => volume.targetType === 'app')
     if (appVolumes.length) {
-      const appId = appEnvironmentId ? await this.appForEnvironment(organizationId, appEnvironmentId) : null
+      const appId = appEnvironmentId
+        ? await appForEnvironment(this.volumeRepository.manager, organizationId, appEnvironmentId)
+        : null
       for (const volume of appVolumes) {
         if (!appId || volume.appId !== appId) {
           throw new ForbiddenException(`Volume '${volume.name}' belongs to App '${volume.appId}'`)

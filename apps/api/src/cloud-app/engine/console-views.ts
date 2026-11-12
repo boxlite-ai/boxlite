@@ -54,7 +54,7 @@ export async function envStatus(
   if (!latest) return 'draft'
   if (ACTIVE_STATUSES.includes(latest.status)) return 'building'
   // An apply before any deploy is "live" in the CP but nothing runs yet.
-  if (!env.live_deployment || !env.box_id) return latest.status === 'failed' ? 'failed' : 'draft'
+  if (!env.live_deployment || !env.active_box_id) return latest.status === 'failed' ? 'failed' : 'draft'
   if (box === 'stopped') return 'sleeping'
   if (services.some((s) => s.state === 'failed' || s.health === 'unhealthy' || crashLooping(s))) return 'degraded'
   return 'live'
@@ -110,7 +110,7 @@ async function liveState(ctx: Ctx, env: EnvRow, opts: { probe?: boolean } = {}):
     const { box, services, usage } = await ctx.resources.liveServices(env)
     return { box, services, usage }
   }
-  const box = env.box_id ? await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown') : null
+  const box = env.active_box_id ? await ctx.resources.boxStatus(env.active_box_id).catch(() => 'unknown') : null
   return { box, services: storedServices(env), usage: null }
 }
 
@@ -157,7 +157,7 @@ export async function environmentViews(ctx: Ctx, app: AppRow): Promise<Environme
         name: env.name,
         status: await envStatus(ctx, env, state.box, state.services),
         url: (await ctx.resources.appUrl(app.name, env.name)) + '/',
-        box: env.box_id,
+        box: env.active_box_id,
         lastDeploy: lastDeploy((await ctx.store.deployments(env.id, 1))[0]),
         from: env.from_env,
       }
@@ -267,7 +267,7 @@ async function problemsOf(
       detail: `${failure.diagnosis.summary.charAt(0).toUpperCase()}${failure.diagnosis.summary.slice(1)}.`,
       fixPrompt: failure.fixPrompt,
       deployment: latest.number,
-      ...(env.live_deployment && env.box_id ? { serving: releaseId(env.live_deployment) } : {}),
+      ...(env.live_deployment && env.active_box_id ? { serving: releaseId(env.live_deployment) } : {}),
     })
   }
   if (reportedAny && env.live_deployment) {
@@ -389,15 +389,15 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
           memoryMib: size?.memory_mib ?? null,
         }
       : null,
-    box: fresh.box_id
+    box: fresh.active_box_id
       ? {
-          id: fresh.box_id,
+          id: fresh.active_box_id,
           state: state.box ?? 'unknown',
           usage: state.box === 'running' ? usageView(state.usage) : null,
         }
       : null,
     services,
-    activeRelease: fresh.live_deployment && fresh.box_id ? releaseId(fresh.live_deployment) : null,
+    activeRelease: fresh.live_deployment && fresh.active_box_id ? releaseId(fresh.live_deployment) : null,
     releases: await releaseViews(ctx, app, fresh),
     activity: await activityView(ctx, app, fresh.name),
     database,

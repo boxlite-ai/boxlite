@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, NotFoundException } from '@nestjs/common'
 import { plainToInstance } from 'class-transformer'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
@@ -376,7 +376,14 @@ describe('BoxService image reporting', () => {
 
 describe('BoxService inbound defaults', () => {
   function makeCreateService(overrides: Record<string, unknown> = {}) {
-    const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const boxRepository = {
+      insert: jest.fn(async (box: any) => box),
+      manager: {
+        query: jest.fn(async (_sql, [_organizationId, environmentId]) =>
+          environmentId === 'missing' ? [] : [{ id: environmentId === 'other-app' ? 'app-b' : 'app-a' }],
+        ),
+      },
+    } as any
     const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
     const runnerService = {
@@ -431,6 +438,51 @@ describe('BoxService inbound defaults', () => {
       expect.objectContaining({ id: result.id, organizationId: activeOrg.id }),
     )
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ id: result.id }), 7, onPersist)
+  })
+
+  it('persists App ownership on each Box without requiring a volume', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService({
+      imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'ubuntu:22.04', isOrgOwned: false }) },
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+    })
+    for (const name of ['web', 'worker']) {
+      await service.create({ image: 'ubuntu:22.04', name }, activeOrg, Context.user(), {
+        appEnvironmentId: 'main',
+      })
+    }
+    expect(boxRepository.insert).toHaveBeenCalledTimes(2)
+    for (const [box] of boxRepository.insert.mock.calls) {
+      expect(box.appId).toBe('app-a')
+      expect(box.environmentId).toBe('main')
+    }
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+  })
+
+  it('leaves standalone Boxes unowned even with App-looking variables and labels', async () => {
+    const { service, boxRepository } = makeCreateService()
+    await service.create(
+      {
+        image: 'node:test',
+        name: 'scratch',
+        env: { BOXLITE_ENV_ID: 'main' },
+        labels: { app_id: 'app-a' },
+      },
+      activeOrg,
+      Context.user(),
+    )
+    const [box] = boxRepository.insert.mock.calls[0]
+    expect(box.appId).toBeNull()
+    expect(box.environmentId).toBeNull()
+  })
+
+  it('refuses an App environment outside the creation organization', async () => {
+    const { service, boxRepository } = makeCreateService()
+    await expect(
+      service.create({ image: 'node:test', name: 'foreign' }, activeOrg, Context.user(), {
+        appEnvironmentId: 'missing',
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
   })
 
   async function appVolumeService() {

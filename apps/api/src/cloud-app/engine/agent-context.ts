@@ -231,7 +231,7 @@ export async function buildAgentContext(
       })),
     ),
     live: live ? { deployment: live.number, spec_version: live.spec_version, live_at: live.live_at } : null,
-    box: env.box_id ? { id: env.box_id, state: boxState ?? 'unknown', usage } : null,
+    box: env.active_box_id ? { id: env.active_box_id, state: boxState ?? 'unknown', usage } : null,
     runtime: spec ? { image: spec.runtime.image, size: spec.runtime.size, build: spec.runtime.build } : null,
     services,
     schedules: await schedulesOf(ctx, env, spec, at),
