@@ -655,6 +655,49 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       ).rejects.toThrow('replayed')
       expect(await journal.reserve(lease, key, { ...demand, job: 56 }, limits)).toBeUndefined()
     })
+    const registeredAllocation = async () => {
+      let row = (await journal.reserve(lease, key, demand, limits))!
+      row = await journal.advance(lease, row.record.key, row.record.version, {
+        box: { phase: 'requested', id: null },
+        effect: { id: randomUUID(), kind: 'box-create' },
+      })
+      row = await journal.advance(lease, row.record.key, row.record.version, { box: { phase: 'known', id: 'box' } })
+      row = await journal.advance(lease, row.record.key, row.record.version, {
+        runner: { phase: 'requested', id: null },
+        effect: { id: randomUUID(), kind: 'runner-register' },
+      })
+      return journal.advance(lease, row.record.key, row.record.version, { runner: { phase: 'known', id: 91 } })
+    }
+    it.each([0, Number.MAX_SAFE_INTEGER])(
+      'preserves a persisted runner registration timestamp: %s',
+      async (registeredAt) => {
+        const row = await registeredAllocation()
+        await state.commit(lease, [
+          {
+            key: row.record.key,
+            expected: row.record.version,
+            payload: JSON.parse(JSON.stringify({ ...row.value, runner: { ...row.value.runner, registeredAt } })),
+          },
+        ])
+        expect((await journal.allocation(lease, row.record.key))?.value.runner).toMatchObject({ registeredAt })
+        expect(await journal.used(definition.organization)).toBe(1)
+      },
+    )
+    it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1', null])(
+      'rejects an invalid persisted runner registration timestamp: %s',
+      async (registeredAt) => {
+        const row = await registeredAllocation()
+        await state.commit(lease, [
+          {
+            key: row.record.key,
+            expected: row.record.version,
+            payload: JSON.parse(JSON.stringify({ ...row.value, runner: { ...row.value.runner, registeredAt } })),
+          },
+        ])
+        await expect(journal.allocation(lease, row.record.key)).rejects.toBeInstanceOf(StateCorrupt)
+        expect(await journal.used(definition.organization)).toBe(1)
+      },
+    )
     it('recovery regression: returns physical quota after confirmed Box absence while retaining runner debt and job dedup', async () => {
       let row = (await journal.reserve(lease, key, demand, limits))!
       const change = async (value: Parameters<ExecutionJournal['advance']>[3]) => {

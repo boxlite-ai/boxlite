@@ -227,6 +227,31 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.job).not.toHaveBeenCalled()
   })
+  it('keeps an offline runner that is still reported busy out of idle supply without stopping its job', async () => {
+    const inventory = supplyInventory()
+    await pool.balance(lease, limits, countedDemand())
+    const row = await allocation()
+    await state.commit(lease, [
+      {
+        key: row.record.key,
+        expected: row.record.version,
+        payload: JSON.parse(
+          JSON.stringify({
+            ...row.value,
+            createdAt: Date.now() - 300001,
+            runner: { ...row.value.runner, registeredAt: Date.now() - 300001 },
+          }),
+        ),
+      },
+    ])
+    inventory.mockResolvedValue([
+      { id: row.value.runner.id!, name: row.value.name, busy: true, status: 'offline', labels: [] },
+    ])
+    await pool.balance(lease, limits, [])
+    expect((await allocation()).value.closing).toBe(false)
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+  })
   it('demand fence regression: bounds organization snapshots and advances remaining repositories', async () => {
     const busy = new Set<string>()
     supplyInventory(busy)
@@ -324,7 +349,13 @@ describe('CI shared worker lifecycle', () => {
         {
           key: row.record.key,
           expected: row.record.version,
-          payload: JSON.parse(JSON.stringify({ ...row.value, createdAt: Date.now() - 300000 })),
+          payload: JSON.parse(
+            JSON.stringify({
+              ...row.value,
+              createdAt: Date.now() - 300000,
+              runner: { phase: row.value.runner.phase, id: row.value.runner.id },
+            }),
+          ),
         },
       ])
       inventory.mockImplementation(async () =>
@@ -355,6 +386,42 @@ describe('CI shared worker lifecycle', () => {
     },
   )
   it.each(['missing', 'offline'])(
+    'late registration regression: preserves a fresh %s runner from an aged reservation',
+    async (mode) => {
+      const inventory = supplyInventory(),
+        capacity = testCapacity({ account: 2, tenant: 2 })
+      const reserved = (await journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] }))!,
+        createdAt = Date.now() - 300001
+      await state.commit(lease, [
+        {
+          key: reserved.record.key,
+          expected: reserved.record.version,
+          payload: JSON.parse(JSON.stringify({ ...reserved.value, createdAt })),
+        },
+      ])
+      await pool.balance(lease, capacity, countedDemand())
+      expect((await allocation()).value.delivery).toBe('done')
+      inventory.mockImplementation(async () =>
+        mode === 'missing'
+          ? []
+          : [...runners.values()].map((runner) => ({
+              ...runner,
+              busy: false,
+              status: 'offline' as const,
+              labels: [],
+            })),
+      )
+      await pool.balance(lease, capacity, countedDemand())
+      const recovered = (await journal.allocation(lease, reserved.record.key))!
+      expect(recovered.value.closing).toBe(false)
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(recovered.value.createdAt).toBe(createdAt)
+      expect(recovered.value.runner).toMatchObject({ registeredAt: expect.any(Number) })
+      expect(await journal.used(definition.organization)).toBe(1)
+    },
+  )
+  it.each(['missing', 'offline'])(
     'runner startup regression: preserves %s supply until the bootstrap grace expires',
     async (mode) => {
       const inventory = supplyInventory(),
@@ -366,7 +433,9 @@ describe('CI shared worker lifecycle', () => {
         {
           key: row.record.key,
           expected: row.record.version,
-          payload: JSON.parse(JSON.stringify({ ...row.value, createdAt: now - 299999 })),
+          payload: JSON.parse(
+            JSON.stringify({ ...row.value, runner: { ...row.value.runner, registeredAt: now - 299999 } }),
+          ),
         },
       ])
       inventory.mockImplementation(async () =>

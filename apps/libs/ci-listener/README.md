@@ -377,8 +377,12 @@ force an authoritative queue rebuild. A repository whose refresh repeatedly race
 new webhooks defers admission while other repositories and resource cleanup proceed.
 Inventory failures block new reservations while allowing existing cleanup. A known
 runner missing from inventory or offline retains starting supply during the existing
-300-second bootstrap budget; after that it enters cleanup without releasing quota
+300-second bootstrap budget from its persisted `runner.registeredAt`; older records
+fall back to allocation creation time. A delayed registration therefore receives
+its own startup grace. After that budget it enters cleanup without releasing quota
 until the original Box is absent.
+An offline runner still reported busy is excluded from idle supply without
+stopping its running job solely because of the inventory status.
 
 Reservations use rotating counter windows within the database's 100-check budget,
 including scope and host-policy fences. Only fenced counters add demand and all

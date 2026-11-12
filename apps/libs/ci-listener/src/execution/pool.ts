@@ -263,8 +263,8 @@ export class WorkerPool {
         if (!selection) throw new StateCorrupt()
         const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
         if (runner && runner.name !== row.value.name) throw new StateCorrupt()
-        if (row.value.runner.phase === 'known' && (!runner || runner.status === 'offline')) {
-          if (Date.now() - row.value.createdAt >= RUNNER_BOOTSTRAP_SECONDS * 1000) {
+        if (row.value.runner.phase === 'known' && (!runner || (runner.status === 'offline' && !runner.busy))) {
+          if (Date.now() - (row.value.runner.registeredAt ?? row.value.createdAt) >= RUNNER_BOOTSTRAP_SECONDS * 1000) {
             allocations[index] = await this.journal.advance(lease, row.record.key, row.record.version, {
               closing: true,
             })
@@ -512,7 +512,7 @@ export class WorkerPool {
       if (selection) {
         const registration = await registry((client) => client.create(row.value.name, signal))
         this.jit.set(row.record.key, registration)
-        await update({ runner: { phase: 'known', id: registration.id } })
+        await update({ runner: { phase: 'known', id: registration.id, registeredAt: Date.now() } })
       }
     }
     if (!row.value.closing && row.value.runner.phase === 'known' && row.value.delivery === 'none') {
