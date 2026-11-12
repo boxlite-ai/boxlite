@@ -181,6 +181,10 @@ make test:apps:github-ci-runner
 make github-ci-runner-image
 ```
 
+Replay boundary tests expire `@lease.until`; `@owner` holds only scheduler
+identity and epoch. With an expired lease, replay must stop before listing GitHub
+deliveries or requesting redelivery.
+
 The image target builds `boxlite-ci-listener:dev` locally for Linux x86-64. It does
 not push an image. The final image contains Node and the bundled host; CI jobs run
 in separate worker images.
