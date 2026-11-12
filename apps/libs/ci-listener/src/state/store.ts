@@ -67,6 +67,26 @@ export class ListenerState {
     })
   }
 
+  /** Permanent deployment retirement, distinct from an expired execution lease. */
+  async superseded(): Promise<boolean> {
+    return this.database.transaction(
+      this.namespace,
+      async (tx) => {
+        this.anchor(await tx.get('@anchor'))
+        const current = this.owner(await tx.get('@owner'))
+        return (current.deployment ?? 0) > (this.deployment ?? 0)
+      },
+      'snapshot',
+    )
+  }
+
+  async now(lease: ExecutionLease): Promise<number> {
+    return this.database.transaction(this.namespace, async (tx) => {
+      await this.assertLease(tx, { ...lease })
+      return tx.now()
+    })
+  }
+
   async initialize(initial: { key: string; payload: Json }[] = []): Promise<void> {
     const seeds = initial.length ? this.prepare(initial.map((row) => ({ ...row, expected: null }))) : []
     await this.database.transaction(

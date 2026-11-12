@@ -90,10 +90,36 @@ replacement or release the replacement's purpose lock; concurrent retirement
 shares one operation. Tokens remain private and failed/unknown issuance records
 contain metadata only. PAT retirement closes the local handle without revoking
 the user's token. Hosts must close borrows and the provider during shutdown.
-Revocation alone does not complete retirement: the held entry remains available
-until its durable issuance record is deleted successfully. A failed deletion
-retries without revoking the already-closed token again. Lease loss still fences
-the state write and preserves the cleanup debt for reconciliation.
+After successful revocation, metadata deletion still uses the captured execution
+lease. Ordinary deletion failures retain the handle and retry without repeating
+revocation. If that write loses its lease, local retirement finishes and leaves
+the metadata to the current scheduler; remote revocation failures still retain
+the handle. This grants no stale owner permission to modify execution state.
+
+New issuance metadata records its holder's lease owner, epoch and optional
+deployment, never the token. The current scheduler collects at most sixteen
+credential records per step, using database time and version-conditional writes.
+It skips the exact current holder and independently leased scan credentials.
+Issued App metadata is eligible at its persisted expiry; stale PAT borrow metadata
+requires a recorded former holder and never revokes the user's token. Unknown
+issuance, invalid expiry and legacy PAT records without holder proof remain.
+This collector cannot stop Boxes, unregister runners or change capacity.
+
+## Deployment retirement
+
+A positively observed higher deployment permanently retires the old Listener;
+temporary same-deployment lease loss still permits recovery and reacquisition.
+The old process stops scheduling and new compensation claims, cancels discovery
+and replay, and closes its worker/backend, scanner and host credential owners.
+Every owner is attempted even when another close fails. Pending local revocation
+uses exponential retry delay capped at sixty seconds without restarting scheduling.
+
+The current owner restores existing Box/runner identities, allocations and quota;
+deployment never resets capacity or stops a running worker merely because its
+creator retired. Authorized webhook ingress remains available on a retired hosted
+API. Shared database/Redis pools and existing HTTP connections belong to the API
+host's lifecycle. Retirement does not guarantee immediate instance termination or
+eliminate database connection pressure and lock contention.
 
 `GitHubJobs` verifies the original repository identity before and after reading a
 job. A job notice must match the repository, run and job IDs returned by GitHub.

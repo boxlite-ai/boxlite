@@ -1302,6 +1302,16 @@ until the original outcome is known. Lease loss, corrupt/conflicting state, abor
 and pending credential retirement stop further work. These rules match standalone
 Listener Boxes and recover from the existing PostgreSQL journal after restart.
 
+A newer deployment permanently retires the old hosted Listener after its local
+credential, discovery, replay and compensation owners have closed. Successful
+token revocation followed by a lease-lost metadata deletion no longer keeps that
+old process in a retry loop; the current scheduler owns eligible metadata
+collection. Remote revocation failures retain their handles and retry with backoff.
+Existing Box/runner recovery and quota remain with the current execution lease.
+Normal deployment retirement preserves authorized webhook ingress. API connections
+and shared database pools remain under the API host's shutdown lifecycle. See the
+[deployment retirement contract](../libs/ci-listener/README.md#deployment-retirement).
+
 The CI state migration refuses rollback while its table contains any records.
 Stop the Listener and reconcile retained resource and credential state before
 attempting rollback; the migration never silently discards the cleanup ledger.

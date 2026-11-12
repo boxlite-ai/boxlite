@@ -73,6 +73,11 @@ interface CompensationOptions {
 export class RepositoryCompensation {
   private readonly retiring = new Map<number, RepositoryScanSession>()
   constructor(private readonly options: CompensationOptions) {}
+  async close(): Promise<void> {
+    const results = await Promise.allSettled([...this.retiring.keys()].map((index) => this.retire(index)))
+    const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+    if (failures.length) throw new AggregateError(failures, 'Compensation credential retirement is incomplete')
+  }
   async run(signal: AbortSignal): Promise<void> {
     const results = await Promise.allSettled([this.lane(0, signal), this.lane(1, signal)])
     const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))

@@ -90,6 +90,42 @@ describe('CI shared credential ownership', () => {
   })
   const posts = () => calls.filter((call) => call.path.endsWith('/access_tokens'))
   const deletes = () => calls.filter((call) => call.path === '/installation/token')
+  it.each(['app', 'pat'] as const)('retires %s locally after deployment takeover', async (kind) => {
+    state = new ListenerState(db, namespace, 1)
+    await state.activate()
+    lease = (await state.acquire('original-holder', 300000))!
+    const app = new GitHubAppSource({ issuer: 'test-app', privateKey: () => keys.privateKey, now: () => clock })
+    provider = new ListenerCredentials(
+      state,
+      lease,
+      'scope/takeover',
+      kind === 'app'
+        ? { kind, app, installation: await app.installation(7) }
+        : { kind, repository: 11, token: () => 'test-user-managed-pat' },
+    )
+    const borrow = await provider.open({ kind: 'jobs', repository: 11 })
+    const replacement = new ListenerState(db, namespace, 2)
+    await replacement.activate()
+    const current = (await replacement.acquire('replacement-holder', 300000))!
+    await expect(provider.close()).resolves.toBeUndefined()
+    await expect(provider.close()).resolves.toBeUndefined()
+    expect(borrow.credential.usable).toBe(false)
+    expect(deletes()).toHaveLength(kind === 'app' ? 1 : 0)
+    expect(await replacement.scan(current, { prefix: 'credential/' })).toHaveLength(1)
+  })
+  it('retains remote revocation failure after deployment takeover until a later close succeeds', async () => {
+    const borrow = await provider.open({ kind: 'jobs', repository: 11 })
+    const replacement = new ListenerState(db, namespace, 2)
+    await replacement.activate()
+    const current = (await replacement.acquire('replacement-holder', 300000))!
+    failClose = 1
+    await expect(provider.close()).rejects.toThrow('retirement remains pending')
+    expect(borrow.credential.usable).toBe(false)
+    expect(deletes()).toHaveLength(1)
+    expect(await replacement.scan(current, { prefix: 'credential/' })).toHaveLength(1)
+    await expect(provider.close()).resolves.toBeUndefined()
+    expect(deletes()).toHaveLength(2)
+  })
   it.each([
     null,
     { kind: 'unknown' },
