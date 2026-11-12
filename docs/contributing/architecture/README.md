@@ -126,9 +126,12 @@ acquire a second lifecycle lock. An initialized handle cannot attach its old liv
 resources to a different PID or `started_at`.
 
 Watcher observes processes and probes health without holding admission. It reports
-events through a weak runtime reference; resolving an event does not arm another
-watcher. The facade checks PID/`started_at` and owns health persistence and shared
-stop finalization: exit records, cache invalidation, and configured removal.
+events through `RuntimeImpl::apply_box_observation` using a weak runtime reference;
+resolving an event does not arm another watcher. `BoxImpl::apply_observation`
+acquires lifecycle write admission, checks PID/`started_at`, and applies the report:
+health persistence or shared stop finalization (exit records, cache invalidation,
+and configured removal). The name distinguishes this state-changing commit phase
+from the watcher's process observation and health probing outside admission.
 Successful automatic removal is recorded on that handle, so a later `stop()` remains
 idempotent even after its row and lock are gone. Unrelated missing state is not
 treated as completed automatic removal.

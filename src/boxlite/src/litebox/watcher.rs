@@ -165,7 +165,7 @@ impl BoxWatcher {
             return;
         };
         if let Err(error) = runtime
-            .observe_box(
+            .apply_box_observation(
                 &self.box_id,
                 self.observed_run(),
                 BoxEvent::Exited {
@@ -198,7 +198,7 @@ impl BoxWatcher {
             return Break(());
         };
         match runtime
-            .observe_box(
+            .apply_box_observation(
                 &self.box_id,
                 self.observed_run(),
                 BoxEvent::Health { healthy, retries },

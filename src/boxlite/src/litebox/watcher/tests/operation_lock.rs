@@ -117,7 +117,7 @@ async fn health_delivery_and_repeated_exit_use_the_box_facade() {
     let run = watcher.observed_run();
     drop(bx);
     let health = runtime
-        .observe_box(
+        .apply_box_observation(
             &id,
             run,
             BoxEvent::Health {
@@ -139,7 +139,7 @@ async fn health_delivery_and_repeated_exit_use_the_box_facade() {
     let stopped = runtime.box_manager.update_box(&id).unwrap();
     assert_eq!(stopped.status, BoxStatus::Stopped);
     runtime
-        .observe_box(
+        .apply_box_observation(
             &id,
             run,
             BoxEvent::Exited {

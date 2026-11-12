@@ -1079,7 +1079,7 @@ impl RuntimeImpl {
         })
     }
 
-    pub(crate) async fn observe_box(
+    pub(crate) async fn apply_box_observation(
         self: &Arc<Self>,
         id: &BoxID,
         run: BoxRun,
@@ -1090,7 +1090,7 @@ impl RuntimeImpl {
         };
         // Resolve the facade without arming a watcher or retaining it between events.
         let (box_impl, _) = self.get_or_create_box_impl(config, state);
-        box_impl.observe(run, event).await
+        box_impl.apply_observation(run, event).await
     }
 
     pub(crate) fn box_locker(&self, id: &BoxID) -> BoxliteResult<Option<Arc<dyn Locker>>> {

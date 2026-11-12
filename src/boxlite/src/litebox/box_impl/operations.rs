@@ -70,7 +70,7 @@ impl BoxImpl {
         operation()
     }
 
-    pub(crate) async fn observe(
+    pub(crate) async fn apply_observation(
         &self,
         run: BoxRun,
         event: BoxEvent,
