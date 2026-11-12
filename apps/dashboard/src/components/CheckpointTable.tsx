@@ -10,8 +10,8 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatBytes, timeAgo } from '@/lib/format'
 import { CheckpointGlyph } from './CheckpointGlyph'
-import { Database, Plus, Trash } from './ui/icon'
-import { AsciiButton as Button } from './ascii'
+import { Database, Trash } from './ui/icon'
+import { AsciiButton as Button, StatusMark } from './ascii'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
@@ -67,7 +67,7 @@ export function CheckpointTable({
               </p>
               {!filtered && (
                 <>
-                  <p className="my-3 text-sm text-muted-foreground">
+                  <p className="my-3 text-body text-muted-foreground">
                     Save a box’s disk and use it to create another box.
                   </p>
                   <Button variant="primary" disabled={!canWrite} onClick={onCreate}>
@@ -88,14 +88,14 @@ export function CheckpointTable({
                 key={checkpoint.id}
                 className="border-border/60 bg-transparent hover:bg-transparent [&_td]:whitespace-nowrap"
               >
-                <TableCell className="max-w-[220px] font-mono text-[13px] font-medium" title={checkpoint.id}>
+                <TableCell className="max-w-[220px] font-mono" title={checkpoint.id}>
                   <span className="flex min-w-0 items-center gap-3">
-                    <CheckpointGlyph state={checkpoint.state} size={28} className="text-muted-foreground" />
-                    <span className="truncate">{checkpoint.name}</span>
+                    <CheckpointGlyph state={checkpoint.state} size={24} className="shrink-0 text-muted-foreground" />
+                    <span className="resource-name">{checkpoint.name}</span>
                   </span>
                 </TableCell>
                 <TableCell
-                  className="max-w-[240px] truncate font-mono text-xs"
+                  className="max-w-[240px] truncate font-mono text-meta"
                   title={deleted ? `${checkpoint.source_box_id} (deleted)` : source?.name || checkpoint.source_box_id}
                 >
                   {deleted ? (
@@ -111,22 +111,20 @@ export function CheckpointTable({
                 <TableCell>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span
-                        tabIndex={failed ? 0 : undefined}
-                        className={`inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.5px] ${failed ? 'text-destructive' : ready ? 'text-brand' : 'text-muted-foreground'}`}
-                      >
-                        <span
-                          className={`size-1.5 bg-current ${checkpoint.state === CheckpointStatus.CREATING ? 'animate-pulse' : ''}`}
-                        />
-                        {checkpoint.state}
+                      <span tabIndex={failed ? 0 : undefined}>
+                        <StatusMark tone={failed ? 'bad' : ready ? 'ok' : 'warn'}>
+                          {checkpoint.state.charAt(0).toUpperCase() + checkpoint.state.slice(1).toLowerCase()}
+                        </StatusMark>
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>{checkpoint.error_reason || checkpoint.state}</TooltipContent>
                   </Tooltip>
                 </TableCell>
-                <TableCell className="font-mono text-xs">{ready ? formatBytes(checkpoint.size_bytes) : '—'}</TableCell>
-                <TableCell className="font-mono text-xs">{'—'}</TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground" title={checkpoint.created_at}>
+                <TableCell className="font-mono text-meta">
+                  {ready ? formatBytes(checkpoint.size_bytes) : '—'}
+                </TableCell>
+                <TableCell className="font-mono text-meta">{'—'}</TableCell>
+                <TableCell className="font-mono text-meta text-muted-foreground" title={checkpoint.created_at}>
                   {timeAgo(checkpoint.created_at)}
                 </TableCell>
                 <TableCell>
@@ -134,17 +132,17 @@ export function CheckpointTable({
                     <Button
                       size="sm"
                       variant="secondary"
-                      className="h-7 gap-[6px] border-border bg-transparent px-[9px] py-[5px] font-mono text-[11px] font-normal tracking-normal text-muted-foreground hover:border-brand hover:bg-transparent hover:text-foreground"
+                      className="h-7 gap-[6px] border-border bg-transparent px-[9px] py-[5px] font-mono text-meta font-medium tracking-normal text-foreground hover:border-brand hover:bg-transparent"
                       aria-label={`Create Box from ${checkpoint.name}`}
                       disabled={!canWrite || !ready || !createBoxEnabled}
                       onClick={() => onCreateBox(checkpoint)}
                     >
-                      <Plus className="size-[13px]" /> Box
+                      New Box
                     </Button>
                     <Button
                       size="sm"
                       variant="secondary"
-                      className="h-auto border-border bg-transparent p-[6px] text-muted-foreground hover:border-destructive hover:bg-transparent hover:text-destructive"
+                      className="size-7 border-border bg-transparent p-0 text-destructive hover:border-destructive hover:bg-transparent"
                       aria-label={`Delete ${checkpoint.name}`}
                       disabled={!canDelete || (!ready && !failed && checkpoint.state !== CheckpointStatus.DELETING)}
                       onClick={() => onDelete(checkpoint)}

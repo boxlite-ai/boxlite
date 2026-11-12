@@ -42,15 +42,15 @@ async def checkpoint_resources(rt):
     suffix = uuid.uuid4().hex[:12]
     names = {
         key: f"e2e-checkpoint-{key}-{suffix}"
-        for key in ["source", "copy", "target", "archive"]
+        for key in ["source", "copy", "archive"]
     }
     owned = set()
     yield names, owned
     if not owned:
         return
     failures = []
-    # Cancelling targets first also releases failed import-use records.
-    for key in ["target", "copy", "source"]:
+    # Removing the copy first also releases failed import-use records.
+    for key in ["copy", "source"]:
         try:
             info = await rt.get_info(names[key])
             if info is not None:
@@ -68,7 +68,7 @@ async def checkpoint_resources(rt):
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
-async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_identity(
+async def test_checkpoint_archive_survives_source_deletion_and_creates_boxes(
     rt, image, checkpoint_resources
 ):
     status, config = await asyncio.to_thread(request_json, "GET", "/v1/config")
@@ -102,7 +102,9 @@ async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_i
     await rt.remove(source.id, force=True)
     assert (await rt.checkpoints.get(checkpoint.id)).state == "ready"
 
-    copy = await rt.checkpoints.import_box(checkpoint.id, names["copy"])
+    copy = await rt.create(
+        boxlite.BoxOptions(checkpoint=checkpoint.id), name=names["copy"]
+    )
     assert copy.id != source.id
     read_captured = (
         "printf '%s\n%s\n' \"$CHECKPOINT_E2E\" \"$BOXLITE_BOX_ID\"; "
@@ -110,26 +112,7 @@ async def test_checkpoint_archive_survives_source_deletion_and_recovers_public_i
     )
     assert await shell(copy, read_captured) == f"{marker}\n{copy.id}\n{marker}"
 
-    target = await rt.create(
-        boxlite.BoxOptions(
-            image=image, cpus=2, memory_mib=1024,
-            env=[("CHECKPOINT_E2E", "old-target")],
-        ),
-        name=names["target"],
-    )
-    await shell(target, "mkdir -p /workspace; printf old-target > /workspace/checkpoint-e2e.txt")
-    await target.stop()
-    public_id = target.id
-    recovered = await rt.checkpoints.import_box(checkpoint.id, box_id=public_id)
-    assert recovered.id == public_id
-    assert recovered.name == names["target"]
-    info = await recovered.info()
-    assert (info.cpus, info.memory_mib) == (1, 512)
-    await recovered.start()
-    assert await shell(recovered, read_captured) == f"{marker}\n{public_id}\n{marker}"
-
     await rt.checkpoints.remove(checkpoint.id)
     with pytest.raises(boxlite.NotFoundError):
         await rt.checkpoints.get(checkpoint.id)
     assert await shell(copy, "cat /workspace/checkpoint-e2e.txt") == marker
-    assert await shell(recovered, "cat /workspace/checkpoint-e2e.txt") == marker

@@ -82,25 +82,24 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       state: "failed",
       errorReason: "archive upload failed",
     });
-    const target = await runtime.checkpoints.importBox(
-      "checkpoint-1",
+    expect("importBox" in runtime.checkpoints).toBe(false);
+    const target = await runtime.create(
+      { checkpoint: "checkpoint-1" },
       "worker",
     );
     expect(target.id).toBe("target-1");
-    expect(
-      (
-        await runtime.checkpoints.importBox(
-          "checkpoint-1",
-          undefined,
-          target.id,
-        )
-      ).id,
-    ).toBe(target.id);
     await runtime.checkpoints.remove("checkpoint-1", true);
     await runtime.checkpoints.remove("checkpoint-1");
     await runtime.checkpoints.remove("checkpoint-1", false);
     await runtime.checkpoints.create("source-1");
-    await runtime.checkpoints.importBox("checkpoint-1");
+    await runtime.create({ checkpoint: "checkpoint-1" });
+    for (const overridden of [
+      { checkpoint: "checkpoint-1", cpus: 2 },
+      { checkpoint: "checkpoint-1", image: "alpine:latest" },
+      { checkpoint: "checkpoint-1", rootfsPath: "/tmp/rootfs" },
+    ]) {
+      await expect(runtime.create(overridden)).rejects.toThrow();
+    }
     expect(requests).toEqual([
       {
         method: "POST",
@@ -111,13 +110,8 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       { method: "GET", path: "/v1/checkpoints/checkpoint-1", body: undefined },
       {
         method: "POST",
-        path: "/v1/boxes/import",
+        path: "/v1/boxes",
         body: { checkpoint_id: "checkpoint-1", name: "worker" },
-      },
-      {
-        method: "POST",
-        path: "/v1/boxes/import",
-        body: { checkpoint_id: "checkpoint-1", box_id: "target-1" },
       },
       {
         method: "DELETE",
@@ -141,7 +135,7 @@ test("checkpoint native REST calls preserve configuration inheritance and result
       },
       {
         method: "POST",
-        path: "/v1/boxes/import",
+        path: "/v1/boxes",
         body: { checkpoint_id: "checkpoint-1" },
       },
     ]);

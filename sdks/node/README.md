@@ -16,29 +16,31 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 
 ## Managed checkpoints
 
-Checkpoint import belongs to the checkpoint handle, separate from archive import.
-The CLI uses `boxlite checkpoint import ID [--name NAME | --box BOX]` and sends
-checkpoint import requests through REST. The runtime facade owns the shared
-checkpoint backend; native archive import and provision remain unchanged.
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
 
 The source must be stopped before `create`; stop it and wait for `stopped` first.
 Checkpoint creation rejects other states and never stops the source automatically.
 
 The REST runtime's `checkpoints` handle exposes `create`, `list`,
-`get`, `remove` and `importBox(key, name?, boxId?)` as promises. Checkpoints survive
-their source box and inherit its saved execution settings without overrides.
+`get` and `remove` as promises. Checkpoints survive their source box.
 
 ```typescript
 const checkpoint = await runtime.checkpoints.create("source", "dev-base");
-const worker = await runtime.checkpoints.importBox(checkpoint.id, "worker");
+const worker = await runtime.create({ checkpoint: checkpoint.id }, "worker");
 ```
 
-Omit `boxId` to create a new Box; `name` and `boxId` are mutually exclusive.
+A box created from a checkpoint inherits its saved execution settings. Setting any
+other option, including `image` or `rootfsPath`, rejects with an invalid-argument
+error before a request is sent.
+This includes explicit defaults such as `detach: false` or
+`advanced: { privileged: false }`, and empty lists such as `env: []`.
 Cloud capture may initially report `creating`; query until `ready` before use.
-`importBox(checkpointId, undefined, targetId)` requires an idle stopped or failed target.
-REST replacement preserves the public Box ID. `remove(key, true)` ignores
-absence only. Storage and replacement coordination belong to the server.
-Local runtime checkpoint operations reject with an unsupported-operation error.
+`remove(key, true)` ignores absence only. Storage belongs to the server.
+Local runtime checkpoint operations, including `create` with a checkpoint, reject
+with an unsupported-operation error.
 
 ## Features
 
@@ -603,6 +605,10 @@ node simplebox.js
 ```
 
 ### Maintaining the native bindings
+
+Rust sources in `sdks/node/src/` use the workspace formatter. From the
+repository root, run `make fmt:rust` before committing binding changes and
+`make fmt:check:rust` to reproduce the CI formatting check.
 
 The Rust bindings require `napi` 3.16.1+, `napi-derive` 3.7.0+, and
 `napi-build` 2.6.0+. Update the runtime and macro generator together:

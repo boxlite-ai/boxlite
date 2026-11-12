@@ -65,7 +65,7 @@ export function BoxPreviewUrlDialog({
             if (valid) onFetchUrl(port)
           }}
         >
-          <label className="text-[13px] text-muted-foreground" htmlFor="preview-url-port">
+          <label className="text-body text-muted-foreground" htmlFor="preview-url-port">
             port
           </label>
           <Input
@@ -82,12 +82,12 @@ export function BoxPreviewUrlDialog({
           </Button>
         </form>
 
-        {error ? <p className="text-[12px] text-destructive-foreground">{error}</p> : null}
+        {error ? <p className="text-meta text-destructive-foreground">{error}</p> : null}
 
         {url ? (
           <div className="space-y-2">
             <div className="group/copy-button flex min-w-0 items-center gap-1 border border-border bg-[hsl(var(--code-background))] px-[8px] py-[6px]">
-              <span className="min-w-0 flex-1 truncate text-[12px]" title={url}>
+              <span className="min-w-0 flex-1 truncate text-meta" title={url}>
                 {url.replace(/^https?:\/\//, '')}
               </span>
               <CopyButton value={url} size="icon-xs" tooltipText="Copy URL" className="flex-none" />
@@ -96,15 +96,13 @@ export function BoxPreviewUrlDialog({
             {/* Who can use it matters at the moment of copying, which is here
                 rather than back on the sheet. The dialog only opens with
                 inbound access enabled, so the answer is always the same. */}
-            <p className="text-[11px] uppercase tracking-[1px] text-muted-foreground">
-              anyone with this url can open it
-            </p>
+            <p className="text-meta uppercase tracking-[1px] text-muted-foreground">anyone with this url can open it</p>
 
             {/* Stated here because it cannot be diagnosed afterwards: the URL
                 opens in a new tab, so a failure there is invisible to the
                 console. A server on 127.0.0.1 is listening but unreachable
                 through the tunnel — the most common reason this looks broken. */}
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-meta leading-relaxed text-muted-foreground">
               Not loading? Your server has to bind <span className="text-foreground">0.0.0.0</span>, not{' '}
               <span className="text-foreground">127.0.0.1</span>.
             </p>

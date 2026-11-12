@@ -448,6 +448,14 @@ impl RuntimeImpl {
                 "Cannot create box: runtime has been shut down".into(),
             ));
         }
+        if matches!(
+            options.rootfs,
+            crate::runtime::options::RootfsSpec::Checkpoint(_)
+        ) {
+            return Err(BoxliteError::Unsupported(
+                crate::runtime::checkpoints::UNSUPPORTED_ON_LOCAL.into(),
+            ));
+        }
 
         // Check DB for existing name — use lookup_box to get full (config, state)
         // so we can build the LiteBox directly without a second lookup

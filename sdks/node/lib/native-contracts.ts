@@ -186,11 +186,6 @@ export interface CheckpointHandle {
   list(): Promise<CheckpointInfo[]>;
   get(key: string): Promise<CheckpointInfo>;
   remove(key: string, force?: boolean | null): Promise<void>;
-  importBox(
-    key: string,
-    name?: string | null,
-    boxId?: string | null,
-  ): Promise<JsBox>;
 }
 
 /** A registry login the server pulls private images with. Has no password. */
@@ -341,6 +336,8 @@ export interface JsAdvancedBoxOptions {
 export interface JsBoxOptions {
   image?: string;
   rootfsPath?: string;
+  /** REST-managed checkpoint to create from; leave every other option unset. */
+  checkpoint?: string;
   cpus?: number;
   memoryMib?: number;
   diskSizeGb?: number;

@@ -20,6 +20,8 @@ import {
   IsArray,
   Min,
   IsIn,
+  MaxLength,
+  MinLength,
   Validate,
   ValidateIf,
   ValidateNested,
@@ -245,6 +247,15 @@ export class CreateBoxDto {
   @IsOptional()
   @IsString()
   image?: string
+
+  // Selects a managed checkpoint, by id or name, as the source of the box
+  // instead of an image. The box inherits the checkpoint's saved settings, so
+  // the controller refuses every other field except `name`.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  checkpoint_id?: string
 
   @IsOptional()
   @CpuAllocation()

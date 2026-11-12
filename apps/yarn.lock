@@ -17194,6 +17194,7 @@ __metadata:
     astro-expressive-code: "npm:^0.41.2"
     autoprefixer: "npm:10.4.13"
     aws4: "npm:^1.13.2"
+    axe-core: "npm:^4.10.0"
     axios: "npm:^1.20.0"
     axios-debug-log: "npm:^1.0.0"
     axios-retry: "npm:^4.5.0"

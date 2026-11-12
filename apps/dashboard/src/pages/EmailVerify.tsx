@@ -64,7 +64,7 @@ export default function EmailVerify() {
   }, [organizationId, email, token, billingApi, navigate, onSelectOrganization])
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-6 font-mono text-[13px]">
+    <div className="flex min-h-screen items-center justify-center bg-background px-6 font-mono text-body">
       <div className="w-full max-w-[420px] border border-border bg-card p-8 text-center">
         <div className="mb-5 flex justify-center">
           <Logo />
@@ -74,8 +74,8 @@ export default function EmailVerify() {
             <div className="mb-4 flex justify-center">
               <Loader2 className="size-7 animate-spin text-muted-foreground" />
             </div>
-            <div className="text-[16px] font-bold tracking-[-0.3px]">Verifying your email</div>
-            <p className="mt-2 text-[12.5px] text-muted-foreground">Please wait while we verify your email address…</p>
+            <div className="text-em font-bold tracking-[-0.3px]">Verifying your email</div>
+            <p className="mt-2 text-meta text-muted-foreground">Please wait while we verify your email address…</p>
           </>
         )}
         {verificationStatus === 'success' && (
@@ -88,8 +88,8 @@ export default function EmailVerify() {
                 <Check className="size-6 text-success" strokeWidth={2.5} />
               </span>
             </div>
-            <div className="text-[16px] font-bold tracking-[-0.3px] text-success">Email verified</div>
-            <p className="mt-2 text-[12.5px] text-muted-foreground">
+            <div className="text-em font-bold tracking-[-0.3px] text-success">Email verified</div>
+            <p className="mt-2 text-meta text-muted-foreground">
               Your email has been verified. Redirecting to billing shortly…
             </p>
           </>
@@ -104,8 +104,8 @@ export default function EmailVerify() {
                 <X className="size-6 text-destructive" strokeWidth={2.5} />
               </span>
             </div>
-            <div className="text-[16px] font-bold tracking-[-0.3px] text-destructive">Verification failed</div>
-            <p className="mt-2 text-[12.5px] text-muted-foreground">{errorMessage}</p>
+            <div className="text-em font-bold tracking-[-0.3px] text-destructive">Verification failed</div>
+            <p className="mt-2 text-meta text-muted-foreground">{errorMessage}</p>
             <AsciiButton variant="primary" className="mt-5" type="button" onClick={() => navigate(RoutePath.BILLING)}>
               Go to billing
             </AsciiButton>

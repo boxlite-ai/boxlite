@@ -727,6 +727,35 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
+    /// The checkpoint this box is created from, if that is its rootfs source.
+    ///
+    /// A checkpoint box inherits the saved execution settings, and the server
+    /// accepts no overrides. Any other option that differs from its default is
+    /// therefore rejected here instead of being dropped on the wire.
+    #[cfg(feature = "rest")]
+    pub(crate) fn checkpoint_source(&self) -> BoxliteResult<Option<&str>> {
+        let RootfsSpec::Checkpoint(checkpoint) = &self.rootfs else {
+            return Ok(None);
+        };
+        let inherited = Self {
+            rootfs: self.rootfs.clone(),
+            ..Self::default()
+        };
+        let serialized = |options: &Self| {
+            serde_json::to_value(options).map_err(|error| {
+                BoxliteError::Internal(format!("box options are not serializable: {error}"))
+            })
+        };
+        if serialized(self)? != serialized(&inherited)? {
+            return Err(BoxliteError::InvalidArgument(
+                "a box created from a checkpoint inherits its saved settings; \
+                 leave every other option at its default"
+                    .into(),
+            ));
+        }
+        Ok(Some(checkpoint))
+    }
+
     /// Validate options for a new box: [`Self::sanitize_common`] plus the
     /// outbound rules `update_outbound` accepts, so every saved allowlist can be
     /// re-sent or rolled back to. Start and import skip the rule check, keeping
@@ -1010,6 +1039,10 @@ pub enum RootfsSpec {
     Image(String),
     /// Use an already prepared rootfs at the given host path.
     RootfsPath(String),
+    /// Use a REST-managed checkpoint, by ID or name. The box inherits the
+    /// checkpoint's saved execution settings, so every other option must stay
+    /// at its default. Local runtimes return `Unsupported`.
+    Checkpoint(String),
 }
 
 impl Default for RootfsSpec {

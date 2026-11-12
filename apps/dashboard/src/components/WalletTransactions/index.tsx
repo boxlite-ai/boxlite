@@ -63,7 +63,7 @@ function transactionAmount(transaction: WalletTransaction): string {
  */
 export function WalletTransactionsTable({ data, loading }: WalletTransactionsTableProps) {
   if (loading) {
-    return <div className="border-b border-border/40 py-[13px] font-mono text-[13px]">Loading...</div>
+    return <div className="border-b border-border/40 py-[13px] font-mono text-body">Loading...</div>
   }
 
   if (!data.length)
@@ -82,7 +82,7 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
     // drift out of alignment by the scrollbar's width.
     <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
       <div
-        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-label uppercase tracking-[1px] text-muted-foreground`}
       >
         <span data-transaction-header>Date</span>
         <span data-transaction-header>Type</span>
@@ -99,7 +99,7 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
         return (
           <div
             key={transaction.id}
-            className={`${ROW} border-b border-border/40 py-[13px] font-mono text-[13px] transition-colors hover:bg-muted/30`}
+            className={`${ROW} border-b border-border/40 py-[13px] font-mono text-body transition-colors hover:bg-muted/30`}
           >
             <span data-transaction-date className="text-foreground">
               {transactionDate(transaction)}

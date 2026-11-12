@@ -310,7 +310,6 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         "checkpoint",
         &[
             box_command_scope("create", &[]),
-            box_command_scope("import", &[]),
             box_command_scope("list", &[]),
             box_command_scope("get", &[]),
             box_command_scope("delete", &[]),
@@ -552,6 +551,33 @@ where
     let mut matches = parser.clone().try_get_matches_from(args)?;
     let command_path = selected_command_path(&matches);
     let scope = command_scope(&command_path).expect("parsed command must have a declared scope");
+
+    // Check presence before FromArgMatches or option normalization can erase
+    // explicit defaults. Global connection flags are independent of settings.
+    if let Some(("create", create)) = matches.subcommand()
+        && create.get_one::<String>("checkpoint").is_some()
+        && create.ids().any(|id| {
+            parser.find_subcommand("create").is_some_and(|command| {
+                command
+                    .get_arguments()
+                    .any(|argument| argument.get_id() == id)
+            }) && !matches!(id.as_str(), "checkpoint" | "name")
+                && !GlobalOption::ALL
+                    .iter()
+                    .any(|option| option.id() == id.as_str())
+                && create.value_source(id.as_str()) == Some(ValueSource::CommandLine)
+        })
+    {
+        let message = if ["image", "rootfs"]
+            .iter()
+            .any(|id| create.value_source(id) == Some(ValueSource::CommandLine))
+        {
+            "provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT"
+        } else {
+            "a box created from --checkpoint inherits its saved settings; only --name may accompany it"
+        };
+        return Err(parser.error(ErrorKind::ArgumentConflict, message));
+    }
 
     if let Some(option) = GlobalOption::ALL.iter().copied().find(|option| {
         !scope.allows(*option)

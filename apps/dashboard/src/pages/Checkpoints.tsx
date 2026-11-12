@@ -29,8 +29,10 @@ import { useCheckpointsQuery } from '@/hooks/queries/useCheckpointsQuery'
 import { useCheckpointBoxesQuery } from '@/hooks/queries/useCheckpointBoxesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { checkpointErrorMessage, CHECKPOINTS_DISABLED_MESSAGE } from '@/lib/checkpoints'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 export default function Checkpoints() {
+  usePageTitle('Checkpoints')
   const { selectedOrganization } = useSelectedOrganization()
   if (!selectedOrganization) return <p className="page-container py-5">Select an organization to view checkpoints.</p>
   return <CheckpointPage key={selectedOrganization.id} />
@@ -81,7 +83,7 @@ function CheckpointPage() {
             <div className="flex-1" />
             <Button
               variant="primary"
-              className="h-11 gap-[7px] px-[15px] text-[12.5px] font-semibold tracking-normal hover:bg-primary hover:opacity-85 sm:h-9"
+              className="h-11 gap-[7px] px-[15px] text-meta font-semibold tracking-normal hover:bg-primary hover:opacity-85 sm:h-9"
               disabled={!canWrite || !capabilities.data?.checkpoints_enabled}
               onClick={() => setCreateOpen(true)}
             >
@@ -89,7 +91,7 @@ function CheckpointPage() {
             </Button>
           </div>
           {capabilities.isError && (
-            <div role="alert" className="mt-6 text-sm">
+            <div role="alert" className="mt-6 text-body">
               <p>Could not load checkpoint capabilities.</p>
               <Button variant="secondary" onClick={() => void capabilities.refetch()}>
                 Retry capabilities
@@ -97,7 +99,7 @@ function CheckpointPage() {
             </div>
           )}
           {checkpoints.isError ? (
-            <div role="alert" className="mt-6 text-sm">
+            <div role="alert" className="mt-6 text-body">
               <p>{checkpointErrorMessage(checkpoints.error)}</p>
               <Button variant="secondary" onClick={() => void checkpoints.refetch()}>
                 Retry
@@ -120,7 +122,7 @@ function CheckpointPage() {
                 }}
               />
               {boxes.isError && (
-                <p role="alert" className="mt-4 text-sm text-muted-foreground">
+                <p role="alert" className="mt-4 text-body text-muted-foreground">
                   Could not load source boxes.{' '}
                   <button className="underline" onClick={() => void boxes.refetch()}>
                     Retry
@@ -145,7 +147,7 @@ function CheckpointPage() {
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <div className="flex flex-col gap-[7px]">
-                <label htmlFor="checkpoint-delete-confirm" className="font-mono text-[11px] text-muted-foreground">
+                <label htmlFor="checkpoint-delete-confirm" className="font-mono text-meta text-muted-foreground">
                   Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
                 </label>
                 <input
@@ -156,11 +158,11 @@ function CheckpointPage() {
                   autoComplete="off"
                   spellCheck={false}
                   disabled={remove.isPending}
-                  className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-[13px] text-foreground outline-none focus:border-destructive"
+                  className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-body text-foreground outline-none focus:border-destructive"
                 />
               </div>
               {remove.error && (
-                <p role="alert" className="text-sm text-destructive">
+                <p role="alert" className="text-body text-destructive">
                   {checkpointErrorMessage(remove.error)}
                 </p>
               )}

@@ -72,13 +72,13 @@ const UserOrganizationInvitations: React.FC = () => {
       <PageContent>
         {status === 'joining' && <p role="status">Joining organization...</p>}
         {status === 'failed' && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-body text-destructive">
             Unable to join using this invitation. Sign in with the invited email address, or ask the organization owner
             for a new invitation.
           </p>
         )}
         {status === 'switch-failed' && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-body text-destructive">
             You joined the organization, but we could not open it. Use the profile menu to switch organizations.
           </p>
         )}
