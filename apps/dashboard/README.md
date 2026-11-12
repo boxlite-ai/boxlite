@@ -1053,3 +1053,7 @@ Checkpoints belongs to the Boxes group. Primary and secondary labels align; text
 Hovering the compact logo temporarily expands the sidebar. Keyboard users activate Expand navigation to open it; focusing a rail link shows its tooltip. Pin keeps it open; leaving a preview restores the compact rail without changing routes. Only one compact tooltip can be visible, and tooltips clear when labels expand. Selected icon effects respect reduced motion.
 
 Desktop mock examples: [expanded navigation](../../docs/contributing/investigations/assets/console-navigation/topic02-navigation-dark.png) and [temporary hover preview](../../docs/contributing/investigations/assets/console-navigation/topic02-hover-dark.png). Captured at 1440 × 900 from the navigation topic preview; the accompanying Tab changes are delivered separately.
+
+In the compact rail, an active parent link includes its current child in its
+accessible name, such as “Boxes, current section: Checkpoints”. The parent is
+not marked as the current page when its destination differs from the current route.
