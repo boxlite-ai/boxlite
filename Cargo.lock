@@ -639,7 +639,6 @@ dependencies = [
  "dialoguer",
  "dirs 6.0.0",
  "futures",
- "glob",
  "gtmpl",
  "gtmpl_value",
  "nix 0.30.1",

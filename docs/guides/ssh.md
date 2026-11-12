@@ -255,14 +255,18 @@ Unknown backslash escapes in Host patterns remain literal, matching OpenSSH.
 Exclude an alias with its exact spelling (`!dev`), not an escaped spelling such
 as `!d\ev`.
 
-User Includes support conventional quoting, relative paths, `~/` and globbing.
-POSIX named character classes such as `[[:alpha:]]`, collating symbols and
-equivalence classes are refused because the static scanner cannot expand them
-like OpenSSH. Use ordinary wildcards such as `config.d/*.conf` instead.
+User Includes support conventional quoting, relative paths, `~/` and globbing,
+including byte-oriented wildcards over Unicode filenames. POSIX named character
+classes such as `[[:alpha:]]`, collating symbols, equivalence classes and
+caret-prefixed bracket classes such as `[^a]` are refused because matching differs
+between OpenSSH and native implementations. Use ordinary wildcards such as
+`config.d/*.conf` and `!` for bracket-class negation instead.
 Relative system Includes resolve under the selected OpenSSH client's compiled
 configuration directory, without `~`
 expansion. Other token/environment expansions and Match conditions other than
 `Match all` are refused; the installer never executes `Match exec`.
+Embedded carriage returns are rejected rather than treated as argument
+separators; normal CRLF line endings remain supported.
 
 The installer checks user and system Include graphs before preparing SSH and
 again before publication. It discovers the client's compiled directory using
@@ -291,6 +295,12 @@ retain their canonicalization settings. Entries also set `KnownHostsCommand none
 so a handwritten helper cannot add another host-key trust source. Reinstall
 existing aliases to receive these settings. Explicit OpenSSH command-line options
 can override managed settings.
+
+An applicable `NoHostAuthenticationForProxyCommand` must be `no`: Apple's OpenSSH
+can otherwise bypass host-key verification for a ProxyCommand despite strict
+checking. Disable it or exclude the managed alias in user and system Includes.
+Both this check and the additional-identity checks run before SSH preparation and
+again before publishing the alias.
 
 Handwritten Includes must not match `~/.ssh/config.boxlite-backup`, even when
 that backup does not exist yet. For example, narrow `Include config.*` to the

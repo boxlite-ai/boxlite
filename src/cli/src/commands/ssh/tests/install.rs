@@ -1115,3 +1115,237 @@ fn vendor_root_is_scanned_when_primary_is_missing_and_keeps_compiled_include_bas
         .unwrap();
     assert!(effective(home.path(), "dev").contains("hostname first\n"));
 }
+
+#[rstest::rstest]
+#[case::proxy_host_authentication(
+    "Host *\n  NoHostAuthenticationForProxyCommand yes\n",
+    "nohostauthenticationforproxycommand yes"
+)]
+#[case::embedded_carriage_return(
+    "Host * !dev\rignored\n  IdentityFile /manual/personal\n",
+    "identityfile /manual/personal"
+)]
+fn inherited_authentication_controls_cannot_bypass_scanning(
+    #[case] contents: &str,
+    #[case] expected: &str,
+    #[values(false, true)] system: bool,
+    #[values(false, true)] rescan: bool,
+) {
+    let home = test_home();
+    let source = if system {
+        system_root(home.path())
+    } else {
+        root(home.path())
+    };
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let included = source.with_file_name("included.conf");
+    fs::write(&included, "").unwrap();
+    let original = format!(
+        "IgnoreUnknown NoHostAuthenticationForProxyCommand\nInclude {}\n",
+        included.display()
+    );
+    fs::write(&source, &original).unwrap();
+    let installation = rescan.then(|| plan(home.path(), "dev", "A", false).unwrap());
+    fs::write(&included, contents).unwrap();
+
+    let output = Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(&source)
+        .arg("dev")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let effective = String::from_utf8(output.stdout).unwrap();
+    // Portable OpenSSH may also be installed on macOS; the refusal below is
+    // unconditional, but only Apple's client exposes this effective option.
+    if expected.starts_with("identityfile ")
+        || effective
+            .lines()
+            .any(|line| line.starts_with("nohostauthenticationforproxycommand "))
+    {
+        assert!(
+            effective.lines().any(|line| line == expected),
+            "OpenSSH must apply the inherited setting: {effective}"
+        );
+    }
+    let result = match installation {
+        Some(installation) => installation.commit(&stanza("dev", "first")),
+        None => plan(home.path(), "dev", "A", false).map(drop),
+    };
+    assert!(
+        result.is_err(),
+        "installer accepted an inherited authentication bypass: {contents:?}"
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+    assert!(!managed(home.path()).exists());
+    assert!(!home.path().join(".ssh/config.boxlite-backup").exists());
+}
+
+#[rstest::rstest]
+fn unicode_include_names_cannot_hide_personal_identities(
+    #[values(false, true)] system: bool,
+    #[values(false, true)] rescan: bool,
+    #[values(false, true)] directory: bool,
+) {
+    let home = test_home();
+    let source = if system {
+        system_root(home.path())
+    } else {
+        root(home.path())
+    };
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let control = source.with_file_name("control.inc");
+    fs::write(&control, "").unwrap();
+    let original = format!("Include {}\n", control.display());
+    fs::write(&source, &original).unwrap();
+    let installation = rescan.then(|| plan(home.path(), "dev", "A", false).unwrap());
+    let (name, pattern) = if directory {
+        ("é/personal.conf", "??/personal.conf")
+    } else {
+        ("é.conf", "??.conf")
+    };
+    let included = source.parent().unwrap().join(name);
+    fs::create_dir_all(included.parent().unwrap()).unwrap();
+    fs::write(&included, "IdentityFile /manual/personal\n").unwrap();
+    fs::write(
+        &control,
+        format!("Include {}/{pattern}\n", source.parent().unwrap().display()),
+    )
+    .unwrap();
+    let output = Command::new("ssh")
+        .args(["-G", "-F"])
+        .arg(&source)
+        .arg("dev")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let effective = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        effective
+            .lines()
+            .any(|line| line == "identityfile /manual/personal"),
+        "OpenSSH must include the Unicode-named identity file: {effective}"
+    );
+    let result = match installation {
+        Some(installation) => installation.commit(&stanza("dev", "first")),
+        None => plan(home.path(), "dev", "A", false).map(drop),
+    };
+    assert!(result.is_err(), "Unicode Include hid a personal identity");
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+    assert!(!managed(home.path()).exists());
+    assert!(!home.path().join(".ssh/config.boxlite-backup").exists());
+}
+
+#[rstest::rstest]
+#[case::disabled("Host *\r\n  NoHostAuthenticationForProxyCommand no\r\n")]
+#[case::excluded(
+    "Host * !dev\r\n  NoHostAuthenticationForProxyCommand yes\r\n  IdentityFile /manual/excluded\r\n"
+)]
+fn safe_proxy_authentication_settings_and_crlf_remain_usable(#[case] contents: &str) {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    let original = format!("IgnoreUnknown NoHostAuthenticationForProxyCommand\r\n{contents}");
+    fs::write(root(home.path()), &original).unwrap();
+    plan(home.path(), "dev", "A", false)
+        .unwrap()
+        .commit(&stanza("dev", "first"))
+        .unwrap();
+    let resolved = effective(home.path(), "dev");
+    assert!(resolved.lines().any(|line| line == "hostname first"));
+    assert!(
+        !resolved
+            .lines()
+            .any(|line| line == "identityfile /manual/excluded")
+    );
+    assert!(
+        fs::read_to_string(root(home.path()))
+            .unwrap()
+            .ends_with(&original)
+    );
+}
+
+#[rstest::rstest]
+#[case::managed(".boxlite/ssh/config")]
+#[case::backup(".ssh/config.boxlite-backup")]
+fn unicode_parent_patterns_cannot_include_future_installer_files(#[case] destination: &str) {
+    let parent = test_home();
+    let home = parent.path().join("é");
+    fs::create_dir_all(home.join(".ssh")).unwrap();
+    let original = format!("Include {}/??/{destination}\n", parent.path().display());
+    fs::write(root(&home), &original).unwrap();
+    assert!(
+        plan(&home, "dev", "A", false).is_err(),
+        "an Include can load a future installer-owned file"
+    );
+    assert_eq!(fs::read_to_string(root(&home)).unwrap(), original);
+    assert!(!managed(&home).exists());
+    assert!(!home.join(".ssh/config.boxlite-backup").exists());
+}
+
+#[rstest::rstest]
+#[case::identity("[^a].conf", "a.conf", "IdentityFile /manual/personal\n")]
+#[case::managed("../.boxlite/ssh/[^c]onfig", "", "")]
+#[case::backup("[^c]onfig.boxlite-backup", "", "")]
+fn ambiguous_caret_include_patterns_are_refused_before_publication(
+    #[case] pattern: &str,
+    #[case] name: &str,
+    #[case] contents: &str,
+    #[values(false, true)] rescan: bool,
+) {
+    let home = test_home();
+    fs::create_dir(home.path().join(".ssh")).unwrap();
+    let control = home.path().join(".ssh/control.inc");
+    fs::write(&control, "").unwrap();
+    let original = "Include control.inc\n";
+    fs::write(root(home.path()), original).unwrap();
+    let installation = rescan.then(|| plan(home.path(), "dev", "A", false).unwrap());
+    if !name.is_empty() {
+        fs::write(home.path().join(".ssh").join(name), contents).unwrap();
+    }
+    fs::write(&control, format!("Include {pattern}\n")).unwrap();
+    let result = match installation {
+        Some(installation) => installation.commit(&stanza("dev", "first")),
+        None => plan(home.path(), "dev", "A", false).map(drop),
+    };
+    assert!(result.is_err(), "ambiguous caret Include was accepted");
+    assert_eq!(fs::read_to_string(root(home.path())).unwrap(), original);
+    assert!(!managed(home.path()).exists());
+    assert!(!home.path().join(".ssh/config.boxlite-backup").exists());
+}
+
+#[rstest::rstest]
+#[case::user_relative(false, "personal.conf")]
+#[case::user_home(false, "~/.ssh/personal.conf")]
+#[case::system_relative(true, "personal.conf")]
+fn literal_backslashes_in_include_bases_cannot_hide_identities(
+    #[case] system: bool,
+    #[case] include: &str,
+    #[values(false, true)] rescan: bool,
+) {
+    let parent = test_home();
+    let home = parent.path().join(r"a\b");
+    let source = if system {
+        system_root(&home)
+    } else {
+        root(&home)
+    };
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    let personal = source.with_file_name("personal.conf");
+    fs::write(&personal, "").unwrap();
+    let original = format!("Include {include}\n");
+    fs::write(&source, &original).unwrap();
+    let installation = rescan.then(|| plan(&home, "dev", "A", false).unwrap());
+    fs::write(&personal, "IdentityFile /manual/personal\n").unwrap();
+    let result = match installation {
+        Some(installation) => installation.commit(&stanza("dev", "first")),
+        None => plan(&home, "dev", "A", false).map(drop),
+    };
+    assert!(
+        result.is_err(),
+        "native Include expansion consumed a literal backslash in its base"
+    );
+    assert_eq!(fs::read_to_string(&source).unwrap(), original);
+    assert!(!managed(&home).exists());
+    assert!(!home.join(".ssh/config.boxlite-backup").exists());
+}

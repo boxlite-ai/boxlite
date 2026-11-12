@@ -1,8 +1,10 @@
 //! Own only the marked Include and the private BoxLite configuration it loads.
 
+use std::ffi::{CStr, CString, OsStr};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -140,11 +142,8 @@ impl Installation {
                 "SSH alias '{alias}' belongs to a different BoxLite target; choose --alias or use --overwrite"
             );
         }
-        // Rust glob treats '\\' literally, but OpenSSH's native glob consumes
-        // it as an escape. A bracket class means one literal backslash to both.
         let literal =
-            glob::Pattern::escape(managed.to_str().context("SSH Include path must be UTF-8")?)
-                .replace('\\', r"[\\]");
+            escape_include_literal(managed.to_str().context("SSH Include path must be UTF-8")?);
         let prefix = include_prefix(&literal, expand_include_tokens)?;
         let original_prefix_len = match original.as_deref() {
             Some(original) if original.starts_with(prefix.as_bytes()) => prefix.len(),
@@ -691,7 +690,7 @@ fn words(value: &str) -> Result<Vec<String>> {
             }
             '#' if !quoted && !started => break,
             '\'' if !quoted => bail!("unsupported single-quoted SSH control directive"),
-            ' ' | '\t' | '\r' if !quoted => {
+            ' ' | '\t' if !quoted => {
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
@@ -732,6 +731,10 @@ impl ConfigScanner<'_> {
         let text =
             std::str::from_utf8(bytes).context("cannot safely scan non-UTF-8 SSH configuration")?;
         for line in text.lines() {
+            ensure!(
+                !line.contains('\r'),
+                "unsupported embedded carriage return in SSH configuration"
+            );
             ensure!(
                 !line
                     .trim_start()
@@ -779,6 +782,14 @@ impl ConfigScanner<'_> {
                     );
                     active = !never_match;
                 }
+                "nohostauthenticationforproxycommand" if active => {
+                    let values = words(value)?;
+                    ensure!(
+                        matches!(values.as_slice(), [value] if value.eq_ignore_ascii_case("no")),
+                        "SSH NoHostAuthenticationForProxyCommand must be no for alias '{}'; disable it or exclude this alias before using --install-ssh-config",
+                        self.alias
+                    );
+                }
                 "identityfile" | "identityfile2" | "certificatefile" if active => {
                     // Only unescaped sentinel syntax is allowed; other values denote files.
                     if keyword != "certificatefile"
@@ -807,21 +818,16 @@ impl ConfigScanner<'_> {
             "system SSH Include does not support home expansion: {path}"
         );
         let pattern = include_pattern(path, self.home, &self.base, self.expand_include_tokens)?;
-        let managed = self
-            .managed
-            .to_str()
-            .context("managed SSH path is not UTF-8")?;
         ensure!(
-            !glob::Pattern::new(&pattern)?.matches(managed),
+            !include_matches_destination(&pattern, self.managed)?,
             "unowned or conditional Include of the BoxLite managed file; remove it manually"
         );
         ensure!(
-            !include_matches_backup(&pattern, self.backup)?,
+            !include_matches_destination(&pattern, self.backup)?,
             "SSH Include matches the BoxLite config backup; narrow it before installing"
         );
-        for included in glob::glob(&pattern).context("unsupported SSH Include glob")? {
-            let included = included.context("read SSH Include glob")?;
-            let canonical = fs::canonicalize(&included)
+        for included in IncludePaths::new(&pattern)?.iter() {
+            let canonical = fs::canonicalize(included)
                 .with_context(|| format!("resolve SSH Include {}", included.display()))?;
             ensure!(
                 canonical != self.managed,
@@ -833,13 +839,13 @@ impl ConfigScanner<'_> {
                 included.display()
             );
             ensure!(
-                fs::metadata(&included)
+                fs::metadata(included)
                     .with_context(|| format!("inspect SSH Include {}", included.display()))?
                     .is_file(),
                 "SSH Include is not a regular file: {}",
                 included.display()
             );
-            let bytes = fs::read(&included)
+            let bytes = fs::read(included)
                 .with_context(|| format!("read SSH Include {}", included.display()))?;
             self.stack.push(canonical);
             let result = self
@@ -852,33 +858,92 @@ impl ConfigScanner<'_> {
     }
 }
 
-/// Match a future backup without requiring the backup file to exist.
+/// Match an installer destination even before the file exists.
 ///
-/// Expand only its prospective parent directories, then resolve them through the
-/// filesystem. This preserves `.`/`..`, directory glob and symlink semantics
-/// rather than lexically collapsing paths that OpenSSH resolves differently.
-fn include_matches_backup(pattern: &str, backup: &Path) -> Result<bool> {
+/// Expand and resolve parent directories through the filesystem. Only the fixed
+/// ASCII filename goes through fnmatch: Darwin fnmatch counts Unicode characters,
+/// whereas its glob and OpenSSH Include count filename bytes.
+fn include_matches_destination(pattern: &str, destination: &Path) -> Result<bool> {
     let (directory, filename) = pattern
         .rsplit_once('/')
         .context("SSH Include pattern must be absolute")?;
-    let backup_name = backup
+    let name = destination
         .file_name()
         .and_then(|name| name.to_str())
-        .context("SSH backup filename must be UTF-8")?;
-    if !glob::Pattern::new(filename)?.matches(backup_name) {
+        .context("SSH destination filename must be UTF-8")?;
+    if !include_matches(filename, name)? {
         return Ok(false);
     }
-    let backup_parent = backup.parent().context("SSH backup has no parent")?;
+    let parent = destination
+        .parent()
+        .context("SSH destination has no parent")?;
     let directory = if directory.is_empty() { "/" } else { directory };
-    for parent in glob::glob(directory).context("unsupported SSH Include directory glob")? {
-        let parent = parent.context("read SSH Include directory glob")?;
-        let canonical = fs::canonicalize(&parent)
-            .with_context(|| format!("resolve SSH Include directory {}", parent.display()))?;
-        if canonical == backup_parent {
+    for matched in IncludePaths::new(directory)?.iter() {
+        let canonical = fs::canonicalize(matched)
+            .with_context(|| format!("resolve SSH Include directory {}", matched.display()))?;
+        if canonical == parent {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Own native glob results while callers borrow paths, including non-UTF-8 names.
+struct IncludePaths(libc::glob_t);
+
+impl IncludePaths {
+    fn new(pattern: &str) -> Result<Self> {
+        let pattern = CString::new(pattern).context("SSH Include pattern contains NUL")?;
+        // SAFETY: zero initializes the counters, pointers and optional callbacks.
+        let mut paths = Self(unsafe { std::mem::zeroed() });
+        extern "C" fn on_error(_: *const libc::c_char, error: libc::c_int) -> libc::c_int {
+            i32::from(error != libc::ENOENT && error != libc::ENOTDIR)
+        }
+        // SAFETY: pattern is NUL-terminated; paths owns writable, initialized
+        // storage and frees all results, including partial results on failure.
+        let result = unsafe { libc::glob(pattern.as_ptr(), 0, Some(on_error), &mut paths.0) };
+        ensure!(
+            result == 0 || result == libc::GLOB_NOMATCH,
+            "cannot expand SSH Include {}: glob error {result}",
+            pattern.to_string_lossy()
+        );
+        Ok(paths)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &Path> {
+        (0..self.0.gl_pathc).map(|index| {
+            // SAFETY: glob supplies gl_pathc valid NUL-terminated paths. The
+            // borrow prevents globfree until the caller finishes using them.
+            let bytes = unsafe { CStr::from_ptr(*self.0.gl_pathv.add(index)).to_bytes() };
+            Path::new(OsStr::from_bytes(bytes))
+        })
+    }
+}
+
+impl Drop for IncludePaths {
+    fn drop(&mut self) {
+        // SAFETY: this is the sole owner of storage initialized by glob.
+        unsafe { libc::globfree(&mut self.0) };
+    }
+}
+
+/// Check prospective destinations with the same native pathname grammar.
+fn include_matches(pattern: &str, path: &str) -> Result<bool> {
+    let pattern = CString::new(pattern).context("SSH Include pattern contains NUL")?;
+    let path = CString::new(path).context("SSH Include destination contains NUL")?;
+    // SAFETY: both C strings remain valid for the call; fnmatch retains neither.
+    let result = unsafe {
+        libc::fnmatch(
+            pattern.as_ptr(),
+            path.as_ptr(),
+            libc::FNM_PATHNAME | libc::FNM_PERIOD,
+        )
+    };
+    ensure!(
+        result == 0 || result == libc::FNM_NOMATCH,
+        "cannot match SSH Include destination: fnmatch error {result}"
+    );
+    Ok(result == 0)
 }
 
 /// Resolve OpenSSH's supported Include spellings against the config home.
@@ -890,14 +955,18 @@ fn include_pattern(value: &str, home: &Path, base: &Path, expand_tokens: bool) -
         !value.is_empty() && !value.contains('$') && !value.contains('`'),
         "unsupported SSH Include environment expansion"
     );
-    // Native glob supports POSIX bracket expressions that Rust glob treats as
-    // literal characters, which can hide files from both configuration scans.
+    // Bracket extensions differ between native and OpenSSH compatibility glob.
+    // Refuse ambiguous syntax before expansion and prospective-file checks.
     let mut characters = value.chars().peekable();
     while let Some(character) = characters.next() {
         if character != '[' {
             continue;
         }
-        if matches!(characters.peek(), Some('!' | '^')) {
+        ensure!(
+            characters.peek() != Some(&'^'),
+            "unsupported SSH Include caret bracket expression; use ! for negation"
+        );
+        if characters.peek() == Some(&'!') {
             characters.next();
         }
         // A leading closing bracket is a literal member of the set.
@@ -914,8 +983,8 @@ fn include_pattern(value: &str, home: &Path, base: &Path, expand_tokens: bool) -
             );
         }
     }
-    // Native and Rust globbing agree on our literal-backslash bracket class,
-    // but other backslash escapes are ambiguous between the two parsers.
+    // Only the generated literal-backslash bracket spelling is supported;
+    // other escapes are ambiguous between ssh_config and glob parsing.
     ensure!(
         value.split(r"[\\]").all(|part| !part.contains('\\')),
         "unsupported SSH Include backslash pattern"
@@ -932,7 +1001,7 @@ fn include_pattern(value: &str, home: &Path, base: &Path, expand_tokens: bool) -
         literal.push(character);
     }
     if let Some(relative) = literal.strip_prefix("~/") {
-        let home = glob::Pattern::escape(home.to_str().context("SSH home must be UTF-8")?);
+        let home = escape_include_literal(home.to_str().context("SSH home must be UTF-8")?);
         Ok(format!("{home}/{relative}"))
     } else if literal.starts_with('/') {
         Ok(literal)
@@ -941,9 +1010,26 @@ fn include_pattern(value: &str, home: &Path, base: &Path, expand_tokens: bool) -
             !literal.starts_with('~'),
             "unsupported SSH Include user-home expansion"
         );
-        let base = glob::Pattern::escape(base.to_str().context("SSH Include base must be UTF-8")?);
+        let base = escape_include_literal(base.to_str().context("SSH Include base must be UTF-8")?);
         Ok(format!("{base}/{literal}"))
     }
+}
+
+/// Preserve literal path components through ssh_config parsing and native glob.
+fn escape_include_literal(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '?' | '*' | '[' | ']' => {
+                escaped.push('[');
+                escaped.push(character);
+                escaped.push(']');
+            }
+            '\\' => escaped.push_str(r"[\\]"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 /// Match OpenSSH Host patterns: only '*' and '?' are wildcards, not glob classes.
