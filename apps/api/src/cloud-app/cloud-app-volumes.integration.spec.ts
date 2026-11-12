@@ -61,7 +61,7 @@ describeDatabase('App volume ownership (PostgreSQL)', () => {
       DROP SCHEMA IF EXISTS "${schema}" CASCADE;
       CREATE SCHEMA "${schema}"; CREATE SCHEMA "${engineSchema}";
       CREATE TABLE volume (id uuid PRIMARY KEY, "organizationId" uuid, name varchar NOT NULL,
-        state varchar NOT NULL DEFAULT 'ready', "errorReason" varchar, "lastUsedAt" timestamp,
+        state varchar NOT NULL DEFAULT 'ready', instance varchar, "errorReason" varchar, "lastUsedAt" timestamp,
         "createdAt" timestamptz NOT NULL DEFAULT now(), "updatedAt" timestamptz NOT NULL DEFAULT now());
       CREATE TABLE box (id text PRIMARY KEY, "organizationId" uuid, volumes jsonb NOT NULL DEFAULT '[]',
         "desiredState" varchar NOT NULL DEFAULT 'started');`)
@@ -96,6 +96,7 @@ describeDatabase('App volume ownership (PostgreSQL)', () => {
       { assertOrganizationIsNotSuspended: () => undefined } as never,
       { get: () => 'gcs' } as never,
       {} as never,
+      {} as never,
     )
   })
 
@@ -126,7 +127,7 @@ describeDatabase('App volume ownership (PostgreSQL)', () => {
       { name: null },
     ])
     await expect(volumes.validateVolumes(organizationId, [volumeId], staging.id)).resolves.toEqual(
-      new Map([[volumeId, volumeId]]),
+      new Map([[volumeId, expect.objectContaining({ id: volumeId, appId: app.id })]]),
     )
     await expect(volumes.validateVolumes(organizationId, [volumeId])).rejects.toMatchObject({ status: 403 })
     await expect(volumes.validateVolumes(organizationId, [volumeId], 'env_b')).rejects.toMatchObject({ status: 403 })
@@ -134,7 +135,7 @@ describeDatabase('App volume ownership (PostgreSQL)', () => {
       status: 404,
     })
     await expect(volumes.validateVolumes(organizationId, [ordinaryId])).resolves.toEqual(
-      new Map([[ordinaryId, ordinaryId]]),
+      new Map([[ordinaryId, expect.objectContaining({ id: ordinaryId, targetType: 'box' })]]),
     )
     await expect(source.query('UPDATE volume SET environment_id = NULL WHERE id=$1', [volumeId])).rejects.toThrow(
       'volume_target',
@@ -205,6 +206,22 @@ describeDatabase('App volume ownership (PostgreSQL)', () => {
     expect(await volumes.findOne(volumeId)).toMatchObject({ appId: app.id, environmentId: environment.id })
   })
 
+  it('accepts App-owned non-active Box consumers before contracting volume mappings', async () => {
+    await migrate(expand)
+    await source.query('ALTER TABLE box ADD COLUMN app_id text, ADD COLUMN environment_id text')
+    await source.query('INSERT INTO box (id, volumes, app_id, environment_id) VALUES ($1,$2,$3,$4)', [
+      'app-worker',
+      JSON.stringify([{ volumeId }]),
+      app.id,
+      environment.id,
+    ])
+    await migrate(contract)
+    expect(await volumes.findOne(volumeId)).toMatchObject({ appId: app.id, environmentId: environment.id })
+    expect(
+      (await source.query(scoped("SELECT to_regclass('cloud_app.env_volumes') AS old_table")))[0].old_table,
+    ).toBeNull()
+  })
+
   it('provisions and lists volumes by ownership and cleans up only the selected environment', async () => {
     await migrate(expand)
     await migrate(contract)
@@ -249,19 +266,22 @@ describeDatabase('App volume ownership (PostgreSQL)', () => {
     )
     expect(mounts).toEqual([{ managed_volume: volumeId, guest_path: '/data' }])
     await expect(
-      resources.forOrganization(organizationId).createBox({
-        name: 'demo-main',
-        image: 'node:test',
-        cpus: 1,
-        memory_mib: 1024,
-        disk_size_gb: 10,
-        env: { BOXLITE_ENV_ID: environment.id },
-        cmd: [],
-        auto_stop: 900,
-        auto_resume: true,
-        network: { inbound: { mode: 'enabled' } },
-        volumes: mounts,
-      }),
+      resources.forOrganization(organizationId).createBox(
+        {
+          name: 'demo-main',
+          image: 'node:test',
+          cpus: 1,
+          memory_mib: 1024,
+          disk_size_gb: 10,
+          env: { BOXLITE_ENV_ID: environment.id },
+          cmd: [],
+          auto_stop: 900,
+          auto_resume: true,
+          network: { inbound: { mode: 'enabled' } },
+          volumes: mounts,
+        },
+        environment.id,
+      ),
     ).resolves.toMatchObject({ id: box.id })
     const next = await adapter.create(app, staging, 'stage-uploads')
     expect(await volumes.findOne(next.id)).toMatchObject({

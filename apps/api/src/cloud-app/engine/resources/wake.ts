@@ -79,7 +79,7 @@ export class BoxWaker {
   private async wakeFailed(boxId: string, err: Error): Promise<void> {
     console.error(`[wake] start ${boxId} failed: ${err.message}`)
     this.wakeFailures.set(boxId, { at: Date.now(), message: err.message })
-    const env = await this.ctx.store.get<{ id: string }>('SELECT id FROM envs WHERE box_id = ?', boxId)
+    const env = await this.ctx.store.get<{ id: string }>('SELECT id FROM envs WHERE active_box_id = ?', boxId)
     if (env) {
       await recordLogs(this.ctx, env.id, [
         {
