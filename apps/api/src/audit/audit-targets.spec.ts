@@ -146,7 +146,7 @@ describe('audit targets at HTTP boundaries', () => {
   })
 
   describe.each(['/v1/boxes', '/v1/org/boxes'])('creation command privacy through %s', (path) => {
-    it.each(['success', 'starting', 'invalid'])('omits command fields from %s audits', async (outcome) => {
+    it.each(['success', 'timeout', 'invalid'])('omits command fields from %s audits', async (outcome) => {
       const cmd = ['tool', '--token=private-command-marker']
       const entrypoint = ['sh', '-c', 'private-entrypoint-marker']
       const body = {
@@ -160,7 +160,7 @@ describe('audit targets at HTTP boundaries', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      expect(res.status).toBe(outcome === 'invalid' ? 400 : 201)
+      expect(res.status).toBe(outcome === 'success' ? 201 : outcome === 'timeout' ? 408 : 400)
       expect(audit.createLog).toHaveBeenCalledTimes(1)
       const metadata = audit.createLog.mock.calls[0][0].metadata.body
       expect(metadata).toMatchObject({ image: body.image })
@@ -175,30 +175,29 @@ describe('audit targets at HTTP boundaries', () => {
       } else {
         expect(boxes.create).toHaveBeenCalledTimes(1)
         expect(boxes.create.mock.calls[0][0]).toMatchObject({ cmd, entrypoint })
-        expect(waitForStarted).not.toHaveBeenCalled()
+        if (outcome === 'timeout') expect(waitForStarted).toHaveBeenCalledWith(box.id, 'org', 30)
+        else expect(waitForStarted).not.toHaveBeenCalled()
       }
     })
   })
 
-  it.each(['/v1/boxes', '/v1/org/boxes'])(
-    'audits the created Box ID without waiting for startup through %s',
-    async (path) => {
-      const res = await fetch(base + path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: 'alpine:latest' }),
-      })
-      expect(res.status).toBe(201)
-      expect(await res.json()).toMatchObject({ box_id: box.id })
-      expect(boxes.create).toHaveBeenCalledTimes(1)
-      expect(waitForStarted).not.toHaveBeenCalled()
-      expect(audit.updateLog).toHaveBeenCalledWith(
-        'audit',
-        expect.objectContaining({ statusCode: 201, targetId: box.id }),
-      )
-    },
-  )
+  it.each(['/v1/boxes', '/v1/org/boxes'])('keeps the created Box ID after a wait timeout through %s', async (path) => {
+    const res = await fetch(base + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: 'alpine:latest' }),
+    })
+    expect(res.status).toBe(408)
+    expect(await res.json()).toMatchObject({ boxId: box.id })
+    expect(boxes.create).toHaveBeenCalledTimes(1)
+    expect(waitForStarted).toHaveBeenCalledWith(box.id, 'org', 30)
+    expect(audit.updateLog).toHaveBeenCalledWith(
+      'audit',
+      expect.objectContaining({ statusCode: 408, targetId: box.id }),
+    )
+  })
   it('retains the created Box audit target if response conversion fails', async () => {
+    box.state = BoxState.STARTED
     Object.defineProperty(box, 'image', {
       configurable: true,
       get: () => {
