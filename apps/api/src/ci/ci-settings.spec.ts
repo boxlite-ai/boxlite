@@ -278,7 +278,7 @@ integration('CI account settings (real Postgres)', () => {
       [native.namespace],
     )
     await db.query(
-      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'),lease_until=clock_timestamp()-interval '1 second' WHERE namespace=$1 AND record_key='@owner'",
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'),lease_until=clock_timestamp()-interval '1 second' WHERE namespace=$1 AND record_key='@lease'",
       [native.namespace],
     )
     await expect(inspectJournal(native.state, lease)).rejects.toBeInstanceOf(LeaseLost)

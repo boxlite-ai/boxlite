@@ -184,6 +184,41 @@ selects indexed key prefixes so retained delivery receipts and inactive historic
 scopes are not enumerated. Unleased reads serve ingress CAS lookups and dashboard
 aggregates; they never grant permission to execute jobs.
 
+### Execution lease storage
+
+`@owner` stores `{owner, epoch}` with record schema 2; `@lease` stores `{until}`
+with schema 1. The identity and its UUID record version remain stable throughout
+a scheduler's tenure. Renewal extends only the deadline; takeover increments the
+epoch and changes both records atomically.
+
+Execution checks, renewal and acquisition lock `@owner` before reading `@lease`.
+Renewal rejects an expired or replaced owner and never shortens its deadline,
+even if a caller requests a shorter TTL. A contender checks the committed deadline
+after obtaining the owner lock, so it cannot take over a live renewed lease.
+The lock is held until the database transaction commits or rolls back.
+
+Snapshot checks read the deadline without locking that frequently updated row.
+For example, a snapshot can precede a renewal from 10:00:30 to 10:00:40 and still
+lock the unchanged scheduler identity. An older deadline can cause conservative
+lease rejection, but cannot extend authority; actual takeover changes the locked
+identity and can still produce a serialization error. Neither the shared state
+adapter nor the hosted adapter automatically retries transactions.
+
+Initialization upgrades a legacy schema-1 owner containing `{owner, epoch, until}`
+under the bootstrap transaction and owner lock. It preserves identity, epoch,
+deadline and journal data while creating `@lease` and writing schema-2 `@owner`.
+An interrupted upgrade rolls back completely; mixed or missing records fail closed.
+Repeated initialization validates the existing records without resetting them.
+
+Old binaries reject owner schema 2. During rollout, an old scheduler stops renewing
+and an upgraded instance can acquire after the preserved deadline expires.
+Upgrade all hosts sharing a namespace; reverting binaries alone is unsupported,
+and deleting execution state would lose recovery records. The existing PostgreSQL
+and SQLite tables are retained: identity columns belong to `@owner`, and
+`lease_until` belongs to `@lease`.
+
+### Conditional admission writes
+
 Admission commits may include read-only record-version checks. The transaction
 locks those records and rejects a missing or changed version before writing any
 allocation. The checked policy keeps its version, so multiple admissions can use

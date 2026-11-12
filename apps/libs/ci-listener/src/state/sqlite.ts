@@ -123,8 +123,8 @@ class SqliteTransaction implements StateTransaction {
     ).map(decode)
   }
   async put(record: StateRecord, expected: string | null): Promise<boolean> {
-    const owner =
-      record.key === '@owner' ? (record.payload as { owner: string; epoch: number; until: number }) : undefined
+    const owner = record.key === '@owner' ? (record.payload as { owner: string; epoch: number }) : undefined
+    const until = record.key === '@lease' ? (record.payload as { until: number }).until : undefined
     if (expected === null)
       return (
         this.database
@@ -140,7 +140,7 @@ class SqliteTransaction implements StateTransaction {
             JSON.stringify(record.payload),
             owner?.epoch ?? null,
             owner?.owner ?? null,
-            owner?.until ?? null,
+            until ?? null,
             Date.now(),
           ).changes === 1
       )
@@ -155,7 +155,7 @@ class SqliteTransaction implements StateTransaction {
           JSON.stringify(record.payload),
           owner?.epoch ?? null,
           owner?.owner ?? null,
-          owner?.until ?? null,
+          until ?? null,
           Date.now(),
           this.namespace,
           record.key,

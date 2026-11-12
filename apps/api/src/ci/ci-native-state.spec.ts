@@ -68,47 +68,52 @@ integration('CI native state snapshot conflicts', () => {
     }) as any)
   }
 
-  it.each(['read', 'recover', 'scan'] as const)('retries %s after a concurrent lease renewal', async (operation) => {
-    const expected = await store.state.read(['notice/job'], lease)
-    afterAnchor(async (attempt) => {
-      if (attempt === 1) await store.state.renew(lease, 30000)
-    })
-    const result =
-      operation === 'read'
-        ? store.state.read(['notice/job'], lease)
-        : operation === 'recover'
-          ? store.state.recover(lease, 100, ['notice/'])
-          : store.state.scan(lease, { prefix: 'notice/' })
-    await expect(result).resolves.toEqual(expected)
-    expect(snapshots).toBe(2)
-  })
+  it.each(['read', 'recover', 'scan'] as const)(
+    'completes %s during renewal without restarting its snapshot',
+    async (operation) => {
+      const expected = await store.state.read(['notice/job'], lease)
+      afterAnchor(async (attempt) => {
+        if (attempt === 1) await store.state.renew(lease, 30000)
+      })
+      const result =
+        operation === 'read'
+          ? store.state.read(['notice/job'], lease)
+          : operation === 'recover'
+            ? store.state.recover(lease, 100, ['notice/'])
+            : store.state.scan(lease, { prefix: 'notice/' })
+      await expect(result).resolves.toEqual(expected)
+      expect(snapshots).toBe(1)
+    },
+  )
 
-  it('stops after three real serialization failures', async () => {
-    afterAnchor(() => store.state.renew(lease, 30000))
-    await expect(store.state.read(['notice/job'], lease)).rejects.toMatchObject({
-      driverError: { code: '40001' },
-    })
-    expect(snapshots).toBe(3)
-  })
-
-  it.each(['expired', 'replaced'])('rejects a lease that became %s before the retry', async (state) => {
-    afterAnchor(async (attempt) => {
-      if (attempt !== 1) return
-      await db.query(
-        "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'),lease_until=to_timestamp(0) WHERE namespace=$1 AND record_key='@owner'",
-        [store.namespace],
-      )
-      if (state === 'replaced') expect(await store.state.acquire('successor', 30000)).toBeDefined()
-    })
+  it('rejects the previous scheduler after takeover', async () => {
+    await db.query(
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'),lease_until=to_timestamp(0) WHERE namespace=$1 AND record_key='@lease'",
+      [store.namespace],
+    )
+    expect(await store.state.acquire('successor', 30000)).toBeDefined()
     await expect(store.state.read(['notice/job'], lease)).rejects.toBeInstanceOf(LeaseLost)
-    expect(snapshots).toBe(2)
+    await expect(store.state.renew(lease, 30000)).rejects.toBeInstanceOf(LeaseLost)
   })
 
-  it('leaves a borrowed transaction failure to its owner', async () => {
+  it('allows renewal before a borrowed snapshot locks the owner', async () => {
+    const expected = await store.state.read(['notice/job'], lease)
     afterAnchor(() => store.state.renew(lease, 30000))
     await expect(
       db.transaction('REPEATABLE READ', (tx) => store.inside(tx).read(['notice/job'], lease)),
-    ).rejects.toMatchObject({ driverError: { code: '40001' } })
+    ).resolves.toEqual(expected)
+    expect(snapshots).toBe(1)
+  })
+
+  it('does not retry a snapshot invalidated by actual takeover', async () => {
+    afterAnchor(async () => {
+      await db.query(
+        "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0') WHERE namespace=$1 AND record_key='@lease'",
+        [store.namespace],
+      )
+      expect(await store.state.acquire('successor', 30000)).toBeDefined()
+    })
+    await expect(store.state.read(['notice/job'], lease)).rejects.toMatchObject({ driverError: { code: '40001' } })
     expect(snapshots).toBe(1)
   })
 
@@ -120,14 +125,15 @@ integration('CI native state snapshot conflicts', () => {
     expect(snapshots).toBe(1)
   })
 
-  it('does not replay a write transaction', async () => {
+  it.each(['read', 'renew'])('does not replay a failed %s transaction', async (operation) => {
     const failure = new QueryFailedError(
       'SELECT',
       [],
       Object.assign(new Error('serialization failure'), { code: '40001' }),
     )
     const transaction = jest.spyOn(db, 'transaction').mockRejectedValue(failure)
-    await expect(store.state.renew(lease, 30000)).rejects.toBe(failure)
+    const pending = operation === 'read' ? store.state.read(['notice/job'], lease) : store.state.renew(lease, 30000)
+    await expect(pending).rejects.toBe(failure)
     expect(transaction).toHaveBeenCalledTimes(1)
   })
 })

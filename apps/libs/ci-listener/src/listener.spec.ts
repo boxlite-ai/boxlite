@@ -478,7 +478,7 @@ describe('CI shared Listener orchestration', () => {
     ))!
     await state.commit(original, [{ key: allocation.record.key, expected: allocation.record.version }])
     await db.transaction(namespace, async (tx) => {
-      const row = (await tx.get('@owner', true))!
+      const row = (await tx.get('@lease', true))!
       await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), until: 0 } }, row.version)
     })
     const failed = deferred()
@@ -571,7 +571,7 @@ describe('CI shared Listener orchestration', () => {
         testCapacity({ account: 2, tenant: 1 }),
       )
       await db.transaction(namespace, async (tx) => {
-        const row = (await tx.get('@owner', true))!
+        const row = (await tx.get('@lease', true))!
         await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), until: 0 } }, row.version)
       })
       jest.mocked(backend.workers.create).mockRejectedValue(new Error('Creation outcome pending'))
@@ -625,7 +625,7 @@ describe('CI shared Listener orchestration', () => {
       key = await journal.define(original, scope)
     await journal.reserve(original, key, { repository: 21, run: 33, job: 55 }, testCapacity({ account: 1, tenant: 2 }))
     await db.transaction(namespace, async (tx) => {
-      const row = (await tx.get('@owner', true))!
+      const row = (await tx.get('@lease', true))!
       await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), until: 0 } }, row.version)
     })
     await listener.receive(notification(56, 2, 8, 22))

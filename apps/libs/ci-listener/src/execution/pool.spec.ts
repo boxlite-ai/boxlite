@@ -455,10 +455,10 @@ describe('CI shared worker lifecycle', () => {
     await pool.tick(lease, capacity)
     await pool.tick(lease, capacity)
     await db.transaction(lease.namespace, async (tx) => {
-      const owner = (await tx.get('@owner'))!
+      const expiry = (await tx.get('@lease'))!
       await tx.put(
-        { ...owner, version: randomUUID(), payload: { ...(owner.payload as object), until: 0 } },
-        owner.version,
+        { ...expiry, version: randomUUID(), payload: { ...(expiry.payload as object), until: 0 } },
+        expiry.version,
       )
     })
     lease = (await state.acquire(randomUUID(), 300000))!

@@ -190,7 +190,7 @@ integration('CI managed organization group (real Postgres)', () => {
   it.each(['owner', 'generation', 'disabled', 'root', 'lease'])(
     'refuses writes after %s authority changes during inventory reads',
     async (kind) => {
-      const [originalOwner] = await db.query("SELECT payload FROM ci_listener_state WHERE record_key='@owner'")
+      const [originalLease] = await db.query("SELECT payload FROM ci_listener_state WHERE record_key='@lease'")
       beforeGroupRead = async () => {
         if (kind === 'owner') await db.query('DELETE FROM organization_user')
         if (kind === 'generation') await db.query('UPDATE ci_installation_binding SET generation=2')
@@ -199,7 +199,7 @@ integration('CI managed organization group (real Postgres)', () => {
           await db.query("UPDATE ci_listener_state SET payload='{}'::jsonb WHERE record_key='backend/native'")
         if (kind === 'lease')
           await db.query(
-            "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@owner'",
+            "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@lease'",
           )
       }
       const view = await discover((value) => value.ready || reports.mock.calls.length > 0).catch((error) => {
@@ -218,7 +218,7 @@ integration('CI managed organization group (real Postgres)', () => {
           ).not.toEqual([])
         } finally {
           // Restore only the fixture's original lease after checking fencing, so teardown can retire its retained debt.
-          await db.query("UPDATE ci_listener_state SET payload=$1 WHERE record_key='@owner'", [originalOwner.payload])
+          await db.query("UPDATE ci_listener_state SET payload=$1 WHERE record_key='@lease'", [originalLease.payload])
         }
         await host.close()
         expect(await db.query("SELECT record_key FROM ci_listener_state WHERE record_key LIKE 'credential/%'")).toEqual(

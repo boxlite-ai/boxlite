@@ -55,6 +55,132 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       }
     })
     const owner = async (): Promise<ExecutionLease> => (await state.acquire(randomUUID(), 10_000))!
+    const roots = () =>
+      database.transaction(namespace, async (tx) => ({
+        owner: await tx.get('@owner'),
+        lease: await tx.get('@lease'),
+      }))
+    async function legacy(until: number) {
+      await database.transaction(namespace, async (tx) => {
+        const current = (await tx.get('@owner', true))!
+        const expiry = await tx.get('@lease')
+        if (expiry) await tx.remove(expiry.key, expiry.version)
+        await tx.put(
+          { ...current, schema: 1, version: randomUUID(), payload: { ...(current.payload as object), until } },
+          current.version,
+        )
+      })
+    }
+    it('renews only expiry while preserving the scheduler identity record', async () => {
+      const lease = await owner(),
+        before = await roots()
+      await state.renew(lease, 20000)
+      const after = await roots()
+      expect(after.owner).toEqual(before.owner)
+      expect(after.owner?.schema).toBe(2)
+      expect(after.owner?.payload).toEqual({ owner: lease.owner, epoch: lease.epoch })
+      expect(after.lease?.version).not.toBe(before.lease?.version)
+      expect((after.lease?.payload as { until: number }).until).toBeGreaterThan(
+        (before.lease?.payload as { until: number }).until,
+      )
+    })
+    it('never shortens expiry when renewal requests a shorter duration', async () => {
+      const lease = await owner(),
+        before = await roots()
+      await state.renew(lease, 100)
+      expect((await roots()).lease?.payload).toEqual(before.lease?.payload)
+      expect(await state.acquire('contender', 10000)).toBeUndefined()
+    })
+    it.each([0, 30000])(
+      'upgrades a legacy deadline with %i ms remaining without changing identity or journal',
+      async (remaining) => {
+        const lease = await owner()
+        const notice = await state.ingest([{ key: 'notice/upgrade', expected: null, payload: { job: 7 } }])
+        const until = remaining ? Date.now() + remaining : 0
+        await legacy(until)
+        await state.initialize()
+        const upgraded = await roots()
+        expect(upgraded.owner).toMatchObject({ schema: 2, payload: { owner: lease.owner, epoch: lease.epoch } })
+        expect(upgraded.owner?.payload).not.toHaveProperty('until')
+        expect(upgraded.lease).toMatchObject({ schema: 1, payload: { until } })
+        expect(await state.read(['notice/upgrade'])).toEqual(notice)
+        await state.initialize()
+        expect(await roots()).toEqual(upgraded)
+        if (remaining) {
+          expect(await state.acquire('successor', 10000)).toBeUndefined()
+          await expect(state.renew(lease, 30000)).resolves.toBeUndefined()
+        } else {
+          expect(await state.acquire('successor', 10000)).toMatchObject({ epoch: lease.epoch + 1 })
+          await expect(state.renew(lease, 10000)).rejects.toBeInstanceOf(LeaseLost)
+        }
+      },
+    )
+    it('rolls back the new expiry record when legacy identity upgrade fails', async () => {
+      await owner()
+      await legacy(Date.now() + 30000)
+      const before = await roots(),
+        failure = new Error('identity write interrupted')
+      const failing: StateDatabase = {
+        transaction: (ns, work, mode) =>
+          database.transaction(
+            ns,
+            async (tx) => {
+              const wrapped = Object.create(tx) as typeof tx
+              wrapped.put = async (row, expected) => {
+                if (row.key === '@owner') throw failure
+                return tx.put(row, expected)
+              }
+              return work(wrapped)
+            },
+            mode,
+          ),
+      }
+      await expect(new ListenerState(failing, namespace).initialize()).rejects.toBe(failure)
+      expect(await roots()).toEqual(before)
+      await expect(state.initialize()).resolves.toBeUndefined()
+    })
+    it.each(['missing', 'invalid', 'mixed'])('rejects %s lease metadata without repairing it', async (kind) => {
+      await owner()
+      if (kind === 'mixed') await legacy(Date.now() + 30000)
+      await database.transaction(namespace, async (tx) => {
+        const row = await tx.get('@lease')
+        if (kind === 'missing') await tx.remove(row!.key, row!.version)
+        else if (kind === 'invalid')
+          await tx.put({ ...row!, version: randomUUID(), payload: { until: -1 } }, row!.version)
+        else await tx.put({ key: '@lease', schema: 1, version: randomUUID(), payload: { until: 0 } }, null)
+      })
+      const before = await roots()
+      await expect(state.initialize()).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await roots()).toEqual(before)
+    })
+    it('rejects an invalid legacy deadline without partially upgrading', async () => {
+      await legacy(-1)
+      const before = await roots()
+      await expect(state.initialize()).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await roots()).toEqual(before)
+    })
+    it('rejects old renewal while concurrent contenders acquire an expired lease', async () => {
+      const previous = await owner()
+      await database.transaction(namespace, async (tx) => {
+        const row = (await tx.get('@lease'))!
+        await tx.put({ ...row, version: randomUUID(), payload: { until: 0 } }, row.version)
+      })
+      const [renewed, ...contenders] = await Promise.allSettled([
+        state.renew(previous, 10000),
+        state.acquire('next-a', 10000),
+        state.acquire('next-b', 10000),
+      ])
+      expect(renewed).toMatchObject({ status: 'rejected', reason: expect.any(LeaseLost) })
+      expect(contenders.every((result) => result.status === 'fulfilled')).toBe(true)
+      const winners = contenders.flatMap((result) =>
+        result.status === 'fulfilled' && result.value ? [result.value] : [],
+      )
+      expect(winners).toHaveLength(1)
+      expect(winners[0]).toMatchObject({ epoch: previous.epoch + 1 })
+      await expect(
+        state.commit(previous, [{ key: 'worker/stale', expected: null, payload: {} }]),
+      ).rejects.toBeInstanceOf(LeaseLost)
+    })
     it('quota fence permits a matching version without modifying the policy', async () => {
       const lease = await owner()
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant', expected: null, payload: { limit: 2 } }])
@@ -250,7 +376,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       )
       await expect(state.scan(lease, { prefix: 'replay/' })).rejects.toBeInstanceOf(StateCorrupt)
       await database.transaction(namespace, async (tx) => {
-        const row = (await tx.get('@owner', true))!
+        const row = (await tx.get('@lease', true))!
         await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), until: 0 } }, row.version)
       })
       await expect(state.scan(lease, { prefix: 'notice/' })).rejects.toBeInstanceOf(LeaseLost)
