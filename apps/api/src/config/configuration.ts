@@ -547,7 +547,14 @@ const configuration = {
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
     // The Filestore instances a mount dispatch may resolve to; invalid
     // configuration refuses to start the API.
-    filestoreInstances: parseFilestoreInstances(),
+    filestoreInstances: parseFilestoreInstances({
+      // Stage verification branch: an unset FILESTORE_INSTANCES falls back
+      // to the stage instance so filestore mounts run on this branch's
+      // deployment without the environment plumbing.
+      FILESTORE_INSTANCES:
+        process.env.FILESTORE_INSTANCES ??
+        '[{"name":"boxlite-dev-shared","server":"10.53.8.194","export":"/shared"}]',
+    }),
   },
   gcs: {
     // Credentials come from Application Default Credentials, never a key file,
