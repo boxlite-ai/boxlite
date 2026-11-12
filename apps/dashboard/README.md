@@ -1054,6 +1054,10 @@ Hovering the compact logo temporarily expands the sidebar. Keyboard users activa
 
 Desktop mock examples: [expanded navigation](../../docs/contributing/investigations/assets/console-navigation/topic02-navigation-dark.png) and [temporary hover preview](../../docs/contributing/investigations/assets/console-navigation/topic02-hover-dark.png). Captured at 1440 × 900 from the navigation topic preview; the accompanying Tab changes are delivered separately.
 
+In the compact rail, an active parent link includes its current child in its
+accessible name, such as “Boxes, current section: Checkpoints”. The parent is
+not marked as the current page when its destination differs from the current route.
+
 ## Tabs and selection feedback
 
 Content tabs use a persistent underline. Compact choices, such as theme and chart/list mode, use a selected surface. Hover previews interaction without replacing selected feedback. Navigation links preserve route semantics; in-page tabs retain tab/panel keyboard behavior. Icon effects respect reduced motion. Billing, Organization and Quickstart use the same choice rules.
