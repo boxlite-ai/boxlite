@@ -33,6 +33,29 @@ Their SPA fixtures leave the optional MCP resource URL empty, matching the deplo
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
 
+### Hosted CI lease storage
+
+The hosted listener stores scheduler identity and epoch in `@owner`, and its
+renewable deadline in `@lease`. Execution checks lock the stable identity row;
+renewal validates that identity and updates only the deadline. A snapshot created
+before renewal can therefore lock the same owner without a renewal-induced
+serialization failure. There is no automatic transaction retry; actual takeover
+or other database failures still propagate.
+
+Initialization atomically upgrades existing combined owner records while
+preserving their identity, epoch, deadline and execution journal. Old binaries
+reject the upgraded owner schema and stop renewing, so rollout can pause
+scheduling until the preserved lease expires. This is a forward state-format
+upgrade: do not revert to an older binary or delete the journal to roll back.
+See [shared lease semantics](../libs/ci-listener/README.md#execution-lease-storage)
+for locking, expiry and migration rules.
+
+`make test:apps:api TEST_FILES=ci-native-state.spec.ts` exercises concurrent
+renewal without snapshot restarts, takeover fencing and error propagation against
+PostgreSQL. Supply `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` if needed,
+and `DB_DATABASE` for a disposable local database; without `DB_HOST`, it skips.
+The suite creates and drops its own schema and accepts only loopback database hosts.
+
 ### Production entity metadata checks
 
 `make build:apps:api` and the API Docker build validate PostgreSQL entity metadata

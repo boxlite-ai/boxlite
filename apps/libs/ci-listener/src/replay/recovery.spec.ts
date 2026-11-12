@@ -459,7 +459,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(pause).toBeDefined()
       expect(await entry()).toBeUndefined()
       await database.transaction(namespace, async (tx) => {
-        const row = (await tx.get('@owner', true))!
+        const row = (await tx.get('@lease', true))!
         await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), until: 0 } }, row.version)
       })
       lease = (await state.acquire('next-owner', 300000))!

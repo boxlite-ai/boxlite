@@ -351,7 +351,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     }
     if (kind === 'lease')
       await db.query(
-        "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE namespace=$1 AND record_key='@owner'",
+        "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE namespace=$1 AND record_key='@lease'",
         [store.namespace],
       )
     await replayUntil(async () => {

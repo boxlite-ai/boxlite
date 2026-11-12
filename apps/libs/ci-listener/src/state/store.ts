@@ -18,9 +18,14 @@ export interface StateCheck {
   key: string
   version: string
 }
-type Owner = { owner: string; epoch: number; until: number }
+type Owner = { owner: string; epoch: number }
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-const record = (key: string, payload: Json): StateRecord => ({ key, payload, schema: 1, version: randomUUID() })
+const record = (key: string, payload: Json): StateRecord => ({
+  key,
+  payload,
+  schema: key === '@owner' ? 2 : 1,
+  version: randomUUID(),
+})
 
 /** Durable facts only. Hosts authorize ingress; a lease fences execution commits, not already-issued HTTP requests. */
 export class ListenerState {
@@ -40,16 +45,28 @@ export class ListenerState {
       this.namespace,
       async (tx) => {
         const anchor = await tx.get('@anchor'),
-          owner = await tx.get('@owner', true)
-        if (anchor || owner) {
+          owner = await tx.get('@owner', true),
+          expiry = await tx.get('@lease')
+        if (anchor || owner || expiry) {
           this.anchor(anchor)
-          this.owner(owner)
+          if (owner?.schema === 1) {
+            if (expiry) throw new StateCorrupt()
+            const { owner: identity, epoch } = this.owner(owner, 1),
+              until = this.until(owner)
+            // Schema 2 makes old binaries fail closed instead of renewing the obsolete deadline.
+            if (!(await tx.put(record('@lease', { until }), null))) throw new StateConflict()
+            if (!(await tx.put(record('@owner', { owner: identity, epoch }), owner.version))) throw new StateConflict()
+          } else {
+            this.owner(owner)
+            this.until(expiry)
+          }
           for (const seed of seeds) this.valid(await tx.get(seed.key))
           return
         }
         if ((await tx.page('', 1)).length) throw new StateCorrupt()
         if (!(await tx.put(record('@anchor', { namespace: this.namespace }), null))) throw new StateConflict()
-        if (!(await tx.put(record('@owner', { owner: '', epoch: 0, until: 0 }), null))) throw new StateConflict()
+        if (!(await tx.put(record('@owner', { owner: '', epoch: 0 }), null))) throw new StateConflict()
+        if (!(await tx.put(record('@lease', { until: 0 }), null))) throw new StateConflict()
         if (seeds.length) await this.apply(tx, seeds)
       },
       'bootstrap',
@@ -63,11 +80,14 @@ export class ListenerState {
       this.anchor(await tx.get('@anchor'))
       const row = await tx.get('@owner', true),
         previous = this.owner(row),
+        expiry = await tx.get('@lease'),
+        until = this.until(expiry),
         now = await tx.now()
-      if (previous.until > now) return undefined
+      if (until > now) return undefined
       if (previous.epoch === Number.MAX_SAFE_INTEGER) throw new StateCorrupt()
-      const next = { owner: ownerId, epoch: previous.epoch + 1, until: now + ttlMs }
+      const next = { owner: ownerId, epoch: previous.epoch + 1 }
       if (!(await tx.put(record('@owner', next), row!.version))) throw new StateConflict()
+      if (!(await tx.put(record('@lease', { until: now + ttlMs }), expiry!.version))) throw new StateConflict()
       return { namespace: this.namespace, owner: next.owner, epoch: next.epoch }
     })
   }
@@ -77,9 +97,9 @@ export class ListenerState {
     this.ttl(ttlMs)
     await this.database.transaction(this.namespace, async (tx) => {
       const row = await this.assertLease(tx, lease),
-        current = this.owner(row)
-      current.until = (await tx.now()) + ttlMs
-      if (!(await tx.put(record('@owner', current), row.version))) throw new StateConflict()
+        until = Math.max(this.until(row), (await tx.now()) + ttlMs)
+      // Keep the locked identity tuple stable; snapshots may conservatively see an older deadline.
+      if (!(await tx.put(record('@lease', { until }), row.version))) throw new StateConflict()
     })
   }
 
@@ -192,6 +212,7 @@ export class ListenerState {
         if (lease) await this.assertLease(tx, lease)
         this.anchor(await tx.get('@anchor'))
         this.owner(await tx.get('@owner'))
+        this.until(await tx.get('@lease'))
         const rows: StateRecord[] = []
         for (const key of keys) {
           const row = await tx.get(key)
@@ -215,6 +236,7 @@ export class ListenerState {
     return this.database.transaction(this.namespace, async (tx) => {
       this.anchor(await tx.get('@anchor'))
       this.owner(await tx.get('@owner'))
+      this.until(await tx.get('@lease'))
       return this.apply(tx, prepared)
     })
   }
@@ -236,11 +258,12 @@ export class ListenerState {
   private async assertLease(tx: StateTransaction, lease: ExecutionLease): Promise<StateRecord> {
     if (lease.namespace !== this.namespace) throw new LeaseLost()
     this.anchor(await tx.get('@anchor'))
-    const row = await tx.get('@owner', true),
-      current = this.owner(row)
-    if (current.owner !== lease.owner || current.epoch !== lease.epoch || current.until <= (await tx.now()))
+    const current = this.owner(await tx.get('@owner', true)),
+      expiry = await tx.get('@lease'),
+      until = this.until(expiry)
+    if (current.owner !== lease.owner || current.epoch !== lease.epoch || until <= (await tx.now()))
       throw new LeaseLost()
-    return row!
+    return expiry!
   }
 
   private anchor(row?: StateRecord): void {
@@ -253,22 +276,21 @@ export class ListenerState {
     )
       throw new StateCorrupt()
   }
-  private owner(row?: StateRecord): Owner {
-    this.valid(row)
+  private owner(row?: StateRecord, schema = 2): Owner {
+    this.valid(row, schema)
     const value = row!.payload as Owner | null
-    if (
-      !value ||
-      typeof value.owner !== 'string' ||
-      !Number.isSafeInteger(value.epoch) ||
-      value.epoch < 0 ||
-      !Number.isSafeInteger(value.until) ||
-      value.until < 0
-    )
+    if (!value || typeof value.owner !== 'string' || !Number.isSafeInteger(value.epoch) || value.epoch < 0)
       throw new StateCorrupt()
     return value
   }
-  private valid(row?: StateRecord): void {
-    if (!row || row.schema !== 1 || !uuid.test(row.version)) throw new StateCorrupt()
+  private until(row?: StateRecord): number {
+    this.valid(row, 1)
+    const until = (row!.payload as { until?: number } | null)?.until
+    if (!Number.isSafeInteger(until) || until! < 0) throw new StateCorrupt()
+    return until!
+  }
+  private valid(row?: StateRecord, schema = row?.key === '@owner' ? 2 : 1): void {
+    if (!row || row.schema !== schema || !uuid.test(row.version)) throw new StateCorrupt()
   }
 
   private prepare(changes: StateChange[]): StateChange[] {

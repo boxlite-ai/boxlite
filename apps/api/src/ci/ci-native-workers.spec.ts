@@ -420,7 +420,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     })
     const previousEpoch = lease.epoch
     await db.query(
-      "UPDATE ci_listener_state SET payload=payload||'{\"until\":0}'::jsonb WHERE namespace=$1 AND record_key='@owner'",
+      "UPDATE ci_listener_state SET payload=payload||'{\"until\":0}'::jsonb WHERE namespace=$1 AND record_key='@lease'",
       [store.namespace],
     )
     lease = (await store.state.acquire(randomUUID(), 30000))!
@@ -463,7 +463,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     expect(await db.getRepository(Box).count()).toBe(0)
     await db.query(
-      "UPDATE ci_listener_state SET payload=payload||'{\"until\":0}'::jsonb WHERE namespace=$1 AND record_key='@owner'",
+      "UPDATE ci_listener_state SET payload=payload||'{\"until\":0}'::jsonb WHERE namespace=$1 AND record_key='@lease'",
       [store.namespace],
     )
     lease = (await store.state.acquire(randomUUID(), 30000))!
@@ -643,7 +643,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   it('rechecks the execution epoch inside Box persistence after a real lease takeover', async () => {
     // Short lease deliberately expires during provisioning, before onPersist.
     await db.query(
-      `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@owner'`,
+      `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@lease'`,
     )
     lease = (await store.state.acquire(randomUUID(), 300))!
     const { host, config } = await prepared()
@@ -951,7 +951,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         if (kind === 'binding') await db.query("UPDATE ci_installation_binding SET state='disabled'")
         else {
           await db.query(
-            `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@owner'`,
+            `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@lease'`,
           )
           expect(await store.state.acquire(randomUUID(), 30000)).toBeDefined()
         }
@@ -975,7 +975,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const { host, config } = await forDelivery()
     respond = async () => {
       await db.query(
-        `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@owner'`,
+        `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@lease'`,
       )
       expect(await store.state.acquire(randomUUID(), 30000)).toBeDefined()
       return 204

@@ -22,12 +22,35 @@ describe('CI shared fair selection', () => {
     values.push({ scope: scope('small', 200), value: 'small' })
     for (let i = 0; i < 5; i++) expect(selection.take(values, 2)).toContain('small')
   })
-  it('rotates queued jobs within an account and returns at most one per account per round', () => {
+  it('fills a batch from one account without repeating a candidate', () => {
     const selection = new FairSelection(),
       values = [1, 2, 3].map((value) => ({ scope: scope('tenant', 1), value }))
-    expect(selection.take(values, 32)).toEqual([1])
-    expect(selection.take(values, 32)).toEqual([2])
-    expect(selection.take(values, 32)).toEqual([3])
+    expect(selection.take(values, 32)).toEqual([1, 2, 3])
+  })
+  it('continues rotating within an account across bounded batches', () => {
+    const selection = new FairSelection(),
+      values = [1, 2, 3].map((value) => ({ scope: scope('tenant', 1), value }))
+    expect(selection.take(values, 2)).toEqual([1, 2])
+    expect(selection.take(values, 2)).toEqual([3, 1])
+    expect(selection.take(values, 2)).toEqual([2, 3])
+  })
+  it('alternates tenants before filling more slots from their accounts', () => {
+    const selection = new FairSelection(),
+      values = [
+        ...['a1', 'a2', 'a3'].map((value) => ({ scope: scope('a', 1), value })),
+        ...['a4', 'a5'].map((value) => ({ scope: scope('a', 2), value })),
+        ...['b1', 'b2', 'b3'].map((value) => ({ scope: scope('b', 3), value })),
+      ]
+    expect(selection.take(values, 6)).toEqual(['a1', 'b1', 'a4', 'b2', 'a2', 'b3'])
+  })
+  it('skips exhausted accounts and returns immediately when fewer candidates remain', () => {
+    const selection = new FairSelection(),
+      values = [
+        { scope: scope('tenant', 1), value: 1 },
+        ...[2, 3].map((value) => ({ scope: scope('tenant', 2), value })),
+      ]
+    expect(selection.take(values, 0)).toEqual([])
+    expect(selection.take(values, 32)).toEqual([1, 2, 3])
   })
   it('continues after the head account exhausts its turn and handles an empty snapshot', () => {
     const selection = new FairSelection()

@@ -863,7 +863,7 @@ describe('Standalone App binding and HTTP ingress', () => {
       ])
     } else
       await db.transaction(namespace, async (tx) => {
-        const row = (await tx.get('@owner', true))!
+        const row = (await tx.get('@lease', true))!
         await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), until: 0 } }, row.version)
       })
     await replayUntil(() => jest.mocked(host.report).mock.calls.length > 0)
