@@ -928,7 +928,6 @@ impl RuntimeImpl {
             }
             let locker = match self.box_locker(&config.id) {
                 Ok(locker) => locker,
-                Err(BoxliteError::NotFound(_)) => continue,
                 Err(error) => {
                     self.sync_cleanup_pending.store(true, Ordering::Release);
                     eprintln!(

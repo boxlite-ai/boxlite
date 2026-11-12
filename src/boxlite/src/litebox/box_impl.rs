@@ -875,9 +875,11 @@ impl BoxImpl {
         // Check if box was persisted
         let was_persisted = self.state.read().lock_id.is_some();
 
-        // Update state
+        // Publish the terminal state only after persistence succeeds, so a failed
+        // write cannot make this run look like a stale handle on the next retry.
         {
-            let mut state = self.state.write();
+            let mut current = self.state.write();
+            let mut state = current.clone();
 
             let exit_file = self.layout.container_exit_file(self.container_id());
             match reason {
@@ -913,6 +915,7 @@ impl BoxImpl {
                             box_id = %self.config.id,
                             "Box already removed from DB during stop (likely cleanup after init failure)"
                         );
+                        *current = state;
                         return Ok(());
                     }
                     Err(e) => return Err(e),
@@ -921,6 +924,7 @@ impl BoxImpl {
                 // Box was never started - persist now so it survives restarts
                 self.runtime.box_manager.add_box(&self.config, &state)?;
             }
+            *current = state;
         }
 
         // Invalidate cache so new handles get fresh BoxImpl
@@ -1230,7 +1234,15 @@ impl BoxImpl {
     /// `start()`). `attach` deliberately does *not* use this: it boots without
     /// running init, so a client can attach before `start()`.
     async fn live_state(&self) -> BoxliteResult<&LiveState> {
-        let live = self.ensure_booted().await?;
+        let live = self
+            .with_operation(async {
+                if self.shutdown_token.is_cancelled() {
+                    return Err(BoxliteError::Stopped("Box handle has been stopped".into()));
+                }
+                self.ensure_usable_without_rerunning_main("use")?;
+                self.ensure_booted_locked().await
+            })
+            .await?;
         self.ensure_container_started(live).await?;
         Ok(live)
     }
@@ -1243,7 +1255,7 @@ impl BoxImpl {
     /// Stopped — and this `OnceCell` still holds that dead VM's `LiveState`.
     /// `OnceCell` cannot be re-initialized, so `get_or_try_init` would return the
     /// corpse and the promised restart would silently not happen. The guard lives
-    /// here, at the one funnel `live_state` and `attach` share.
+    /// in `ensure_booted_locked`, shared by `live_state`, `start`, and `attach`.
     ///
     /// A `Stopped` box whose cell is empty is fine: that is a fresh handle, and
     /// booting it is the restart. Only an *initialized* cell on a box that is no

@@ -125,6 +125,11 @@ watcher reports. Internal boot and attach helpers reuse that admission; they nev
 acquire a second lifecycle lock. An initialized handle cannot attach its old live
 resources to a different PID or `started_at`.
 
+Implicit operations recheck whether booting may run a user-specified command after
+this refresh, under the same admission as boot. For example, `metrics()` waiting
+behind a stop must not restart a job whose command already ran. Explicit `start()`
+still permits a restart; attach-before-start still permits preparing a fresh box.
+
 Watcher observes processes and probes health without holding admission. It reports
 events through `RuntimeImpl::apply_box_observation` using a weak runtime reference;
 resolving an event does not arm another watcher. `BoxImpl::apply_observation`
@@ -136,6 +141,10 @@ Successful automatic removal is recorded on that handle, so a later `stop()` rem
 idempotent even after its row and lock are gone. Unrelated missing state is not
 treated as completed automatic removal.
 
+Stop finalization publishes its in-memory terminal state only after persistence
+succeeds (or the row is already gone). A failed write leaves the run identity
+retryable instead of making the handle appear to belong to an earlier VM.
+
 Explicit start keeps `Container.Start` background and cancellable. Outbound updates
 use the host network backend without awaiting that RPC: a pending container start
 cannot hold lifecycle admission and prevent stop. Returning live resources releases
@@ -144,9 +153,11 @@ their short state lock.
 
 Explicit removal uses a nonblocking lifecycle write attempt and returns
 `InvalidState` when busy. Synchronous shutdown skips detached boxes and defers busy
-cleanup. Async shutdown marks cleanup pending before awaiting stops and clears it
-only after every stop succeeds. Timeout, failure, or cancellation leaves a later
-synchronous shutdown or runtime Drop able to retry.
+cleanup or lock-retrieval failures, including a missing lock file. A missing box row
+is already gone; a missing lock is not proof of completed cleanup. Async shutdown
+marks cleanup pending before awaiting stops and clears it only after every stop
+succeeds. Timeout, failure, or cancellation leaves a later synchronous shutdown or
+runtime Drop able to retry.
 
 Disk APIs retain their existing **per-handle `disk_ops` mutex**, not a disk-lock
 registry. The quiesce bracket also takes lifecycle write admission through
@@ -165,10 +176,12 @@ snapshot/clone/export lock migration is separate work.
 
 Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` for host
 admission and cleanup checks. Stand-in processes and loopback guest RPCs are not
-VM evidence. For the real boot control/race cases, leave dependency stubs unset
-and run `make test:integration:lifecycle-race` with `BOXLITE_REPRO_ROOTFS` pointing
-to a local OCI image layout, not an unpacked rootfs; this target explicitly runs
-the ignored tests.
+VM evidence. For real boot/stop races and implicit-job restart prevention, leave
+dependency stubs unset and run `make test:integration:lifecycle-race` with
+`BOXLITE_REPRO_ROOTFS` pointing to a local OCI image layout, not an unpacked rootfs.
+This target explicitly runs the ignored tests. The implicit-operation regression
+counts guest-written markers before cleanup and checks that explicit restart still
+works.
 
 
 ### ShimController

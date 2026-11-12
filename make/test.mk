@@ -479,11 +479,14 @@ test\:integration\:lifecycle-race: $(if $(SETUP_DONE),,runtime\:debug)
 		echo "Set BOXLITE_REPRO_ROOTFS to a local OCI image directory" >&2; exit 1; }
 	@test -z "$$BOXLITE_DEPS_STUB" || { echo "Real VM tests cannot use dependency stubs" >&2; exit 1; }
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy,native --test start_stop_race \
+		cargo nextest run -p boxlite --features krun,gvproxy,native --lib --test start_stop_race \
+			-E 'binary(start_stop_race) | test(implicit_job_rechecks_after_admission)' \
 			--run-ignored only --no-tests=fail --no-fail-fast --profile vm; \
 	else \
 		cargo test -p boxlite --features krun,gvproxy,native --test start_stop_race \
-			-- --ignored --test-threads=1 --nocapture; \
+			-- --ignored --test-threads=1 --nocapture && \
+		cargo test -p boxlite --features krun,gvproxy,native --lib \
+			-- --ignored --test-threads=1 --nocapture implicit_job_rechecks_after_admission; \
 	fi
 
 # OpenCode agent adapter and `boxlite agent` CLI tests (requires VM). Ignored by the suites above:

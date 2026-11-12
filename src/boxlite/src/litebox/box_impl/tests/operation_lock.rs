@@ -280,3 +280,166 @@ async fn drop_retries_after_async_shutdown_timeout() {
 async fn drop_retries_after_async_shutdown_is_cancelled() {
     check_async_shutdown_retains_drop_cleanup(true).await;
 }
+
+#[tokio::test]
+async fn stop_retries_after_state_persistence_failure() {
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = &fixture.box_impl;
+    let database =
+        rusqlite::Connection::open(bx.runtime.layout.db_dir().join("boxlite.db")).unwrap();
+    database
+        .execute_batch(
+            "CREATE TRIGGER reject_stop BEFORE UPDATE ON box_state
+             BEGIN SELECT RAISE(ABORT, 'injected stop persistence failure'); END;",
+        )
+        .unwrap();
+
+    assert!(bx.stop().await.is_err());
+    assert_eq!(
+        bx.runtime.box_manager.update_box(bx.id()).unwrap().status,
+        BoxStatus::Running
+    );
+    database.execute_batch("DROP TRIGGER reject_stop").unwrap();
+    bx.stop()
+        .await
+        .expect("stop must retry the failed state write");
+    assert_eq!(
+        bx.runtime.box_manager.update_box(bx.id()).unwrap().status,
+        BoxStatus::Stopped
+    );
+}
+
+#[tokio::test]
+async fn sync_shutdown_retries_after_missing_lock_is_restored() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (child, id, pid) = running_box_with_standin(&runtime, false, 17, vec![]);
+    let lock_id = runtime
+        .box_manager
+        .update_box(&id)
+        .unwrap()
+        .lock_id
+        .unwrap();
+    runtime.lock_manager.free(lock_id).unwrap();
+    runtime.shutdown_sync();
+    assert!(
+        is_process_alive(pid),
+        "shutdown must not bypass the missing lock"
+    );
+
+    runtime.lock_manager.allocate_and_retrieve(lock_id).unwrap();
+    runtime.shutdown_sync();
+    let alive_after_retry = is_process_alive(pid);
+    let status = runtime.box_manager.update_box(&id).unwrap().status;
+    drop(child);
+    assert!(
+        !alive_after_retry,
+        "missing lock disabled subsequent cleanup"
+    );
+    assert_eq!(status, BoxStatus::Stopped);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "Requires BOXLITE_REPRO_ROOTFS and a real VM runtime"]
+async fn implicit_job_rechecks_after_admission() {
+    use crate::runtime::options::{NetworkSpec, VolumeSpec};
+
+    async fn wait_for_runs(marker: &std::path::Path, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while std::fs::read(marker).unwrap_or_default().len() != expected {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("guest did not publish the expected command execution marker");
+    }
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let evidence = home.path().join("evidence");
+    std::fs::create_dir(&evidence).unwrap();
+    let marker = evidence.join("runs");
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        image_registries: vec![],
+        ..Default::default()
+    })
+    .unwrap();
+    let handle = runtime
+        .create(
+            BoxOptions {
+                rootfs: RootfsSpec::RootfsPath(
+                    std::env::var("BOXLITE_REPRO_ROOTFS").expect("set BOXLITE_REPRO_ROOTFS"),
+                ),
+                detach: false,
+                auto_delete: Some(0),
+                network: NetworkSpec::Disabled,
+                volumes: vec![VolumeSpec::bind_mount(
+                    evidence.to_str().unwrap(),
+                    "/evidence",
+                )],
+                cmd: Some(vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "printf x >> /evidence/runs; exec /bin/sleep 300".into(),
+                ]),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let bx = Arc::clone(&handle.box_backend)
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .ok()
+        .unwrap();
+    bx.start().await.expect("control boot");
+    wait_for_runs(&marker, 1).await;
+
+    // A recovered facade has the published run but has not attached its LiveState.
+    let recovered = BoxImpl::new(
+        bx.config.clone(),
+        bx.state.read().clone(),
+        Arc::clone(&runtime),
+        runtime.shutdown_token.child_token(),
+    );
+    let locker = runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let guard = LockGuard::new(locker.as_ref());
+    let mut metrics = Box::pin(recovered.metrics());
+    assert!(futures::poll!(&mut metrics).is_pending());
+    drop(guard);
+    bx.stop().await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(90), &mut metrics)
+        .await
+        .expect("implicit operation timed out");
+    drop(metrics);
+    if result.is_ok() {
+        // Container.Start returning does not prove the guest command has run.
+        wait_for_runs(&marker, 2).await;
+    } else {
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidState(_))),
+            "unexpected boot/setup error: {result:?}"
+        );
+    }
+    let implicit_runs = std::fs::read(&marker).unwrap().len();
+
+    recovered
+        .start()
+        .await
+        .expect("explicit restart remains allowed");
+    wait_for_runs(&marker, 2).await;
+    recovered.stop().await.unwrap();
+    runtime.shutdown(Some(15)).await.unwrap();
+    assert_eq!(
+        implicit_runs, 1,
+        "implicit metrics reran the user's main command after refreshing Stopped"
+    );
+}
