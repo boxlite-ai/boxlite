@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceLoadingState, StatusIndicator } from '@/components/ResourceLayout'
 import { FileText } from '@/components/ui/icon'
 import type { Invoice } from '@/billing-api'
 import type { InvoicesTableProps } from './types'
@@ -72,7 +72,7 @@ function invoiceAmount(invoice: Invoice): string {
  */
 export function InvoicesTable({ data, loading }: InvoicesTableProps) {
   if (loading) {
-    return <div className="border-b border-border/40 py-[13px] font-mono text-body">Loading...</div>
+    return <ResourceLoadingState title="Loading billing documents…" />
   }
 
   if (data.length === 0) {

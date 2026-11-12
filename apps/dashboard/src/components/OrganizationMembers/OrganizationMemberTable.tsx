@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceIdentity, StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceIdentity, ResourceLoadingState, StatusIndicator } from '@/components/ResourceLayout'
 import { useMemo, useState } from 'react'
 import { MoreHorizontal, UserRound, Users } from '@/components/ui/icon'
 import {
@@ -115,7 +115,7 @@ export function OrganizationMemberTable({
                 </>
               )}
             </colgroup>
-            <TableHeader className={!loadingData && table.getRowModel().rows.length === 0 ? 'hidden' : undefined}>
+            <TableHeader className={loadingData || table.getRowModel().rows.length === 0 ? 'hidden' : undefined}>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
@@ -131,8 +131,8 @@ export function OrganizationMemberTable({
             <TableBody>
               {loadingData ? (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-24 text-center">
-                    Loading...
+                  <TableCell colSpan={columns.length}>
+                    <ResourceLoadingState title="Loading members…" />
                   </TableCell>
                 </TableRow>
               ) : table.getRowModel().rows?.length ? (

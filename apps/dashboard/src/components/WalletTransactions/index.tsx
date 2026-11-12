@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceLoadingState, StatusIndicator } from '@/components/ResourceLayout'
 import { CreditCardIcon } from '@/components/ui/icon'
 import type { WalletTransaction } from '@/billing-api'
 import type { WalletTransactionsTableProps } from './types'
@@ -63,7 +63,7 @@ function transactionAmount(transaction: WalletTransaction): string {
  */
 export function WalletTransactionsTable({ data, loading }: WalletTransactionsTableProps) {
   if (loading) {
-    return <div className="border-b border-border/40 py-[13px] font-mono text-body">Loading...</div>
+    return <ResourceLoadingState title="Loading credit activity…" />
   }
 
   if (!data.length)

@@ -47,7 +47,7 @@ describe('WalletTransactionsTable PR #829 surface', () => {
     document.body.appendChild(host)
     root = createRoot(host)
     act(() => root?.render(<WalletTransactionsTable data={[]} loading />))
-    expect(host.textContent).toContain('Loading...')
+    expect(host.querySelector('[role="status"] h2')?.textContent).toBe('Loading credit activity…')
     expect(host.textContent).not.toContain('No credit activity yet')
     act(() => root?.render(<WalletTransactionsTable data={[]} loading={false} />))
     expect(host.querySelector('h2')?.textContent).toBe('No credit activity yet')

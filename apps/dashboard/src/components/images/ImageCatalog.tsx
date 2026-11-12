@@ -1,11 +1,19 @@
-import { QuotaTicks } from '@/components/QuotaTicks'
-import { TechnicalText, FormattedBytes } from '@/components/TechnicalText'
 /*
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, ResourceFilter, ResourceIdentity } from '@/components/ResourceLayout'
+import { QuotaTicks } from '@/components/QuotaTicks'
+import { TechnicalText, FormattedBytes } from '@/components/TechnicalText'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
@@ -38,9 +46,7 @@ import { toast } from 'sonner'
 // One definition for the header and every row, for the reason spelled out in
 // Volumes: two grid containers solving independently drift apart column by
 // column.
-// `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own box.
-const ROW_GRID =
-  'grid min-w-[760px] grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_72px_48px_100px_110px] items-center gap-4'
+const ROW_GRID = 'grid min-w-[760px] grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_72px_48px_100px_110px] items-center gap-4'
 
 function BoxLinks({ boxes }: { boxes: Box[] }) {
   return (
@@ -65,7 +71,8 @@ export function ImageCatalog() {
   const navigate = useNavigate()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
 
-  const { data: images = [], error: imagesError, isLoading } = useImagesQuery()
+  const { data: inventory, error: imagesError, isFetching, refetch } = useImagesQuery()
+  const images = inventory ?? []
   const { data: usage, error: usageError } = useImageUsageQuery()
   const { byImage, byId, truncated } = useBoxesByImageQuery()
   const deleteImage = useDeleteImageMutation()
@@ -78,12 +85,8 @@ export function ImageCatalog() {
   const [newBoxImage, setNewBoxImage] = useState<string | null>(null)
 
   useEffect(() => {
-    if (imagesError) handleApiError(imagesError, 'Failed to fetch images')
-  }, [imagesError])
-
-  useEffect(() => {
-    if (usageError) handleApiError(usageError, 'Failed to fetch image usage')
-  }, [usageError])
+    if (usageError && !imagesError) handleApiError(usageError, 'Failed to fetch image usage')
+  }, [usageError, imagesError])
 
   const catalog = useMemo(
     () =>
@@ -144,9 +147,10 @@ export function ImageCatalog() {
       <div className="resource-toolbar">
         <ResourceFilter
           label="Filter images"
+          disabled={inventory === undefined}
           value={filter}
           onChange={(value) => setFilter(value)}
-          count={rows.length}
+          count={inventory === undefined ? '—' : rows.length}
         />
         {usage && (
           <div>
@@ -180,8 +184,15 @@ export function ImageCatalog() {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-auto">
-        <div className={cn(ROW_GRID, 'resource-list-head')}>
+      <div className="resource-content scroll-edge mt-[14px]">
+        {imagesError && inventory !== undefined && (
+          <ResourceErrorNotice
+            title="Could not refresh images. Showing previously loaded data."
+            retrying={isFetching}
+            onRetry={() => void refetch()}
+          />
+        )}
+        <div className={cn(ROW_GRID, 'resource-list-head', rows.length === 0 && 'hidden')}>
           <span>Image</span>
           <span>Tags</span>
           <span>Size</span>
@@ -261,30 +272,23 @@ export function ImageCatalog() {
           )
         })}
 
-        {isLoading ? (
-          <p role="status" className="px-4 py-12 text-body text-muted-foreground">
-            Loading images…
-          </p>
-        ) : imagesError ? (
-          <p role="alert" className="px-4 py-12 text-body text-muted-foreground">
-            {images.length > 0
-              ? 'Could not refresh images. Showing previously loaded data.'
-              : 'Images are unavailable. Reload to try again.'}
-          </p>
-        ) : rows.length === 0 && !filter.trim() ? (
-          <ResourceEmptyState
-            title="No images yet"
-            description="Create a Box from the Boxes page to add an image. Images appear here after a Box starts successfully."
-          />
+        {inventory === undefined ? (
+          imagesError ? (
+            <ResourceErrorState title="Could not load images" retrying={isFetching} onRetry={() => void refetch()} />
+          ) : (
+            <ResourceLoadingState title="Loading images…" />
+          )
+        ) : rows.length === 0 ? (
+          !filter.trim() ? (
+            <ResourceEmptyState
+              title="No images yet"
+              icon={<Layers />}
+              description="Create a Box from the Boxes page to add an image. Images appear here after a Box starts successfully."
+            />
+          ) : (
+            <ResourceFilterEmptyState title={`No image matches “${filter.trim()}”`} onClear={() => setFilter('')} />
+          )
         ) : null}
-        {!isLoading && !imagesError && rows.length === 0 && filter.trim() && (
-          <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-meta text-muted-foreground">
-            <span>No image matches “{filter.trim()}”</span>
-            <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
-              Clear filter
-            </AsciiButton>
-          </div>
-        )}
       </div>
 
       <CreateBoxDialog
