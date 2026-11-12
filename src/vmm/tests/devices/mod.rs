@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use super::{COM1, I8042_COMMAND, I8042_DATA, add_legacy_devices};
+use super::{CMOS, COM1, I8042_COMMAND, I8042_DATA, add_legacy_devices};
 use crate::{
     bus::UNCLAIMED_READ,
     chipset::{Chipset, ChipsetBuilder, Conflict},
@@ -70,7 +70,7 @@ impl Machine {
         let (writer, console) =
             ConsoleWorker::spawn(Box::new(output), DEFAULT_QUEUE_BYTES).unwrap();
         let mut builder = ChipsetBuilder::new(vm.clone(), events.sender());
-        add_legacy_devices(&mut builder, writer).unwrap();
+        add_legacy_devices(&mut builder, writer, Box::new(|| 0)).unwrap();
         Self {
             chipset: builder.build().unwrap(),
             console,
@@ -161,12 +161,14 @@ fn the_legacy_ports_and_the_in_kernel_windows_are_the_only_claims() {
 
     // The ports around each device, those between the i8042 ports, and the
     // PIT's speaker port, which KVM serves and no device may take.
-    for port in [0x3f7, 0x400, 0x5f, 0x61, 0x62, 0x63, 0x65, 0x80] {
+    for port in [0x3f7, 0x400, 0x6f, 0x72, 0x5f, 0x61, 0x62, 0x63, 0x65, 0x80] {
         assert_eq!(machine.inb(port), UNCLAIMED_READ, "port {port:#x}");
     }
-    assert_eq!(machine.chipset.buses().pio.unclaimed(), (8, 0));
-    // The transmitter is idle.
+    assert_eq!(machine.chipset.buses().pio.unclaimed(), (10, 0));
+    // The transmitter is idle, and CMOS register B reads 24-hour mode.
     assert_eq!(machine.inb(LSR), 0x60);
+    machine.outb(CMOS, 0x0b);
+    assert_eq!(machine.inb(CMOS + 1), 0x02);
     // The UART registers take byte accesses only.
     let mut wide = [0; 2];
     machine.chipset.buses().pio.read(COM1, &mut wide);
@@ -181,8 +183,8 @@ fn a_second_platform_conflicts_with_every_legacy_claim() {
     let mut builder = ChipsetBuilder::new(vm, events.sender());
     let (writer, _console) = ConsoleWorker::spawn(Box::new(Output::default()), 16).unwrap();
     let (second, _second_console) = ConsoleWorker::spawn(Box::new(Output::default()), 16).unwrap();
-    add_legacy_devices(&mut builder, writer).unwrap();
-    add_legacy_devices(&mut builder, second).unwrap();
+    add_legacy_devices(&mut builder, writer, Box::new(|| 0)).unwrap();
+    add_legacy_devices(&mut builder, second, Box::new(|| 0)).unwrap();
 
     let error = builder.build().err().expect("the ports are taken");
     let Error::ChipsetConflicts(conflicts) = &error else {
@@ -201,6 +203,8 @@ fn a_second_platform_conflicts_with_every_legacy_claim() {
             "in-kernel local APIC claims MMIO range 0xfee00000+0x1000, held by in-kernel local APIC",
             "com1 claims port range 0x3f8+0x8, held by com1",
             "com1 claims interrupt line 4, held by com1",
+            "cmos claims port range 0x70+0x2, held by cmos",
+            "cmos claims interrupt line 8, held by cmos",
             "i8042 claims port range 0x60+0x1, held by i8042",
             "i8042 claims port range 0x64+0x1, held by i8042",
         ]

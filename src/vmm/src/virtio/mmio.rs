@@ -49,7 +49,7 @@ pub(crate) const MMIO_WINDOW_LEN: u64 = 0x1000;
 /// Where the virtio-mmio windows start; slot `i` is `i` windows later.
 const WINDOW_START: u64 = 0xd000_0000;
 /// The interrupt lines the slots use, in order: the legacy range above COM1
-/// and below the MSI space, as Firecracker and libkrun allocate it.
+/// and below the MSI space, skipping GSI 8 reserved for the PC RTC.
 const FIRST_GSI: u32 = 5;
 const LAST_GSI: u32 = 23;
 
@@ -79,7 +79,7 @@ pub(crate) struct Slots {
 
 impl Slots {
     /// How many slots a VM has.
-    pub(crate) const CAPACITY: u32 = LAST_GSI - FIRST_GSI + 1;
+    pub(crate) const CAPACITY: u32 = LAST_GSI - FIRST_GSI;
 
     pub(crate) fn new() -> Self {
         Self::default()
@@ -94,7 +94,7 @@ impl Slots {
         self.taken += 1;
         Ok(Slot {
             base: WINDOW_START + u64::from(index) * MMIO_WINDOW_LEN,
-            gsi: FIRST_GSI + index,
+            gsi: FIRST_GSI + index + u32::from(FIRST_GSI + index >= 8),
         })
     }
 }

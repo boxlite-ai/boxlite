@@ -335,7 +335,7 @@ fn boots_linux_and_drives_virtio_blk_through_the_workers() {
         },
         |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
         |chipset, ctx| {
-            add_legacy_devices(chipset, writer)?;
+            add_legacy_devices(chipset, writer, Box::new(crate::devices::cmos::host_clock))?;
             add_blk(chipset, ctx, device, slot)
         },
     )

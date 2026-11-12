@@ -4,6 +4,8 @@
 //! The devices behind the buses, and the platform code that adds them.
 
 pub(crate) mod balloon;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod cmos;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
@@ -42,7 +44,7 @@ pub(crate) fn add_all(
     config: &mut VmConfig,
     console: ConsoleWriter,
 ) -> Result<()> {
-    add_legacy_devices(chipset, console)?;
+    add_legacy_devices(chipset, console, Box::new(cmos::host_clock))?;
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
