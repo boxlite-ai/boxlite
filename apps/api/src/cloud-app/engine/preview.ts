@@ -101,7 +101,7 @@ export async function refreshPreviewIfStale(
   env: EnvRow,
   boxState: string | null,
 ): Promise<void> {
-  if (!env.live_deployment || !env.box_id || boxState !== 'running') return
+  if (!env.live_deployment || !env.active_box_id || boxState !== 'running') return
   const meta = await previewMeta(ctx, env.id)
   if (meta && Date.now() - Date.parse(meta.capturedAt) < STALE_MS) return
   capturePreview(ctx, app.id, env.id, env.live_deployment)

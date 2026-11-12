@@ -70,7 +70,7 @@ export function envRoutes(ctx: Ctx) {
     ) {
       throw fail('conflict', `env "${env.name}" has a deployment in progress`, 'cancel it or wait for it to finish')
     }
-    if (env.box_id) await ctx.boxlite.deleteBox(env.box_id)
+    for (const boxId of await ctx.boxes.list(app, env)) await ctx.boxlite.deleteBox(boxId)
     await ctx.resources.deleteVolumes(app, env)
     if (env.neon_branch_id && app.neon_project_id && env.neon_branch_id !== app.neon_main_branch_id) {
       await ctx.neon.deleteBranch(app.neon_project_id, env.neon_branch_id)

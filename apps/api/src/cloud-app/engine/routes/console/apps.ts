@@ -161,8 +161,9 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
   api.post('/apps/:id/sleep', async (c) => {
     const app = await appOf(c)
     const env = await envOf(c, app)
-    if (!env.box_id) throw fail('conflict', 'nothing is running yet', 'deploy first')
-    await ctx.resources.sleep(env.box_id)
+    const boxes = await ctx.boxes.list(app, env)
+    if (!boxes.length) throw fail('conflict', 'nothing is running yet', 'deploy first')
+    for (const boxId of boxes) await ctx.resources.sleep(boxId)
     await store.recordActivity(app.id, env.name, actorOf(viewer(c)), 'box.sleep')
     return c.json(await detail(app, env))
   })

@@ -54,7 +54,7 @@ export async function writeSpec(
     applied,
     accessOverride: env.access_override,
     assigned: {
-      box_id: env.box_id,
+      box_id: env.active_box_id,
       box_url: env.box_url,
       db_host: db?.host ?? null,
       db_branch: db?.branchId ?? null,
