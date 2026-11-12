@@ -35,10 +35,10 @@ void test_simple_default_resources() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  // Use 0 for default cpus and memory
+  // Use the CPU default and request 1024 MiB explicitly
   BoxliteErrorCode code = boxlite_simple_new("alpine:3.19",
                                              0, // cpus = default
-                                             0, // memory_mib = default
+                                             1024, // memory_mib
                                              &box, &error);
 
   assert(code == Ok);
@@ -54,7 +54,7 @@ void test_simple_run_command() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   assert(code == Ok);
 
   // Run a simple command
@@ -79,7 +79,7 @@ void test_simple_run_no_args() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   assert(code == Ok);
 
   // Run command with no args (NULL, 0)
@@ -100,7 +100,7 @@ void test_simple_run_failure() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   assert(code == Ok);
 
   // Run command that will fail
@@ -127,7 +127,7 @@ void test_simple_multiple_commands() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   assert(code == Ok);
 
   CBoxliteExecResult *result;
@@ -164,7 +164,7 @@ void test_simple_result_cleanup() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   assert(code == Ok);
 
   CBoxliteExecResult *result;
@@ -199,7 +199,7 @@ void test_simple_auto_cleanup() {
   CBoxliteSimple *box;
   CBoxliteError error = {0};
 
-  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   assert(code == Ok);
 
   // Run a command

@@ -19,6 +19,7 @@ import {
   IsObject,
   IsArray,
   Min,
+  Max,
   IsIn,
   MaxLength,
   MinLength,
@@ -261,6 +262,7 @@ export class CreateBoxDto {
   @IsNumber()
   @IsInt()
   @Min(256)
+  @Max(2147483647)
   memory_mib?: number
 
   @IsOptional()

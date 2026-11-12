@@ -245,24 +245,19 @@ Configuration is fixed at creation; see [fractional CPUs](../guides/resource-lim
 
 ### `memory_mib: int`
 
-Memory limit in mebibytes (MiB).
+Integer memory allocation in mebibytes (MiB), minimum **256**, default **1024**.
+A MiB is 1,048,576 bytes. Values are preserved without rounding to GiB.
 
-**Default:** 512
-
-**Range:** 128 to 65536 (64 GiB)
-
-**Example:**
 ```python
-memory_mib=1024   # 1 GB
-memory_mib=2048   # 2 GB
-memory_mib=4096   # 4 GB
+memory_mib=256    # Minimum allocation
+memory_mib=513    # Exact allocation, no power-of-two requirement
+memory_mib=1536   # 1.5 GiB
 ```
 
-**Notes:**
-- 1 MiB = 1024 KiB = 1,048,576 bytes
-- Minimum 128 MiB required for most images
-- Out of memory kills the box process
-- Monitor with `box.metrics().memory_usage_bytes`
+Omitting the option preserves the default; explicit values below 256, fractional MiB and overflow are errors.
+C, Go and cloud paths have a signed 32-bit MiB representation; Rust, Python, Node and CLI use unsigned 32-bit MiB.
+Host capacity, organization quotas and backend limits can impose lower maxima.
+See [memory management](../guides/resource-limits.md#memory-management) for all SDK mappings, C Simple migration and cloud rollout requirements.
 
 ### `disk_size_gb: int | None`
 

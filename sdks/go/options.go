@@ -237,6 +237,7 @@ type boxConfig struct {
 	name               string
 	cpus               *float64
 	memoryMiB          int
+	memorySet          bool
 	diskSizeGB         int
 	rootfsPath         string
 	checkpoint         string
@@ -280,11 +281,12 @@ func WithCPUs(n float64) BoxOption {
 	}
 }
 
-// WithMemory sets the memory limit in MiB.
+// WithMemory sets integer MiB (256..2147483647). Omit it to use the runtime default.
 func WithMemory(mib int) BoxOption {
 	return func(c *boxConfig) {
 		c.checkpointOverride = true
 		c.memoryMiB = mib
+		c.memorySet = true
 	}
 }
 
@@ -538,6 +540,9 @@ func WithAdvancedOptions(adv *AdvancedBoxOptions) BoxOption {
 
 // buildCOptions validates caller presence before converting defaults to the C ABI.
 func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
+	if cfg.memorySet && (cfg.memoryMiB < 256 || int64(cfg.memoryMiB) > 2147483647) {
+		return nil, &Error{Code: ErrInvalidArgument, Message: "memory must be between 256 and 2147483647 MiB"}
+	}
 	if cfg.checkpointSet || cfg.checkpoint != "" {
 		if cfg.checkpoint == "" || strings.ContainsRune(cfg.checkpoint, '\x00') || cfg.checkpointOverride {
 			return nil, &Error{Code: ErrInvalidArgument, Message: "a checkpoint requires a nonempty selector and accepts only WithName"}

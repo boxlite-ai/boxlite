@@ -165,7 +165,7 @@ class CreateBoxRequest(BaseModel):
     image: Optional[str] = "alpine:latest"
     rootfs_path: Optional[str] = None
     cpus: Optional[float] = None
-    memory_mib: Optional[int] = None
+    memory_mib: Optional[int] = Field(default=None, ge=256, le=4294967295, strict=True)
     disk_size_gb: Optional[int] = None
     working_dir: Optional[str] = None
     env: Optional[dict[str, str]] = None

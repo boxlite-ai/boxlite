@@ -90,6 +90,7 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { assertMemoryAllocation } from '../utils/memory-allocation'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
@@ -212,6 +213,7 @@ export class BoxService {
       throw new BoxError(message)
     }
 
+    assertMemoryAllocation(warmPoolItem.mem)
     const box = new Box(warmPoolItem.target)
 
     box.organizationId = BOX_WARM_POOL_UNASSIGNED_ORGANIZATION
@@ -956,6 +958,8 @@ export class BoxService {
     if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
       return box
     }
+
+    assertMemoryAllocation(box.mem)
 
     this.assertBoxNotErrored(box)
 

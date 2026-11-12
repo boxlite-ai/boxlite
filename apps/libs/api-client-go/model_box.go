@@ -43,8 +43,8 @@ type Box struct {
 	Cpu float32 `json:"cpu"`
 	// The GPU quota for the box
 	Gpu float32 `json:"gpu"`
-	// The memory quota for the box
-	Memory float32 `json:"memory"`
+	// The memory quota for the box in GiB, in increments of 1/1024 GiB
+	Memory float64 `json:"memory"`
 	// The disk quota for the box
 	Disk float32 `json:"disk"`
 	// Persisted guest privilege mode; absent when an older server does not report it
@@ -94,7 +94,7 @@ type _Box Box
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, target string, cpu float32, gpu float32, memory float32, disk float32) *Box {
+func NewBox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, target string, cpu float32, gpu float32, memory float64, disk float32) *Box {
 	this := Box{}
 	this.Id = id
 	this.OrganizationId = organizationId
@@ -399,9 +399,9 @@ func (o *Box) SetGpu(v float32) {
 }
 
 // GetMemory returns the Memory field value
-func (o *Box) GetMemory() float32 {
+func (o *Box) GetMemory() float64 {
 	if o == nil {
-		var ret float32
+		var ret float64
 		return ret
 	}
 
@@ -410,7 +410,7 @@ func (o *Box) GetMemory() float32 {
 
 // GetMemoryOk returns a tuple with the Memory field value
 // and a boolean to check if the value has been set.
-func (o *Box) GetMemoryOk() (*float32, bool) {
+func (o *Box) GetMemoryOk() (*float64, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -418,7 +418,7 @@ func (o *Box) GetMemoryOk() (*float32, bool) {
 }
 
 // SetMemory sets field value
-func (o *Box) SetMemory(v float32) {
+func (o *Box) SetMemory(v float64) {
 	o.Memory = v
 }
 

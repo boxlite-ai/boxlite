@@ -29,6 +29,36 @@ fn checkpoint_options() -> JsBoxOptions {
 }
 
 #[test]
+fn memory_conversion_checks_before_narrowing() {
+    for memory in [256.0, 257.0, 513.0, 1536.0, u32::MAX as f64] {
+        let mut options = checkpoint_options();
+        options.checkpoint = None;
+        options.memory_mib = Some(memory);
+        assert_eq!(
+            BoxOptions::try_from(options).unwrap().memory_mib,
+            Some(memory as u32)
+        );
+    }
+    for memory in [
+        0.0,
+        -1.0,
+        255.0,
+        256.5,
+        f64::NAN,
+        f64::INFINITY,
+        u32::MAX as f64 + 1.0,
+    ] {
+        let mut options = checkpoint_options();
+        options.checkpoint = None;
+        options.memory_mib = Some(memory);
+        assert!(matches!(
+            BoxOptions::try_from(options),
+            Err(boxlite_shared::errors::BoxliteError::InvalidArgument(_))
+        ));
+    }
+}
+
+#[test]
 fn checkpoint_conversion_rejects_explicit_defaults_and_empty_collections() {
     let plain = BoxOptions::try_from(checkpoint_options()).unwrap();
     assert!(matches!(plain.rootfs, RootfsSpec::Checkpoint(_)));

@@ -79,7 +79,8 @@ export class BoxSecret {
   hosts: string[]
 
   @ApiPropertyOptional({
-    description: 'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
+    description:
+      'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
     example: '<BOXLITE_SECRET:openai>',
   })
   placeholder?: string
@@ -170,7 +171,8 @@ export class BoxDto {
   gpu: number
 
   @ApiProperty({
-    description: 'The memory quota for the box',
+    description: 'The memory quota for the box in GiB, in increments of 1/1024 GiB',
+    format: 'double',
     example: 4,
   })
   memory: number

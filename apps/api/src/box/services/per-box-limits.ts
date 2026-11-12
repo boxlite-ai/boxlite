@@ -7,6 +7,7 @@
 import { BadRequestException } from '@nestjs/common'
 
 import { assertCpuAllocation, MAX_CPU_PER_BOX } from '../utils/cpu-allocation'
+import { assertMemoryAllocation } from '../utils/memory-allocation'
 export { MAX_CPU_PER_BOX } from '../utils/cpu-allocation'
 
 /** A deterministic resource denial before any Box persistence. */
@@ -28,6 +29,7 @@ export interface PerBoxLimits {
  * whole org. Memory and disk are compared in GB (the CreateBoxDto unit).
  */
 export function assertWithinPerBoxLimits(cpu: number, memoryGb: number, diskGb: number, limits: PerBoxLimits): void {
+  assertMemoryAllocation(memoryGb)
   const violations: string[] = []
   if (cpu > MAX_CPU_PER_BOX) {
     violations.push(`cpu ${cpu} exceeds the guest kernel limit of ${MAX_CPU_PER_BOX}`)

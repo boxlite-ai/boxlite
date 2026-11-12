@@ -64,7 +64,7 @@ CBoxliteSimple* box = NULL;
 CBoxliteError error = {0};
 
 // Create box with defaults
-if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+if (boxlite_simple_new("python:slim", 0, 1024, &box, &error) != Ok) {
     fprintf(stderr, "Error: %s\n", error.message);
     boxlite_error_free(&error);
     return 1;
@@ -323,7 +323,7 @@ boxlite_error_free(&error);
 
 // Retry logic
 for (int i = 0; i < 3; i++) {
-    code = boxlite_simple_new(image, 0, 0, &box, &error);
+    code = boxlite_simple_new(image, 0, 1024, &box, &error);
     if (code == Ok) break;
     boxlite_error_free(&error);
     sleep(1);

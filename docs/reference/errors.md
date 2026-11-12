@@ -58,7 +58,7 @@ sudo usermod -aG kvm $USER
 Invalid box configuration.
 
 **Cause:**
-- Invalid memory size (< 128 or > 65536)
+- Invalid memory size (below 256 MiB, fractional MiB or out of range)
 - Invalid paths in volumes
 - Invalid port numbers
 

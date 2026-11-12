@@ -20,7 +20,7 @@ int main() {
     BoxliteErrorCode result = boxlite_simple_new(
         "python:slim",  // image
         0,              // cpus (0 = default)
-        0,              // memory_mib (0 = default)
+        1024,           // memory_mib (minimum 256)
         &box,
         &error
     );

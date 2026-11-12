@@ -681,8 +681,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "memoryQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "type": "number",
+                    "minimum": 0.25
                 },
                 "metadata": {
                     "type": "object",
@@ -836,8 +836,8 @@ const docTemplate = `{
                     "minimum": 0
                 },
                 "memoryQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "type": "number",
+                    "minimum": 0.25
                 },
                 "osUser": {
                     "type": "string"

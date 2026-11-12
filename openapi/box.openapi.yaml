@@ -2740,8 +2740,8 @@ components:
           example: 1.5
         memory_mib:
           type: integer
-          minimum: 128
-          description: Memory in MiB to allocate
+          minimum: 256
+          description: Integer memory in MiB to allocate, preserved exactly through local and cloud execution
           example: 512
         disk_size_gb:
           type: integer

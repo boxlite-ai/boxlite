@@ -311,7 +311,7 @@ Configuration options for creating a box.
 
 - `image: str` - OCI image URI (default: `"python:slim"`)
 - `cpus: float` - CPU allocation (default: 1, range: 0.125–16, step: 0.001); fractions require a Linux execution host
-- `memory_mib: int` - Memory in MiB (default: 512, range: 128-65536)
+- `memory_mib: int` - Integer MiB (default: 1024, minimum: 256; backend limits apply)
 - `disk_size_gb: int | None` - Container disk size in GB, never smaller than the image (default: None, the image size)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs

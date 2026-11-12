@@ -1333,7 +1333,7 @@ pub struct ResourceFlags {
     #[arg(long, value_parser = clap::value_parser!(f64))]
     pub cpus: Option<f64>,
 
-    /// Memory limit (in MiB)
+    /// Integer memory allocation in MiB (minimum 256)
     #[arg(long)]
     pub memory: Option<u32>,
 

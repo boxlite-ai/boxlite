@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod checkpoint_options;
 mod kernel;
+mod memory;
 mod nested_virtualization;
 
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}

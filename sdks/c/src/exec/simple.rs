@@ -48,6 +48,8 @@ pub struct ExecResult {
     pub stderr_text: *mut c_char,
 }
 
+/// Create a simple Box with an explicit memory allocation in MiB, minimum 256.
+/// Zero memory is invalid; only `cpus` retains its zero-as-default convention.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_simple_new(
     image: *const c_char,
@@ -98,6 +100,14 @@ unsafe fn runner_new(
             return BoxliteErrorCode::InvalidArgument;
         }
 
+        if memory_mib < boxlite::runtime::constants::vm_defaults::MIN_MEMORY_MIB as c_int {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument("memory_mib must be at least 256 MiB".into()),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
         let image_str = match c_str_to_string(image) {
             Ok(s) => s,
             Err(e) => {
@@ -130,11 +140,7 @@ unsafe fn runner_new(
             rootfs: RootfsSpec::Image(image_str),
             // The Simple C API documents zero as the default sentinel.
             cpus: (cpus != 0.0).then_some(cpus),
-            memory_mib: if memory_mib > 0 {
-                Some(memory_mib as u32)
-            } else {
-                None
-            },
+            memory_mib: Some(memory_mib as u32),
             ..Default::default()
         };
 

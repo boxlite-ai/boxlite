@@ -207,6 +207,21 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["box_id"], "box-create")
         self.assertIn("box-create", SERVER.state.active_boxes_by_id)
 
+    def test_memory_request_preserves_integer_mib(self) -> None:
+        for memory in [None, 256, 257, 513, 768, 1536, 4294967295]:
+            with self.subTest(memory=memory):
+                request = SERVER.CreateBoxRequest.model_validate({"memory_mib": memory})
+                options = SERVER.build_box_options(request)
+                if memory is None:
+                    self.assertNotIn("memory_mib", options.kwargs)
+                else:
+                    self.assertEqual(options.kwargs["memory_mib"], memory)
+
+    def test_memory_request_rejects_invalid_values(self) -> None:
+        for memory in [0, -1, 255, 256.5, "256", True, 4294967296]:
+            with self.subTest(memory=memory), self.assertRaises(ValidationError):
+                SERVER.CreateBoxRequest.model_validate({"memory_mib": memory})
+
     def test_create_request_rejects_remote_port_publication(self) -> None:
         with self.assertRaises(ValidationError):
             SERVER.CreateBoxRequest.model_validate(

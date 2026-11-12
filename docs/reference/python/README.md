@@ -207,7 +207,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
 | `cpus` | `float` | `1` | CPU allocation (0.125–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
-| `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
+| `memory_mib` | `int` | `1024` | Integer MiB, minimum 256; backend limits apply |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |

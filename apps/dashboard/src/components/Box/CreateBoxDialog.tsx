@@ -38,7 +38,7 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
 const DEFAULTS = {
   cpu: 1,
-  memory: 1,
+  memory: 1024,
   disk: 10,
   autoStopIntervalSeconds: 900,
 }
@@ -75,6 +75,7 @@ function Stepper({
   max,
   onExceed,
   fractional = false,
+  integerMemory = false,
   onValidityChange,
 }: {
   value: number
@@ -83,6 +84,7 @@ function Stepper({
   max?: number
   onExceed?: () => void
   fractional?: boolean
+  integerMemory?: boolean
   onValidityChange?: (valid: boolean) => void
 }) {
   const [invalid, setInvalid] = useState(false)
@@ -101,9 +103,12 @@ function Stepper({
   // wouldn't re-sync `text` when the clamped result equalled the previous
   // parent value, leaving a stale typed number in the box).
   const handleTyped = (raw: string) => {
-    if (fractional) {
+    if (fractional || integerMemory) {
       const n = Number(raw)
-      const valid = /^\d+(?:\.\d{0,3})?$/.test(raw) && Number.isFinite(n) && n >= min
+      const valid =
+        (integerMemory ? /^\d+$/.test(raw) && Number.isSafeInteger(n) : /^\d+(?:\.\d{0,3})?$/.test(raw)) &&
+        Number.isFinite(n) &&
+        n >= min
       setInvalid(!valid)
       onValidityChange?.(valid)
       if (!valid) {
@@ -133,7 +138,7 @@ function Stepper({
   // Text sync is unconditional so `text` stays consistent even when the parent
   // value doesn't change (e.g., already at max).
   const commit = (raw: string) => {
-    if (fractional) {
+    if (fractional || integerMemory) {
       handleTyped(raw)
       return
     }
@@ -159,7 +164,13 @@ function Stepper({
         value={text}
         inputMode={fractional ? 'decimal' : 'numeric'}
         aria-invalid={invalid}
-        title={invalid ? 'Enter at least 0.125 CPU with up to three decimal places' : undefined}
+        title={
+          invalid
+            ? integerMemory
+              ? 'Enter an integer of at least 256 MiB'
+              : 'Enter at least 0.125 CPU with up to three decimal places'
+            : undefined
+        }
         aria-label="value"
         onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
@@ -192,6 +203,7 @@ function ResourceField({
   max,
   onExceed,
   fractional,
+  integerMemory,
   onValidityChange,
 }: {
   label: string
@@ -201,6 +213,7 @@ function ResourceField({
   max?: number
   onExceed?: () => void
   fractional?: boolean
+  integerMemory?: boolean
   onValidityChange?: (valid: boolean) => void
 }) {
   return (
@@ -211,10 +224,11 @@ function ResourceField({
       <Stepper
         value={value}
         onChange={onChange}
-        min={fractional ? 0.125 : 1}
+        min={integerMemory ? 256 : fractional ? 0.125 : 1}
         max={max}
         onExceed={onExceed}
         fractional={fractional}
+        integerMemory={integerMemory}
         onValidityChange={onValidityChange}
       />
       {max != null && (
@@ -343,9 +357,9 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
 // mirror the Lifecycle pattern (chips + a `Custom` escape hatch) so the two
 // sections teach one interaction, not two.
 const SIZE_PRESETS = [
-  { id: 'small', label: 'Small', cpu: 1, memory: 1, disk: 10 },
-  { id: 'medium', label: 'Medium', cpu: 2, memory: 4, disk: 20 },
-  { id: 'large', label: 'Large', cpu: 4, memory: 8, disk: 50 },
+  { id: 'small', label: 'Small', cpu: 1, memory: 1024, disk: 10 },
+  { id: 'medium', label: 'Medium', cpu: 2, memory: 4096, disk: 20 },
+  { id: 'large', label: 'Large', cpu: 4, memory: 8192, disk: 50 },
   { id: 'custom', label: 'Custom', cpu: null, memory: null, disk: null },
 ] as const
 
@@ -659,6 +673,7 @@ export const CreateBoxDialog = ({
 
   // Only confirmed effective limits constrain input; the server validates unknown limits on creation.
   const limits = resolvePerBoxLimits(confirmedLimits)
+  if (limits.memory != null) limits.memory = Math.floor(limits.memory * 1024)
 
   // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
   // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
@@ -672,6 +687,7 @@ export const CreateBoxDialog = ({
   const [cpu, setCpu] = useState(initialCpu)
   const [cpuValid, setCpuValid] = useState(true)
   const [memory, setMemory] = useState(initialMemory)
+  const [memoryValid, setMemoryValid] = useState(true)
   const [disk, setDisk] = useState(initialDisk)
   // 0 means "never" for both — a legitimate value, not the accidental-empty-input
   // bug the old free-text field had, because a dropdown has no empty state.
@@ -702,6 +718,7 @@ export const CreateBoxDialog = ({
     setImageRef(prefillImage ?? '')
     setCpu(initialCpu)
     setMemory(initialMemory)
+    setMemoryValid(true)
     setDisk(initialDisk)
     setStopSeconds(DEFAULTS.autoStopIntervalSeconds)
     setDeleteDelaySeconds(0)
@@ -774,6 +791,7 @@ export const CreateBoxDialog = ({
     setCpuValid(true)
     const spec = SIZE_PRESETS.find((p) => p.id === id)
     if (!spec || spec.cpu == null || spec.memory == null || spec.disk == null) return // `custom` only reveals the controls
+    setMemoryValid(true)
     const nextCpu = limits.cpu != null && spec.cpu > limits.cpu ? limits.cpu : spec.cpu
     const nextMemory = limits.memory != null && spec.memory > limits.memory ? limits.memory : spec.memory
     const nextDisk = limits.disk != null && spec.disk > limits.disk ? limits.disk : spec.disk
@@ -784,7 +802,7 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
-    if (!cpuValid) return
+    if (!cpuValid || !memoryValid || memory < 256) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -810,7 +828,7 @@ export const CreateBoxDialog = ({
         // curated image was current when this shipped.
         image: imageRef.trim() || undefined,
         network: { mode: 'enabled' },
-        resources: { cpu, memory, disk },
+        resources: { cpu, memory: memory / 1024, disk },
         autoStopIntervalSeconds,
         autoDelete,
         autoResume,
@@ -954,7 +972,7 @@ export const CreateBoxDialog = ({
                 there's no other visible readout of the current size. */}
             {sizePreset !== 'custom' && (
               <div className="font-mono text-meta text-muted-foreground">
-                {cpu} vCPU · {memory} GiB RAM · {disk} GiB disk
+                {cpu} vCPU · {memory % 1024 === 0 ? `${memory / 1024} GiB` : `${memory} MiB`} RAM · {disk} GiB disk
               </div>
             )}
 
@@ -965,7 +983,7 @@ export const CreateBoxDialog = ({
             <CappedResourcesNote
               items={[
                 capped.cpu && limits.cpu != null && { label: 'CPU', unit: 'vCPU', max: limits.cpu },
-                capped.memory && limits.memory != null && { label: 'Memory', unit: 'GiB', max: limits.memory },
+                capped.memory && limits.memory != null && { label: 'Memory', unit: 'MiB', max: limits.memory },
                 capped.disk && limits.disk != null && { label: 'Disk', unit: 'GiB', max: limits.disk },
               ].filter((r): r is { label: string; unit: string; max: number } => Boolean(r))}
             />
@@ -984,7 +1002,9 @@ export const CreateBoxDialog = ({
                 />
                 <ResourceField
                   label="Memory"
-                  unit="GiB"
+                  unit="MiB"
+                  integerMemory
+                  onValidityChange={setMemoryValid}
                   value={memory}
                   onChange={changeResource('memory', setMemory)}
                   max={limits.memory}
@@ -1133,12 +1153,17 @@ export const CreateBoxDialog = ({
             </>
           )}
           <div className="-mx-6">
+            {(!memoryValid || memory < 256) && (
+              <p role="alert" className="text-destructive">
+                Enter an integer of at least 256 MiB.
+              </p>
+            )}
             {!cpuValid && (
               <p role="alert" className="text-destructive">
                 Enter at least 0.125 CPU with up to three decimal places.
               </p>
             )}
-            <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
+            <BoxPriceRow cpu={cpu} memory={memory / 1024} disk={disk} />
             {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
             {(lifecycleError || mountError) && (
               <p className="border-t border-border px-6 pt-3 font-mono text-meta text-destructive">
@@ -1159,6 +1184,8 @@ export const CreateBoxDialog = ({
             disabled={
               submitting ||
               !cpuValid ||
+              !memoryValid ||
+              memory < 256 ||
               !selectedOrganization?.id ||
               !nameValid ||
               Boolean(lifecycleError) ||

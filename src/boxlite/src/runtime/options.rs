@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
-use crate::runtime::constants::vm_defaults::MAX_CPUS;
+use crate::runtime::constants::vm_defaults::{MAX_CPUS, MIN_MEMORY_MIB};
 use crate::runtime::types::Bytes;
 use std::fmt;
 
@@ -385,6 +385,7 @@ pub struct BoxOptions {
     /// For REST runtimes, this requirement applies to the server.
     #[serde(serialize_with = "super::cpu_count::serialize_optional")]
     pub cpus: Option<f64>,
+    /// Integer MiB, minimum 256. Omission retains the runtime default.
     pub memory_mib: Option<u32>,
     /// Disk size in GB for the container rootfs (sparse, grows as needed).
     ///
@@ -700,6 +701,14 @@ impl BoxOptions {
     ///   guest-networking switch (it gates host jailer grants only)
     /// - every mount in `mounts` fits its type
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
+        if self
+            .memory_mib
+            .is_some_and(|memory| memory < MIN_MEMORY_MIB)
+        {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "memory_mib must be at least {MIN_MEMORY_MIB} MiB; recreate smaller boxes with a supported allocation"
+            )));
+        }
         // CPU host requirements belong to local execution; REST clients may
         // run on a different platform from the server.
         self.cpu_count()?;
@@ -1947,6 +1956,43 @@ mod tests {
         let back: BoxOptions = serde_json::from_str(&json).unwrap();
         assert_eq!(back.advanced.network_rate_limit.tx_kbps, Some(10_000));
         assert_eq!(back.advanced.network_rate_limit.rx_kbps, None);
+    }
+
+    #[test]
+    fn memory_minimum_applies_to_create_and_persisted_start() {
+        for memory_mib in [0, 1, 128, 255] {
+            let mut options = BoxOptions {
+                memory_mib: Some(memory_mib),
+                ..Default::default()
+            };
+            for result in [
+                options.sanitize_create(),
+                options.sanitize_persisted(),
+                options.sanitize(),
+            ] {
+                assert!(
+                    matches!(result, Err(BoxliteError::InvalidArgument(ref message)) if message.contains("256 MiB")),
+                    "accepted {memory_mib}: {result:?}"
+                );
+            }
+        }
+        for memory_mib in [
+            None,
+            Some(256),
+            Some(257),
+            Some(513),
+            Some(1536),
+            Some(u32::MAX),
+        ] {
+            let mut options = BoxOptions {
+                memory_mib,
+                ..Default::default()
+            };
+            options.sanitize_create().unwrap();
+            options.sanitize_persisted().unwrap();
+            options.sanitize().unwrap();
+            assert_eq!(options.memory_mib, memory_mib);
+        }
     }
 
     /// There is no interface to shape when the network is off, so the pair must

@@ -36,8 +36,8 @@ without applying stored membership quotas and leaves validation to the server.
 Quota reads have a 10-second timeout and do not show loading or error toasts.
 REST and SDK creation requests are independently
 checked by the server; over-limit requests return HTTP 400.
-The REST maximum is `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
-Memory and disk use binary units (GiB), including the historical `disk_size_gb` name.
+With default subscribed quotas, the limits are `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
+REST memory uses MiB; disk uses GiB despite the historical `disk_size_gb` name.
 
 Canceling renewal retains the higher limits until the paid period ends. Payment
 grace also retains them; suspended subscription entitlements or expiry restore
@@ -145,28 +145,42 @@ Run `make test:fractional-cpus:acceptance` on a KVM host with CPU controller del
 
 ## Memory management
 
-**Set Memory Limit:**
+All Box creation entry points accept **integer MiB**, with a **256 MiB minimum**.
+1 MiB is 1,048,576 bytes; values such as 257 or 513 are preserved exactly.
+Omitting memory retains the existing default (1024 MiB in the local runtime); explicit zero, negative, fractional MiB and overflowing values fail validation.
 
-```python
-boxlite.BoxOptions(
-    memory_mib=1024,  # 1 GB
-)
-```
+| Entry point | Example requesting 513 MiB |
+| --- | --- |
+| CLI (`create` and `run`) | `boxlite create --memory 513 alpine:latest` |
+| Python | `boxlite.BoxOptions("alpine:latest", memory_mib=513)` |
+| Node.js / TypeScript | `{ image: "alpine:latest", memoryMib: 513 }` |
+| Rust | `BoxOptions { memory_mib: Some(513), ..Default::default() }` |
+| Go | `boxlite.WithMemory(513)` |
+| C | `boxlite_options_set_memory(opts, 513)` |
+| Box REST API | `{ "image": "alpine:latest", "memory_mib": 513 }` |
 
-**Range:** 128 to 65536 MiB (64 GiB)
+Dashboard Custom memory is entered in MiB, in steps of one, with invalid text blocking submission.
+Organization limits, host capacity and backend limits still apply; 256 MiB is a configuration minimum, not a guarantee that every image can boot.
+The Rust/Python/Node/CLI representation allows up to 4,294,967,295 MiB; C, Go and cloud requests allow up to 2,147,483,647 MiB before narrower backend limits.
 
-**Default:** 512 MiB
+**Compatibility:** explicit memory below 256 MiB is now rejected, including C Simple API's former `memory_mib=0` default sentinel.
+Pass an explicit valid size to `boxlite_simple_new`, or omit the optional setting in the Native API to retain its default.
+Existing smaller Boxes remain readable, but starting or recovering them requires recreating them with at least 256 MiB; stored allocations are never silently increased.
 
-**Behavior:**
-- Hard limit (box killed if exceeded)
-- Minimum 128 MiB required
+**Cloud conversion and rollout:** the legacy cloud model and Runner JSON retain GiB units, with increments of 1/1024 GiB.
+For example, `513 MiB → 0.5009765625 GiB → 513 MiB`; no step rounds to whole GiB.
+Scheduling, quotas and billing consume the exact GiB allocation.
+Deploy the `fractional-box-memory` pre-deploy database migration first, then supporting Runners, then the API and Dashboard.
+Drain old Runners before exposing fractional GiB requests: their integer JSON decoder cannot accept them.
+The migration preserves integer allocations, defaults and indexes, and uses a five-second lock timeout.
+Rollback holds both table locks and refuses fractional or out-of-range data; remove or recreate those Boxes and warm-pool entries before downgrading.
 
 **Monitor Usage:**
 
 ```python
 metrics = await box.metrics()
-memory_mb = metrics.memory_usage_bytes / (1024**2)
-print(f"Memory: {memory_mb:.2f} MB")
+memory_mib = metrics.memory_usage_bytes / (1024**2)
+print(f"Memory: {memory_mib:.2f} MiB")
 ```
 
 **Out of Memory:**
@@ -226,7 +240,7 @@ asyncio.run(main())
 
 **Concurrency Limits:**
 - Limited by host resources (CPU, memory)
-- Each box: minimum 128 MiB + overhead
+- Each box: minimum 256 MiB + overhead
 - Monitor with `(await runtime.metrics()).active_boxes`
 
 **Best Practices:**

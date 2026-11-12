@@ -1453,6 +1453,8 @@ enum BoxliteErrorCode boxlite_box_executions_list(CBoxHandle *handle,
 // Free the list and all IDs/argv strings. Null is accepted.
 void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
 
+// Create a simple Box with an explicit memory allocation in MiB, minimum 256.
+// Zero memory is invalid; only `cpus` retains its zero-as-default convention.
 enum BoxliteErrorCode boxlite_simple_new(const char *image,
                                          double cpus,
                                          int memory_mib,
@@ -1757,6 +1759,8 @@ void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
 
 void boxlite_options_set_cpus(CBoxliteOptions *opts, double cpus);
 
+// Set integer MiB, minimum 256. Invalid values are rejected when creating the Box.
+// Omit this setter to retain the runtime default; zero is an explicit invalid value.
 void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
 
 void boxlite_options_set_disk_size_gb(CBoxliteOptions *opts, int disk_size_gb);

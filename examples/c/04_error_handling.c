@@ -18,7 +18,7 @@ int main(void) {
   printf("1. InvalidArgument error\n");
   CBoxliteSimple *box = NULL;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_simple_new(NULL, 0, 0, &box, &error);
+  BoxliteErrorCode code = boxlite_simple_new(NULL, 0, 1024, &box, &error);
   if (code != Ok) {
     show_error("boxlite_simple_new", &error);
     boxlite_error_free(&error);
@@ -39,7 +39,7 @@ int main(void) {
   printf("\n");
 
   printf("3. Recovery after an error\n");
-  code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+  code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
   if (code != Ok) {
     show_error("boxlite_simple_new", &error);
     boxlite_error_free(&error);

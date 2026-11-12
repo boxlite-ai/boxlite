@@ -134,11 +134,11 @@ See [LICENSE](../LICENSE) for details.
 
 ### How much memory does each box use?
 
-**Minimum:** 128 MiB (configured via `memory_mib`)
+**Minimum:** 256 MiB (configured via `memory_mib`)
 
-**Default:** 512 MiB
+**Default:** 1024 MiB
 
-**Range:** 128 MiB to 64 GiB (65536 MiB)
+**Range:** integer MiB from 256; upper limits depend on the SDK, backend and organization quotas.
 
 **Overhead:**
 - VM overhead: ~50-100 MB per box
@@ -148,10 +148,10 @@ See [LICENSE](../LICENSE) for details.
 **Example:**
 ```python
 # Lightweight box
-boxlite.BoxOptions(memory_mib=128)  # Minimum for Alpine
+boxlite.BoxOptions(memory_mib=256)  # Minimum allocation
 
 # Standard box
-boxlite.BoxOptions(memory_mib=512)  # Default, good for Python
+boxlite.BoxOptions(memory_mib=1024)  # Local runtime default
 
 # Heavy box
 boxlite.BoxOptions(memory_mib=2048)  # For complex workloads
@@ -379,7 +379,7 @@ async def run_100_boxes():
 **No hard limit**, but practical constraints:
 
 **Memory:**
-- Range: 128 MiB to 64 GiB (65536 MiB)
+- Range: integer MiB from 256; see [memory management](guides/resource-limits.md#memory-management) for backend limits.
 - Limited by host RAM
 
 **Disk:**

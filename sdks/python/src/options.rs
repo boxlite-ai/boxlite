@@ -536,6 +536,7 @@ pub(crate) struct PyBoxOptions {
     pub(crate) checkpoint: Option<String>,
     #[pyo3(get, set)]
     pub(crate) cpus: Option<f64>,
+    /// Integer memory allocation in MiB, minimum 256.
     #[pyo3(get, set)]
     pub(crate) memory_mib: Option<u32>,
     #[pyo3(get, set)]

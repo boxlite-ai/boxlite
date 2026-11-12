@@ -9,6 +9,12 @@ import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
+  it.each([256, 257, 512, 513, 768, 1024, 1536])('preserves %i MiB through cloud mapping', (memoryMib) => {
+    const mapped = createBoxToCreateBox({ memory_mib: memoryMib })
+    expect(mapped.memory).toBe(memoryMib / 1024)
+    expect(boxToBoxResponse({ memory: mapped.memory } as BoxDto).memory_mib).toBe(memoryMib)
+  })
+
   it.each([
     ['enabled', true],
     ['disabled', false],

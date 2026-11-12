@@ -95,6 +95,8 @@ pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cp
     options_set_cpus(opts, cpus)
 }
 
+/// Set integer MiB, minimum 256. Invalid values are rejected when creating the Box.
+/// Omit this setter to retain the runtime default; zero is an explicit invalid value.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_memory(opts: *mut CBoxliteOptions, memory_mib: c_int) {
     unsafe { mark_checkpoint_override(opts) };
@@ -447,8 +449,9 @@ pub unsafe fn options_set_cpus(handle: *mut OptionsHandle, cpus: f64) {
 
 pub unsafe fn options_set_memory(handle: *mut OptionsHandle, memory_mib: c_int) {
     unsafe {
-        if !handle.is_null() && memory_mib > 0 {
-            (*handle).options.memory_mib = Some(memory_mib as u32);
+        if let Some(handle) = handle.as_mut() {
+            // Preserve explicit invalid input for runtime validation, never default it.
+            handle.options.memory_mib = Some(u32::try_from(memory_mib).unwrap_or(0));
         }
     }
 }

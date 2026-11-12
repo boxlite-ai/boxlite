@@ -183,7 +183,7 @@ Configuration options for creating a box.
 | `image` | `string` | - | OCI image URI |
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
 | `cpus` | `number` | `1` | CPU allocation (0.125–16, step 0.001); fractional values require a Linux execution host; see [resource limits](../../guides/resource-limits.md#fractional-cpus-linux) |
-| `memoryMib` | `number` | `512` | Memory limit in MiB |
+| `memoryMib` | `number` | `1024` | Integer MiB, minimum 256; backend limits apply |
 | `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
@@ -1144,7 +1144,7 @@ Default values used by BoxLite.
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `DEFAULT_CPUS` | `1` | Default CPU cores |
-| `DEFAULT_MEMORY_MIB` | `512` | Default memory in MiB |
+| `DEFAULT_MEMORY_MIB` | `1024` | Default memory in MiB |
 
 ### ComputerBox defaults
 

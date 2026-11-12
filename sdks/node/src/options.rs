@@ -4,7 +4,7 @@ use std::time::Duration;
 use boxlite::runtime::advanced_options::{
     AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, SecurityOptions,
 };
-use boxlite::runtime::constants::images;
+use boxlite::runtime::constants::{images, vm_defaults::MIN_MEMORY_MIB};
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
     NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
@@ -185,8 +185,8 @@ pub struct JsBoxOptions {
     /// CPU allocation (default: 1, range: 0.125-16); fractional values require a Linux execution host
     pub cpus: Option<f64>,
 
-    /// Memory limit in MiB (default: 512)
-    pub memory_mib: Option<u32>,
+    /// Integer memory allocation in MiB, at least 256; omitted uses the runtime default.
+    pub memory_mib: Option<f64>,
 
     /// Disk size in GB for container rootfs (sparse, grows as needed)
     pub disk_size_gb: Option<f64>,
@@ -496,6 +496,20 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
     /// Reject supplied checkpoint settings before conversion erases defaults.
     #[allow(deprecated)]
     fn try_from(js_opts: JsBoxOptions) -> Result<Self, Self::Error> {
+        let memory_mib = js_opts
+            .memory_mib
+            .map(|memory| {
+                if !memory.is_finite()
+                    || memory.fract() != 0.0
+                    || !(MIN_MEMORY_MIB as f64..=u32::MAX as f64).contains(&memory)
+                {
+                    return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                        "memoryMib must be an integer between 256 and 4294967295 MiB".into(),
+                    ));
+                }
+                Ok(memory as u32)
+            })
+            .transpose()?;
         if js_opts.checkpoint.is_some()
             && (js_opts.cpus.is_some()
                 || js_opts.memory_mib.is_some()
@@ -618,7 +632,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
 
         Ok(BoxOptions {
             cpus: js_opts.cpus,
-            memory_mib: js_opts.memory_mib,
+            memory_mib,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
             working_dir: js_opts.working_dir,
             env,

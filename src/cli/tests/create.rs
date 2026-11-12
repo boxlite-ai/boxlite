@@ -50,7 +50,7 @@ fn test_create_resources() {
         .arg("--cpus")
         .arg("1")
         .arg("--memory")
-        .arg("128")
+        .arg("256")
         .arg("--env")
         .arg("TEST_VAR=1")
         .arg("--workdir")

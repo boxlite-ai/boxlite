@@ -152,7 +152,7 @@ fn start_box(home: &PerTestBoxHome) -> String {
             "run",
             "-d",
             "--memory",
-            "128",
+            "256",
             "alpine:latest",
             "sleep",
             "600",

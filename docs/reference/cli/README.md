@@ -1283,7 +1283,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | Flag | Type | Description |
 |------|------|-------------|
 | `--cpus N` | f64 | CPU allocation, 0.125–16 with the bundled kernel, step 0.001; fractions require a Linux execution host and round guest vCPUs up, while integers add no bandwidth quota; creation validates numeric values |
-| `--memory MiB` | u32 | Memory limit in mebibytes |
+| `--memory MiB` | u32 | Integer memory in MiB, minimum 256 |
 | `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 
 ### `PublishFlags`

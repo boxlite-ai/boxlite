@@ -68,7 +68,7 @@ int main() {
     CBoxliteError error = {0};
 
     // Create box and auto-start it
-    if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+    if (boxlite_simple_new("python:slim", 0, 1024, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
@@ -238,7 +238,7 @@ typedef struct CBoxliteError {
 
 ```c
 CBoxliteError error = {0};
-BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
 
 if (code != Ok) {
     fprintf(stderr, "Error %d: %s\n", error.code, error.message);
@@ -274,7 +274,7 @@ boxlite_error_free(&error);
 ```c
 int retries = 3;
 for (int i = 0; i < retries; i++) {
-    code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+    code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
     if (code == Ok) break;
 
     fprintf(stderr, "Retry %d/%d: %s\n", i+1, retries, error.message);
@@ -313,7 +313,7 @@ BoxliteErrorCode boxlite_simple_new(
 |-----------|------|-------------|
 | `image` | `const char*` | OCI image reference (e.g., `"python:slim"`, `"alpine:3.19"`) |
 | `cpus` | `double` | CPU allocation; fractional values require a Linux execution host, 0 selects the default in the Simple API |
-| `memory_mib` | `int` | Memory in MiB (0 = default: 512) |
+| `memory_mib` | `int` | Integer MiB, minimum 256; 0 is invalid |
 | `out_box` | `CBoxliteSimple**` | Output: created box handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
@@ -328,7 +328,7 @@ CBoxliteSimple* box = NULL;
 CBoxliteError error = {0};
 
 // Default resources
-if (boxlite_simple_new("alpine:3.19", 0, 0, &box, &error) != Ok) {
+if (boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error) != Ok) {
     fprintf(stderr, "Error: %s\n", error.message);
     boxlite_error_free(&error);
     return 1;

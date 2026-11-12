@@ -56,7 +56,7 @@ int main() {
     CBoxliteError error = {0};
 
     // Create box and auto-start it
-    if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+    if (boxlite_simple_new("python:slim", 0, 1024, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;

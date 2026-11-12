@@ -79,7 +79,7 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 		t.Errorf("createDto.GpuQuota = %d, want %d", createDto.GpuQuota, recoverDto.GpuQuota)
 	}
 	if createDto.MemoryQuota != recoverDto.MemoryQuota {
-		t.Errorf("createDto.MemoryQuota = %d, want %d", createDto.MemoryQuota, recoverDto.MemoryQuota)
+		t.Errorf("createDto.MemoryQuota = %g, want %g", createDto.MemoryQuota, recoverDto.MemoryQuota)
 	}
 	if createDto.StorageQuota != recoverDto.StorageQuota {
 		t.Errorf("createDto.StorageQuota = %d, want %d", createDto.StorageQuota, recoverDto.StorageQuota)

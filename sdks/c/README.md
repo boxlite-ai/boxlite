@@ -202,7 +202,7 @@ int main() {
     CBoxliteSimple* box;
     CBoxliteError error = {0};
 
-    if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
+    if (boxlite_simple_new("python:slim", 0, 1024, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
@@ -418,7 +418,7 @@ The Simple API provides a streamlined interface for common use cases with automa
 BoxliteErrorCode boxlite_simple_new(
     const char* image,          // "python:slim", "alpine:3.19", etc.
     double cpus,                // 0 = default; fractions require a Linux execution host
-    int memory_mib,             // 0 = default (512)
+    int memory_mib,             // Integer MiB, minimum 256; 0 is invalid
     CBoxliteSimple** out_box,
     CBoxliteError* out_error
 );
@@ -869,7 +869,7 @@ typedef struct CBoxliteError {
 
 ```c
 CBoxliteError error = {0};
-BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+BoxliteErrorCode code = boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
 
 if (code != Ok) {
     fprintf(stderr, "Error %d: %s\n", error.code, error.message);
@@ -1256,7 +1256,7 @@ After (0.2.0):
 CBoxliteSimple* box;
 CBoxliteError error = {0};
 
-boxlite_simple_new("alpine:3.19", 0, 0, &box, &error);
+boxlite_simple_new("alpine:3.19", 0, 1024, &box, &error);
 const char* args[] = {"hello", NULL};
 CBoxliteExecResult* result;
 boxlite_simple_run(box, "/bin/echo", args, 1, &result, &error);

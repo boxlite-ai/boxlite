@@ -29,7 +29,9 @@ const resourceIcons = {
 }
 
 export function ResourceChip({ resource, value, unit, icon, className }: Props) {
-  const resourceUnit = unit ?? resourceUnits[resource]
+  const showMiB = resource === 'memory' && unit === undefined && !Number.isInteger(value)
+  const resourceUnit = showMiB ? 'MiB' : (unit ?? resourceUnits[resource])
+  const displayValue = showMiB ? value * 1024 : value
   const ResourceIcon = resourceIcons[resource]
 
   return (
@@ -42,7 +44,7 @@ export function ResourceChip({ resource, value, unit, icon, className }: Props) 
       {icon === null
         ? null
         : (icon ?? <ResourceIcon className="size-3.5 flex-shrink-0 text-muted-foreground" strokeWidth={1.75} />)}
-      <span className="font-medium tabular-nums">{value}</span>
+      <span className="font-medium tabular-nums">{displayValue}</span>
       <span className="text-muted-foreground">{resourceUnit}</span>
     </span>
   )

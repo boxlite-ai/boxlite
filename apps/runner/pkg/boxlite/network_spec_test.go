@@ -79,13 +79,13 @@ func TestOutboundPolicyRejectsDisabledRulesBeforeSideEffects(t *testing.T) {
 	}{
 		{"create", func() error {
 			_, _, err := client.Create(t.Context(), dto.CreateBoxDTO{
-				Id: "box-1", Image: "base", OutboundEnabled: &disabled, OutboundAllowNet: []string{"example.com"},
+				Id: "box-1", Image: "base", MemoryQuota: 1, OutboundEnabled: &disabled, OutboundAllowNet: []string{"example.com"},
 			})
 			return err
 		}},
 		{"recover", func() error {
 			return client.RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{
-				OsUser: "root", OutboundEnabled: &disabled, OutboundAllowNet: []string{"example.com"},
+				OsUser: "root", MemoryQuota: 1, OutboundEnabled: &disabled, OutboundAllowNet: []string{"example.com"},
 			})
 		}},
 		{"update", func() error {
@@ -125,7 +125,7 @@ func TestNetworkSpecRejectsMissingOutboundPolicy(t *testing.T) {
 // Create checks the policy before it mounts volumes or creates the box, so a
 // rejected request leaves nothing behind. A nil runtime would panic past it.
 func TestCreateRejectsMissingOutboundPolicyBeforeSideEffects(t *testing.T) {
-	_, _, err := (&Client{}).Create(t.Context(), dto.CreateBoxDTO{Id: "box-1", Image: "base"})
+	_, _, err := (&Client{}).Create(t.Context(), dto.CreateBoxDTO{Id: "box-1", Image: "base", MemoryQuota: 1})
 	if !errdefs.IsInvalidArgument(err) {
 		t.Fatalf("Create() error = %v, want an invalid-argument error", err)
 	}
@@ -146,7 +146,7 @@ func TestRecoverRejectsUnrecreatableSecretsBeforeDestroy(t *testing.T) {
 	for name, secrets := range cases {
 		t.Run(name, func(t *testing.T) {
 			err := (&Client{logger: slog.Default()}).RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{
-				OsUser: "root", OutboundEnabled: &enabled, Secrets: secrets,
+				OsUser: "root", MemoryQuota: 1, OutboundEnabled: &enabled, Secrets: secrets,
 			})
 			if !errdefs.IsInvalidArgument(err) {
 				t.Fatalf("RecoverBox() error = %v, want an invalid-argument error", err)
@@ -161,7 +161,7 @@ func TestRecoverRejectsUnrecreatableSecretsBeforeDestroy(t *testing.T) {
 // RecoverBox destroys the old box before recreating it, so the policy check
 // must come first. A nil runtime would panic in Destroy.
 func TestRecoverRejectsMissingOutboundPolicyBeforeDestroy(t *testing.T) {
-	err := (&Client{logger: slog.Default()}).RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{OsUser: "root"})
+	err := (&Client{logger: slog.Default()}).RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{OsUser: "root", MemoryQuota: 1})
 	if !errdefs.IsInvalidArgument(err) {
 		t.Fatalf("RecoverBox() error = %v, want an invalid-argument error", err)
 	}

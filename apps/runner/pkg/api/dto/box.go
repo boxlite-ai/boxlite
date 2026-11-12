@@ -17,7 +17,7 @@ type CreateBoxDTO struct {
 	// CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.
 	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.125,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
+	MemoryQuota  float64           `json:"memoryQuota" validate:"min=0.25"`
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
 	Env          map[string]string `json:"env,omitempty"`
 	Registry     *RegistryDTO      `json:"registry,omitempty"`
@@ -58,7 +58,7 @@ type RecoverBoxDTO struct {
 	// CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.
 	CpuQuota     *float64          `json:"cpuQuota,omitempty" validate:"omitempty,min=0.125,max=16"`
 	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
+	MemoryQuota  float64           `json:"memoryQuota" validate:"min=0.25"`
 	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
 	Env          map[string]string `json:"env,omitempty"`
 	Privileged   bool              `json:"privileged,omitempty"`

@@ -171,7 +171,7 @@ export class Box {
   @Column({ type: 'int', default: 0 })
   gpu = 0
 
-  @Column({ type: 'int', default: 4 })
+  @Column({ type: 'double precision', default: 4 })
   mem = 4
 
   @Column({ type: 'int', default: 10 })

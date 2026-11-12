@@ -230,9 +230,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
     // Disk (the third stepper) must open at 3, NOT the DEFAULTS.disk of 10.
     expect(inputs[2].value).toBe('3')
-    // CPU / Memory defaults (1 each) are already under the caps — untouched.
+    // CPU / Memory defaults (1 vCPU / 1024 MiB) are already under the caps — untouched.
     expect(inputs[0].value).toBe('1')
-    expect(inputs[1].value).toBe('1')
+    expect(inputs[1].value).toBe('1024')
   })
 
   it('pins the visible input at the org max the moment the typed value would overshoot (before any blur)', async () => {
@@ -295,12 +295,12 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
     // Org limits from beforeEach: cpu 4, memory 8, disk 10
     expect(inputs[0].value).toBe('4')
-    expect(inputs[1].value).toBe('8')
+    expect(inputs[1].value).toBe('8192')
     expect(inputs[2].value).toBe('10')
 
     const note = document.body.textContent ?? ''
     expect(note).toMatch(/CPU\s*4\s*vCPU/)
-    expect(note).toMatch(/Memory\s*8\s*GiB/)
+    expect(note).toMatch(/Memory\s*8192\s*MiB/)
     expect(note).toMatch(/Disk\s*10\s*GiB/)
   })
 
@@ -396,6 +396,25 @@ describe('CreateBoxDialog per-org resource cap', () => {
     )
   })
 
+  it.each(['256', '257', '513', '768', '1536'])('submits exact integer MiB %s', async (value) => {
+    await renderOpen()
+    const input = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[1]
+    await act(async () => typeInto(input, value))
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).memory_mib).toBe(Number(value))
+  })
+
+  it.each(['', '0', '-1', '255', '256.5', 'abc'])('rejects invalid memory text %s', async (value) => {
+    await renderOpen()
+    const input = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[1]
+    await act(async () => typeInto(input, value))
+    await act(async () => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    expect(button('Create Box').disabled).toBe(true)
+    await act(async () => button('Custom').click())
+    expect(button('Create Box').disabled).toBe(true)
+    expect(mutationMocks.createBox).not.toHaveBeenCalled()
+  })
+
   it.each(['0', '-1', '0.124', '0.1251', 'abc'])(
     'blocks invalid CPU text %s instead of submitting the saved CPU',
     async (value) => {
@@ -439,7 +458,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     it('submits the exact Custom maximum in MiB without a cap warning', async () => {
       await renderOpen()
       const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
-      for (const [index, value] of ['16', '32', '100'].entries()) {
+      for (const [index, value] of ['16', '32768', '100'].entries()) {
         await act(async () => typeInto(inputs[index], value))
         await act(async () => inputs[index].dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
       }
@@ -456,7 +475,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
 
     it.each([
       [0, '17', '16', /CPU\s*16\s*vCPU/],
-      [1, '33', '32', /Memory\s*32\s*GiB/],
+      [1, '33792', '32768', /Memory\s*32768\s*MiB/],
       [2, '101', '100', /Disk\s*100\s*GiB/],
     ])(
       'clamps resource %s to the returned organization limit and explains the cap',
@@ -518,7 +537,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await renderOpen()
     const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
     expect([...inputs].every((input) => !input.matches(':disabled'))).toBe(true)
-    for (const [index, value] of ['16', '32', '100'].entries()) {
+    for (const [index, value] of ['16', '32768', '100'].entries()) {
       await act(async () => typeInto(inputs[index], value))
       await act(async () => inputs[index].dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
     }
@@ -575,7 +594,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await flush()
     expect(cpuInput().value).toBe('3')
     expect(document.body.textContent).toContain('Max 16 vCPU')
-    expect(document.body.textContent).toContain('Max 32 GiB')
+    expect(document.body.textContent).toContain('Max 32768 MiB')
     expect(document.body.textContent).toContain('Max 100 GiB')
     const failed = deferRefresh()
     await act(async () => {

@@ -25,7 +25,7 @@ export class WarmPool {
   @Column({ type: 'double precision' })
   cpu: number
 
-  @Column()
+  @Column({ type: 'double precision' })
   mem: number
 
   @Column()

@@ -36,6 +36,16 @@ describe('CreateBoxDto cpu ceiling', () => {
 })
 
 describe('CreateBoxDto resource minimums', () => {
+  it.each([0, 255, 256.5, NaN, Infinity, 2147483648])('rejects invalid memory_mib %s', async (memory_mib) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { memory_mib }))
+    expect(errors.some((error) => error.property === 'memory_mib')).toBe(true)
+  })
+
+  it.each([256, 257, 513, 768, 1536, 2147483647])('accepts integer memory_mib %i', async (memory_mib) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { memory_mib }))
+    expect(errors).toHaveLength(0)
+  })
+
   it.each([
     ['cpus', { cpus: 0 }],
     ['memory_mib', { memory_mib: 128 }],

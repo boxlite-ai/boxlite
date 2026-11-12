@@ -292,7 +292,7 @@ export interface SimpleBoxOptions {
   /** Path to local OCI layout directory (overrides image if provided) */
   rootfsPath?: string;
 
-  /** Memory limit in MiB */
+  /** Integer memory allocation in MiB, minimum 256. */
   memoryMib?: number;
 
   /** Number of CPU cores */

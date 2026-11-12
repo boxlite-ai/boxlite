@@ -47,7 +47,7 @@ func checkpointSourceFixture(t *testing.T, image string) archiveSource {
 	manifest, err := json.Marshal(map[string]any{
 		"version": 3, "box_name": "source", "image": image,
 		"box_options": map[string]any{
-			"rootfs": map[string]string{"Image": image}, "cpus": 1, "memory_mib": 128,
+			"rootfs": map[string]string{"Image": image}, "cpus": 1, "memory_mib": 256,
 			"env":    [][2]string{{"APP_MODE", "captured"}, {"BOXLITE_BOX_ID", "source"}},
 			"detach": true, "auto_delete": 0,
 		},
