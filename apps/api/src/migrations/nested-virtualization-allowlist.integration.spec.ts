@@ -70,7 +70,9 @@ describeWithDatabase('Organization nesting allowlist storage (real PostgreSQL)',
       await runner.release()
     }
   })
-  // Cold coverage instrumentation imports the complete production migration chain.
+  // Cold coverage instrumentation imports the complete production migration
+  // chain, whose import cost grows with the migration count and with CI
+  // runner speed; the generous timeout absorbs that drift.
   it('discovers the allowlist migration through the production pre-deploy loader', async () => {
     const source = new DataSource({
       ...database.options,
@@ -85,7 +87,7 @@ describeWithDatabase('Organization nesting allowlist storage (real PostgreSQL)',
     } finally {
       if (source.isInitialized) await source.destroy()
     }
-  }, 30_000)
+  }, 90_000)
 
   it.each(['name', 'suspend', 'unsuspend', 'network', 'region', 'experiments', 'verification'])(
     'keeps an Admin revocation committed after the %s writer reads',
