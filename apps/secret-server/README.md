@@ -1,11 +1,12 @@
 ## TL;DR
 
-The internal encryption package protects secret values and routing policy with per-write data keys and a replaceable key provider.
+The internal encryption package protects secret values and routing policy with per-write data keys and a replaceable key provider. The internal attest package tells the Secret Server which runner a request came from.
 
 ## Scope
 
-This Go module currently contains only `internal/encryption`; it has no server
-entry point, HTTP endpoints, persistence, authentication, or deployment resources.
+This Go module contains two library packages, `internal/encryption` and
+`internal/attest` ([runner attestation](#runner-attestation)). It has no server
+entry point, HTTP endpoints, persistence, or deployment resources yet.
 The existing API encryption service and stored values remain unchanged.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
@@ -119,6 +120,60 @@ A future change will add a rewrap API or a keyring provider that routes by key I
 The envelope format allows rewrapping a DEK without changing the value ciphertext,
 but KMS, provider routing, and migration jobs are not implemented here.
 
+## Runner attestation
+
+Design: [runner attestation with gcp_iit](https://github.com/boxlite-ai/boxlite/issues/2623).
+
+A runner VM requests an instance identity token from its metadata server with
+`audience=<Secret Server URL>&format=full` and sends it in
+`X-Boxlite-Runner-Identity`. The API cannot mint such a token, so the
+`runner_id` the fetch route gets cannot be forged by a compromised API.
+
+```go
+selector, err := attest.New(attest.Config{
+    Attestors:   []string{"gcp_iit"},
+    Environment: "staging",
+    GCPIIT: attest.GCPIITConfig{
+        Audience:       secretServerURL,
+        Project:        "boxlite-staging",
+        ServiceAccount: runnerServiceAccount,
+    },
+    Registry: `{"gcp_iit": {"4257000000000000001": "rnr_a"}}`,
+}, googleVerifier, logger)
+runnerID, err := selector.Verify(ctx, r.Header)
+```
+
+`googleVerifier` comes from `attest.NewGoogleTokenVerifier(ctx, nil)`.
+Every error from `New` must fail startup. The service skeleton reads these
+values from `SECRET_SERVER_ATTESTORS`, `SECRET_SERVER_AUDIENCE`,
+`SECRET_SERVER_GCP_PROJECT`, `SECRET_SERVER_RUNNER_SERVICE_ACCOUNT`, and
+`SECRET_SERVER_RUNNER_REGISTRY` once it lands; this package does not read the
+environment.
+
+| `Verify` result | Meaning | Fetch route answer |
+| --- | --- | --- |
+| `runnerID, nil` | Proof valid; instance registered | Continue to introspection |
+| `errors.Is(err, attest.ErrInvalidProof)` | Missing, ambiguous, or rejected proof | 401 `attestation_failed` |
+| any other error | Google signing keys unreachable | 503; the runner retries |
+
+- **Selection.** The selector calls the one enabled attestor whose header is
+  present. No proof header, or headers for two attestors, is an invalid proof.
+- **gcp_iit checks.** The `idtoken` library checks signature, `aud`, and
+  `exp`. This package checks `iss`, `iat` at most 60 seconds ahead, `email`
+  and `email_verified`, the Compute Engine `project_id`, and that
+  `instance_id` is in the registry's `gcp_iit` section.
+- **Registry.** JSON `{mode: {machine_id: runner_id}}`, written by hand for
+  staging. Unknown modes and empty IDs fail startup. An empty `gcp_iit` map,
+  or a map for a disabled attestor, logs a warning.
+- **dev attestor.** Reads `X-Boxlite-Dev-Runner` and is refused unless
+  `ENVIRONMENT` is `local` or `dev`. It rejects runner IDs registered under
+  another mode.
+- **Logging.** Rejection reasons name the failed check, never token content.
+  Callers log the error and return only the problem code.
+
+Known limitations: a captured token can be replayed until it expires, about
+an hour; the zone is not checked; the registry is written by hand.
+
 ## Verification
 
 Run from the repository root with Go 1.25.4 or newer:
@@ -150,6 +205,10 @@ Go reports statement coverage; Codecov also distinguishes partially covered sour
 lines, so a passing statement percentage does not imply passing patch coverage.
 The uint32 framing overflow guards remain in place; tests do not allocate multi-GiB
 inputs merely to exercise those guards.
+
+Attestation tests sign tokens with a locally generated RSA key and serve it as
+a fake Google key set to the real `idtoken` adapter, so no network is needed.
+Real Google tokens are verified on staging.
 
 This is a new contract with no equivalent on the base branch. Full-revert defect
 proof is not applicable; positive, negative, and boundary tests exercise the new code.
