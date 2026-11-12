@@ -79,7 +79,7 @@ for info in await runtime.list_info():
 
 ### `boxlite.ImageHandle`
 
-`await runtime.images.remove_by_id("1f8c03c8f5e5")` accepts a full manifest ID or unique hex prefix.
+`await runtime.images.delete("1f8c03c8f5e5")` accepts a full manifest ID or unique hex prefix.
 It returns an `ImageRemovalResult` with read-only `image_id: str`, `removed_references: list[str]`, and `reclaimed_bytes: int` fields.
 The synchronous handle exposes the same method without `await`.
 
@@ -97,7 +97,7 @@ the server catalog on a REST runtime. Registry credentials are accessed through
 | `list` | One row per cached reference | Catalog alias and digest references |
 | `get` | Cached versions under the name | Catalog versions, aliases and history |
 | `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
-| `remove_by_id` | Removes an eligible local manifest and reclaims unused data | Unsupported |
+| `delete` | Removes an eligible local manifest and reclaims unused data | Unsupported |
 | `usage` | Unsupported | Image count, allowance and known bytes |
 | `create_alias()` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
 | `delete_alias()` | Unsupported | Removes only the named alias; absent names return NotFound |

@@ -143,7 +143,7 @@ the server catalog on a REST runtime. Registry credentials are accessed through
 | `list` | One row per cached reference | Catalog alias and digest references |
 | `get` | Cached versions under the name | Catalog versions, aliases and history |
 | `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
-| `remove_by_id` | Reclaims an untagged, box-independent local manifest | Unsupported |
+| `delete` | Reclaims an untagged, box-independent local manifest | Unsupported |
 | `usage` | Unsupported | Image count, allowance and known bytes |
 | `create_alias` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
 | `delete_alias` | Unsupported | Removes only the named alias; absent names return NotFound |
@@ -175,7 +175,7 @@ images.delete_alias(&detail.name, "verified").await?;
 let logins = images.registries()?.list().await?;
 ```
 
-`images.remove_by_id("1f8c03c8f5e5").await?` returns `ImageRemovalResult`
+`images.delete("1f8c03c8f5e5").await?` returns `ImageRemovalResult`
 with `image_id: String`, `removed_references: Vec<String>` and `reclaimed_bytes: u64`.
 `resolve_ids(&[String])` resolves a whole batch against one snapshot and returns one result per target.
 

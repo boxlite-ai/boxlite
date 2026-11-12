@@ -28,7 +28,7 @@ extern void goBoxliteOnImagePull(CImagePullResult *res, CBoxliteError *err, void
 extern void goBoxliteOnImageList(CImageInfoList *list, CBoxliteError *err, void *ud);
 extern void goBoxliteOnImageGet(CImageDetail *detail, CBoxliteError *err, void *ud);
 extern void goBoxliteOnImageRemove(CBoxliteError *err, void *ud);
-extern void goBoxliteOnImageRemoveByID(CImageRemovalResult *result, CBoxliteError *err, void *ud);
+extern void goBoxliteOnImageDelete(CImageRemovalResult *result, CBoxliteError *err, void *ud);
 extern void goBoxliteOnImageUsage(CImageUsage *usage, CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnVolume(CVolumeInfo *info, CBoxliteError *err, void *ud);
@@ -82,7 +82,7 @@ CBoxImagePullCb cbImagePull(void) { return (CBoxImagePullCb)goBoxliteOnImagePull
 CBoxImageListCb cbImageList(void) { return (CBoxImageListCb)goBoxliteOnImageList; }
 CBoxImageGetCb cbImageGet(void) { return (CBoxImageGetCb)goBoxliteOnImageGet; }
 CBoxImageRemoveCb cbImageRemove(void) { return (CBoxImageRemoveCb)goBoxliteOnImageRemove; }
-CBoxImageRemoveByIdCb cbImageRemoveByID(void) { return (CBoxImageRemoveByIdCb)goBoxliteOnImageRemoveByID; }
+CBoxImageDeleteCb cbImageDelete(void) { return (CBoxImageDeleteCb)goBoxliteOnImageDelete; }
 CBoxImageUsageCb cbImageUsage(void) { return (CBoxImageUsageCb)goBoxliteOnImageUsage; }
 
 // Create and Get both deliver a single CVolumeInfo, so they share the

@@ -37,7 +37,7 @@ async fn removal_clears_every_repository_alias_and_preserves_retained_shared_dat
     )
     .await;
     let storage = runtime.image_manager.store().storage().await;
-    let result = handle(&runtime).remove_by_id("111").await.unwrap();
+    let result = handle(&runtime).delete("111").await.unwrap();
     assert_eq!(result.image_id, FIRST);
     assert_eq!(result.removed_references.len(), 2);
     assert!(result.reclaimed_bytes > 0);
@@ -66,7 +66,7 @@ async fn removal_refuses_tags_including_a_tag_pinned_to_a_digest() {
         let (runtime, _dir) = runtime();
         seed(&runtime.image_manager, "two.example/app", FIRST).await;
         seed_cached_build(runtime.image_manager.store(), &reference, FIRST).await;
-        let error = handle(&runtime).remove_by_id(FIRST).await.unwrap_err();
+        let error = handle(&runtime).delete(FIRST).await.unwrap_err();
         assert!(matches!(error, BoxliteError::ImageHasTags(_)));
         assert!(error.to_string().contains(&reference));
         assert_eq!(runtime.image_manager.list().await.unwrap().len(), 2);
@@ -110,7 +110,7 @@ async fn removal_protects_configured_stopped_and_pinned_boxes() {
             total_layer_size: 0,
         });
         runtime.box_manager.save_box(&config.id, &state).unwrap();
-        let error = handle(&runtime).remove_by_id("111").await.unwrap_err();
+        let error = handle(&runtime).delete("111").await.unwrap_err();
         assert!(matches!(error, BoxliteError::ImageUsedByBoxes(_)));
         assert!(error.to_string().contains(box_handle.id().as_str()));
         assert!(
@@ -144,7 +144,7 @@ async fn removal_protects_legacy_unqualified_references_across_registry_search()
         )
         .await
         .unwrap();
-    let error = handle(&runtime).remove_by_id("111").await.unwrap_err();
+    let error = handle(&runtime).delete("111").await.unwrap_err();
     assert!(matches!(error, BoxliteError::ImageUsedByBoxes(_)));
     assert!(error.to_string().contains(box_handle.id().as_str()));
 }
@@ -186,7 +186,7 @@ async fn removal_retains_unknown_box_contents_and_all_disk_cache_variants() {
     ));
     fs::write(&disk, b"base disk").unwrap();
     drop(image);
-    handle(&runtime).remove_by_id(FIRST).await.unwrap();
+    handle(&runtime).delete(FIRST).await.unwrap();
     assert!(config_path.exists());
     assert!(layer_path.exists());
     assert!(disk.exists());
@@ -205,12 +205,12 @@ async fn removal_refuses_active_image_consumers_until_every_clone_is_released() 
     drop(image);
     let images = handle(&runtime);
     assert!(matches!(
-        images.remove_by_id(FIRST).await,
+        images.delete(FIRST).await,
         Err(BoxliteError::InvalidState(_))
     ));
     clone.load_config().await.unwrap();
     drop(clone);
-    images.remove_by_id(FIRST).await.unwrap();
+    images.delete(FIRST).await.unwrap();
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn removal_reports_zero_when_the_target_has_no_files_left() {
     drop(image);
     assert_eq!(
         handle(&runtime)
-            .remove_by_id(FIRST)
+            .delete(FIRST)
             .await
             .unwrap()
             .reclaimed_bytes,
@@ -265,7 +265,7 @@ async fn removal_reclaims_every_unique_cache_object_and_reports_its_allocated_by
         .iter()
         .map(|path| fs::symlink_metadata(path).unwrap().blocks() * 512)
         .sum();
-    let result = handle(&runtime).remove_by_id(FIRST).await.unwrap();
+    let result = handle(&runtime).delete(FIRST).await.unwrap();
     assert_eq!(result.reclaimed_bytes, expected);
     assert!(paths.iter().all(|path| !path.exists()));
 }
@@ -297,7 +297,7 @@ async fn removal_refuses_corrupt_cache_and_box_metadata_before_deleting_any_file
             cached.config_digest = "sha256:../../outside".into();
             index.upsert(&reference, &cached).unwrap();
         }
-        let error = handle(&runtime).remove_by_id(FIRST).await.unwrap_err();
+        let error = handle(&runtime).delete(FIRST).await.unwrap_err();
         assert!(matches!(
             error,
             BoxliteError::MetadataError(_) | BoxliteError::Database(_)
@@ -327,7 +327,7 @@ async fn removal_keeps_retained_content_when_index_deletion_fails_and_can_retry(
     let db = crate::db::Database::open(&runtime.layout.db_dir().join("boxlite.db")).unwrap();
     db.conn().execute_batch("CREATE TRIGGER refuse_removal BEFORE DELETE ON image_index BEGIN SELECT RAISE(ABORT, 'fixture index failure'); END").unwrap();
     assert!(matches!(
-        handle(&runtime).remove_by_id(FIRST).await,
+        handle(&runtime).delete(FIRST).await,
         Err(BoxliteError::Database(_))
     ));
     let storage = runtime.image_manager.store().storage().await;
@@ -341,7 +341,7 @@ async fn removal_keeps_retained_content_when_index_deletion_fails_and_can_retry(
     db.conn()
         .execute_batch("DROP TRIGGER refuse_removal")
         .unwrap();
-    let result = handle(&runtime).remove_by_id(FIRST).await.unwrap();
+    let result = handle(&runtime).delete(FIRST).await.unwrap();
     assert_eq!(result.reclaimed_bytes, 0);
     assert_eq!(runtime.image_manager.list().await.unwrap().len(), 1);
 }
@@ -351,7 +351,7 @@ async fn removal_refuses_after_runtime_shutdown() {
     let (runtime, _dir) = runtime();
     runtime.shutdown(None).await.unwrap();
     assert!(matches!(
-        LocalRuntime(runtime).remove_image_by_id(FIRST).await,
+        LocalRuntime(runtime).delete_image(FIRST).await,
         Err(BoxliteError::Stopped(_))
     ));
 }
@@ -463,7 +463,7 @@ async fn removal_reclaims_unique_disks_but_preserves_shared_keys_and_lookalikes(
             fs::write(path, b"disk data").unwrap();
         }
         drop(image);
-        handle(&runtime).remove_by_id(FIRST).await.unwrap();
+        handle(&runtime).delete(FIRST).await.unwrap();
         assert_eq!(paths[0].exists(), shared);
         assert_eq!(paths[1].exists(), shared);
         assert!(paths[2..].iter().all(|path| path.exists()));
@@ -479,7 +479,7 @@ async fn removal_worker_keeps_cache_and_home_locked_after_caller_cancellation() 
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let task = tokio::spawn(async move {
         manager
-            .remove_by_id(FIRST.into(), move || {
+            .delete(FIRST.into(), move || {
                 entered_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(Vec::new())
@@ -488,7 +488,7 @@ async fn removal_worker_keeps_cache_and_home_locked_after_caller_cancellation() 
     });
     entered_rx.await.unwrap();
     assert!(matches!(
-        handle(&runtime).remove_by_id(FIRST).await,
+        handle(&runtime).delete(FIRST).await,
         Err(BoxliteError::InvalidState(_))
     ));
     task.abort();
@@ -541,7 +541,7 @@ async fn removal_excludes_a_pull_before_it_has_written_its_index() {
     let pull = tokio::spawn(async move { manager.pull(&format!("{host}/app:latest")).await });
     entered_rx.await.unwrap();
     assert!(matches!(
-        handle(&runtime).remove_by_id(FIRST).await,
+        handle(&runtime).delete(FIRST).await,
         Err(BoxliteError::InvalidState(_))
     ));
     release_tx.send(()).unwrap();
@@ -553,7 +553,7 @@ async fn removal_excludes_a_pull_before_it_has_written_its_index() {
             .is_err()
     );
     server.join().unwrap();
-    handle(&runtime).remove_by_id(FIRST).await.unwrap();
+    handle(&runtime).delete(FIRST).await.unwrap();
 }
 
 #[tokio::test]
@@ -565,7 +565,7 @@ async fn removal_serializes_box_creation_until_cleanup_finishes() {
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let removed = tokio::spawn(async move {
         manager
-            .remove_by_id(FIRST.into(), move || {
+            .delete(FIRST.into(), move || {
                 entered_tx.send(()).unwrap();
                 release_rx
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -636,7 +636,7 @@ async fn removal_waits_for_detached_extraction_after_its_caller_and_runtime_are_
     });
     entered_rx.await.unwrap();
     assert!(matches!(
-        handle(&runtime).remove_by_id(FIRST).await,
+        handle(&runtime).delete(FIRST).await,
         Err(BoxliteError::InvalidState(_))
     ));
     extraction.abort();

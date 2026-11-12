@@ -55,7 +55,7 @@ func removalRegistry(t *testing.T) *httptest.Server {
 	return server
 }
 
-func TestImageRemovalByID(t *testing.T) {
+func TestImageDelete(t *testing.T) {
 	t.Setenv("NO_PROXY", "127.0.0.1,localhost")
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 	registry := removalRegistry(t)
@@ -79,7 +79,7 @@ func TestImageRemovalByID(t *testing.T) {
 		t.Fatalf("list: %v, %v", listed, err)
 	}
 	id := listed[0].ID
-	_, err = images.RemoveByID(ctx, id)
+	_, err = images.Delete(ctx, id)
 	var failure *Error
 	if !errors.As(err, &failure) || failure.Code != ErrImageHasTags || !strings.Contains(err.Error(), ":latest") {
 		t.Fatalf("tag refusal: %v", err)
@@ -93,7 +93,7 @@ func TestImageRemovalByID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, err = images.RemoveByID(ctx, id+"\x00garbage")
+	_, err = images.Delete(ctx, id+"\x00garbage")
 	if !errors.As(err, &failure) || failure.Code != ErrInvalidArgument {
 		t.Fatalf("embedded NUL must be rejected without deleting the image: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestImageRemovalByID(t *testing.T) {
 	if err != nil || len(listed) != 2 {
 		t.Fatalf("invalid ID changed cached references: %v, %v", listed, err)
 	}
-	removed, err := images.RemoveByID(ctx, id[7:19])
+	removed, err := images.Delete(ctx, id[7:19])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestImageRemovalByID(t *testing.T) {
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("remaining images: %v, %v", listed, err)
 	}
-	_, err = images.RemoveByID(ctx, id)
+	_, err = images.Delete(ctx, id)
 	if !IsNotFound(err) {
 		t.Fatalf("missing image: %v", err)
 	}

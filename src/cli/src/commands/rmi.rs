@@ -18,7 +18,7 @@ pub async fn execute(args: RmiArgs, global: &crate::cli::GlobalFlags) -> anyhow:
     let mut reclaimed_bytes = 0u64;
     for (target, resolved) in args.targets.iter().zip(resolved) {
         let result = match resolved {
-            Ok(id) => images.remove_by_id(&id).await,
+            Ok(id) => images.delete(&id).await,
             Err(error) => Err(error),
         };
         match result {

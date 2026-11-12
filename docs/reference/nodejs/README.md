@@ -84,7 +84,7 @@ boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
 
 ### `ImageHandle`
 
-`await runtime.images.removeById("1f8c03c8f5e5")` accepts a full manifest ID or unique hex prefix.
+`await runtime.images.delete("1f8c03c8f5e5")` accepts a full manifest ID or unique hex prefix.
 It returns `ImageRemovalResult` with `imageId: string`, `removedReferences: string[]` and `reclaimedBytes: number`.
 `errorCode(error)` distinguishes `ambiguous_image_id`, `image_has_tags`, `image_used_by_boxes`, `not_found`, `invalid_state` (busy), and `unsupported`.
 See [local deletion semantics](../../concepts/images.md#removing-local-images), including shared data and accounting limits.
@@ -99,7 +99,7 @@ the server catalog on a REST runtime. Registry credentials are accessed through
 | `list` | One row per cached reference | Catalog alias and digest references |
 | `get` | Cached versions under the name | Catalog versions, aliases and history |
 | `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
-| `removeById` | Removes an eligible local manifest and reclaims unused data | Unsupported |
+| `delete` | Removes an eligible local manifest and reclaims unused data | Unsupported |
 | `usage` | Unsupported | Image count, allowance and known bytes |
 | `createAlias()` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
 | `deleteAlias()` | Unsupported | Removes only the named alias; absent names return NotFound |

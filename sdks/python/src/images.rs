@@ -308,12 +308,12 @@ impl PyImageHandle {
         })
     }
 
-    /// Remove one untagged local image by manifest ID or unique hex prefix.
-    fn remove_by_id<'py>(&self, py: Python<'py>, image_id: String) -> PyResult<Bound<'py, PyAny>> {
+    /// Delete one untagged local image by manifest ID or unique hex prefix.
+    fn delete<'py>(&self, py: Python<'py>, image_id: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             Ok(PyImageRemovalResult::from(
-                handle.remove_by_id(&image_id).await.map_err(map_err)?,
+                handle.delete(&image_id).await.map_err(map_err)?,
             ))
         })
     }
@@ -378,7 +378,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removal_by_id_returns_core_results_through_the_python_async_api() {
+    fn deletion_returns_core_results_through_the_python_async_api() {
         let fixture = boxlite::LocalImageFixture::new();
         Python::attach(|py| {
             let images = Bound::new(
@@ -396,7 +396,7 @@ mod tests {
                 .unwrap()
                 .extract()
                 .unwrap();
-            let removed = awaited(&images, &format!("remove_by_id({:?})", &id[7..19]));
+            let removed = awaited(&images, &format!("delete({:?})", &id[7..19]));
             assert_eq!(
                 removed
                     .getattr("image_id")
@@ -427,10 +427,10 @@ mod tests {
     }
 
     #[test]
-    fn removal_by_id_on_rest_is_unsupported_without_network_io() {
+    fn deletion_on_rest_is_unsupported_without_network_io() {
         Python::attach(|py| {
             let images = images_at(py, "http://127.0.0.1:1".into());
-            let error = awaited_error(&images, "remove_by_id('123')");
+            let error = awaited_error(&images, "delete('123')");
             assert_eq!(
                 error.getattr("code").unwrap().extract::<String>().unwrap(),
                 "unsupported"
@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn removal_by_id_preserves_typed_tag_and_missing_errors() {
+    fn deletion_preserves_typed_tag_and_missing_errors() {
         let fixture = boxlite::LocalImageFixture::new();
         fixture.add_tag();
         Python::attach(|py| {
@@ -450,13 +450,13 @@ mod tests {
                 },
             )
             .unwrap();
-            let error = awaited_error(&images, &format!("remove_by_id({:?})", fixture.image_id));
+            let error = awaited_error(&images, &format!("delete({:?})", fixture.image_id));
             assert_eq!(
                 error.getattr("code").unwrap().extract::<String>().unwrap(),
                 "image_has_tags"
             );
             assert!(error.to_string().contains("one.example/app:latest"));
-            let error = awaited_error(&images, "remove_by_id('000000000000')");
+            let error = awaited_error(&images, "delete('000000000000')");
             assert_eq!(
                 error.getattr("code").unwrap().extract::<String>().unwrap(),
                 "not_found"

@@ -228,9 +228,9 @@ for each method on each runtime.
 For local cache reclamation, use the separate ID-based operation:
 
 ```python
-removed = await runtime.images.remove_by_id("1f8c03c8f5e5")
+removed = await runtime.images.delete("1f8c03c8f5e5")
 print(removed.image_id, removed.removed_references, removed.reclaimed_bytes)
-# With SyncBoxlite, call runtime.images.remove_by_id(...) without await.
+# With SyncBoxlite, call runtime.images.delete(...) without await.
 ```
 
 The result is an `ImageRemovalResult`; `reclaimed_bytes` is an integer.

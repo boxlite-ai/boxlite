@@ -48,7 +48,7 @@ export/import remains available.
 
 ## Local image removal
 
-Local cache removal uses `boxlite_image_remove_by_id` with a full manifest ID or unique hex prefix.
+Local cache removal uses `boxlite_image_delete` with a full manifest ID or unique hex prefix.
 It refuses tagged or box-dependent images and returns an owned `CImageRemovalResult` through the drain-thread callback.
 Release it with `boxlite_free_image_removal_result`.
 See the [C image reference](../../docs/reference/c/README.md#images) for result fields, error codes, an example and ownership rules.

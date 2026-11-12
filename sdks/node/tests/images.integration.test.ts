@@ -17,7 +17,7 @@ const testRegistries = [
   { host: "docker.io", search: true },
 ];
 
-test("removeById crosses the native binding with results and typed conflicts", async () => {
+test("delete crosses the native binding with results and typed conflicts", async () => {
   const digest = (bytes: Buffer) =>
     `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
   const config = Buffer.from(
@@ -82,13 +82,13 @@ test("removeById crosses the native binding with results and typed conflicts", a
     const images = runtime.images;
     await images.pull(`${host}/app:latest`);
     const id = (await images.list())[0].id;
-    expect(errorCode(await failureOf(images.removeById(id)))).toBe(
+    expect(errorCode(await failureOf(images.delete(id)))).toBe(
       "image_has_tags",
     );
     await images.remove(`${host}/app`);
     await images.pull(`${host}/app@${id}`);
     await images.pull(`${host}/mirror@${id}`);
-    const result = await images.removeById(id.slice(7, 19));
+    const result = await images.delete(id.slice(7, 19));
     expect(result.imageId).toBe(id);
     expect(result.removedReferences).toEqual([
       `${host}/app@${id}`,
@@ -96,7 +96,7 @@ test("removeById crosses the native binding with results and typed conflicts", a
     ]);
     expect(result.reclaimedBytes).toBeGreaterThan(0);
     expect(await images.list()).toEqual([]);
-    expect(errorCode(await failureOf(images.removeById(id)))).toBe("not_found");
+    expect(errorCode(await failureOf(images.delete(id)))).toBe("not_found");
   } finally {
     await runtime?.shutdown();
     await new Promise<void>((resolve, reject) =>

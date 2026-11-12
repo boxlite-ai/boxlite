@@ -349,7 +349,7 @@ console.log(pulled.reference, pulled.configDigest, pulled.layerCount);
 To reclaim an untagged local image, use its manifest ID:
 
 ```typescript
-const removed = await runtime.images.removeById("1f8c03c8f5e5");
+const removed = await runtime.images.delete("1f8c03c8f5e5");
 console.log(removed.imageId, removed.removedReferences, removed.reclaimedBytes);
 ```
 

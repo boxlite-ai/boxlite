@@ -160,11 +160,11 @@ pub(crate) type CBoxImageGetFn =
 pub type CBoxImageRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxImageRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
-/// Removal by ID completion. The callback owns a successful result and frees
-/// it with `boxlite_free_image_removal_result`. The error is borrowed.
-pub type CBoxImageRemoveByIdCb =
+/// Local image deletion completion. The callback owns a successful result,
+/// freed with `boxlite_free_image_removal_result`. The error is borrowed.
+pub type CBoxImageDeleteCb =
     Option<extern "C" fn(*mut CImageRemovalResult, *mut crate::CBoxliteError, *mut c_void)>;
-pub(crate) type CBoxImageRemoveByIdFn =
+pub(crate) type CBoxImageDeleteFn =
     extern "C" fn(*mut CImageRemovalResult, *mut crate::CBoxliteError, *mut c_void);
 
 /// Image usage completion. The usage (null on failure) and error pointers are
@@ -486,8 +486,8 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<(), BoxliteError>,
     },
-    ImageRemoveById {
-        cb: CBoxImageRemoveByIdFn,
+    ImageDelete {
+        cb: CBoxImageDeleteFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CImageRemovalResult>, BoxliteError>,
     },

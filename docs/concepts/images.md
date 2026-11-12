@@ -111,13 +111,24 @@ Eligibility errors leave the target intact.
 Filesystem and SQLite updates are not one atomic transaction: an I/O failure can leave the target cache incomplete.
 Retry removal, or pull the image again to restore missing data; retained images and protected boxes keep their data.
 
-SDKs expose the same operation as `images.remove_by_id()` in Rust and Python,
-`images.removeById()` in Node.js, `images.RemoveByID()` in Go, and
-`boxlite_image_remove_by_id()` in C.
-Python's synchronous handle also provides `remove_by_id()`.
+SDKs expose the same operation as `images.delete()` in Rust, Python and Node.js,
+`images.Delete()` in Go, and
+`boxlite_image_delete()` in C.
+Python's synchronous handle also provides `delete()`.
 Results contain the resolved full image ID, removed references and reclaimed bytes.
 
-The existing name-based `remove` operation still forgets references and retains cache bytes.
+The SDK uses `delete(id)` for local cache reclamation and keeps `remove(name)` for its existing contract.
+Choose the operation by its effect, not just the form of its argument:
+
+| Operation | Local runtime | REST runtime |
+| --- | --- | --- |
+| `remove(name)` | Forgets every reference under the name and retains cache files | Removes the catalog entry, subject to box dependency checks |
+| `delete(id)` | Removes an eligible manifest and reclaims its unused cache data | Unsupported, without sending a request |
+
+For example, `remove("docker.io/library/alpine")` leaves reusable layers on disk;
+`delete("1f8c03c8f5e5")` checks dependencies and reclaims only data no retained image needs.
+The CLI's `rmi` command uses the SDK's `delete` operation.
+
 Dashboard deletion removes an organization catalog entry and leaves runner cache bytes in place.
 
 ## Registry tags and catalog aliases
@@ -147,4 +158,4 @@ REST runtimes return Unsupported without sending a request.
 Pulls, image objects, box creation, and initialization retain shared cache access.
 Image-object clones and detached extraction workers also retain the runtime home lock.
 Release all consumers before reopening that home in another runtime.
-Use `images.remove_by_id()` to reclaim an eligible local image; see [removal semantics](#removing-local-images).
+Use `images.delete()` to reclaim an eligible local image; see [removal semantics](#removing-local-images).

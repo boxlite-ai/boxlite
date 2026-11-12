@@ -650,7 +650,7 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
-            RuntimeEvent::ImageRemoveById {
+            RuntimeEvent::ImageDelete {
                 cb,
                 user_data,
                 result,

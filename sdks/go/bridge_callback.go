@@ -318,8 +318,8 @@ func goBoxliteOnImageRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
-//export goBoxliteOnImageRemoveByID
-func goBoxliteOnImageRemoveByID(result *C.CImageRemovalResult, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+//export goBoxliteOnImageDelete
+func goBoxliteOnImageDelete(result *C.CImageRemovalResult, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
 		return

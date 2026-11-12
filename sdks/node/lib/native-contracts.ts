@@ -112,8 +112,8 @@ export interface ImageHandle {
    * on a REST runtime `invalid_state` while a box can still boot from it.
    */
   remove(name: string): Promise<void>;
-  /** Remove by manifest ID or unique hex prefix. REST returns `unsupported`. */
-  removeById(imageId: string): Promise<ImageRemovalResult>;
+  /** Delete an untagged local image and reclaim unused cache data. REST returns `unsupported`. */
+  delete(imageId: string): Promise<ImageRemovalResult>;
   /** Images held against the allowance. @throws `unsupported` locally. */
   usage(): Promise<ImageUsage>;
   /**

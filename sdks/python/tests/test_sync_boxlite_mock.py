@@ -47,8 +47,8 @@ class _NativeImages:
     async def remove(self, name: str) -> None:
         self.calls.append(("remove", name))
 
-    async def remove_by_id(self, image_id: str):
-        self.calls.append(("remove_by_id", image_id))
+    async def delete(self, image_id: str):
+        self.calls.append(("delete", image_id))
         if image_id == "tagged":
             raise ImageHasTagsError("image has tags: one.example/app:latest")
         return self.removal_result
@@ -113,15 +113,15 @@ class TestFactories:
 
 
 class TestImages:
-    def test_remove_by_id_bridges_the_result_and_typed_errors(self):
+    def test_delete_bridges_the_result_and_typed_errors(self):
         with SyncBoxlite.rest(object()) as runtime:
-            result = runtime.images.remove_by_id("123abc")
+            result = runtime.images.delete("123abc")
             assert result is runtime.runtime.images.removal_result
             with pytest.raises(ImageHasTagsError, match="one.example/app:latest"):
-                runtime.images.remove_by_id("tagged")
+                runtime.images.delete("tagged")
         assert runtime.runtime.images.calls == [
-            ("remove_by_id", "123abc"),
-            ("remove_by_id", "tagged"),
+            ("delete", "123abc"),
+            ("delete", "tagged"),
         ]
 
     def test_each_call_returns_what_the_native_call_answered(self):

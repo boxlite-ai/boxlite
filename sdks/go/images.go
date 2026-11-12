@@ -265,9 +265,9 @@ func (i *Images) Remove(ctx context.Context, name string) error {
 	}
 }
 
-// RemoveByID removes one untagged local image by manifest ID or unique hex
+// Delete deletes one untagged local image by manifest ID or unique hex
 // prefix. Tagged and box-dependent images are refused. REST is unsupported.
-func (i *Images) RemoveByID(ctx context.Context, imageID string) (*ImageRemovalResult, error) {
+func (i *Images) Delete(ctx context.Context, imageID string) (*ImageRemovalResult, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()
 	}
@@ -280,7 +280,7 @@ func (i *Images) RemoveByID(ctx context.Context, imageID string) (*ImageRemovalR
 	ch := make(chan imageRemovalResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	var cerr C.CBoxliteError
-	code := C.boxlite_image_remove_by_id(i.handle, cID, C.cbImageRemoveByID(), handleToPtr(h), &cerr)
+	code := C.boxlite_image_delete(i.handle, cID, C.cbImageDelete(), handleToPtr(h), &cerr)
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)

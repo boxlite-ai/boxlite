@@ -258,11 +258,11 @@ impl JsImageHandle {
         handle.remove(&name).await.map_err(map_err)
     }
 
-    /// Remove an untagged local image by manifest ID or unique hex prefix.
-    #[napi(js_name = "removeById")]
-    pub async fn remove_by_id(&self, image_id: String) -> Result<JsImageRemovalResult> {
+    /// Delete an untagged local image by manifest ID or unique hex prefix.
+    #[napi]
+    pub async fn delete(&self, image_id: String) -> Result<JsImageRemovalResult> {
         Ok(JsImageRemovalResult::from(
-            self.handle.remove_by_id(&image_id).await.map_err(map_err)?,
+            self.handle.delete(&image_id).await.map_err(map_err)?,
         ))
     }
 
@@ -313,21 +313,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removal_by_id_returns_core_results_and_propagates_tag_and_missing_errors() {
+    fn deletion_returns_core_results_and_propagates_tag_and_missing_errors() {
         let fixture = boxlite::LocalImageFixture::new();
         let images = JsImageHandle {
             handle: Arc::new(fixture.runtime().images().unwrap()),
         };
         let listed = block_on(images.list()).unwrap();
         let id = listed[0].id.clone();
-        let result = block_on(images.remove_by_id(id[7..19].to_string())).unwrap();
+        let result = block_on(images.delete(id[7..19].to_string())).unwrap();
         assert_eq!(result.image_id, id);
         assert_eq!(result.removed_references.len(), 2);
         assert!(result.reclaimed_bytes > 0);
         assert!(!fixture.manifest_path.exists());
         assert!(block_on(images.list()).unwrap().is_empty());
         assert!(
-            block_on(images.remove_by_id(id))
+            block_on(images.delete(id))
                 .unwrap_err()
                 .reason
                 .starts_with("not found:")
@@ -338,16 +338,16 @@ mod tests {
         let images = JsImageHandle {
             handle: Arc::new(fixture.runtime().images().unwrap()),
         };
-        let error = block_on(images.remove_by_id(fixture.image_id.clone())).unwrap_err();
+        let error = block_on(images.delete(fixture.image_id.clone())).unwrap_err();
         assert!(error.reason.starts_with("image has tags:"));
         assert!(error.reason.contains("one.example/app:latest"));
         assert!(fixture.manifest_path.exists());
     }
 
     #[test]
-    fn removal_by_id_on_rest_is_unsupported_without_network_io() {
-        let error = block_on(images_at("http://127.0.0.1:1".into()).remove_by_id("123".into()))
-            .unwrap_err();
+    fn deletion_on_rest_is_unsupported_without_network_io() {
+        let error =
+            block_on(images_at("http://127.0.0.1:1".into()).delete("123".into())).unwrap_err();
         assert!(error.reason.starts_with("unsupported:"));
     }
 

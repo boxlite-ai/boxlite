@@ -6,8 +6,8 @@
 //! alias creation and deletion are REST only.
 //!
 //! Async methods (`boxlite_image_pull`, `boxlite_image_list`,
-//! `boxlite_image_get`, `boxlite_image_remove`, `boxlite_image_usage`,
-//! `boxlite_image_create_alias`) follow the post-and-drain pattern; results are
+//! `boxlite_image_get`, `boxlite_image_remove`, `boxlite_image_delete`,
+//! `boxlite_image_usage`, `boxlite_image_create_alias`) follow the post-and-drain pattern; results are
 //! dispatched on the user's drain thread.
 
 use std::ffi::{CStr, CString};
@@ -31,108 +31,6 @@ use crate::info::{free_raw_slice, into_raw_slice};
 use crate::registries::RegistryHandle;
 use crate::runtime::RuntimeLiveness;
 use crate::{CBoxliteError, CBoxliteImageHandle};
-
-/// Owned result of local image removal. Release it once with
-/// `boxlite_free_image_removal_result`, including its nested strings.
-#[repr(C)]
-pub struct CImageRemovalResult {
-    pub image_id: *mut c_char,
-    pub removed_references: *mut *mut c_char,
-    pub removed_references_count: c_int,
-    pub reclaimed_bytes: u64,
-}
-
-impl CImageRemovalResult {
-    fn from_result(result: boxlite::ImageRemovalResult) -> Self {
-        let (removed_references, removed_references_count) =
-            to_c_str_array(&result.removed_references);
-        Self {
-            image_id: to_c_str(&result.image_id),
-            removed_references,
-            removed_references_count,
-            reclaimed_bytes: result.reclaimed_bytes,
-        }
-    }
-}
-
-/// Release an image-removal result, its strings and reference array.
-///
-/// # Safety
-/// `result` must be null or an owned result from the removal callback,
-/// and must not have been freed before.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_free_image_removal_result(result: *mut CImageRemovalResult) {
-    unsafe { free_image_removal_result(result) }
-}
-
-unsafe fn free_image_removal_result(result: *mut CImageRemovalResult) {
-    if !result.is_null() {
-        let result = unsafe { Box::from_raw(result) };
-        unsafe {
-            free_str(result.image_id);
-            free_str_array(result.removed_references, result.removed_references_count);
-        }
-    }
-}
-
-/// Remove an untagged local image by full manifest ID or unique hex prefix.
-/// This posts a completion event; drain the runtime to dispatch it. On success
-/// the callback owns the result. REST runtimes return Unsupported.
-///
-/// # Safety
-/// As for `boxlite_image_get`; `image_id` must point to a NUL-terminated UTF-8
-/// string for the duration of this call. The callback must not be null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_image_remove_by_id(
-    handle: *mut CBoxliteImageHandle,
-    image_id: *const c_char,
-    cb: crate::event_queue::CBoxImageRemoveByIdCb,
-    user_data: *mut c_void,
-    out_error: *mut CBoxliteError,
-) -> BoxliteErrorCode {
-    unsafe {
-        if handle.is_null() {
-            write_error(out_error, null_pointer_error("handle"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        let image_id = match copy_arg(image_id, "image_id") {
-            Ok(id) => id,
-            Err(error) => {
-                write_error(out_error, error);
-                return BoxliteErrorCode::InvalidArgument;
-            }
-        };
-        let handle = &*handle;
-        if let Err(error) = crate::util::ensure_runtime_live(&handle.liveness, "remove image by ID")
-        {
-            let code = error_to_code(&error);
-            write_error(out_error, error);
-            return code;
-        }
-        let cb = crate::unwrap_cb_or_return!(cb, out_error);
-        let core = handle.handle.clone();
-        let queue = Arc::clone(&handle.queue);
-        let user_data = user_data as usize;
-        handle.tokio_rt.spawn(async move {
-            let result = core.remove_by_id(&image_id).await.map(|result| {
-                crate::event_queue::OwnedFfiPtr::new_with(
-                    Box::new(CImageRemovalResult::from_result(result)),
-                    free_image_removal_result,
-                )
-            });
-            push_event(
-                &queue,
-                RuntimeEvent::ImageRemoveById {
-                    cb,
-                    user_data,
-                    result,
-                },
-            )
-            .await;
-        });
-        BoxliteErrorCode::Ok
-    }
-}
 
 /// Opaque handle to runtime image operations.
 pub struct ImageHandle {
@@ -164,6 +62,16 @@ pub struct CImagePullResult {
     pub reference: *mut c_char,
     pub config_digest: *mut c_char,
     pub layer_count: c_int,
+}
+
+/// Owned result of local image removal. Release it once with
+/// `boxlite_free_image_removal_result`, including its nested strings.
+#[repr(C)]
+pub struct CImageRemovalResult {
+    pub image_id: *mut c_char,
+    pub removed_references: *mut *mut c_char,
+    pub removed_references_count: c_int,
+    pub reclaimed_bytes: u64,
 }
 
 /// One build of an image, owned by its enclosing [`CImageDetail`].
@@ -292,6 +200,19 @@ impl CImagePullResult {
             reference: to_c_str(reference),
             config_digest: to_c_str(config_digest),
             layer_count: layer_count as c_int,
+        }
+    }
+}
+
+impl CImageRemovalResult {
+    fn from_result(result: boxlite::ImageRemovalResult) -> Self {
+        let (removed_references, removed_references_count) =
+            to_c_str_array(&result.removed_references);
+        Self {
+            image_id: to_c_str(&result.image_id),
+            removed_references,
+            removed_references_count,
+            reclaimed_bytes: result.reclaimed_bytes,
         }
     }
 }
@@ -455,6 +376,16 @@ pub unsafe fn free_image_pull_result(result: *mut CImagePullResult) {
     }
 }
 
+unsafe fn free_image_removal_result(result: *mut CImageRemovalResult) {
+    if !result.is_null() {
+        let result = unsafe { Box::from_raw(result) };
+        unsafe {
+            free_str(result.image_id);
+            free_str_array(result.removed_references, result.removed_references_count);
+        }
+    }
+}
+
 unsafe fn free_str(s: *mut c_char) {
     if !s.is_null() {
         #[cfg(test)]
@@ -533,6 +464,65 @@ pub unsafe extern "C" fn boxlite_image_remove(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     image_remove(handle, name, cb, user_data, out_error)
+}
+
+/// Delete an untagged local image by full manifest ID or unique hex prefix.
+/// This posts a completion event; drain the runtime to dispatch it. On success
+/// the callback owns the result. REST runtimes return Unsupported.
+///
+/// # Safety
+/// As for `boxlite_image_get`; `image_id` must point to a NUL-terminated UTF-8
+/// string for the duration of this call. The callback must not be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_delete(
+    handle: *mut CBoxliteImageHandle,
+    image_id: *const c_char,
+    cb: crate::event_queue::CBoxImageDeleteCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let image_id = match copy_arg(image_id, "image_id") {
+            Ok(id) => id,
+            Err(error) => {
+                write_error(out_error, error);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+        let handle = &*handle;
+        if let Err(error) = crate::util::ensure_runtime_live(&handle.liveness, "remove image by ID")
+        {
+            let code = error_to_code(&error);
+            write_error(out_error, error);
+            return code;
+        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+        let core = handle.handle.clone();
+        let queue = Arc::clone(&handle.queue);
+        let user_data = user_data as usize;
+        handle.tokio_rt.spawn(async move {
+            let result = core.delete(&image_id).await.map(|result| {
+                crate::event_queue::OwnedFfiPtr::new_with(
+                    Box::new(CImageRemovalResult::from_result(result)),
+                    free_image_removal_result,
+                )
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::ImageDelete {
+                    cb,
+                    user_data,
+                    result,
+                },
+            )
+            .await;
+        });
+        BoxliteErrorCode::Ok
+    }
 }
 
 /// Queue a read of how many images are held against the allowance, with the
@@ -633,6 +623,16 @@ pub unsafe extern "C" fn boxlite_free_image_info_list(list: *mut CImageInfoList)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_free_image_pull_result(result: *mut CImagePullResult) {
     free_image_pull_result(result)
+}
+
+/// Release an image-removal result, its strings and reference array.
+///
+/// # Safety
+/// `result` must be null or an owned result from the removal callback,
+/// and must not have been freed before.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_free_image_removal_result(result: *mut CImageRemovalResult) {
+    unsafe { free_image_removal_result(result) }
 }
 
 /// Free a `CImageDetail` with its aliases, versions, and their strings.

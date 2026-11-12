@@ -54,7 +54,7 @@ pub(crate) trait ImageBackend: Send + Sync {
     /// Stop holding `name`. The layers stay where they are.
     async fn remove_image(&self, name: &str) -> BoxliteResult<()>;
 
-    async fn remove_image_by_id(&self, _id: &str) -> BoxliteResult<ImageRemovalResult> {
+    async fn delete_image(&self, _id: &str) -> BoxliteResult<ImageRemovalResult> {
         Err(BoxliteError::Unsupported(
             "local image cache removal requires an embedded runtime".into(),
         ))
@@ -201,12 +201,12 @@ pub struct ImageHandle {
 }
 
 impl ImageHandle {
-    /// Remove an untagged local image by full manifest ID or unique hex prefix.
+    /// Delete an untagged local image by full manifest ID or unique hex prefix.
     ///
     /// Refuses tagged and box-dependent images. Active cache consumers return
     /// `InvalidState`; retry after their work completes. REST returns `Unsupported`.
-    pub async fn remove_by_id(&self, id: &str) -> BoxliteResult<ImageRemovalResult> {
-        self.manager.remove_image_by_id(id).await
+    pub async fn delete(&self, id: &str) -> BoxliteResult<ImageRemovalResult> {
+        self.manager.delete_image(id).await
     }
 
     /// Resolve a batch against one cache snapshot without removing anything.

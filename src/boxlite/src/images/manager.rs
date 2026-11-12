@@ -147,7 +147,7 @@ impl ImageManager {
             .collect())
     }
 
-    pub(crate) async fn remove_by_id(
+    pub(crate) async fn delete(
         &self,
         id: String,
         boxes: impl FnOnce() -> BoxliteResult<Vec<(BoxConfig, BoxState)>> + Send + 'static,
