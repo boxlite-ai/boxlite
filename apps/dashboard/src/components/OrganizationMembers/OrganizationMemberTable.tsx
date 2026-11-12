@@ -102,7 +102,13 @@ export function OrganizationMemberTable({
     <>
       <div>
         <div>
-          <Table className="resource-table w-full table-fixed">
+          <Table
+            className={
+              ownerMode
+                ? 'resource-table w-full min-w-[640px] table-fixed'
+                : 'resource-table w-full min-w-[400px] table-fixed'
+            }
+          >
             <colgroup>
               <col className={ownerMode ? 'w-[28%]' : 'w-[60%]'} />
               <col className={ownerMode ? 'w-[12%]' : 'w-[20%]'} />

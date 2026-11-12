@@ -1087,3 +1087,4 @@ Image rows use full curated references with quieter registry/version context, sh
 ### Resource request feedback
 
 ResourceLayout owns the shared placement of loading, empty, and failed inventories. Initial requests use an assembling Box with a static reduced-motion fallback. Image and registry inventories distinguish missing data from an empty successful response: initial failures offer Retry, while refresh failures retain cached rows with an inline recovery notice. Transport details stay out of user-facing messages. Filters remain disabled until an inventory exists.
+Resource tables retain a minimum readable width in narrow desktop containers. Boxes keep the sticky header and records in one scrolling region so horizontal scrolling cannot misalign columns. Member tables use a wider minimum for owner-only invitation columns.
