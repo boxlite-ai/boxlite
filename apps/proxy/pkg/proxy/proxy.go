@@ -247,7 +247,7 @@ func (p *Proxy) handleHTTP(ctx *gin.Context) {
 		return
 	}
 
-	if _, isAppDomain := p.namedDomainHost(ctx.Request.Host); !isAppDomain {
+	if _, isAppDomain := p.appDomainHost(ctx.Request.Host); !isAppDomain {
 		_, _, _, err := p.parseHost(ctx.Request.Host)
 		// if the host is not valid, we don't proxy the request
 		if err != nil {

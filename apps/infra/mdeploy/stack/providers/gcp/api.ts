@@ -308,7 +308,6 @@ export const gcpApiProvider =
     zoneId,
     network,
     runnerAccount,
-    proxyAddress,
   }: {
     dependencies: ApiDependencies
     project: string
@@ -332,8 +331,6 @@ export const gcpApiProvider =
     network: $util.Output<string>
     /** The runner's identity, which the egress rule below is keyed on. */
     runnerAccount: $util.Output<string>
-    /** The same reserved address used by the proxy's forwarding rule and DNS. */
-    proxyAddress: $util.Output<string>
   }): ApiProvider =>
   (request: ApiRequest): Api => {
     const placement = dependencies.placement as Extract<Placement, { cloud: 'gcp' }>
@@ -512,10 +509,7 @@ export const gcpApiProvider =
               startupProbe: { httpGet: { path: '/api/health', port: request.port }, failureThreshold: 30 },
               livenessProbe: { httpGet: { path: '/api/health', port: request.port } },
               envs: containerEnvironment({
-                values: {
-                  ...request.environment,
-                  ...(customDomains ? { CUSTOM_DOMAIN_EDGE_IPS: proxyAddress } : {}),
-                },
+                values: request.environment,
                 addresses,
               }),
             },

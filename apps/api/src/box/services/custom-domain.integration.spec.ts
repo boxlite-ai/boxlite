@@ -22,7 +22,7 @@ describeWithDatabase('confirmed custom domain lifecycle (real Postgres)', () => 
   const subscription = { refresh: jest.fn(), read: jest.fn() }
   const dns = { checkAll: jest.fn(), verifyTls: jest.fn() }
   const provider = { reconcile: jest.fn() }
-  const settings = { enabled: true, trafficHost: 'custom.platform.com', reservedSuffixes: [], edgeIps: ['192.0.2.1'] }
+  const settings = { enabled: true, trafficHost: 'custom.platform.com' }
   const config = {
     get: (key: string) =>
       ({
@@ -391,8 +391,7 @@ describeWithDatabase('confirmed custom domain lifecycle (real Postgres)', () => 
     expect(await db.query(`SELECT * FROM domain`)).toEqual([])
   })
 
-  it('bounds quota, rejects reserved names and prevents cross-organization operations', async () => {
-    await expect(domains.create(org, 'x.apps.platform.com')).rejects.toMatchObject({ status: 400 })
+  it('bounds quota and prevents cross-organization operations', async () => {
     const draft = await domains.create(org, 'app.example.com')
     await expect(domains.create(org, 'second.example.com')).rejects.toMatchObject({ status: 400 })
     await expect(domains.verify(other, draft.id)).rejects.toMatchObject({ status: 404 })

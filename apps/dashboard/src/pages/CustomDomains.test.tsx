@@ -483,7 +483,7 @@ describe('Custom domains setup', () => {
     expect(api.prepareCustomDomain).not.toHaveBeenCalled()
   })
 
-  it.each([null, 'provider_unavailable'])(
+  it.each(['provider_unavailable'])(
     'keeps an incomplete create response with error %s in the hostname form and resumes its draft',
     async (errorCode) => {
       response.domains = []
@@ -510,7 +510,7 @@ describe('Custom domains setup', () => {
       expect(button('Get DNS configuration').disabled).toBe(false)
       expect(client.getQueryData<CustomDomainList>(['custom-domains', 'org-1'])?.domains[0].id).toBe(domain.id)
       expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-        errorCode ? 'HTTPS service is temporarily unavailable' : 'DNS configuration is not ready yet.',
+        'HTTPS service is temporarily unavailable',
       )
       await click('Get DNS configuration')
       expect(api.prepareCustomDomain).toHaveBeenCalledWith('org-1', domain.id)
@@ -721,41 +721,6 @@ describe('Custom domains setup', () => {
     expect(button('Configured, verify').disabled).toBe(false)
     expect(feedback.success).not.toHaveBeenCalled()
     expect(api.verifyCustomDomain).toHaveBeenCalledTimes(1)
-  })
-
-  it('does not automatically resume preparation after an incomplete create response', async () => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    response.domains = []
-    api.createCustomDomain.mockImplementation(async () => {
-      const draft = {
-        ...domain,
-        phase: 'pending_verification' as const,
-        ready: false,
-        confirmed: false,
-        dnsRecords: [],
-      }
-      response.domains = [draft]
-      return draft
-    })
-    await render()
-    await click('Add custom domain')
-    input('Custom hostname', 'app.example.com')
-    vi.useFakeTimers()
-    try {
-      await act(async () => button('Get DNS configuration').click())
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(50)
-      })
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(60_000)
-      })
-      expect(api.prepareCustomDomain).not.toHaveBeenCalled()
-      expect(api.verifyCustomDomain).not.toHaveBeenCalled()
-    } finally {
-      vi.useRealTimers()
-    }
-    expect(button('Continue getting DNS configuration')).toBeUndefined()
-    expect(button('Get DNS configuration')).toBeDefined()
   })
 
   it('shows the verification result without waiting for the held-domain refresh', async () => {

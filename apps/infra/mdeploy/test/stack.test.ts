@@ -94,7 +94,7 @@ test('the proxy namespace is supplied independently of API certificate setup', (
         apiEnvironment: providerConfigured ? { CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project' } : {},
       }),
     })
-    assert.equal(providers.seen.edge.request.environment.PROXY_DOMAIN, 'box.dev.boxlite.ai')
+    assert.equal(providers.seen.edge.request.domain, 'box.dev.boxlite.ai')
   }
 })
 

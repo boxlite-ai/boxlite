@@ -119,8 +119,8 @@ A port can have several names: binding a new one leaves the others in place.
 `unbind` stops routing a name: requests that start afterwards get
 `404`, connections already open run until they close, and the port's
 generated URL stays public until the tunnel is revoked. An unbound name is
-still the organization's — nobody else can claim it, platform names still count
-against the platform allowance, and the same organization can bind it
+still the organization's; platform names still count against the platform allowance,
+and the same organization can bind it
 again to any of its box ports. Destroying the box, including later cleanup of its
 database row, preserves the binding: `domain ls` still shows the original Box ID
 and port until explicit unbind or rebind. A destroy request first changes the
@@ -145,70 +145,39 @@ not start or end with a hyphen, not look like `<digits>-…`, and not be one of
 the platform's own names or the API's collection names (`boxes`, `images`,
 `volumes`, `domains`); names held before `min_length` rose stay bindable.
 A box in a region served by its own proxy cannot take a named domain
-(`region_not_supported`): the app domain's wildcard record points at the
-default proxy only.
+(`region_not_supported`): named-domain traffic is served by the default proxy.
 
 #### Bring your own domain
 
-On an enabled GCP deployment, an organization with an active subscription can add
-one hostname in **Dashboard → Domains → Add custom domain**. Pending, failed and
-expired setup drafts also occupy this one-per-organization allowance. Adding a
-different hostname returns `400 custom_domain_count_limit_reached` until the existing
-configuration is deleted; repeating the same hostname returns its existing configuration.
-Platform-domain allowance remains separate, even when it is zero or full.
-Pre-existing configurations are retained; an organization already above the allowance
-must delete all its configurations before adding a different hostname.
+On an enabled GCP deployment, an organization with an active subscription can add one hostname in
+**Dashboard → Domains → Custom domains**. Live drafts occupy this separate allowance; delete an existing configuration before adding another hostname.
+Repeating the same hostname resumes its configuration. Custom domains do not consume platform-domain quota.
 
-1. Enter a public subdomain, such as `app.example.com`, and click **Get DNS configuration**; apex domains and wildcards are unsupported.
-2. Wait for all three records: traffic CNAME, configuration-specific ownership TXT, and Google certificate authorization CNAME.
-3. Add all three at your DNS provider, then click **Configured, verify**; the page displays **Verifying DNS, please wait…**.
-4. Correct any identified record and retry; a DNS timeout means the check was unavailable, not that the record is necessarily wrong.
-5. After Google accepts the certificate request and BoxLite saves it, the page says HTTPS is being enabled and you can return later.
-6. Wait for issuance, map activation and actual TLS verification, then return to bind a Box port when **Ready**.
+1. Enter a public ASCII/Punycode subdomain such as `app.example.com` and click **Get DNS configuration**; apex domains and wildcards are unsupported.
+2. Add all three records: traffic CNAME, configuration-specific ownership TXT, and certificate authorization CNAME.
+3. Click **Configured, verify**; correct failed records and retry. A DNS timeout means the check was unavailable.
+4. After confirmation, the API continues HTTPS setup. Return when **Ready** to bind a Box port with a public tunnel and inbound access enabled.
 
-Preparation creates a Google DNS authorization but does not query your DNS or request a certificate.
-The three records are displayed together; an interrupted preparation can be resumed without changing the TXT.
-In Cloudflare, use **DNS only** for both CNAME records; copy the full certificate authorization name, not the traffic name.
-If the DNS editor appends the zone suffix, enter the relative name and verify the resulting full name.
+Use the platform hostname as the traffic CNAME target; no fixed IP is required, and admission has no suffix blacklist.
+In Cloudflare, use **DNS only** for both CNAME records. Keep the certificate authorization name distinct from the traffic name.
+If your DNS editor appends the zone suffix, enter relative names and verify the resulting full names.
+Keep the records after setup for routing and managed renewal.
 
-Only your confirmation starts DNS verification. Ordinary list/detail requests do not advance setup.
-While the dialog is visible, confirmed setup advances about every ten seconds, subject to provider backoff.
-Leaving stops page requests; Google continues issuance, and an API task advances confirmed setup at startup and every minute while execution is available.
-No new minimum instances or continuous CPU settings are required by this change; an absent or CPU-throttled API can delay progress until it resumes.
-Returning does not guarantee immediate readiness; map deployment can take additional time.
+Preparation resumes automatically after creating a draft; preparation errors allow explicit retry without changing the ownership TXT.
+DNS verification requires confirmation. The page reads incomplete status every minute while visible; reads do not advance setup.
+The API task advances confirmed setups at startup and every minute while it runs, independently of the page.
+HTTPS errors offer **Retry**; certificate submission, issuance and map deployment may still be pending after DNS succeeds.
+**Setup completed** indicates completed HTTPS setup without confirmed active subscription eligibility; **Ready** also requires active eligibility.
 
-| Status | Meaning |
-| --- | --- |
-| Getting DNS configuration | Resume preparation until all three records are available |
-| Waiting for DNS | Configure all records and explicitly confirm; no background DNS polling occurs |
-| Submission unknown | The request may have reached Google; continue the same configuration to recover its result |
-| Waiting for HTTPS | Google accepted the request; the API task or open dialog continues mapping and TLS checks |
-| Ready | Setup completed; bind a port and keep DNS records for routing and managed renewal |
-| Replaced | Another application verified ownership later; this configuration cannot be reused |
+A newer application that verifies DNS transfers ownership and clears the previous Box binding; the old configuration becomes **Replaced**.
+Failed verification leaves the current owner unchanged. Repeated verification of the winner preserves its target.
+The new owner must complete HTTPS setup and bind its target before receiving traffic.
 
-Google documents [up to sixty minutes after DNS and load-balancer changes propagate](https://docs.cloud.google.com/certificate-manager/docs/troubleshooting#managed-certificate-state).
-DNS propagation and mapping can add time; this is not an end-to-end completion deadline.
-If Google stops issuance entirely (`FAILED`), continuing setup rechecks ownership and DNS before replacing an unissued or expired certificate.
-Replacements remain at least one hour apart; a still-valid certificate and the authorization record are retained.
-An individual failed authorization attempt on a `PROVISIONING` certificate does not trigger replacement.
-
-The latest application that successfully verifies DNS becomes the sole valid owner, scoped to its organization.
-Unverified or failed applications do not interrupt the current owner; successful transfer invalidates all older applications and clears the previous Box binding.
-The new owner must finish HTTPS setup and bind its own target, so a transfer can temporarily interrupt access.
-Repeated verification of the winning application does not clear its existing binding.
-
-Ready is persistent setup completion, not a five-minute DNS/TLS grant.
-Google manages certificate renewal; an old locally observed expiration does not disable a renewed certificate.
-Bind and proxy route requests independently check the organization's effective subscription, without requiring Dashboard activity.
-Active eligibility is cached for at most sixty seconds and never beyond the paid cycle; denials and lookup failures are cached for thirty seconds.
-Early suspension can therefore take up to sixty seconds to appear, while expired or unavailable authorization prevents new access without deleting the target.
-Existing connections are not forcibly disconnected; public-tunnel and inbound rules remain independently enforced.
-
-**Unbind** retains ownership and cloud resources. **Delete configuration** immediately releases ownership and stops new requests, then attempts a bounded cleanup step.
-Superseded/deleted records retain resource identities for recovery; the API task also performs bounded cleanup and hourly certificate/TLS observations.
-These tasks pause when API execution is unavailable; independent expiration alerts and guaranteed unattended monitoring remain operational work.
-Unconfirmed, unclaimed drafts with no action for thirty days become cleanup candidates; abandoned drafts are not repeatedly DNS-polled.
-After deleting a configuration, remove its DNS records; a new application uses a new ownership TXT.
+Bind and route requests check subscription eligibility, cached for at most sixty seconds and never beyond the paid cycle.
+Suspension can take up to sixty seconds to affect new requests; existing connections are not forcibly disconnected.
+**Unbind** retains ownership and resources, though later DNS verification can transfer ownership.
+**Delete configuration** releases ownership and stops new requests before recoverable cloud cleanup; remove its DNS records afterward.
+Unconfirmed, unclaimed drafts expire after thirty idle days. See [deployment and maintenance](../../apps/infra/docs/gcp/deployment.md#customer-domain-https) for background execution requirements.
 
 Domain responses expose `hostname`, `url` and `target`; there is no short `name`
 field. CLI lists use `HOSTNAME`, including full-hostname output with `ls -q`.

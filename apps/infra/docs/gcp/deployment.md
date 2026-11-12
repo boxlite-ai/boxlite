@@ -78,103 +78,41 @@ For locks, refresh or removal, follow [shared recovery](../deployment.md#recover
 
 ## Customer domain HTTPS
 
-API domain onboarding requires the first three settings below. Supply them as
-plain values in the stage's API environment group; do not put them only in a local
-shell or the secrets-reference channel.
-The manifest declares these as optional API values: an unconfigured environment
-stays disabled, while an enabled environment must supply all three together.
+Set all three values in the stage's plain API environment group to enable custom domains;
+leave all three unset to disable onboarding.
 
 | Setting | Required value |
 | --- | --- |
 | `CUSTOM_DOMAIN_GCP_PROJECT` | Project containing the proxy's Certificate Manager resources |
-| `CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP` | Existing global map ID attached to the proxy TargetSSLProxy; an ID, not a resource URL |
-| `CUSTOM_DOMAIN_TRAFFIC_HOST` | Stable public hostname resolving to the proxy's reserved entry IPs, e.g. the existing proxy root |
-| `CUSTOM_DOMAIN_EDGE_IPS` | Automatically supplied from the stack's reserved proxy address; any stored value is overridden on GCP |
-| `CUSTOM_DOMAIN_RESERVED_SUFFIXES` | Optional comma-separated additional platform namespaces, including retired platform suffixes |
+| `CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP` | Existing global map ID attached to the proxy TargetSSLProxy, not a resource URL |
+| `CUSTOM_DOMAIN_TRAFFIC_HOST` | Stable public hostname resolving to the proxy entry, e.g. the proxy root |
 
-The GCP bundle shares the existing `ProxyAddress` resource between the API,
-proxy forwarding rule and DNS records. For example, when that resource resolves
-to `192.0.2.10`, the API receives `CUSTOM_DOMAIN_EDGE_IPS=192.0.2.10` without a
-stored IP setting or a DNS lookup. Pulumi tracks the resource dependency during
-both first deployment and updates; the resource's logical and physical names stay
-unchanged. The API still validates this runtime setting and uses it for DNS
-comparison and TLS probes. Deploy this infrastructure change before removing an
-existing stored value; older deployment code still needs it.
+Customers use a traffic CNAME to this hostname. HTTPS checks resolve the platform hostname's IPv4/IPv6 addresses
+and connect with the customer hostname as SNI, requiring certificate validation; no fixed IP list is configured.
+The existing edge address, forwarding rule and DNS records retain their resource identities.
 
-Deploy from a branch containing both the environment declarations and the
-custom-domain GCP provider, following the [shared deployment runbook](../deployment.md).
-Preview first and inspect the full resource diff; custom-domain support does not
-add deployment environments or alter the workflow's supported stage choices.
+Enable Certificate Manager and Resource Manager in the certificate project, attach the map to the proxy,
+and deploy the API service account's custom role before enabling onboarding.
+The provider grants DNS authorization, certificate and map-entry operations plus `resourcemanager.projects.get`;
+it does not grant certificate-map mutation. The API also requires its existing Commerce connection for subscription eligibility.
+Customer CNAME records must use DNS-only mode; see the [DNS guide](../../../../docs/concepts/networking.md#bring-your-own-domain).
 
-The API also needs its existing Commerce connection to determine subscription
-eligibility. Missing billing connectivity cannot authorize custom-domain access.
-The GCP provider grants the API service account a custom role for DNS authorization,
-certificate and map-entry create/get/delete/use plus operation get; it does not
-grant map mutation. The role also includes `resourcemanager.projects.get` on the
-configured certificate project. Certificate Manager can return project IDs in resource
-names and project numbers in references; the API resolves their exact mapping through
-Resource Manager and validates full paths, ownership labels and generation before use
-or deletion. Deploy the role update before the API, and enable the Resource Manager
-API in that project; the GCP bootstrap already enables it. Failed lookups are retried,
-including during IAM propagation, rather than cached as a permanent failure.
+Custom domains set Cloud Run `cpuIdle: false`, incurring CPU costs while an instance exists, without adding a minimum instance count.
+Hosted CI independently sets a service-level minimum of one when enabled.
+The API task runs at startup and every minute, advancing at most three due confirmed setups and one maintenance round.
+Startup awaits that work; hostname leases coordinate replicas, and shutdown awaits the active round.
+Scale-to-zero pauses progress until the API starts again; no independent Cloud Scheduler or expiration alerts are provisioned.
 
-With the feature enabled, Cloud Run allocates CPU outside requests without imposing
-a minimum instance count for custom domains. Hosted CI independently requires a
-service-level minimum of one when configured. Background domain checks run while
-an instance exists and resume at startup after scale-to-zero; continuous CPU does
-not keep an instance alive. Other API periodic work, including Box autostop and
-usage handling, is unchanged; this does not establish that every API task can safely pause.
-Every proxy receives the required `PROXY_DOMAIN` namespace;
-other valid customer hosts always use exact domain lookup.
-API onboarding still requires all three operator-supplied GCP settings above.
-IP-host `GET /health` remains available to GKE and load-balancer probes, while
-customer-host `/health` resolves to the customer's service.
+For upgrades from the earlier custom-domain workflow, drain old API revisions and in-flight leases before applying the migration and enabling new writers.
+Mixed old/new writers are unsupported; retain resource identities and use a compatible forward fix for rollback.
+Unconfirmed legacy setups require explicit verification, and capped legacy deadlines do not establish certificate expiration.
 
-Before enabling, deploy the migration and compatible API/proxy versions everywhere.
-Confirm the Certificate Manager API is enabled, the map is attached, the selected
-project has resource and request capacity, and the runtime service account can
-perform the required operations. Admin CLI access does not establish runtime IAM.
-Customer CNAME records must use DNS-only mode; the platform never receives customer DNS credentials.
+Maintenance expires unconfirmed, unclaimed drafts after thirty idle days, observes ready TLS/certificates hourly,
+and revisits cleaned tombstones daily for late cloud creates. Unbind and subscription suspension retain cloud resources.
+Admin `POST /admin/custom-domains/maintain` invokes one bounded maintenance round for recovery.
 
-Use a controlled hostname to check the Dashboard TXT challenge, certificate CNAME,
-real issuance, SNI on each fixed entry IP, public Box access, suspension, recovery
-and deletion cleanup. Renewal and production-scale reconciliation latency need
-separate observation; local provider mocks do not establish these properties.
-No live issuance or deployment was performed as part of the local implementation.
-
-The provider reads the current DNS authorization before checking its CNAME. Changed
-records are published to the Dashboard before issuance continues. Only terminal
-`FAILED` certificates without a valid remaining lifetime are replaced, after at least
-one hour from creation; the owned map entry is removed first, and the authorization
-record is retained. `PROVISIONING` certificates remain in place even when an individual
-authorization attempt failed. See the [customer waiting and retry guide](../../../../docs/concepts/networking.md#bring-your-own-domain).
-
-Resource/rate failures persist with backoff; manual retry cannot bypass provider
-capacity errors. Unbind and subscription suspension retain certificates and their
-cloud allocation; deletion frees it only after recoverable cleanup completes.
-
-Request-driven cutover requires draining every old API revision and its in-flight domain leases before applying the new migration and enabling new writers.
-The migration disables old due scanning, but an old verify request can reschedule it; mixed old/new writers are unsupported.
-Retain the data tables and resource identities; rollback must use a compatible forward fix, not the legacy worker.
-Legacy unconfirmed setups preserve their records and resources but require confirmation; old capped certificate deadlines are not actual expiration dates.
-
-The API task starts once during application bootstrap, then checks every 60 seconds while the process receives CPU.
-Each round advances at most three due confirmed setups and performs one maintenance round; existing leases prevent conflicting hostname work.
-Startup awaits that round, and shutdown stops new rounds and awaits active work; cold starts can therefore include setup-check latency.
-No Cloud Scheduler is added; custom domains retain continuous CPU but do not require a minimum instance count.
-A stopped or CPU-throttled API cannot guarantee minute-by-minute execution; restart or resumed execution continues from saved progress.
-
-Maintenance observes ready certificate/TLS state without revoking setup on a single timeout, expires unconfirmed/unclaimed drafts after thirty days,
-and revisits cleaned tombstones daily to catch late cloud creates. It does not poll drafts for DNS readiness.
-Authenticated admin `POST /admin/custom-domains/maintain` remains available for manual recovery, processing at most one due resource round.
-
-Operational acceptance still requires:
-
-- Verify deployed startup recovery, shared leases and minute checks under the actual Cloud Run CPU allocation.
-- Monitor due-work age and cleanup backlog; the fixed per-instance batch is not a completion-time guarantee.
-- Configure Certificate Manager expiration log alerts and an actual notification channel, independently of API/UI activity.
-
-No cloud task execution, log alert or notification channel is deployed or validated here.
-Guaranteed cleanup and monitoring during API inactivity require an independent trigger; that infrastructure remains outside this change.
+Before production use, verify issuance, customer SNI, public Box access, suspension, recovery and deletion with a controlled hostname.
+Monitor due-work age and cleanup backlog, and configure certificate-expiration alerts with a notification channel.
+Cleanup and monitoring during API inactivity require an independent trigger.
 
 Sources: [bootstrap](../../bootstrap/gcp.ts), [Pulumi entrypoint](../../mdeploy/pulumi/program.ts).

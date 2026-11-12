@@ -17,7 +17,7 @@ jest.mock('node:dns/promises', () => ({ Resolver: jest.fn().mockImplementation((
 
 describe('public DNS proof', () => {
   const dns = new CustomDomainDnsService({
-    getOrThrow: () => ({ trafficHost: 'custom.platform.com', edgeIps: ['192.0.2.1'] }),
+    getOrThrow: () => ({ trafficHost: 'custom.platform.com' }),
   } as never)
   beforeEach(() => {
     jest.clearAllMocks()
@@ -56,7 +56,7 @@ describe('public DNS proof', () => {
     expect(checks.slice(1).every((check) => check.status === 'passed')).toBe(true)
   })
 
-  it('requires this configuration TXT and the fixed traffic endpoint', async () => {
+  it('requires this configuration TXT and the configured traffic CNAME', async () => {
     await expect(dns.verify('app.example.com', 'proof')).resolves.toBeUndefined()
     expect(resolver.resolveTxt).toHaveBeenCalledWith('_boxlite-verification.app.example.com')
     expect(resolver.setServers).toHaveBeenCalledWith(['8.8.8.8', '1.1.1.1'])
@@ -69,12 +69,9 @@ describe('public DNS proof', () => {
     })
     expect(resolver.resolveCname).not.toHaveBeenCalled()
   })
-  it('bounds CNAME cycles and rejects extra IPv6 traffic', async () => {
+  it('bounds CNAME cycles', async () => {
     resolver.resolveCname.mockResolvedValue(['app.example.com'])
     await expect(dns.verify('app.example.com', 'proof')).rejects.toMatchObject({ code: 'traffic_cname_mismatch' })
-    resolver.resolveCname.mockResolvedValue(['custom.platform.com.'])
-    resolver.resolve6.mockResolvedValue(['2001:db8::bad'])
-    await expect(dns.verify('app.example.com', 'proof')).rejects.toMatchObject({ code: 'traffic_address_mismatch' })
   })
   it('distinguishes a missing proof from a resolver outage', async () => {
     resolver.resolveTxt.mockRejectedValue({ code: 'ENOTFOUND' })
@@ -129,12 +126,17 @@ describe('certificate authorization DNS proof', () => {
 })
 
 describe('edge HTTPS proof', () => {
+  beforeEach(() => {
+    resolver.resolve4.mockResolvedValue(['192.0.2.1', '192.0.2.2'])
+    resolver.resolve6.mockRejectedValue({ code: 'ENODATA' })
+  })
   const dns = new CustomDomainDnsService({
-    getOrThrow: () => ['192.0.2.1', '192.0.2.2'],
+    getOrThrow: () => 'custom.platform.com',
   } as never)
   afterEach(() => {
     jest.useRealTimers()
-    jest.resetAllMocks()
+    jest.clearAllMocks()
+    jest.mocked(connect).mockReset()
   })
 
   function socket(expiry: string, outcome: 'secureConnect' | 'error' | 'timeout' = 'secureConnect') {
@@ -148,12 +150,14 @@ describe('edge HTTPS proof', () => {
     return value
   }
 
-  it('uses only fixed edge IPs with customer SNI and returns the earliest served certificate expiry', async () => {
+  it('uses the platform hostname addresses with customer SNI and returns the earliest served certificate expiry', async () => {
     jest
       .mocked(connect)
       .mockImplementationOnce(() => socket('Jan 2 00:00:00 2030 GMT') as never)
       .mockImplementationOnce(() => socket('Jan 1 00:00:00 2030 GMT') as never)
     await expect(dns.verifyTls('app.example.com')).resolves.toBe('2030-01-01T00:00:00.000Z')
+    expect(resolver.resolve4).toHaveBeenCalledWith('custom.platform.com')
+    expect(resolver.resolve6).toHaveBeenCalledWith('custom.platform.com')
     expect(jest.mocked(connect).mock.calls.map(([options]) => options)).toEqual([
       { host: '192.0.2.1', port: 443, servername: 'app.example.com', rejectUnauthorized: true },
       { host: '192.0.2.2', port: 443, servername: 'app.example.com', rejectUnauthorized: true },

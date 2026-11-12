@@ -16,7 +16,6 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { awsStackProviders } from '../stack/providers/aws/index.ts'
 import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
-import { recordServices } from './service-recording.ts'
 
 /*
  * The committed example, not this machine's stage file.
@@ -111,36 +110,6 @@ test('every entry is a function, so a bundle exists before the first resource do
     }
   }
 })
-
-for (const order of [
-  ['api', 'edge'],
-  ['edge', 'api'],
-] as const) {
-  test(`GCP reserves one proxy address per bundle with ${order[0]} first`, () => {
-    const resources = recordServices('boxlite-app', 'stage', () => {
-      const network = {
-        binding: { cloud: 'gcp' },
-        placementFor: () => ({ cloud: 'gcp' }),
-      } as any
-      const host = { cloud: 'gcp', runtime: 'gke' } as any
-      for (let index = 0; index < 2; index++) {
-        const bundle = gcp()
-        for (const module of order) {
-          if (module === 'api') bundle.api({ network, dependencies: {} as any })
-          else bundle.edge({ host, network, dependsOn: [] })
-        }
-      }
-    })
-    assert.equal(resources.length, 2, 'each bundle must own exactly one address')
-    for (const resource of resources) {
-      assert.deepEqual(resource, {
-        kind: 'gcp.compute.GlobalAddress',
-        logical: 'ProxyAddress',
-        args: { name: 'boxlite-app-stage-proxy', project: 'boxlite-gcp-dev' },
-      })
-    }
-  })
-}
 
 test('a bundle handed the other cloud’s network says which module was, by name', () => {
   // The tagged unions are narrowed here and nowhere else, so this is the one

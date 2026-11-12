@@ -83,7 +83,7 @@ export class CustomDomainDnsService {
     await this.resolve(
       'traffic_cname_mismatch',
       async (resolver) => {
-        const { trafficHost, edgeIps } = this.config.getOrThrow('customDomains')
+        const { trafficHost } = this.config.getOrThrow('customDomains')
         let current = hostname
         const visited = new Set<string>()
         while (current !== trafficHost) {
@@ -94,26 +94,16 @@ export class CustomDomainDnsService {
           if (names.length !== 1) throw new DomainSetupError('traffic_cname_mismatch', true)
           current = canonical(names[0])
         }
-        const addresses = (
-          await Promise.all(
-            [resolver.resolve4(hostname), resolver.resolve6(hostname)].map(async (result) => {
-              try {
-                return await result
-              } catch (error) {
-                if ((error as NodeJS.ErrnoException).code === 'ENODATA') return []
-                throw error
-              }
-            }),
-          )
-        ).flat()
-        if (!addresses.length || addresses.some((ip) => !edgeIps.includes(ip)))
-          throw new DomainSetupError('traffic_address_mismatch', true)
       },
       signal,
     )
   }
 
-  private async resolve(missing: string, work: (resolver: Resolver) => Promise<void>, signal?: AbortSignal) {
+  private async resolve<T>(
+    missing: string,
+    work: (resolver: Resolver) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const resolver = new Resolver({ timeout: 2000, tries: 1 })
     resolver.setServers(['8.8.8.8', '1.1.1.1'])
     const cancel = () => resolver.cancel()
@@ -121,12 +111,16 @@ export class CustomDomainDnsService {
     signal?.addEventListener('abort', cancel, { once: true })
     try {
       signal?.throwIfAborted()
-      await work(resolver)
+      const result = await work(resolver)
       signal?.throwIfAborted()
+      return result
     } catch (error) {
       if (error instanceof DomainSetupError) throw error
       if (['ENODATA', 'ENOTFOUND'].includes((error as NodeJS.ErrnoException).code))
-        throw new DomainSetupError(missing, missing !== 'certificate_dns_mismatch')
+        throw new DomainSetupError(
+          missing,
+          missing === 'ownership_txt_mismatch' || missing === 'traffic_cname_mismatch',
+        )
       throw new DomainSetupError('dns_unavailable')
     } finally {
       clearTimeout(timer)
@@ -136,8 +130,29 @@ export class CustomDomainDnsService {
   }
 
   async verifyTls(hostname: string, signal?: AbortSignal): Promise<string> {
+    // Resolve only the operator-controlled endpoint; customer DNS never chooses the probe destination.
+    const addresses = await this.resolve(
+      'https_not_ready',
+      async (resolver) => {
+        const trafficHost = this.config.getOrThrow('customDomains.trafficHost')
+        const results = await Promise.all(
+          [resolver.resolve4(trafficHost), resolver.resolve6(trafficHost)].map(async (result) => {
+            try {
+              return await result
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === 'ENODATA') return []
+              throw error
+            }
+          }),
+        )
+        const addresses = [...new Set(results.flat())]
+        if (!addresses.length) throw new DomainSetupError('https_not_ready')
+        return addresses
+      },
+      signal,
+    )
     let expiry = Infinity
-    for (const ip of this.config.getOrThrow('customDomains.edgeIps')) {
+    for (const ip of addresses) {
       signal?.throwIfAborted()
       await new Promise<void>((resolve, reject) => {
         const socket = connect({ host: ip, port: 443, servername: hostname, rejectUnauthorized: true })

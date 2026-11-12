@@ -4,7 +4,7 @@ import { BadRequestException } from '@nestjs/common'
 import { isIP } from 'node:net'
 import { parse } from 'tldts'
 
-export function normalizeCustomHostname(raw: unknown, reserved: string[]): string {
+export function normalizeCustomHostname(raw: unknown): string {
   const hostname = typeof raw === 'string' ? raw.trim().toLowerCase().replace(/\.$/, '') : ''
   const validLabels = hostname.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
   const suffix = parse(hostname, { allowPrivateDomains: true })
@@ -19,12 +19,6 @@ export function normalizeCustomHostname(raw: unknown, reserved: string[]): strin
     throw new BadRequestException({
       code: 'invalid_custom_domain',
       message: 'Use a public ASCII/Punycode subdomain, at most 220 bytes.',
-    })
-  }
-  if (reserved.filter(Boolean).some((name) => hostname === name || hostname.endsWith(`.${name}`))) {
-    throw new BadRequestException({
-      code: 'reserved_domain',
-      message: 'This hostname belongs to a reserved platform namespace.',
     })
   }
   return hostname

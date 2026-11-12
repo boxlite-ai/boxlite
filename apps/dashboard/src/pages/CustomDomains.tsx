@@ -16,8 +16,6 @@ import type { CustomDomain, CustomDomainList, HeldDomain } from '@/api/domain-ty
 const ERRORS: Record<string, string> = {
   ownership_txt_mismatch: 'The TXT record does not match this configuration. Copy the current value below.',
   traffic_cname_mismatch: 'Point the traffic CNAME to the exact platform endpoint below.',
-  traffic_address_mismatch:
-    'Traffic resolves to another address. Disable CDN proxying and remove conflicting A/AAAA records.',
   dns_record_missing: 'A DNS record is missing. Check the names and allow time for DNS propagation.',
   dns_unavailable: 'DNS could not be checked. Retry when you are ready.',
   certificate_dns_mismatch:

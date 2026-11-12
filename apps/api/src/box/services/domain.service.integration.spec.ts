@@ -180,7 +180,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   })
 
   async function prepareReady(hostname: string) {
-    const settings = { enabled: true, trafficHost: 'custom.platform.com', reservedSuffixes: [], edgeIps: ['192.0.2.1'] }
+    const settings = { enabled: true, trafficHost: 'custom.platform.com' }
     const flowConfig = {
       get: (key: string) => (key === 'customDomains' ? settings : configService.get(key)),
       getOrThrow: (key: string) => (key === 'customDomains' ? settings : configService.getOrThrow(key)),

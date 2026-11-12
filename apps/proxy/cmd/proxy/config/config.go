@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,9 +27,8 @@ type Config struct {
 	ProxyProtocol   string `envconfig:"PROXY_PROTOCOL" validate:"required"`
 	ProxyApiKey     string `envconfig:"PROXY_API_KEY" validate:"required"`
 	TunnelCookieKey string `envconfig:"TUNNEL_COOKIE_KEY"`
-	// The parent of platform subdomains, the stage's user domain. A request
-	// whose Host is one label under it is resolved through the API's domain
-	// lookup instead of the `<port>-<box>` encoding, before custom-host classification.
+	// The parent of platform app domains. Platform and customer domains both
+	// use exact API lookup, independent of their binding target.
 	ProxyAppDomain        string             `envconfig:"PROXY_APP_DOMAIN"`
 	ProxyDomain           string             `envconfig:"PROXY_DOMAIN"`
 	CookieDomain          *string            `envconfig:"COOKIE_DOMAIN"`
@@ -84,9 +84,6 @@ func GetConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(config.ProxyDomain) == "" {
-		return nil, fmt.Errorf("PROXY_DOMAIN is required to delimit generated tunnel hosts")
-	}
 
 	if config.ProxyPort == 0 {
 		config.ProxyPort = DEFAULT_PROXY_PORT
@@ -118,6 +115,7 @@ func GetConfig() (*Config, error) {
 	}
 
 	ctx := context.Background()
+	var proxyTemplateURL string
 
 	// Retry fetching BoxLite API config with exponential backoff
 	err = utils.RetryWithExponentialBackoff(
@@ -131,6 +129,8 @@ func GetConfig() (*Config, error) {
 			if err != nil {
 				return err
 			}
+
+			proxyTemplateURL = apiConfig.ProxyTemplateUrl
 
 			if config.Oidc.ClientId == "" {
 				config.Oidc.ClientId = apiConfig.Oidc.ClientId
@@ -153,6 +153,15 @@ func GetConfig() (*Config, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	if strings.TrimSpace(config.ProxyDomain) == "" {
+		// Older proxy deployments already obtain this template from the API.
+		endpoint, err := url.Parse(strings.Replace(proxyTemplateURL, "{{PORT}}-{{boxId}}.", "", 1))
+		if err != nil || endpoint.Hostname() == "" {
+			return nil, fmt.Errorf("PROXY_DOMAIN or a valid API proxyTemplateUrl is required to delimit generated tunnel hosts")
+		}
+		config.ProxyDomain = endpoint.Host
 	}
 
 	return config, nil

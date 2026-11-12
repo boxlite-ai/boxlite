@@ -35,7 +35,6 @@ import { gcpRegistryCredentialStoreProvider } from './registry-credentials.ts'
 import { gcpRegistryProxyProvider } from './registry-proxy.ts'
 import { gcpRunnerProvider } from './runners.ts'
 import { gcpStorageProvider } from './storage.ts'
-import { instanceFor } from 'naming'
 
 const onGcp = <T extends { cloud: string }>(value: T, what: string): Extract<T, { cloud: 'gcp' }> => {
   if (value.cloud !== 'gcp') throw new Error(`The GCP stack was handed ${value.cloud} ${what}`)
@@ -119,15 +118,6 @@ export const gcpStackProviders = ({
 }): StackProviders => {
   const zone = zoneIn(region, declaredZone)
 
-  // API and edge share the reserved IP without making API depend on edge,
-  // which already depends on API. Keep bundle construction resource-free.
-  let proxyAddress: $util.Output<string> | undefined
-  const getProxyAddress = () =>
-    (proxyAddress ??= new gcp.compute.GlobalAddress('ProxyAddress', {
-      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
-      project,
-    }).address)
-
   return {
     images: gcpImages({ stage, region, project }),
     network: gcpNetworkProvider({ project, region, appShort }),
@@ -202,7 +192,6 @@ export const gcpStackProviders = ({
         // placement carries neither; see `api.ts`.
         network: binding(network).network,
         runnerAccount: placement(network, 'runner').serviceAccount,
-        proxyAddress: getProxyAddress(),
       }),
     // Not a Cloud Run service: the proxy is a GKE workload behind a standalone
     // NEG attached to the existing global SSL proxy load balancer.
@@ -218,7 +207,6 @@ export const gcpStackProviders = ({
         runnerServiceAccount: placement(network, 'runner').serviceAccount,
         zoneId,
         dependsOn,
-        proxyAddress: getProxyAddress(),
       }),
     // Served here: the edge above writes the wildcard record and issues its
     // certificate beside the box domain's.

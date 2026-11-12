@@ -24,18 +24,18 @@ var errAppDomainNotFound = errors.New("domain not found")
 
 var domainLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Named hosts always use exact API lookup; an unknown name never falls back to
-// interpreting its first label as a generated port/Box address.
-func (p *Proxy) namedDomainHost(host string) (string, bool) {
-	if hostname, ok := p.appDomainHost(host); ok {
-		return hostname, true
-	}
+// appDomainHost classifies platform and customer domains independently of their
+// binding target. Unknown names never fall back to generated port/Box addresses.
+func (p *Proxy) appDomainHost(host string) (string, bool) {
 	if p.config == nil {
 		return "", false
 	}
 	hostname := bareHost(host)
 	proxyHost := bareHost(p.config.ProxyDomain)
-	if hostname == proxyHost || hostname == p.appDomain() || strings.HasSuffix(hostname, "."+proxyHost) || net.ParseIP(hostname) != nil || len(hostname) > 253 {
+	if hostname == proxyHost || hostname == p.appDomain() || net.ParseIP(hostname) != nil || len(hostname) > 253 {
+		return "", false
+	}
+	if _, _, _, err := p.parseHost(host); err == nil {
 		return "", false
 	}
 	labels := strings.Split(hostname, ".")
@@ -80,33 +80,10 @@ func bareHost(host string) string {
 	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
-// appDomainHost reports whether the request Host names a platform subdomain
-// and returns it lowercased, without a port. The app domain itself is not a
-// box hostname and is left to whatever else serves it. The check runs before
-// the legacy `<port>-<box>` parse, which cannot tell `3000-abc.<app domain>`
-// from its own encoding.
-func (p *Proxy) appDomainHost(host string) (string, bool) {
-	appDomain := p.appDomain()
-	if appDomain == "" {
-		return "", false
-	}
-	hostname := bareHost(host)
-	if !strings.HasSuffix(hostname, "."+appDomain) {
-		return "", false
-	}
-	return hostname, true
-}
-
 // resolveAppDomain asks the API which box port a named hostname routes to now.
-// Platform names allow one label under the app domain; customer names can be
-// deeper. Not cached: a released name must not forward again.
+// Both platform and customer names use exact lookup. Not cached: a released
+// name must not forward again.
 func (p *Proxy) resolveAppDomain(ctx context.Context, hostname string) (string, uint16, error) {
-	if _, platform := p.appDomainHost(hostname); platform {
-		label := strings.TrimSuffix(hostname, "."+p.appDomain())
-		if label == "" || strings.Contains(label, ".") {
-			return "", 0, errAppDomainNotFound
-		}
-	}
 	response, err := p.previewGet(ctx, "preview", "domains", hostname)
 	if err != nil {
 		return "", 0, fmt.Errorf("resolve domain %s: %w", hostname, err)

@@ -613,36 +613,15 @@ Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
 remain denied. Confirmed Box absence makes its physical capacity available; the
 allocation remains recorded until the original runner cleanup also finishes.
 A successful CI job alone does not prove that cleanup finished.
+
 ## Custom domain tests
 
-Run `make test:apps:api` against disposable PostgreSQL and Redis instances. Set
-`DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `REDIS_HOST`
-and `REDIS_PORT`; tests create/drop schemas or databases and may flush Redis.
-Never point these variables at a deployed application's data stores.
-
-For the complete API suite, also set `ONBOARDING_TEST_DATABASE_URL` and
-`BOXLITE_TEST_REDIS_URL` to those same disposable instances. These two suites
-have separate explicit opt-ins; setting only `DB_HOST` and `REDIS_HOST` leaves
-them skipped. Use `NX_SKIP_NX_CACHE=true NX_DAEMON=false NX_ISOLATE_PLUGINS=false`
-to execute the tests rather than replay Nx output, and clear the local
-`BOXLITE_IMAGE_REGISTRY_ALLOWLIST` override when checking the suite's default policy.
-
-`TEST_FILES='custom-domain|domain.service'` selects explicit admission, scheduled advancement and routing checks.
-Real PostgreSQL tests cover stable drafts, one-shot record preparation, explicit confirmation, unknown submission recovery,
-latest-verified ownership transfer, invalidated executions, target preservation, deletion and subscription-gated routing.
-Controlled DNS/GCP boundaries allow deterministic interruption and concurrency tests; they do not establish real issuance, renewal or propagation.
-
-`custom-domain-subscription.integration.spec.ts` uses real Redis and controlled Commerce responses.
-Set `BOXLITE_TEST_REDIS_URL` explicitly to exercise sixty-second maximum authorization, paid-cycle bounds, non-sliding expiry,
-cache migration, outages and stale refresh owners; no production store is safe for these tests.
-Bind and route refresh authorization independently of Dashboard visits; DNS/TLS observations no longer expire routing after five minutes.
-
-The domain task runs once at API startup and every 60 seconds, advancing up to three due confirmed setups alongside one maintenance round.
-It skips overlapping rounds, disabled custom domains and `skipConnections`; unconfirmed drafts are never automatically DNS-verified.
-Nest lifecycle tests cover startup, interval, failures and shutdown; PostgreSQL tests cover selection, backoff, batch limits and shared request/replica leases.
-`POST /admin/custom-domains/maintain` remains a bounded, admin-only trigger for cleanup and observations.
-No new minimum-instance or continuous-CPU configuration is added; inactive APIs pause scheduled work, and independent alerts remain unconfigured.
-See [deployment acceptance](../infra/docs/gcp/deployment.md#customer-domain-https).
+Run `make test:apps:api TEST_FILES='custom-domain|domain.service'` for domain setup,
+ownership transfer, cleanup, subscription and routing checks. Use disposable
+PostgreSQL through `DB_*` and Redis through `REDIS_*`; these tests may destroy test data.
+Set `BOXLITE_TEST_REDIS_URL` explicitly to enable the subscription integration suite.
+DNS, Commerce and certificate-provider responses are controlled in these tests;
+real issuance and renewal require [deployment acceptance](../infra/docs/gcp/deployment.md#customer-domain-https).
 
 ## Admin Box image
 

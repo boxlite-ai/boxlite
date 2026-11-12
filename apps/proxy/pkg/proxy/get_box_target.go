@@ -52,7 +52,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	// A platform subdomain carries no port or box in its name: the API says
 	// which port it routes to, and its answer already applies the tunnel,
 	// inbound and box-state checks below. Nothing here signs a user in.
-	if hostname, ok := p.namedDomainHost(ctx.Request.Host); ok {
+	if hostname, ok := p.appDomainHost(ctx.Request.Host); ok {
 		boxId, targetPort, err := p.resolveAppDomain(ctx.Request.Context(), hostname)
 		if errors.Is(err, errAppDomainNotFound) {
 			ctx.Error(common_errors.NewNotFoundError(err))

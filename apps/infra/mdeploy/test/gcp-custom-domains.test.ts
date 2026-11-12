@@ -93,58 +93,38 @@ const apiEnvironmentFromStore = (settings: Record<string, string>) => {
   })
 }
 
-for (const reserved of [undefined, 'retired.example.test']) {
-  test(`stored custom-domain settings reach the GCP API${reserved ? ' with reserved suffixes' : ''}`, () => {
-    const settings: Record<string, string> = {
-      CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project',
-      CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: 'customer-map',
-      CUSTOM_DOMAIN_TRAFFIC_HOST: 'proxy.stage.example.test',
-      ...(reserved ? { CUSTOM_DOMAIN_RESERVED_SUFFIXES: reserved } : {}),
-    }
-    const delivered = apiEnvironmentFromStore(settings)
-    const resources = customDomainApi('stage', delivered.environment)
-    const service = resources.find((resource) => resource.logical === 'Api')!
-    const container = service.args.template.containers[0]
-    const envs = container.envs.toJSON()
-    for (const [name, value] of Object.entries(settings)) {
-      assert.deepEqual(
-        envs.find((entry: { name: string }) => entry.name === name),
-        { name, value },
-      )
-      assert.equal(Object.hasOwn(delivered.secrets, name), false)
-    }
-    assert.equal(
-      String(envs.find((entry: { name: string }) => entry.name === 'CUSTOM_DOMAIN_EDGE_IPS')?.value),
-      'ProxyAddress:address',
-    )
-    assert.equal(service.args.scaling, undefined)
-    assert.equal(service.args.template.scaling, undefined)
-    assert.equal(container.resources.cpuIdle, false)
-    assert.deepEqual(container.ports, { name: 'http1', containerPort: 3000 })
-    const role = resources.find((resource) => resource.logical === 'CustomDomainRuntimeRole')!
-    const grant = resources.find((resource) => resource.logical === 'CustomDomainRuntimeGrant')!
-    assert.equal(role.args.project, settings.CUSTOM_DOMAIN_GCP_PROJECT)
-    assert.equal(role.args.roleId, 'boxlite_app_stage_custom_domains')
-    assert.ok(role.args.permissions.includes('certificatemanager.certs.create'))
-    assert.ok(role.args.permissions.includes('resourcemanager.projects.get'))
-    assert.equal(role.args.permissions.includes('certificatemanager.certmaps.update'), false)
-    assert.equal(grant.args.project, settings.CUSTOM_DOMAIN_GCP_PROJECT)
-    assert.equal(String(grant.args.member), 'serviceAccount:api@example.com')
-    assert.equal(String(grant.args.role), 'CustomDomainRuntimeRole')
-  })
-}
-
-test('GCP replaces a stale stored edge IP with its reserved proxy address', () => {
-  const resources = customDomainApi('stage', {
+test('stored custom-domain settings reach the GCP API', () => {
+  const settings: Record<string, string> = {
     CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project',
     CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: 'customer-map',
     CUSTOM_DOMAIN_TRAFFIC_HOST: 'proxy.stage.example.test',
-    CUSTOM_DOMAIN_EDGE_IPS: '192.0.2.99',
-  })
-  const envs = resources.find((resource) => resource.logical === 'Api')!.args.template.containers[0].envs.toJSON()
-  const entries = envs.filter((entry: { name: string }) => entry.name === 'CUSTOM_DOMAIN_EDGE_IPS')
-  assert.equal(entries.length, 1)
-  assert.equal(String(entries[0].value), 'ProxyAddress:address')
+  }
+  const delivered = apiEnvironmentFromStore(settings)
+  const resources = customDomainApi('stage', delivered.environment)
+  const service = resources.find((resource) => resource.logical === 'Api')!
+  const container = service.args.template.containers[0]
+  const envs = container.envs.toJSON()
+  for (const [name, value] of Object.entries(settings)) {
+    assert.deepEqual(
+      envs.find((entry: { name: string }) => entry.name === name),
+      { name, value },
+    )
+    assert.equal(Object.hasOwn(delivered.secrets, name), false)
+  }
+  assert.equal(service.args.scaling, undefined)
+  assert.equal(service.args.template.scaling, undefined)
+  assert.equal(container.resources.cpuIdle, false)
+  assert.deepEqual(container.ports, { name: 'http1', containerPort: 3000 })
+  const role = resources.find((resource) => resource.logical === 'CustomDomainRuntimeRole')!
+  const grant = resources.find((resource) => resource.logical === 'CustomDomainRuntimeGrant')!
+  assert.equal(role.args.project, settings.CUSTOM_DOMAIN_GCP_PROJECT)
+  assert.equal(role.args.roleId, 'boxlite_app_stage_custom_domains')
+  assert.ok(role.args.permissions.includes('certificatemanager.certs.create'))
+  assert.ok(role.args.permissions.includes('resourcemanager.projects.get'))
+  assert.equal(role.args.permissions.includes('certificatemanager.certmaps.update'), false)
+  assert.equal(grant.args.project, settings.CUSTOM_DOMAIN_GCP_PROJECT)
+  assert.equal(String(grant.args.member), 'serviceAccount:api@example.com')
+  assert.equal(String(grant.args.role), 'CustomDomainRuntimeRole')
 })
 
 test('an unconfigured stage needs no custom-domain IAM or always-on API', () => {

@@ -530,8 +530,6 @@ export const deployStack = ({
     OTEL_LOGGING_ENABLED: 'true',
     OTEL_TRACING_ENABLED: 'true',
     ...inputs.proxyEnvironment,
-    // Both cloud providers need the namespace that bounds generated tunnel hosts.
-    PROXY_DOMAIN: inputs.proxyDomain,
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
     ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
   }

@@ -1032,16 +1032,13 @@ The response presents a superseded tombstone as `superseded`; `provider_state.pr
 A winner transaction clears other configs' unique `domain_id`, supersedes them and transfers the held domain while clearing its binding.
 Every execution claim considers all configurations for the hostname, including tombstones; a stale lease cannot publish Ready.
 
-Legacy `dns_valid_until`, `certificate_valid_until` and `challenge_expires_at` remain for additive migration compatibility but no longer authorize new routing.
-Capped legacy certificate deadlines cannot be converted to actual certificate expiration; that observation starts unknown.
-Previously completed rows retain confirmation unless their prior error requires review; unfinished legacy rows require explicit verification before new issuance.
-Drain old API revisions before migration/new writes, because old workers do not understand these contracts and can reintroduce short deadlines.
-The migration intentionally refuses automatic downgrade after ownership transfers.
+Legacy `dns_valid_until`, `certificate_valid_until` and `challenge_expires_at` remain for migration compatibility but no longer authorize routing.
+Capped legacy certificate deadlines are not actual expiration times; unfinished legacy setups require explicit verification.
+The migration refuses automatic downgrade after ownership transfers; see [deployment cutover](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).
 
-Unbind retains resources. Delete and supersession revoke routing before cloud cleanup, retaining resource labels and deterministic IDs without organization foreign keys.
-The API startup/minute task resumes at most three due, confirmed, live, incomplete configurations using the persisted next-check time and hostname leases.
-Maintenance runs alongside setup or through its admin endpoint: it expires unclaimed drafts after thirty idle days, observes ready TLS/certificate status hourly, and revisits cleaned tombstones after a day.
-Execution pauses if the API stops or lacks CPU; independent alerting and guaranteed monitoring during that pause are not installed by this change.
+Unbind retains resources. Delete and supersession revoke routing before cloud cleanup, preserving deterministic resource IDs without organization foreign keys.
+Explicit deletion clears the supersession marker so a replaced configuration no longer appears in the organization's list.
+The API task uses saved retry times and hostname leases to resume setup and cleanup; see the [API contract](api.md).
 
 ### `box_last_activity`
 

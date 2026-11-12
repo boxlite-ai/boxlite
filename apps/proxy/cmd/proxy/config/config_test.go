@@ -9,29 +9,27 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
-func TestProxyStartupRequiresNamespace(t *testing.T) {
+func TestProxyStartupResolvesNamespace(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(apiclient.NewBoxliteConfiguration(
 			"test", *apiclient.NewOidcConfig("https://issuer.example/", "test", "boxlite"),
-			false, map[string]apiclient.Announcement{}, "", "", "", false, "test",
+			false, map[string]apiclient.Announcement{}, "https://{{PORT}}-{{boxId}}.proxy.boxlite.test", "", false, "test",
 		))
 	}))
 	defer api.Close()
 	for _, tc := range []struct {
-		name, namespace string
-		wantError       bool
+		name, namespace, want string
 	}{
-		{"cloud", "proxy.boxlite.test", false},
-		{"local", "localhost:4000", false},
-		{"missing namespace", "", true},
-		{"blank namespace", " \t", true},
+		{"cloud", "proxy.boxlite.test", "proxy.boxlite.test"},
+		{"local", "localhost:4000", "localhost:4000"},
+		{"missing namespace", "", "proxy.boxlite.test"},
+		{"blank namespace", " \t", "proxy.boxlite.test"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			config = nil
@@ -42,17 +40,11 @@ func TestProxyStartupRequiresNamespace(t *testing.T) {
 			t.Setenv("BOXLITE_API_URL", api.URL)
 			t.Setenv("PROXY_DOMAIN", tc.namespace)
 			got, err := GetConfig()
-			if tc.wantError {
-				if err == nil || !strings.Contains(err.Error(), "PROXY_DOMAIN") {
-					t.Fatalf("startup must reject an absent generated-host namespace: %v", err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.ProxyDomain != tc.namespace {
-				t.Fatalf("startup namespace=%q; want %q", got.ProxyDomain, tc.namespace)
+			if got.ProxyDomain != tc.want {
+				t.Fatalf("startup namespace=%q; want %q", got.ProxyDomain, tc.want)
 			}
 		})
 	}

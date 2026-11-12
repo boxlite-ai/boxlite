@@ -7,11 +7,7 @@ export function customDomainConfig(env: NodeJS.ProcessEnv = process.env) {
   const project = env.CUSTOM_DOMAIN_GCP_PROJECT?.trim() || ''
   const certificateMap = env.CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP?.trim() || ''
   const trafficHost = env.CUSTOM_DOMAIN_TRAFFIC_HOST?.trim().toLowerCase() || ''
-  const edgeIps = (env.CUSTOM_DOMAIN_EDGE_IPS ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
-  const enabled = !!(project || certificateMap || trafficHost || edgeIps.length)
+  const enabled = !!(project || certificateMap || trafficHost)
   if (
     enabled &&
     (!/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(project) ||
@@ -19,15 +15,8 @@ export function customDomainConfig(env: NodeJS.ProcessEnv = process.env) {
       trafficHost.length > 253 ||
       !trafficHost.includes('.') ||
       !trafficHost.split('.').every((part) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part)) ||
-      isIP(trafficHost) ||
-      !edgeIps.length ||
-      edgeIps.length > 4 ||
-      edgeIps.some((ip) => !isIP(ip)))
+      isIP(trafficHost))
   )
-    throw new Error('Custom domains require a GCP project, certificate map, traffic hostname and fixed edge IPs')
-  const reservedSuffixes = (env.CUSTOM_DOMAIN_RESERVED_SUFFIXES ?? '')
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean)
-  return { enabled, project, certificateMap, trafficHost, edgeIps, reservedSuffixes }
+    throw new Error('Custom domains require a GCP project, certificate map, traffic hostname')
+  return { enabled, project, certificateMap, trafficHost }
 }

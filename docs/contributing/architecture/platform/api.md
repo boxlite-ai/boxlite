@@ -667,8 +667,8 @@ Use the returned guest ID with the status, attach, signal, resize, and kill
 routes, including for the main session; terminating main can stop the box.
 Listing a stopped box returns an empty inventory and never starts it.
 
-Custom-domain bind reads persisted readiness bounded by the subscription deadline;
-it performs no DNS challenge or Commerce lookup. Its fields are unchanged, with new failures `403 subscription_required`,
+Custom-domain bind checks persisted readiness and refreshes subscription eligibility through Redis and, when needed, Commerce;
+it performs no DNS challenge. Its fields are unchanged, with new failures `403 subscription_required`,
 `409 subscription_not_ready` and `409 domain_not_ready`. Unbind keeps ownership
 and remains available after subscription expiry; only platform names occupy quota.
 
@@ -685,33 +685,24 @@ Dashboard setup is separate from the portable API and requires organization memb
 | DELETE | `…/custom-domains/{id}` | Revokes routing immediately, then attempts a bounded cleanup round |
 | POST | `/admin/custom-domains/maintain` | Admin-only awaited maintenance round for one due tombstone or ready observation; also expires abandoned drafts |
 
-Responses retain `id`, `hostname`, `phase`, `ready`, `errorCode` and `dnsRecords` and add `confirmed`, `progress`,
-`submissionStatus`, per-record `dnsChecks`, `retryAfter`, `certificateExpiresAt`, `certificateObservedAt` and `tlsCheckedAt`.
-`challengeExpiresAt` is null: retrying a live draft does not rotate its ownership challenge.
-`dnsRecords` is empty until all three records can be shown together.
-A 202 response is not evidence of accepted issuance; only persisted `submissionStatus: accepted` permits that message.
-`unknown` preserves ambiguity after timeouts or failed result saves; recovery reads fixed resource IDs before creating anything.
-Explicit provider rejection remains separate from an unknown outcome.
+Each organization can retain one live configuration; a different hostname returns `400 custom_domain_count_limit_reached` until it is deleted.
+Responses expose setup `phase`, `progress`, `ready`, `errorCode`, `confirmed`, `submissionStatus`, `retryAfter`, DNS records/checks and certificate/TLS observation times.
+`challengeExpiresAt` is null; the ownership challenge remains stable, and `dnsRecords` is empty until all three records are available.
+A 202 response does not establish certificate submission: `accepted` confirms it, while `unknown` requires recovery of the existing operation.
 
-`progress` distinguishes preparing DNS, awaiting DNS, certificate issuance, mapping activation, TLS checks and completion.
-Preparation and provider calls share a 25-second external-work budget; workflow SQL statements use two-second timeouts and leases last 45 seconds.
-Each request round is awaited and persisted; no response relies on unfinished work continuing after it returns.
-An API task also runs at startup and every 60 seconds, advancing up to three due, confirmed, live, incomplete configurations per round.
-It separately invokes one maintenance round; hostname leases coordinate replicas and requests, and a local guard prevents overlapping task rounds.
-No new minimum-instance or continuous-CPU configuration is added; progress can pause when API execution is unavailable.
-The UI invokes advance only for confirmed, incomplete work while its dialog is visible, normally every ten seconds with server backoff.
-`GET` does not refresh Commerce or create cloud resources; an explicit setup or actual routing request refreshes eligibility when needed.
+External work has a 25-second budget, SQL statements have two-second timeouts, and execution leases last 45 seconds.
+The API task runs at startup and every minute, advancing up to three due confirmed setups alongside one maintenance round.
+Hostname leases coordinate requests and replicas; incomplete unconfirmed drafts require explicit verification.
+Dashboard status reads do not advance setup or refresh Commerce; explicit HTTPS Retry invokes advance.
 
-A successful new verification atomically transfers hostname ownership to its organization, clears the old target and supersedes all other live applications.
-Superseded applications are viewable but cannot be verified or advanced again; cloud cleanup retains their original IDs and labels.
-The current winner's repeated verify is idempotent and does not clear its target.
-Ready publication requires an unexpired execution lease, matching generation, a live configuration and current domain ownership.
+Successful verification transfers ownership, clears the old target and supersedes other live applications; the winner's repeated verification preserves its target.
+Superseded configurations remain viewable until explicitly deleted and cannot be verified or advanced again.
+Deletion hides them while retaining provider identities for cleanup; Ready publication requires current ownership, generation and an unexpired lease.
 
-Subscriptions reuse Commerce's existing plan endpoint; active Redis grants use a new v2 namespace and last at most sixty seconds or `cycleTo`, whichever is earlier.
-Denied/unavailable results last thirty seconds, cache reads never extend expiry, and binding rechecks the deadline after lock waits.
-Routing rereads ownership and target after subscription refresh, so deletion, transfer or unbinding during the call cannot return a stale target.
-Ready no longer expires after five minutes and observed certificate expiration is not a route gate.
-See the [DNS guide](../../../concepts/networking.md#bring-your-own-domain) and [maintenance/cutover requirements](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).
+Subscription grants last at most sixty seconds or the paid-cycle end, whichever comes first; denied/unavailable results last thirty seconds.
+Binding rechecks the grant deadline after lock waits; routing rereads ownership and target after subscription refresh.
+Setup readiness persists independently of certificate observation deadlines.
+See the [DNS guide](../../../concepts/networking.md#bring-your-own-domain) and [deployment requirements](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are

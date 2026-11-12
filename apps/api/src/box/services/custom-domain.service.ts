@@ -42,19 +42,7 @@ export class CustomDomainService {
 
   async create(organizationId: string, rawHostname: unknown) {
     this.requireEnabled()
-    const settings = this.config.getOrThrow('customDomains')
-    const hostname = normalizeCustomHostname(
-      rawHostname,
-      [
-        ...settings.reservedSuffixes,
-        settings.trafficHost,
-        this.config.get('domain.appHost'),
-        this.config.get('proxy.domain')?.split(':')[0],
-        ...[this.config.get('dashboardBaseApiUrl'), this.config.get('dashboardUrl')]
-          .filter((url) => url?.startsWith('https://') || url?.startsWith('http://'))
-          .map((url) => new URL(url).hostname),
-      ].filter(Boolean),
-    )
+    const hostname = normalizeCustomHostname(rawHostname)
     requireDomainSubscription((await this.subscriptions.refresh(organizationId)).status)
     const id = await this.db.transaction(async (manager) => {
       await this.lockOrganization(manager, organizationId)
@@ -137,7 +125,7 @@ export class CustomDomainService {
       const row = await this.owned(manager, organizationId, id, true)
       // Retain the execution lease: a late cloud result must still be cleaned up.
       await manager.query(
-        `UPDATE custom_domain_config SET deleted_at = now(), phase = 'deleting',
+        `UPDATE custom_domain_config SET deleted_at = now(), phase = 'deleting', superseded_by = NULL,
         dns_valid_until = '-infinity', next_check_at = now(), updated_at = now() WHERE id = $1`,
         [id],
       )
