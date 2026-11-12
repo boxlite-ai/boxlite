@@ -71,6 +71,167 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         )
       })
     }
+    it('blocks the previous deployment from renewing after a newer deployment activates', async () => {
+      const old = new ListenerState(database, namespace, 1)
+      await old.activate()
+      const lease = (await old.acquire('old-deployment', 10000))!
+      const next = new ListenerState(database, namespace, 2)
+      await next.initialize()
+      await next.activate()
+      await expect(old.renew(lease, 10000)).rejects.toBeInstanceOf(LeaseLost)
+      await expect(old.commit(lease, [{ key: 'worker/obsolete', expected: null, payload: {} }])).rejects.toBeInstanceOf(
+        LeaseLost,
+      )
+      expect(await old.activate()).toBe(false)
+      expect(await old.acquire('obsolete-again', 10000)).toBeUndefined()
+      const replacement = (await next.acquire('new-deployment', 10000))!
+      expect(replacement).toMatchObject({ deployment: 2, epoch: lease.epoch + 2 })
+      await expect(next.renew(replacement, 10000)).resolves.toBeUndefined()
+      expect(await next.recover(replacement)).toEqual([])
+    })
+    it('keeps startup and ingress passive until deployment activation', async () => {
+      const lease = await owner(),
+        before = await roots()
+      const next = new ListenerState(database, namespace, 2)
+      await next.initialize()
+      expect(await roots()).toEqual(before)
+      expect(await next.acquire('premature', 10000)).toBeUndefined()
+      const rows = await next.ingress('delivery/1', (tx) =>
+        tx.write([{ key: 'notice/passive', expected: null, payload: {} }]),
+      )
+      expect(await next.read(['notice/passive'])).toEqual(rows)
+      await expect(state.renew(lease, 10000)).resolves.toBeUndefined()
+      expect(await next.activate()).toBe(true)
+      const active = await roots()
+      expect(active.owner).toMatchObject({ schema: 3, payload: { owner: '', epoch: lease.epoch + 1, deployment: 2 } })
+      expect(active.lease?.payload).toEqual({ until: 0 })
+      await state.initialize()
+      expect(await state.read(['notice/passive'])).toEqual(rows)
+      await state.ingest([{ key: 'notice/legacy-ingress', expected: null, payload: {} }])
+      expect(await state.acquire('legacy', 10000)).toBeUndefined()
+      await expect(state.renew(lease, 10000)).rejects.toBeInstanceOf(LeaseLost)
+    })
+    it('keeps same-deployment activation and renewal identity stable', async () => {
+      const active = new ListenerState(database, namespace, 2)
+      expect(await active.activate()).toBe(true)
+      const lease = (await active.acquire('replica', 10000))!,
+        before = await roots()
+      const replica = new ListenerState(database, namespace, 2)
+      await replica.initialize()
+      expect(await replica.activate()).toBe(true)
+      expect(await roots()).toEqual(before)
+      expect(await replica.acquire('second-replica', 10000)).toBeUndefined()
+      await active.renew(lease, 20000)
+      expect((await roots()).owner).toEqual(before.owner)
+      await expect(active.renew({ ...lease, deployment: undefined }, 10000)).rejects.toBeInstanceOf(LeaseLost)
+      await expect(active.renew({ ...lease, deployment: 1 }, 10000)).rejects.toBeInstanceOf(LeaseLost)
+      await expect(state.renew(lease, 10000)).rejects.toBeInstanceOf(LeaseLost)
+      await database.transaction(namespace, async (tx) => {
+        const row = (await tx.get('@lease'))!
+        await tx.put({ ...row, version: randomUUID(), payload: { until: 0 } }, row.version)
+      })
+      const stale = new ListenerState(database, namespace, 1)
+      expect(await stale.activate()).toBe(false)
+      expect(await stale.acquire('stale', 10000)).toBeUndefined()
+      expect(await state.acquire('unversioned', 10000)).toBeUndefined()
+      expect(await replica.acquire('same-release', 10000)).toMatchObject({ deployment: 2, epoch: lease.epoch + 1 })
+    })
+    it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN])('rejects invalid deployment %s', (deployment) => {
+      expect(() => new ListenerState(database, namespace, deployment)).toThrow('Invalid Listener deployment')
+    })
+    it.each(['@owner', '@lease'])('rolls back deployment activation when %s write conflicts', async (key) => {
+      const lease = await owner(),
+        before = await roots()
+      const conflicting: StateDatabase = {
+        transaction: (ns, work, mode) =>
+          database.transaction(
+            ns,
+            (tx) => {
+              const wrapped = Object.create(tx) as typeof tx
+              wrapped.put = (row, expected) => tx.put(row, row.key === key ? randomUUID() : expected)
+              return work(wrapped)
+            },
+            mode,
+          ),
+      }
+      await expect(new ListenerState(conflicting, namespace, 1).activate()).rejects.toBeInstanceOf(StateConflict)
+      expect(await roots()).toEqual(before)
+      await expect(state.renew(lease, 10000)).resolves.toBeUndefined()
+    })
+    it('accepts the maximum deployment and rejects malformed durable deployment metadata', async () => {
+      const active = new ListenerState(database, namespace, Number.MAX_SAFE_INTEGER)
+      expect(await active.activate()).toBe(true)
+      expect(await active.acquire('maximum', 10000)).toMatchObject({ deployment: Number.MAX_SAFE_INTEGER })
+      await database.transaction(namespace, async (tx) => {
+        const row = (await tx.get('@owner'))!
+        await tx.put(
+          { ...row, version: randomUUID(), payload: { owner: 'maximum', epoch: 2, deployment: 0 } },
+          row.version,
+        )
+      })
+      const before = await roots()
+      await expect(active.initialize()).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(active.activate()).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(active.acquire('damaged', 10000)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await roots()).toEqual(before)
+    })
+    it('finishes an in-progress execution transaction before deployment takeover', async () => {
+      const active = new ListenerState(database, namespace, 1)
+      await active.activate()
+      const lease = (await active.acquire('original', 10000))!
+      let written!: () => void, release!: () => void
+      const hasWritten = new Promise<void>((resolve) => {
+        written = resolve
+      })
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const holding: StateDatabase = {
+        transaction: (ns, work, mode) =>
+          database.transaction(
+            ns,
+            (tx) => {
+              const wrapped = Object.create(tx) as typeof tx
+              wrapped.put = async (row, expected) => {
+                const result = await tx.put(row, expected)
+                if (row.key === 'worker/atomic') {
+                  written()
+                  await released
+                }
+                return result
+              }
+              return work(wrapped)
+            },
+            mode,
+          ),
+      }
+      const writing = new ListenerState(holding, namespace, 1).commit(lease, [
+        { key: 'worker/atomic', expected: null, payload: { committed: true } },
+      ])
+      await hasWritten
+      const next = new ListenerState(database, namespace, 2)
+      const activation = next.activate()
+      try {
+        if (pg) {
+          let waiting = false
+          for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
+            const rows = await pg.query(
+              "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%record_key=$2 FOR UPDATE%') AS waiting",
+            )
+            waiting = rows[0].waiting
+            if (!waiting) await pg.query('SELECT pg_sleep(0.01)')
+          }
+          expect(waiting).toBe(true)
+        }
+      } finally {
+        release()
+        await Promise.allSettled([writing, activation])
+      }
+      const rows = await writing
+      expect(await activation).toBe(true)
+      expect(await next.read(['worker/atomic'])).toEqual(rows)
+      await expect(active.renew(lease, 10000)).rejects.toBeInstanceOf(LeaseLost)
+    })
     it('renews only expiry while preserving the scheduler identity record', async () => {
       const lease = await owner(),
         before = await roots()

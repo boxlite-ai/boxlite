@@ -2,13 +2,16 @@
 import { Listener, VerifiedWebhook } from '@boxlite-ai/ci-listener'
 import { CiListenerService } from './ci-listener.service'
 
-it('rejects ingress after the hosted scheduler unexpectedly stops', async () => {
-  const failure = new Error('scheduler stopped')
-  const run = jest.spyOn(Listener.prototype, 'run').mockRejectedValue(failure)
-  const receive = jest.spyOn(Listener.prototype, 'receive').mockResolvedValue('stored')
+it.each([true, false])('waits for the serving host to activate deployment eligibility: %s', async (eligible) => {
+  const run = jest.spyOn(Listener.prototype, 'run').mockResolvedValue(undefined)
+  let release!: (eligible: boolean) => void
+  const activation = new Promise<boolean>((resolve) => {
+    release = resolve
+  })
+  const activate = jest.fn(() => activation)
   const host = { report: jest.fn(), close: jest.fn() }
   const service = new CiListenerService(
-    { app: 'app', initialize: jest.fn(), state: { scans: jest.fn() } } as any,
+    { app: 'app', initialize: jest.fn(), state: { scans: jest.fn(), activate } } as any,
     host as any,
     { get: (key: string) => ({ 'ci.workerCPUs': 1, 'ci.workerMemoryGB': 1, 'ci.workerImage': 'runner' })[key] } as any,
     { configured: () => [{ settings: jest.fn() }] } as any,
@@ -16,6 +19,37 @@ it('rejects ingress after the hosted scheduler unexpectedly stops', async () => 
   )
   try {
     await service.onModuleInit()
+    expect(run).not.toHaveBeenCalled()
+    expect(activate).not.toHaveBeenCalled()
+    const start = service.start()
+    expect(activate).toHaveBeenCalledTimes(1)
+    expect(run).not.toHaveBeenCalled()
+    release(eligible)
+    await start
+    await service.start()
+    expect(run).toHaveBeenCalledTimes(eligible ? 1 : 0)
+  } finally {
+    release(false)
+    await service.onModuleDestroy()
+    run.mockRestore()
+  }
+})
+
+it('rejects ingress after the hosted scheduler unexpectedly stops', async () => {
+  const failure = new Error('scheduler stopped')
+  const run = jest.spyOn(Listener.prototype, 'run').mockRejectedValue(failure)
+  const receive = jest.spyOn(Listener.prototype, 'receive').mockResolvedValue('stored')
+  const host = { report: jest.fn(), close: jest.fn() }
+  const service = new CiListenerService(
+    { app: 'app', initialize: jest.fn(), state: { scans: jest.fn(), activate: jest.fn(async () => true) } } as any,
+    host as any,
+    { get: (key: string) => ({ 'ci.workerCPUs': 1, 'ci.workerMemoryGB': 1, 'ci.workerImage': 'runner' })[key] } as any,
+    { configured: () => [{ settings: jest.fn() }] } as any,
+    { initialize: jest.fn() } as any,
+  )
+  try {
+    await service.onModuleInit()
+    await service.start()
     await expect(service.receive({} as VerifiedWebhook)).rejects.toThrow('Hosted CI Listener has stopped')
     expect(receive).not.toHaveBeenCalled()
     await expect(service.onModuleDestroy()).rejects.toBe(failure)

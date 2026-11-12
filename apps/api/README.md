@@ -50,6 +50,14 @@ upgrade: do not revert to an older binary or delete the journal to roll back.
 See [shared lease semantics](../libs/ci-listener/README.md#execution-lease-storage)
 for locking, expiry and migration rules.
 
+When `CI_SCHEDULER_GENERATION` is configured, the serving host activates that
+deployment only after HTTP starts listening. Activation waits for outstanding
+execution transactions, advances the owner epoch and deployment atomically, and
+expires the old lease. Old deployments cannot renew, reacquire or commit execution
+writes, even while their WebSockets remain open. The owner uses schema 3; workers,
+resource identities and quota records are preserved. Ingress stays independent of
+execution eligibility. See [deployment eligibility](../libs/ci-listener/README.md#deployment-eligibility).
+
 `make test:apps:api TEST_FILES=ci-native-state.spec.ts` exercises concurrent
 renewal without snapshot restarts, takeover fencing and error propagation against
 PostgreSQL. Supply `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` if needed,
@@ -1330,6 +1338,7 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
 | `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
+| `CI_SCHEDULER_GENERATION`                                        | Positive deployment generation; mdeploy uses `GITHUB_RUN_ID` or an explicit per-deploy override, never process startup time    |
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
 `boxlite` workflow label for configured defaults, or

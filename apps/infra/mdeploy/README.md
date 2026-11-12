@@ -97,6 +97,23 @@ See the [API configuration contract](../../api/README.md#hosted-configuration-an
 and [Cloud Run secret delivery](https://docs.cloud.google.com/run/docs/configuring/services/secrets).
 Provider-input tests do not replace a deployed App/CI acceptance run.
 
+### Scheduler deployment generation
+
+mdeploy passes the invocation's `CI_SCHEDULER_GENERATION`, or `GITHUB_RUN_ID`
+when no override is supplied, into the API environment on both clouds.
+The value must be a positive safe integer in canonical decimal form.
+This is per-deployment metadata, like `BOXLITE_IMAGE_TAG`; do not store it in
+mstage groups. Invocations without either value retain local lease behavior.
+
+A newer generation takes over scheduling after its API listens and the current
+database transaction finishes. Older deployments cannot renew or reacquire ownership.
+Retrying the same workflow run preserves its generation. To roll back an image,
+dispatch a new workflow run so the rollback receives a higher generation.
+Manual invocations must supply a generation greater than the last active deployment.
+
+To test this PR's deployment program, dispatch the workflow with
+`--ref fix/ci-label-capacity`; the deploy program comes from the dispatch ref.
+
 ## Runner convergence
 
 Runner hosts retain local box state and are protected against replacement. Boot-image, startup and

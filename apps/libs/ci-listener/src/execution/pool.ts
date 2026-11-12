@@ -68,8 +68,9 @@ export interface WorkerEvent {
   exitCode?: number | null
   errorType?: string
 }
+const RUNNER_BOOTSTRAP_SECONDS = 300
 const bootstrap = `set -eu
-for ((attempt=0; attempt<300; attempt++)); do
+for ((attempt=0; attempt<${RUNNER_BOOTSTRAP_SECONDS}; attempt++)); do
   if [[ -f /home/runner/.boxlite-jitconfig.ready && -r /home/runner/.boxlite-jitconfig ]]; then
     ACTIONS_RUNNER_INPUT_JITCONFIG="$(cat /home/runner/.boxlite-jitconfig)"
     export ACTIONS_RUNNER_INPUT_JITCONFIG
@@ -87,6 +88,7 @@ export class WorkerPool {
   private readonly settings: PoolSettings
   private readonly jit = new Map<string, JitRegistration>()
   private readonly sessions = new Set<RunnerSession>()
+  private demandAfter = 0
   constructor(
     private readonly journal: ExecutionJournal,
     private readonly scopeKey: string,
@@ -222,8 +224,6 @@ export class WorkerPool {
       const scope = await this.journal.scope(lease, this.scopeKey)
       if (!scope.active && demands.every((demand) => demand.queued === 0 && !demand.dirty)) return
       const backend = await this.backend(scope.scope, lease)
-      if (!backend.inventory) throw new Error('CI runner supply inventory is unavailable')
-      const inventory = new Map((await backend.inventory(signal)).map((runner) => [runner.id, runner]))
       const allocations: AllocationRow[] = []
       let after = ''
       do {
@@ -231,6 +231,21 @@ export class WorkerPool {
         allocations.push(...page.rows)
         after = page.after
       } while (after)
+      let inventory: Map<number, RunnerObservation>
+      try {
+        if (!backend.inventory) throw new Error('CI runner supply inventory is unavailable')
+        inventory = new Map((await backend.inventory(signal)).map((runner) => [runner.id, runner]))
+      } catch (error) {
+        if (
+          error instanceof LeaseLost ||
+          error instanceof StateCorrupt ||
+          error instanceof StateConflict ||
+          signal?.aborted
+        )
+          throw error
+        await this.reconcileAll(lease, allocations, backend, scope.scope, signal)
+        throw error
+      }
       const supplied = new Map<string, number>()
       const claims = await this.journal.claimedRunners(
         lease,
@@ -240,7 +255,7 @@ export class WorkerPool {
         ),
       )
       const unknownBusy = new Set<string>()
-      for (const row of allocations) {
+      for (const [index, row] of allocations.entries()) {
         if (row.value.closing || row.value.box.phase === 'absent') continue
         // Legacy records have no label snapshot; only their recovery uses job details.
         const labels = row.value.supply?.labels ?? (await backend.job(row.value.job, signal)).labels
@@ -248,6 +263,18 @@ export class WorkerPool {
         if (!selection) throw new StateCorrupt()
         const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
         if (runner && runner.name !== row.value.name) throw new StateCorrupt()
+        if (row.value.runner.phase === 'known' && (!runner || runner.status === 'offline')) {
+          if (Date.now() - row.value.createdAt >= RUNNER_BOOTSTRAP_SECONDS * 1000) {
+            allocations[index] = await this.journal.advance(lease, row.record.key, row.record.version, {
+              closing: true,
+            })
+          } else {
+            // JIT delivery does not prove the runner has connected. Pending startup
+            // consumes the same demand and quota until its bounded grace expires.
+            supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
+          }
+          continue
+        }
         if (runner?.busy) {
           if (!claims.has(runner.id)) unknownBusy.add(selection.label)
           continue
@@ -260,21 +287,30 @@ export class WorkerPool {
         string,
         { count: number; demand: LabelDemand; labels: readonly string[]; checks: StateCheck[] }
       >()
-      for (const demand of demands) {
+      // Reserve one database check for the journal's scope fence. Omitted
+      // counters contribute no demand; a later round starts at the first omission.
+      const demandBudget = 99 - (policy.checks?.length ?? 0)
+      let nextDemand: number | undefined
+      for (let offset = 0; offset < demands.length; offset++) {
+        const index = (this.demandAfter + offset) % demands.length,
+          demand = demands[index]
         if (demand.dirty) throw new StateCorrupt()
         const selection = selectRunnerLabels(demand.labels, this.settings.labels)
         if (!selection || !demand.queued) continue
         const existing = requested.get(selection.label)
+        const checks = demand.key && demand.version ? [{ key: demand.key, version: demand.version }] : []
+        if ((existing?.checks.length ?? 0) + checks.length > demandBudget) {
+          nextDemand ??= index
+          continue
+        }
         requested.set(selection.label, {
           count: (existing?.count ?? 0) + demand.queued,
           demand,
           labels: selection.labels,
-          checks: [
-            ...(existing?.checks ?? []),
-            ...(demand.key && demand.version ? [{ key: demand.key, version: demand.version }] : []),
-          ],
+          checks: [...(existing?.checks ?? []), ...checks],
         })
       }
+      this.demandAfter = nextDemand ?? 0
       if (
         !verified &&
         [...requested].some(([label, target]) => unknownBusy.has(label) && target.count > (supplied.get(label) ?? 0)) &&
@@ -310,29 +346,38 @@ export class WorkerPool {
           pending = true
         }
       }
-      const results = await Promise.allSettled(
-        allocations.map(async (row) => {
-          await backend.retire?.(row.value.name)
-          try {
-            await this.reconcile(lease, row, backend, scope.scope, signal)
-          } finally {
-            await backend.retire?.(row.value.name)
-          }
-        }),
-      )
-      for (let index = 0; index < results.length; index++) {
-        const result = results[index]
-        if (result.status !== 'rejected') continue
-        const error = result.reason
-        if (error instanceof LeaseLost || error instanceof StateCorrupt || signal?.aborted) throw error
-        const current = await this.journal.allocation(lease, allocations[index].record.key)
-        if (current)
-          this.event(scope.scope, current, 'ci-worker-recovery-deferred', 'warn', {
-            errorType: error instanceof Error ? error.constructor.name : 'Unknown',
-          })
-      }
+      await this.reconcileAll(lease, allocations, backend, scope.scope, signal)
     } finally {
       this.busy = false
+    }
+  }
+  private async reconcileAll(
+    lease: ExecutionLease,
+    allocations: readonly AllocationRow[],
+    backend: PoolBackend,
+    scope: ExecutionScope,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const results = await Promise.allSettled(
+      allocations.map(async (row) => {
+        await backend.retire?.(row.value.name)
+        try {
+          await this.reconcile(lease, row, backend, scope, signal)
+        } finally {
+          await backend.retire?.(row.value.name)
+        }
+      }),
+    )
+    for (let index = 0; index < results.length; index++) {
+      const result = results[index]
+      if (result.status !== 'rejected') continue
+      const error = result.reason
+      if (error instanceof LeaseLost || error instanceof StateCorrupt || signal?.aborted) throw error
+      const current = await this.journal.allocation(lease, allocations[index].record.key)
+      if (current)
+        this.event(scope, current, 'ci-worker-recovery-deferred', 'warn', {
+          errorType: error instanceof Error ? error.constructor.name : 'Unknown',
+        })
     }
   }
   private async reconcile(

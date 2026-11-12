@@ -136,21 +136,33 @@ export async function observeDemand(
     if (
       claim &&
       (!object(claim.payload) ||
-        claim.payload.repository !== hint.repositoryId ||
-        claim.payload.run !== hint.job.runId ||
-        claim.payload.job !== hint.job.id)
+        !positive(claim.payload.repository) ||
+        !positive(claim.payload.run) ||
+        !positive(claim.payload.job) ||
+        !['in_progress', 'completed'].includes(claim.payload.status as string) ||
+        (claim.payload.ambiguous !== undefined && typeof claim.payload.ambiguous !== 'boolean'))
     )
       throw new StateCorrupt()
-    changes.push({
-      key,
-      expected: claim?.version ?? null,
-      payload: {
-        repository: hint.repositoryId,
-        run: hint.job.runId,
-        job: hint.job.id,
-        status: observation.status,
-      },
-    })
+    const priorClaim = claim?.payload as Record<string, Json> | undefined
+    const sameJob =
+      !priorClaim ||
+      (priorClaim.repository === hint.repositoryId &&
+        priorClaim.run === hint.job.runId &&
+        priorClaim.job === hint.job.id)
+    // Delivery order cannot establish which reused-runner assignment is current.
+    // Accept facts, but require a queue scan for ambiguous busy supply.
+    if (sameJob || observation.status === 'in_progress')
+      changes.push({
+        key,
+        expected: claim?.version ?? null,
+        payload: {
+          repository: hint.repositoryId,
+          run: hint.job.runId,
+          job: hint.job.id,
+          status: observation.status,
+          ...(!sameJob || priorClaim?.ambiguous ? { ambiguous: true } : {}),
+        },
+      })
   }
   for (const [key, { labels, delta }] of deltas) {
     const [row] = await tx.read([key])

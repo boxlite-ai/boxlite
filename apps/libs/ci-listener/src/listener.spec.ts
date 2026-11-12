@@ -15,7 +15,7 @@ import { ListenerInbox, verifyWebhook } from './webhook'
 import { AppDeliveryRecovery } from './replay/recovery'
 import { GitHubAppSource } from './github-app'
 import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected } from './worker'
-import { StateCorrupt } from './state/database'
+import { StateConflict, StateCorrupt } from './state/database'
 import { CapacityRequest } from './capacity'
 import { ScanClaim } from './compensation/queue'
 import { WorkflowJob } from './jobs'
@@ -247,6 +247,80 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.job).not.toHaveBeenCalled()
     expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 1, dirty: false })
+  })
+  it('retries a conflicting repository scan from fresh counters and wake before balancing', async () => {
+    const balanced = deferred()
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    await listener.receive(notification())
+    await db.transaction(namespace, async (tx) => {
+      const [row] = await tx.page('', 10, 'demand/')
+      await tx.put({ ...row, version: randomUUID(), payload: { ...(row.payload as object), dirty: true } }, row.version)
+    })
+    let reads = 0
+    jest.mocked(backend.queued).mockImplementation(async () => {
+      if (++reads === 1) {
+        await listener.receive(observePhase('completed', 55))
+        return [{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }]
+      }
+      return []
+    })
+    const ingress = state.ingress.bind(state)
+    jest.spyOn(state, 'ingress').mockImplementation(async (...args) => {
+      const result = await ingress(...args)
+      const [row] = await state.recover(lease, 1000, ['demand/'])
+      if (
+        (row?.payload as { queued?: number; dirty?: boolean })?.queued === 0 &&
+        (row.payload as { dirty?: boolean }).dirty === false
+      )
+        balanced.resolve()
+      return result
+    })
+    await runUntil(balanced.promise)
+    expect(reads).toBe(2)
+    expect((await state.recover(lease, 1000, ['demand/']))[0].payload).toMatchObject({ queued: 0, dirty: false })
+    expect(host.report).not.toHaveBeenCalledWith(expect.any(StateConflict), 'label-capacity-balance')
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('defers a repeatedly conflicting repository without reserving its stale counts or blocking another repository', async () => {
+    scope.installation.account.type = 'Organization'
+    scope.runners = {
+      kind: 'organization',
+      account: { id: 7, login: 'owner' },
+      group: 5,
+      repositories: [21, 22],
+      allowPrivate: true,
+      allowPublic: false,
+    }
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    await listener.receive(notification())
+    const { observation: _observation, ...legacy } = notification(56, 1, 7, 22)
+    await listener.receive(legacy)
+    await db.transaction(namespace, async (tx) => {
+      const [row] = await tx.page('', 10, 'demand/')
+      await tx.put(
+        { ...row, version: randomUUID(), payload: { ...(row.payload as object), queued: 99, dirty: true } },
+        row.version,
+      )
+    })
+    let conflictingReads = 0
+    jest.mocked(backend.queued).mockImplementation(async (repository) => {
+      if (repository === 21) {
+        conflictingReads++
+        await listener.receive(notification())
+      }
+      return [
+        { repository, run: 33, job: repository === 21 ? 55 : 56, status: 'queued', runner: null, labels: ['boxlite'] },
+      ]
+    })
+    await runUntil(delivered.promise)
+    expect(conflictingReads).toBe(2)
+    const allocations = [...(await inspectJournal(state, lease)).allocations.values()]
+    expect(allocations).toHaveLength(1)
+    expect(allocations[0].value.job.repository).toBe(22)
+    expect(await state.read(['notice/1/55'])).toHaveLength(1)
+    expect((await state.recover(lease, 1000, ['demand/1/21/']))[0].payload).toMatchObject({ queued: 99, dirty: true })
   })
   it('repairs an unreadable aggregate without carrying its deleted snapshot into admission', async () => {
     const repaired = deferred()

@@ -419,30 +419,48 @@ export class Listener {
       for (const notice of notices)
         if (object(notice.payload) && notice.payload.counted !== true)
           repairs.add(notice.payload.repositoryId as number)
+      const deferredRepositories = new Set<number>()
       const refreshCounts = async (targets: Iterable<number>) => {
         for (const repository of targets) {
           if (!repositories(scope).includes(repository)) throw new StateCorrupt()
-          const wakeKey = `wake/${scope.installation.id}/${repository}`
-          const [wake] = await this.options.state.read([wakeKey], session.lease)
-          const jobs = (await runtime.backend.queued(repository, signal)).filter((job) =>
-            jobMatches(job, this.worker.labels),
-          )
-          const refreshed = await rebuildDemand(
-            this.options.state,
-            session.lease,
-            {
-              installationId: scope.installation.id,
-              accountId: scope.installation.account.id,
-              repositoryId: repository,
-            },
-            [...counters.values()].filter(related),
-            jobs,
-            wake?.version,
-          )
           const prefix = `demand/${scope.installation.id}/${repository}/`
-          for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
-          for (const row of refreshed) counters.set(row.key, row)
-          session.demandRefresh.set(`${scope.installation.id}/${repository}`, Date.now())
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const wakeKey = `wake/${scope.installation.id}/${repository}`
+            const [wake] = await this.options.state.read([wakeKey], session.lease)
+            const jobs = (await runtime.backend.queued(repository, signal)).filter((job) =>
+              jobMatches(job, this.worker.labels),
+            )
+            try {
+              const refreshed = await rebuildDemand(
+                this.options.state,
+                session.lease,
+                {
+                  installationId: scope.installation.id,
+                  accountId: scope.installation.account.id,
+                  repositoryId: repository,
+                },
+                [...counters.values()].filter((row) => row.key.startsWith(prefix)),
+                jobs,
+                wake?.version,
+              )
+              for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
+              for (const row of refreshed) counters.set(row.key, row)
+              deferredRepositories.delete(repository)
+              session.demandRefresh.set(`${scope.installation.id}/${repository}`, Date.now())
+              break
+            } catch (error) {
+              if (!(error instanceof StateConflict)) throw error
+              // A racing webhook invalidates this entire repository snapshot.
+              // Never reserve from it; leave unsettled notices for the next cycle.
+              for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
+              if (attempt === 1) {
+                deferredRepositories.add(repository)
+                break
+              }
+              for (const row of await this.options.state.recover(session.lease, 100000, [prefix]))
+                counters.set(row.key, row)
+            }
+          }
         }
       }
       if (current) await refreshCounts(repairs)
@@ -466,7 +484,9 @@ export class Listener {
         demands = readCounts()
         await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
       }
-      for (const notice of notices) await this.settle(session.lease, notice)
+      for (const notice of notices)
+        if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))
+          await this.settle(session.lease, notice)
     })
     const results = await Promise.allSettled(tasks)
     for (const result of results)

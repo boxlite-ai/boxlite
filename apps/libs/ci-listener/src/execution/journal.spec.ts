@@ -116,6 +116,19 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await journal.claimedRunners(lease, definition, [])).toEqual(new Set())
       expect(await journal.claimedRunners(lease, definition, [93])).toEqual(new Set())
     })
+    it('withholds runner claim certainty when running observations overlap', async () => {
+      await recordClaim(1, 21, 91)
+      await state.ingress('1/21', async (tx) =>
+        tx.write(
+          await observeDemand(
+            tx,
+            { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 56, runId: 33 } },
+            { status: 'in_progress', labels: ['boxlite'], runner: 91 },
+          ),
+        ),
+      )
+      expect(await journal.claimedRunners(lease, definition, [91])).toEqual(new Set())
+    })
     it.each(['repository', 'organization'] as const)('rejects a claim outside the %s scope', async (kind) => {
       await recordClaim(1, 22, 91)
       const scope: ExecutionScope =
@@ -139,7 +152,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         expect(await journal.claimedRunners(lease, scope, [91])).toEqual(new Set([91]))
       }
     })
-    it.each([{ repository: 0 }, { run: null }, { job: '55' }, { status: 'queued' }])(
+    it.each([{ repository: 0 }, { run: null }, { job: '55' }, { status: 'queued' }, { ambiguous: 'true' }])(
       'rejects malformed persisted runner claims: %j',
       async (change) => {
         await recordClaim(1, 21, 91)

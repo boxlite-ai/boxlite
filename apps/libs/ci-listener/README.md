@@ -187,8 +187,9 @@ aggregates; they never grant permission to execute jobs.
 
 ### Execution lease storage
 
-`@owner` stores `{owner, epoch}` with record schema 2; `@lease` stores `{until}`
-with schema 1. The identity and its UUID record version remain stable throughout
+`@owner` stores `{owner, epoch}` with record schema 2, or adds `deployment` with
+schema 3 for deployment-aware hosts; `@lease` stores `{until}` with schema 1.
+The identity and its UUID record version remain stable throughout
 a scheduler's tenure. Renewal extends only the deadline; takeover increments the
 epoch and changes both records atomically.
 
@@ -215,12 +216,33 @@ abort the whole transaction, preserving the previous identity, deadline and jour
 Malformed identity or deadline payloads block initialization or ingress rather
 than admitting new work with incomplete lease metadata.
 
-Old binaries reject owner schema 2. During rollout, an old scheduler stops renewing
+Pre-schema-2 binaries reject owner schema 2. During that upgrade, an old scheduler stops renewing
 and an upgraded instance can acquire after the preserved deadline expires.
 Upgrade all hosts sharing a namespace; reverting binaries alone is unsupported,
 and deleting execution state would lose recovery records. The existing PostgreSQL
 and SQLite tables are retained: identity columns belong to `@owner`, and
 `lease_until` belongs to `@lease`.
+
+### Deployment eligibility
+
+A host may construct `ListenerState(database, namespace, deployment)` with a
+positive safe integer assigned by its deployment workflow. After HTTP is serving,
+it calls `activate()`: a higher deployment takes the same owner lock as execution
+transactions, waits for those transactions to finish, then atomically advances the
+deployment and epoch, clears the owner and expires the lease. Same-deployment
+activation is idempotent; an older deployment cannot move the target backwards.
+
+The first activation upgrades owner schema 2 to 3, so earlier binaries fail closed
+instead of renewing an ownership record they do not understand. Acquisition,
+renewal and execution writes require the active deployment. Initialization and
+webhook ingress do not activate a deployment. Unversioned standalone hosts retain
+schema 2 and cannot acquire an upgraded namespace. Keep the journal when upgrading;
+rolling back to an older binary requires an explicit state-format recovery plan.
+
+No HTTP call holds this database lock. A call issued before takeover may finish,
+but stale state commits fail; the replacement owner recovers its persisted intent
+using original resource identifiers. A retired API may keep WebSockets open and
+accept authorized ingress without retaining scheduling authority.
 
 ### Conditional admission writes
 
@@ -350,6 +372,20 @@ also requires a rebuild before replenishment, covering PAT hosts and missed
 running events. Job queries support recovery instead of ordinary per-allocation
 admission. Custom backends without supply inventory retain job-driven fallback.
 
+Reused runner IDs do not reject job observations. Ambiguous assignment observations
+force an authoritative queue rebuild. A repository whose refresh repeatedly races
+new webhooks defers admission while other repositories and resource cleanup proceed.
+Inventory failures block new reservations while allowing existing cleanup. A known
+runner missing from inventory or offline retains starting supply during the existing
+300-second bootstrap budget; after that it enters cleanup without releasing quota
+until the original Box is absent.
+
+Reservations use rotating counter windows within the database's 100-check budget,
+including scope and host-policy fences. Only fenced counters add demand and all
+compatible supply is deducted. Wide repository sets can therefore fill capacity
+conservatively across rounds; the window does not cap runners represented by one
+counter or replace organization quota.
+
 A fallback replaces or removes a malformed aggregate only after a version-fenced
 queue snapshot. Terminal job observations prevent stale scans from recreating
 completed demand. Rejected ingress changes leave receipts, facts and counters
@@ -357,8 +393,8 @@ uncommitted.
 
 The label-count upgrade preserves an existing version-2 journal and outstanding
 resources. It adds no state-table DDL and requires no journal reset. Legacy
-allocations recover through original identifiers and job-label fallback. Revision
-handoff during deployment remains separate work.
+allocations recover through original identifiers and job-label fallback. Hosted
+deployment handoff follows the eligibility protocol above.
 
 ## Independent repository compensation
 

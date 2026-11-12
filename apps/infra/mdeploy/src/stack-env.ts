@@ -87,7 +87,11 @@ export const userDomainFrom = (environment: NodeJS.ProcessEnv): UserDomain | nul
   }
   return {
     domain,
-    dnsZoneId: required(environment, 'CLOUDFLARE_USER_ZONE_ID', `the records for *.${domain} go into the zone that holds it`),
+    dnsZoneId: required(
+      environment,
+      'CLOUDFLARE_USER_ZONE_ID',
+      `the records for *.${domain} go into the zone that holds it`,
+    ),
   }
 }
 
@@ -277,6 +281,14 @@ const channels = ({
   home: Cloud
 }) => {
   const api = apiEnvironmentFrom({ environment, declaration, region, stage, home })
+  // Invocation metadata bypasses stored stage groups, like the image tag.
+  const generationKey = environment.CI_SCHEDULER_GENERATION === undefined ? 'GITHUB_RUN_ID' : 'CI_SCHEDULER_GENERATION'
+  const generation = environment[generationKey]
+  if (generation !== undefined) {
+    if (!/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation)))
+      throw new StackEnvError(`${generationKey} must be a canonical positive safe integer`)
+    api.environment.CI_SCHEDULER_GENERATION = generation
+  }
   const split = (group: string) =>
     splitServiceChannels({
       delivered: serviceSecretsFrom({ group, declaration, environment }),

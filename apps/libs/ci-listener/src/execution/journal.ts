@@ -222,7 +222,8 @@ export class ExecutionJournal {
           !positive(row.payload.repository) ||
           !positive(row.payload.job) ||
           !positive(row.payload.run) ||
-          !['in_progress', 'completed'].includes(row.payload.status as string)
+          !['in_progress', 'completed'].includes(row.payload.status as string) ||
+          (row.payload.ambiguous !== undefined && typeof row.payload.ambiguous !== 'boolean')
         )
           throw new StateCorrupt()
         const repository = row.payload.repository
@@ -232,7 +233,7 @@ export class ExecutionJournal {
             : !scope.runners.repositories.includes(repository)
         )
           throw new StateCorrupt()
-        known.add(Number(row.key.split('/')[2]))
+        if (!row.payload.ambiguous) known.add(Number(row.key.split('/')[2]))
       }
     }
     return known

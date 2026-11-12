@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { JitRegistration, RunnerIdentity } from '../runners'
+import { JitRegistration, RunnerIdentity, RunnerObservation } from '../runners'
 import { LeaseLost, StateCorrupt } from '../state/database'
 import { ExecutionLease, ListenerState } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
@@ -13,7 +13,7 @@ import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected, WorkerState } f
 import { ExecutionJournal } from './journal'
 import { ExecutionScope } from './model'
 import { PoolBackend, WorkerPool } from './pool'
-import { observeDemand } from '../demand'
+import { decodeDemand, observeDemand } from '../demand'
 
 describe('CI shared worker lifecycle', () => {
   const definition: ExecutionScope = {
@@ -180,23 +180,105 @@ describe('CI shared worker lifecycle', () => {
     },
   ]
   const supplyInventory = (busy = new Set<string>()) => {
-    const inventory = jest.fn(async () =>
-      [...runners.values()].map((runner) => ({
-        ...runner,
-        busy: busy.has(runner.name),
-        status: 'online' as const,
-        labels: [...settings.labels],
-      })),
+    const inventory = jest.fn(
+      async (): Promise<RunnerObservation[]> =>
+        [...runners.values()].map((runner) => ({
+          ...runner,
+          busy: busy.has(runner.name),
+          status: 'online' as const,
+          labels: [...settings.labels],
+        })),
     )
     Object.assign(backend, { inventory })
     return inventory
   }
+  const organizationDemand = async (count: number) => {
+    const repositories = Array.from({ length: count }, (_, index) => index + 21)
+    key = await journal.define(lease, {
+      ...definition,
+      installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
+      runners: {
+        kind: 'organization',
+        account: { id: 7, login: 'owner' },
+        group: 5,
+        repositories,
+        allowPrivate: true,
+        allowPublic: false,
+      },
+    })
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    for (const repositoryId of repositories)
+      await state.ingress(`1/${repositoryId}`, async (tx) => {
+        await tx.write(
+          await observeDemand(
+            tx,
+            { installationId: 1, accountId: 7, repositoryId, job: { id: repositoryId + 1000, runId: demand.run } },
+            { status: 'queued', labels: ['boxlite'], runner: null },
+          ),
+        )
+      })
+  }
+  const durableDemands = async () =>
+    (await state.recover(lease, 1000, ['demand/'])).map(decodeDemand).sort((a, b) => a.repositoryId - b.repositoryId)
   it('counts idle supply and does not remint a runner for unchanged demand', async () => {
     supplyInventory()
     await pool.balance(lease, limits, countedDemand())
     await pool.balance(lease, limits, countedDemand())
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.job).not.toHaveBeenCalled()
+  })
+  it('demand fence regression: bounds organization snapshots and advances remaining repositories', async () => {
+    const busy = new Set<string>()
+    supplyInventory(busy)
+    await organizationDemand(101)
+    await expect(
+      pool.balance(lease, testCapacity({ account: 3, tenant: 3 }), await durableDemands()),
+    ).resolves.toBeUndefined()
+    expect(backend.workers.create).toHaveBeenCalledTimes(3)
+    const initial = [...runners.values()]
+    initial.forEach((runner) => busy.add(runner.name))
+    const counters = await durableDemands()
+    for (const [index, counter] of counters.slice(0, 99).entries())
+      await state.ingress(`1/${counter.repositoryId}`, async (tx) => {
+        await tx.write(
+          await observeDemand(
+            tx,
+            { ...counter, job: counter.job },
+            {
+              status: index < initial.length ? 'in_progress' : 'completed',
+              labels: ['boxlite'],
+              runner: initial[index]?.id ?? null,
+            },
+          ),
+        )
+      })
+    await pool.balance(lease, testCapacity({ account: 5, tenant: 5 }), await durableDemands())
+    expect(backend.workers.create).toHaveBeenCalledTimes(5)
+    expect(await journal.used(definition.organization)).toBe(5)
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+  })
+  it('demand fence regression: leaves room for policy and journal checks without counting omitted counters', async () => {
+    supplyInventory()
+    await organizationDemand(2)
+    const policy = await state.commit(
+      lease,
+      Array.from({ length: 98 }, (_, index) => ({ key: `policy/${index}`, expected: null, payload: true })),
+    )
+    await expect(
+      pool.balance(
+        lease,
+        testCapacity({ account: 3, tenant: 3, checks: policy.map(({ key, version }) => ({ key, version })) }),
+        await durableDemands(),
+      ),
+    ).resolves.toBeUndefined()
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(await journal.used(definition.organization)).toBe(1)
+  })
+  it('fills configured capacity from a large single counter without a worker batch cap', async () => {
+    supplyInventory()
+    await pool.balance(lease, testCapacity({ account: 4, tenant: 4 }), countedDemand(5000))
+    expect(backend.workers.create).toHaveBeenCalledTimes(4)
+    expect(await journal.used(definition.organization)).toBe(4)
   })
   it('does not open a backend for an empty clean scope and zero queued demand', async () => {
     const open = jest.fn(async () => backend)
@@ -213,6 +295,110 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.create).not.toHaveBeenCalled()
     expect(await journal.used(definition.organization)).toBe(0)
   })
+  it.each(['failed', 'unavailable'])(
+    'inventory failure regression: cleans stopped Boxes when inventory is %s',
+    async (mode) => {
+      const inventory = supplyInventory()
+      await pool.balance(lease, limits, countedDemand())
+      const row = await allocation()
+      boxes.get(row.value.name)!.status = 'stopped'
+      if (mode === 'failed') inventory.mockRejectedValue(new Error('inventory unavailable'))
+      else delete backend.inventory
+      await expect(pool.balance(lease, limits, countedDemand(2))).rejects.toThrow(/inventory/)
+      expect(backend.workers.remove).toHaveBeenCalledWith(row.value.name)
+      expect(await journal.used(definition.organization)).toBe(1)
+      await expect(pool.balance(lease, limits, countedDemand(2))).rejects.toThrow(/inventory/)
+      expect((await rows()).allocations.size).toBe(0)
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    },
+  )
+  it.each(['missing', 'offline'])(
+    'unavailable supply regression: closes a delivered running worker whose runner is %s',
+    async (mode) => {
+      const inventory = supplyInventory()
+      await pool.balance(lease, limits, countedDemand())
+      const row = await allocation()
+      await state.commit(lease, [
+        {
+          key: row.record.key,
+          expected: row.record.version,
+          payload: JSON.parse(JSON.stringify({ ...row.value, createdAt: Date.now() - 300000 })),
+        },
+      ])
+      inventory.mockImplementation(async () =>
+        mode === 'missing'
+          ? []
+          : [...runners.values()].map((runner) => ({
+              ...runner,
+              busy: false,
+              status: 'offline' as const,
+              labels: [...settings.labels],
+            })),
+      )
+      await pool.balance(lease, limits, countedDemand())
+      expect((await journal.allocation(lease, row.record.key))?.value.closing).toBe(true)
+      expect(backend.workers.stop).toHaveBeenCalledWith(row.value.name)
+      expect(await journal.used(definition.organization)).toBe(1)
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      await pool.balance(lease, limits, countedDemand())
+      expect(backend.workers.remove).toHaveBeenCalledWith(row.value.name)
+      expect(await journal.used(definition.organization)).toBe(1)
+      await pool.balance(lease, limits, countedDemand())
+      expect(await journal.allocation(lease, row.record.key)).toBeUndefined()
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      supplyInventory()
+      await pool.balance(lease, limits, countedDemand())
+      expect(backend.workers.create).toHaveBeenCalledTimes(2)
+    },
+  )
+  it.each(['missing', 'offline'])(
+    'runner startup regression: preserves %s supply until the bootstrap grace expires',
+    async (mode) => {
+      const inventory = supplyInventory(),
+        capacity = testCapacity({ account: 2, tenant: 2 })
+      await pool.balance(lease, capacity, countedDemand())
+      const row = await allocation(),
+        now = Date.now()
+      await state.commit(lease, [
+        {
+          key: row.record.key,
+          expected: row.record.version,
+          payload: JSON.parse(JSON.stringify({ ...row.value, createdAt: now - 299999 })),
+        },
+      ])
+      inventory.mockImplementation(async () =>
+        mode === 'missing'
+          ? []
+          : [...runners.values()].map((runner) => ({
+              ...runner,
+              busy: false,
+              status: 'offline' as const,
+              labels: [],
+            })),
+      )
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+      try {
+        await pool.balance(lease, capacity, countedDemand())
+        expect((await journal.allocation(lease, row.record.key))?.value).toMatchObject({
+          closing: false,
+          delivery: 'done',
+        })
+        expect(backend.workers.stop).not.toHaveBeenCalled()
+        expect(backend.workers.create).toHaveBeenCalledTimes(1)
+        expect(await journal.used(definition.organization)).toBe(1)
+        clock.mockReturnValue(now + 1)
+        await pool.balance(lease, capacity, countedDemand())
+        expect((await journal.allocation(lease, row.record.key))?.value.closing).toBe(true)
+        expect(backend.workers.stop).toHaveBeenCalledWith(row.value.name)
+        expect(await journal.used(definition.organization)).toBe(2)
+      } finally {
+        clock.mockRestore()
+      }
+    },
+  )
   it('recovers legacy allocation labels while balancing an initially empty runner inventory', async () => {
     supplyInventory()
     const reserved = (await journal.reserve(lease, key, demand, limits))!

@@ -145,15 +145,45 @@ describe('CI label demand counters and fallback', () => {
   it.each([
     null,
     {},
-    { repository: 22, run: 33, job: 55 },
-    { repository: 21, run: 34, job: 55 },
-    { repository: 21, run: 33, job: 56 },
-  ])('rejects a runner claimed by another identity without consuming queued demand %j', async (payload) => {
+    { repository: 0, run: 33, job: 55, status: 'completed' },
+    { repository: 21, run: null, job: 55, status: 'in_progress' },
+    { repository: 21, run: 33, job: '55', status: 'in_progress' },
+    { repository: 21, run: 33, job: 55, status: 'queued' },
+    { repository: 21, run: 33, job: 55, status: 'in_progress', ambiguous: 'true' },
+  ])('rejects a malformed runner claim without consuming queued demand %j', async (payload) => {
     await send('queued')
     await state.commit(lease, [{ key: 'runner-claim/1/91', expected: null, payload: payload as Json }])
     const before = await state.recover(lease)
     await expect(send('in_progress', 55, ['boxlite'], 91)).rejects.toBeInstanceOf(StateCorrupt)
     expect(await state.recover(lease)).toEqual(before)
+  })
+  it('accepts sequential runner reuse without losing job facts or queued counts', async () => {
+    await send('queued', 55)
+    await send('in_progress', 55, ['boxlite'], 91)
+    await send('completed', 55, [], 91)
+    await send('queued', 56)
+    await send('in_progress', 56, ['boxlite'], 91)
+    const [current] = await state.read(['runner-claim/1/91'])
+    expect(current.payload).toEqual({ repository: 21, run: 33, job: 56, status: 'in_progress', ambiguous: true })
+    await send('completed', 55, [], 91)
+    expect((await state.read(['runner-claim/1/91']))[0]).toEqual(current)
+    expect((await state.read(['job-fact/1/55', 'job-fact/1/56'])).map((row) => row.payload)).toEqual([
+      expect.objectContaining({ status: 'completed' }),
+      expect.objectContaining({ status: 'in_progress' }),
+    ])
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 0, dirty: false })
+  })
+  it('accepts overlapping runner observations conservatively and ignores an older completion claim', async () => {
+    await send('queued', 55)
+    await send('queued', 56)
+    await send('in_progress', 55, ['boxlite'], 91)
+    await send('in_progress', 56, ['boxlite'], 91)
+    const [current] = await state.read(['runner-claim/1/91'])
+    expect(current.payload).toEqual({ repository: 21, run: 33, job: 56, status: 'in_progress', ambiguous: true })
+    await send('completed', 55, [], 91)
+    expect((await state.read(['runner-claim/1/91']))[0]).toEqual(current)
+    expect((await state.read(['job-fact/1/55']))[0].payload).toMatchObject({ status: 'completed' })
+    expect(decodeDemand((await counters())[0])).toMatchObject({ queued: 0, dirty: false })
   })
   it('advances an existing runner claim from running to completed for the same job', async () => {
     await send('queued')

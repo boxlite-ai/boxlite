@@ -433,6 +433,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     })
     try {
       await Promise.all([first.onModuleInit(), second.onModuleInit()])
+      await Promise.all([first.start(), second.start()])
       await observed
       expect(acquired.slice(0, 2).filter(Boolean)).toHaveLength(1)
       const owner = (
@@ -468,6 +469,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       new CiSettingsService(disabledStore, {} as any),
     )
     await service.onModuleInit()
+    await service.start()
     await expect(service.receive(notification())).rejects.toThrow('not configured')
     await service.onModuleDestroy()
     expect(github.settings).not.toHaveBeenCalled()
@@ -475,6 +477,52 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       await db.query('SELECT record_key FROM ci_listener_state WHERE namespace=$1', [disabledStore.namespace]),
     ).toHaveLength(0)
   })
+  it('fences old hosted deployments inside native resource transactions while ingress remains available', async () => {
+    const configured = (generation: string) => ({
+      get: (key: string) => (key === 'ci.schedulerGeneration' ? generation : config.get(key)),
+    })
+    const older = new CiNativeState(db, configured('10') as any)
+    await older.initialize()
+    expect(await older.state.acquire('before-serving', 30000)).toBeUndefined()
+    await older.state.activate()
+    const original = (await older.state.acquire('old-api', 30000))!
+    const newer = new CiNativeState(db, configured('11') as any)
+    await newer.initialize()
+    await expect(older.state.renew(original, 30000)).resolves.toBeUndefined()
+    expect(await newer.state.activate()).toBe(true)
+    await expect(older.state.renew(original, 30000)).rejects.toThrow('lease')
+    expect(await older.state.acquire('old-restarted', 30000)).toBeUndefined()
+    await expect(
+      older.transaction((_tx, state) =>
+        state.commit(original, [{ key: 'backend/retired-resource', expected: null, payload: {} }]),
+      ),
+    ).rejects.toThrow('lease')
+    const replacement = (await newer.state.acquire('new-api', 30000))!
+    await newer.transaction((_tx, state) =>
+      state.commit(replacement, [{ key: 'backend/new-resource', expected: null, payload: {} }]),
+    )
+    const nextHost = new CiNativeHost(db, newer, worker as any, newer.registry, configured('11') as any)
+    try {
+      expect(await nextHost.accept(notification())).toBe('stored')
+      expect(await newer.state.read(['backend/new-resource'])).toHaveLength(1)
+      expect(await older.state.read(['backend/retired-resource'])).toEqual([])
+    } finally {
+      await nextHost.close()
+      await older.onApplicationShutdown()
+      await newer.onApplicationShutdown()
+    }
+  })
+  it.each(['', '0', '-1', '01', ' 2', '1.5', '9007199254740992'])(
+    'rejects invalid hosted scheduler generation %j',
+    (generation) => {
+      expect(
+        () =>
+          new CiNativeState(db, {
+            get: (key: string) => (key === 'ci.schedulerGeneration' ? generation : config.get(key)),
+          } as any),
+      ).toThrow('Invalid hosted CI scheduler generation')
+    },
+  )
   it('stores and deduplicates an authorized webhook without the scheduler lease', async () => {
     const event = notification()
     expect(await host.accept(event)).toBe('stored')

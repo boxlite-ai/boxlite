@@ -784,6 +784,7 @@ const configuration = {
     startConfirmationStallSeconds: parseInt(process.env.BOX_SYNC_START_CONFIRMATION_STALL_SECONDS || '60', 10),
   },
   ci: {
+    schedulerGeneration: process.env.CI_SCHEDULER_GENERATION,
     workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
     workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
     ...ciWorkerResources(),
