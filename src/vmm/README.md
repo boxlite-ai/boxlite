@@ -1057,14 +1057,17 @@ reports whole seconds, never overrides it.
   00–69 means 20xx and 70–99 means 19xx unless the guest writes it.
 - The alarm matches the seconds, minutes and hours registers `0x01`, `0x03`
   and `0x05`; a byte `0xC0`–`0xFF` matches any value, as Linux writes `0xff`
-  for a field it does not care about. With AIE in register B set and the
-  clock running, a worker thread sleeps until the next matching guest second,
-  sets IRQF and AF in register C, raises an edge on GSI 8 and re-arms.
-  Reading register C returns and clears them. Clearing AIE clears IRQF but
-  keeps AF; enabling AIE again delivers that unacknowledged alarm immediately.
-  Any write to a time, alarm or
-  status register recomputes the deadline; clearing AIE or stopping the
-  clock disarms it.
+  for a field it does not care about. While the clock runs, a worker sleeps
+  until the next matching guest second and latches AF in register C, even
+  with AIE off. AIE gates IRQF and the edge on GSI 8, not alarm matching.
+  Further matches coalesce while AF is pending; the worker waits without a
+  timer rather than repeatedly waking. Reading register C returns and clears
+  its flags and, when AF was set, schedules the next match under the worker's
+  lock. Reading C with AF clear preserves any match the worker has yet to
+  process. Clearing AIE clears IRQF but keeps
+  AF; enabling AIE with AF pending delivers that alarm immediately.
+  Writes to time, alarm, register A or register B recompute the deadline;
+  stopping the clock disarms matching until it restarts.
 - x86 Linux registers `rtc_cmos` with IRQ 8, so it trusts the alarm and
   serves update interrupts with it; `hwclock` waits up to 10 s for one on
   every read. Periodic and update-ended interrupts, and day and month
@@ -1076,6 +1079,9 @@ reports whole seconds, never overrides it.
   `/dev/rtc0`.
 
 The fixed IRQ 8 follows Linux's [x86 RTC platform device](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/kernel/rtc.c#L114-L152).
+Latching AF independently of AIE follows [QEMU's alarm update](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L411-L423);
+coalescing and rearming follow its [timer scheduling](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L246-L295)
+and [register C read](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L696-L702).
 Re-enabling AIE with AF pending follows [QEMU's register B handling](https://github.com/qemu/qemu/blob/d73149283205645625bfa9fe029cfb68e4c4a9ae/hw/rtc/mc146818rtc.c#L518-L529).
 This RTC and its alarm do not resynchronize Linux's system clock after host
 sleep; guest clock recovery remains separate work.

@@ -997,6 +997,7 @@ fn add_device_puts_each_device_in_its_own_slot() {
     workers.shutdown().unwrap();
 }
 
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn virtio_slots_do_not_conflict_with_the_pc_rtc_interrupt() {
     let vm = Arc::new(MockVm::new());

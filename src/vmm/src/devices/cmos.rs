@@ -14,10 +14,10 @@
 //! it starts half a second into the written second, because Linux writes the
 //! time half a second early (`set_offset_nsec` in `rtc-cmos.c`).
 //!
-//! The alarm follows the alarm registers and AIE: at each matching guest
-//! second a worker thread sets IRQF and AF in register C and raises an edge
-//! on GSI 8. Linux emulates update interrupts with that alarm, and `hwclock`
-//! waits on them. Not modelled: 12-hour mode, day and month alarms, and
+//! At each new alarm match a worker latches AF in register C. AIE gates
+//! IRQF and the edge on GSI 8; matches coalesce until the guest reads C.
+//! Linux emulates update interrupts with that alarm, and `hwclock` waits
+//! on them. Not modelled: 12-hour mode, day and month alarms, and
 //! periodic and update-ended interrupts.
 
 use std::{
@@ -175,7 +175,7 @@ impl CmosRtc {
         (self.clock)().saturating_add(self.offset_from_clock)
     }
 
-    fn read_register(&self, register: usize) -> u8 {
+    fn read_register(&mut self, register: usize) -> u8 {
         match register {
             _ if TIME_REGISTERS.contains(&register) && self.clock_running() => {
                 self.time_register(register, self.guest_time_nanos())
@@ -185,7 +185,16 @@ impl CmosRtc {
             STATUS_C => {
                 let mut state = self.alarm.state();
                 state.pending_irq = false;
-                std::mem::take(&mut state.flags)
+                // Sample and rearm only an acknowledged match, under the
+                // worker's lock. An empty read must preserve an overdue match
+                // the worker has not latched yet.
+                if state.flags & ALARM_FLAG != 0 {
+                    state.armed = self.next_alarm();
+                }
+                let flags = std::mem::take(&mut state.flags);
+                drop(state);
+                self.alarm.changed.notify_one();
+                flags
             }
             _ => self.registers[register],
         }
@@ -222,13 +231,17 @@ impl CmosRtc {
         if register <= STATUS_B {
             // The time, an alarm field, the divider, SET or AIE may have
             // moved the next match.
-            let armed = self.next_alarm();
-            if armed.is_some() {
-                self.start_worker();
-            }
-            let aie_off = self.registers[STATUS_B] & ALARM_INTERRUPT_ENABLE == 0;
-            self.alarm.set(armed, aie_off);
+            self.update_alarm();
         }
+    }
+
+    fn update_alarm(&mut self) {
+        let armed = self.next_alarm();
+        if armed.is_some() {
+            self.start_worker();
+        }
+        let aie_off = self.registers[STATUS_B] & ALARM_INTERRUPT_ENABLE == 0;
+        self.alarm.set(armed, aie_off);
     }
 
     /// Writes the time at `nanos` into the time registers, which keep it
@@ -319,10 +332,10 @@ impl CmosRtc {
     }
 
     /// The next guest second the alarm matches, as a host deadline, or
-    /// `None` while AIE is off, the clock is stopped, or an alarm byte is not
-    /// a valid second, minute or hour.
+    /// `None` while the clock is stopped or an alarm byte is not a valid
+    /// second, minute or hour. AIE gates delivery, not matching.
     fn next_alarm(&self) -> Option<Armed> {
-        if self.registers[STATUS_B] & ALARM_INTERRUPT_ENABLE == 0 || !self.clock_running() {
+        if !self.clock_running() {
             return None;
         }
         let field = |register: usize, limit: i64| match self.registers[register] {
@@ -428,8 +441,9 @@ impl Armed {
 #[derive(Debug, Default)]
 struct AlarmState {
     armed: Option<Armed>,
-    /// Register C: IRQF and AF once the alarm matched, until the guest reads it.
+    /// Register C: AF on a match, plus IRQF when AIE enables delivery.
     flags: u8,
+    aie_off: bool,
     pending_irq: bool,
     stopping: bool,
 }
@@ -451,6 +465,7 @@ impl Alarm {
     fn set(&self, armed: Option<Armed>, aie_off: bool) {
         let mut state = self.state();
         state.armed = armed;
+        state.aie_off = aie_off;
         if aie_off {
             state.flags &= ALARM_FLAG;
             state.pending_irq = false;
@@ -462,9 +477,10 @@ impl Alarm {
         self.changed.notify_one();
     }
 
-    /// The worker: at each deadline, sets register C, re-arms for the next
-    /// match, and raises an edge on `irq` outside the lock, until the device
-    /// stops it. A failed edge ends the VM.
+    /// The worker latches AF at a match and, with AIE enabled, sets IRQF and
+    /// raises an edge on `irq` outside the lock. Matches coalesce while AF is
+    /// pending; reading C clears it and schedules the next match. The device
+    /// stops and joins the worker; a failed edge ends the VM.
     fn run(&self, irq: &IrqLine, event_sender: &EventSender) {
         let mut state = self.state();
         loop {
@@ -481,7 +497,10 @@ impl Alarm {
                 state = self.state();
                 continue;
             }
-            let Some(deadline) = state.armed.as_ref().map(|armed| armed.deadline) else {
+            // AF coalesces all further matches until C is read. Wait without
+            // a timeout even if the saved deadline has already passed.
+            let deadline = state.armed.as_ref().map(|armed| armed.deadline);
+            let Some(deadline) = deadline.filter(|_| state.flags & ALARM_FLAG == 0) else {
                 state = self
                     .changed
                     .wait(state)
@@ -500,13 +519,11 @@ impl Alarm {
             if let Some(armed) = &mut state.armed {
                 armed.advance_past(now);
             }
-            state.flags = INTERRUPT_REQUEST | ALARM_FLAG;
-            drop(state);
-            if let Err(error) = irq.pulse() {
-                event_sender.send(Event::DeviceFailed(error));
-                return;
+            state.flags = ALARM_FLAG;
+            if !state.aie_off {
+                state.flags |= INTERRUPT_REQUEST;
+                state.pending_irq = true;
             }
-            state = self.state();
         }
     }
 }

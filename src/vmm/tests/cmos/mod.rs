@@ -367,7 +367,7 @@ fn an_alarm_raises_line_8_and_reports_itself_once_in_register_c() {
 }
 
 #[test]
-fn clearing_aie_disarms_the_alarm() {
+fn clearing_aie_preserves_af_without_another_edge() {
     // Half a second into 00:00:00, with every alarm field "don't care".
     let (mut rtc, clock, changes) = rtc_with_line(0);
     advance(&clock, NANOS / 2);
@@ -380,7 +380,7 @@ fn clearing_aie_disarms_the_alarm() {
     assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
 
     write(&mut rtc, 0x0b, 0x02);
-    // Still armed, the alarm would fire again one second after the first.
+    // Further matches coalesce while AF remains unacknowledged.
     assert_eq!(
         changes.recv_timeout(Duration::from_millis(1500)),
         Err(RecvTimeoutError::Timeout)
@@ -390,6 +390,159 @@ fn clearing_aie_disarms_the_alarm() {
         0x20,
         "AF without IRQF once AIE is off"
     );
+}
+
+/// Schedule a disabled wildcard match 100 ms from now through the guest ports.
+fn disabled_alarm() -> (CmosRtc, Arc<AtomicI64>, Receiver<(u32, bool)>) {
+    let (mut rtc, clock, changes) = rtc_with_line(0);
+    advance(&clock, NANOS - 100_000_000);
+    for index in [0x01, 0x03, 0x05] {
+        write(&mut rtc, index, 0xff);
+    }
+    (rtc, clock, changes)
+}
+
+#[test]
+fn a_disabled_alarm_latches_af_without_irqf_or_an_edge() {
+    let (mut rtc, _, changes) = disabled_alarm();
+    assert_eq!(
+        changes.recv_timeout(Duration::from_millis(250)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    assert_eq!(read(&mut rtc, 0x0c), 0x20, "a disabled match must latch AF");
+}
+
+#[test]
+fn enabling_aie_delivers_a_match_that_occurred_while_disabled() {
+    let (mut rtc, _, changes) = disabled_alarm();
+    assert_eq!(
+        changes.recv_timeout(Duration::from_millis(250)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    write(&mut rtc, 0x0b, 0x22);
+    assert_eq!(
+        changes.recv_timeout(Duration::from_millis(50)),
+        Ok((8, true)),
+        "pending AF must deliver before the next scheduled match"
+    );
+    assert_eq!(changes.recv_timeout(Duration::from_secs(5)), Ok((8, false)));
+    assert_eq!(read(&mut rtc, 0x0c), 0xa0);
+}
+
+#[test]
+fn reading_c_rearms_disabled_matches_after_coalescing() {
+    let (mut rtc, clock, changes) = disabled_alarm();
+    write(&mut rtc, 0x0b, 0x22);
+    let wait = Duration::from_secs(5);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
+    write(&mut rtc, 0x0b, 0x02);
+    assert_eq!(
+        changes.recv_timeout(Duration::from_millis(1250)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    assert_eq!(rtc.alarm.state().flags, 0x20, "disabled matches latch AF");
+    assert!(
+        rtc.alarm
+            .state()
+            .armed
+            .as_ref()
+            .is_none_or(|armed| armed.deadline < Instant::now()),
+        "pending AF must leave the elapsed deadline asleep instead of rescheduling"
+    );
+    advance(&clock, NANOS);
+    assert_eq!(read(&mut rtc, 0x0c), 0x20);
+    assert_eq!(read(&mut rtc, 0x0c), 0, "C clears AF immediately");
+    assert_eq!(
+        changes.recv_timeout(Duration::from_millis(250)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    assert_eq!(
+        read(&mut rtc, 0x0c),
+        0x20,
+        "the next disabled match relatches AF"
+    );
+}
+
+#[test]
+fn reading_c_samples_the_next_match_under_the_alarm_lock() {
+    let (mut rtc, _, changes) = disabled_alarm();
+    write(&mut rtc, 0x0b, 0x22);
+    let wait = Duration::from_secs(5);
+    assert_eq!(changes.recv_timeout(wait), Ok((8, true)));
+    assert_eq!(changes.recv_timeout(wait), Ok((8, false)));
+    let alarm = Arc::clone(&rtc.alarm);
+    let (samples, sampled) = mpsc::channel();
+    rtc.clock = Box::new(move || {
+        // The injected clock is the sampling boundary. A worker can latch
+        // between sampling and clearing C exactly when this lock is free.
+        samples.send(alarm.state.try_lock().is_err()).unwrap();
+        NANOS
+    });
+    assert_eq!(read(&mut rtc, 0x0c), 0xa0);
+    assert!(
+        sampled.recv_timeout(wait).unwrap(),
+        "sampling and acknowledging AF must exclude the worker"
+    );
+    assert_eq!(read(&mut rtc, 0x0c), 0);
+    assert_eq!(
+        changes.recv_timeout(Duration::from_millis(100)),
+        Err(RecvTimeoutError::Timeout)
+    );
+}
+
+#[test]
+fn reading_empty_c_preserves_an_overdue_unprocessed_match() {
+    let (mut rtc, clock, changes) = rtc_with_line(0);
+    write(&mut rtc, 0x01, 1); // A daily alarm at 00:00:01.
+    write(&mut rtc, 0x0b, 0x22);
+    // Hold the worker before its first match, without changing the schedule
+    // produced by the guest register writes.
+    rtc.alarm.state().stopping = true;
+    rtc.alarm.changed.notify_one();
+    rtc.worker.take().unwrap().join().unwrap();
+    rtc.alarm.state().stopping = false;
+    let deadline = rtc.alarm.state().armed.as_ref().unwrap().deadline;
+    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+    clock.store(2 * NANOS, Ordering::SeqCst);
+    assert_eq!(read(&mut rtc, 0x0c), 0);
+    assert_eq!(
+        rtc.alarm.state().armed.as_ref().unwrap().deadline,
+        deadline,
+        "an empty C read must not defer an unprocessed daily match"
+    );
+    let alarm = Arc::clone(&rtc.alarm);
+    let (levels, delivered) = mpsc::channel();
+    let events = EventLoop::new().unwrap();
+    let sender = events.sender();
+    rtc.worker = Some(std::thread::spawn(move || {
+        alarm.run(&IrqLine::new(Arc::new(Lines(levels)), 8), &sender);
+    }));
+    assert_eq!(
+        delivered.recv_timeout(Duration::from_secs(5)),
+        Ok((8, true))
+    );
+    assert_eq!(
+        delivered.recv_timeout(Duration::from_secs(5)),
+        Ok((8, false))
+    );
+    assert_eq!(read(&mut rtc, 0x0c), 0xa0);
+    drop(changes);
+}
+
+#[test]
+fn stopped_clocks_do_not_schedule_disabled_matches() {
+    for (register, value) in [(0x0b, 0x82), (0x0a, 0x76)] {
+        let (mut rtc, _, changes) = disabled_alarm();
+        write(&mut rtc, register, value);
+        assert!(rtc.next_alarm().is_none());
+        assert_eq!(
+            changes.recv_timeout(Duration::from_millis(250)),
+            Err(RecvTimeoutError::Timeout)
+        );
+        assert_eq!(read(&mut rtc, 0x0c), 0);
+        assert!(rtc.alarm.state().armed.is_none());
+    }
 }
 
 #[test]
