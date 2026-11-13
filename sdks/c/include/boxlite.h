@@ -938,86 +938,86 @@ enum BoxliteErrorCode boxlite_box_agents(CBoxHandle *handle,
 
 // Create an agent with initial configuration.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agents_create(struct CAgents *_handle,
-                                            const char *_agent,
-                                            const struct CAgentCreateOptions *_options,
-                                            CAgentCb _cb,
-                                            void *_user_data,
+enum BoxliteErrorCode boxlite_agents_create(struct CAgents *handle_arg,
+                                            const char *agent_arg,
+                                            const struct CAgentCreateOptions *options_arg,
+                                            CAgentCb callback_arg,
+                                            void *user_data_arg,
                                             CBoxliteError *out_error);
 
 // Look up an agent without replaying work.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agents_get(struct CAgents *_handle,
-                                         const char *_agent_id,
-                                         CAgentCb _cb,
-                                         void *_user_data,
+enum BoxliteErrorCode boxlite_agents_get(struct CAgents *handle_arg,
+                                         const char *agent_id_arg,
+                                         CAgentCb callback_arg,
+                                         void *user_data_arg,
                                          CBoxliteError *out_error);
 
 // Stop admissions and close the agent loop.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_close(struct CAgent *_agent,
-                                          const struct CAgentControlOptions *_options,
-                                          CAgentDoneCb _cb,
-                                          void *_user_data,
+enum BoxliteErrorCode boxlite_agent_close(struct CAgent *agent_arg,
+                                          const struct CAgentControlOptions *options_arg,
+                                          CAgentDoneCb callback_arg,
+                                          void *user_data_arg,
                                           CBoxliteError *out_error);
 
 // Submit text with optional JSON data.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_send(struct CAgent *_agent,
-                                         const char *_text,
-                                         const struct CAgentSendOptions *_options,
-                                         CAgentTurnCb _cb,
-                                         void *_user_data,
+enum BoxliteErrorCode boxlite_agent_send(struct CAgent *agent_arg,
+                                         const char *text_arg,
+                                         const struct CAgentSendOptions *options_arg,
+                                         CAgentTurnCb callback_arg,
+                                         void *user_data_arg,
                                          CBoxliteError *out_error);
 
 // Look up a turn without executing it.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_get_turn(struct CAgent *_agent,
-                                             const char *_turn_id,
-                                             CAgentTurnCb _cb,
-                                             void *_user_data,
+enum BoxliteErrorCode boxlite_agent_get_turn(struct CAgent *agent_arg,
+                                             const char *turn_id_arg,
+                                             CAgentTurnCb callback_arg,
+                                             void *user_data_arg,
                                              CBoxliteError *out_error);
 
 // Read outstanding questions and permissions.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_requests(struct CAgent *_agent,
-                                             CAgentJsonCb _cb,
-                                             void *_user_data,
+enum BoxliteErrorCode boxlite_agent_requests(struct CAgent *agent_arg,
+                                             CAgentJsonCb callback_arg,
+                                             void *user_data_arg,
                                              CBoxliteError *out_error);
 
 // Answer a typed request.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_respond(struct CAgent *_agent,
-                                            const char *_request_id,
-                                            const char *_response_json,
-                                            const struct CAgentControlOptions *_options,
-                                            CAgentTurnCb _cb,
-                                            void *_user_data,
+enum BoxliteErrorCode boxlite_agent_respond(struct CAgent *agent_arg,
+                                            const char *request_id_arg,
+                                            const char *response_json_arg,
+                                            const struct CAgentControlOptions *options_arg,
+                                            CAgentTurnCb callback_arg,
+                                            void *user_data_arg,
                                             CBoxliteError *out_error);
 
 // Wait for a turn result; timeout does not imply cancellation.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_turn_wait(struct CAgentTurn *_turn,
-                                              const struct CAgentWaitOptions *_options,
-                                              CAgentJsonCb _cb,
-                                              void *_user_data,
+enum BoxliteErrorCode boxlite_agent_turn_wait(struct CAgentTurn *turn_arg,
+                                              const struct CAgentWaitOptions *options_arg,
+                                              CAgentJsonCb callback_arg,
+                                              void *user_data_arg,
                                               CBoxliteError *out_error);
 
 // Steer this turn without submitting another turn.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_turn_steer(struct CAgentTurn *_turn,
-                                               const char *_text,
-                                               const struct CAgentControlOptions *_options,
-                                               CAgentJsonCb _cb,
-                                               void *_user_data,
+enum BoxliteErrorCode boxlite_agent_turn_steer(struct CAgentTurn *turn_arg,
+                                               const char *text_arg,
+                                               const struct CAgentControlOptions *options_arg,
+                                               CAgentJsonCb callback_arg,
+                                               void *user_data_arg,
                                                CBoxliteError *out_error);
 
 // Interrupt the agent loop for this turn.
 // out_error may be null or writable.
-enum BoxliteErrorCode boxlite_agent_turn_interrupt(struct CAgentTurn *_turn,
-                                                   const struct CAgentControlOptions *_options,
-                                                   CAgentDoneCb _cb,
-                                                   void *_user_data,
+enum BoxliteErrorCode boxlite_agent_turn_interrupt(struct CAgentTurn *turn_arg,
+                                                   const struct CAgentControlOptions *options_arg,
+                                                   CAgentDoneCb callback_arg,
+                                                   void *user_data_arg,
                                                    CBoxliteError *out_error);
 
 // Open the agent's events, after an opaque cursor where the adapter supports it.
@@ -1041,28 +1041,28 @@ enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
 // Read a consistent agent state snapshot.
 // Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
-enum BoxliteErrorCode boxlite_agent_state(struct CAgent *_handle,
+enum BoxliteErrorCode boxlite_agent_state(struct CAgent *handle_arg,
                                           char **out_json,
                                           CBoxliteError *out_error);
 
 // Read effective agent configuration.
 // Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
-enum BoxliteErrorCode boxlite_agent_config(struct CAgent *_handle,
+enum BoxliteErrorCode boxlite_agent_config(struct CAgent *handle_arg,
                                            char **out_json,
                                            CBoxliteError *out_error);
 
 // Read adapter guarantees and limits.
 // Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
-enum BoxliteErrorCode boxlite_agent_capabilities(struct CAgent *_handle,
+enum BoxliteErrorCode boxlite_agent_capabilities(struct CAgent *handle_arg,
                                                  char **out_json,
                                                  CBoxliteError *out_error);
 
 // Read a consistent turn state snapshot.
 // Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
-enum BoxliteErrorCode boxlite_agent_turn_state(struct CAgentTurn *_handle,
+enum BoxliteErrorCode boxlite_agent_turn_state(struct CAgentTurn *handle_arg,
                                                char **out_json,
                                                CBoxliteError *out_error);
 

@@ -2,6 +2,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <stddef.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -13,6 +14,22 @@ typedef struct GetRequest {
   CBoxHandle *box;
   BoxliteErrorCode error_code;
 } GetRequest;
+
+typedef struct AgentRequest {
+  int done;
+  BoxliteErrorCode error_code;
+  pthread_t caller;
+} AgentRequest;
+
+static void on_agent_created(struct CAgent *agent, const CBoxliteError *error,
+                             void *data) {
+  AgentRequest *request = data;
+  assert(agent == NULL);
+  assert(error != NULL);
+  assert(pthread_equal(pthread_self(), request->caller));
+  request->error_code = error->code;
+  request->done = 1;
+}
 
 static void write_all(int fd, const char *data) {
   size_t remaining = strlen(data);
@@ -112,6 +129,33 @@ static void test_live_box_namespace(void) {
   struct CAgents *agents = NULL;
   assert(boxlite_box_agents(request.box, &agents, &error) == Ok);
   assert(agents != NULL);
+  AgentRequest agent_request = {.caller = pthread_self()};
+  const char invalid_utf8[] = {(char)0xff, '\0'};
+  struct CAgentCreateOptions invalid_options = {.config_json = "{not-json"};
+  assert(boxlite_agents_create(agents, "opencode", &invalid_options,
+                               on_agent_created, &agent_request, &error) ==
+         InvalidArgument);
+  boxlite_error_free(&error);
+  invalid_options.config_json = "{\"model\":123}";
+  assert(boxlite_agents_create(agents, "opencode", &invalid_options,
+                               on_agent_created, &agent_request, &error) ==
+         InvalidArgument);
+  boxlite_error_free(&error);
+  assert(boxlite_agents_create(agents, invalid_utf8, NULL, on_agent_created,
+                               &agent_request, &error) == InvalidArgument);
+  boxlite_error_free(&error);
+  assert(boxlite_agents_create(agents, "opencode", NULL, NULL, &agent_request,
+                               &error) == InvalidArgument);
+  boxlite_error_free(&error);
+  assert(!agent_request.done);
+  assert(boxlite_runtime_drain(runtime, 0, &error) == 0);
+  assert(boxlite_agents_create(agents, "opencode", NULL, on_agent_created,
+                               &agent_request, &error) == Ok);
+  assert(!agent_request.done);
+  for (int attempt = 0; attempt < 20 && !agent_request.done; attempt++) {
+    assert(boxlite_runtime_drain(runtime, 500, &error) >= 0);
+  }
+  assert(agent_request.done && agent_request.error_code == Unsupported);
   boxlite_agents_free(agents);
   boxlite_box_free(request.box);
   boxlite_runtime_free(runtime);
@@ -157,6 +201,13 @@ static void done_cb(const CBoxliteError *error, void *data) {
     boxlite_error_free(&error);                                                \
   } while (0)
 
+#define CHECK_INVALID(call, operation)                                         \
+  do {                                                                         \
+    assert((call) == InvalidArgument);                                         \
+    assert(error.code == InvalidArgument);                                     \
+    boxlite_error_free(&error);                                                \
+  } while (0)
+
 int main(void) {
   test_live_box_namespace();
   CBoxliteError error = {0};
@@ -173,33 +224,33 @@ int main(void) {
   assert(boxlite_box_agents(NULL, &agents, &error) == InvalidArgument);
   assert(agents == NULL);
   boxlite_error_free(&error);
-  CHECK_UNIMPLEMENTED(boxlite_agents_create(NULL, "agent", &create_options,
+  CHECK_INVALID(boxlite_agents_create(NULL, "agent", &create_options,
                                             agent_cb, NULL, &error),
                       "agents.create");
-  CHECK_UNIMPLEMENTED(boxlite_agents_get(NULL, "agent", agent_cb, NULL, &error),
+  CHECK_INVALID(boxlite_agents_get(NULL, "agent", agent_cb, NULL, &error),
                       "agents.get");
-  CHECK_UNIMPLEMENTED(boxlite_agent_close(NULL, NULL, done_cb, NULL, &error),
+  CHECK_INVALID(boxlite_agent_close(NULL, NULL, done_cb, NULL, &error),
                       "agent.close");
-  CHECK_UNIMPLEMENTED(
+  CHECK_INVALID(
       boxlite_agent_send(NULL, "task", &send_options, turn_cb, NULL, &error),
       "agent.send");
-  CHECK_UNIMPLEMENTED(
+  CHECK_INVALID(
       boxlite_agent_get_turn(NULL, "turn", turn_cb, NULL, &error),
       "agent.get_turn");
-  CHECK_UNIMPLEMENTED(boxlite_agent_requests(NULL, json_cb, NULL, &error),
+  CHECK_INVALID(boxlite_agent_requests(NULL, json_cb, NULL, &error),
                       "agent.requests");
-  CHECK_UNIMPLEMENTED(
+  CHECK_INVALID(
       boxlite_agent_respond(NULL, "request",
                             "{\"type\":\"permission\",\"approved\":false}",
                             NULL, turn_cb, NULL, &error),
       "agent.respond");
-  CHECK_UNIMPLEMENTED(
+  CHECK_INVALID(
       boxlite_agent_turn_wait(NULL, &wait_options, json_cb, NULL, &error),
       "turn.wait");
-  CHECK_UNIMPLEMENTED(
+  CHECK_INVALID(
       boxlite_agent_turn_steer(NULL, "direction", NULL, json_cb, NULL, &error),
       "turn.steer");
-  CHECK_UNIMPLEMENTED(
+  CHECK_INVALID(
       boxlite_agent_turn_interrupt(NULL, NULL, done_cb, NULL, &error),
       "turn.interrupt");
   struct CAgentEvents *events = (struct CAgentEvents *)&callbacks;
@@ -213,18 +264,18 @@ int main(void) {
       "turn.events");
   assert(events == NULL);
   char *json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_state(NULL, &json, &error), "agent.state");
+  CHECK_INVALID(boxlite_agent_state(NULL, &json, &error), "agent.state");
   assert(json == NULL);
   json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_config(NULL, &json, &error),
+  CHECK_INVALID(boxlite_agent_config(NULL, &json, &error),
                       "agent.config");
   assert(json == NULL);
   json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_capabilities(NULL, &json, &error),
+  CHECK_INVALID(boxlite_agent_capabilities(NULL, &json, &error),
                       "agent.capabilities");
   assert(json == NULL);
   json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_turn_state(NULL, &json, &error),
+  CHECK_INVALID(boxlite_agent_turn_state(NULL, &json, &error),
                       "turn.state");
   assert(json == NULL);
   assert(callbacks == 0);

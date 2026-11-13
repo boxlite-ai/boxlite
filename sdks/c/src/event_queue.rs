@@ -399,6 +399,16 @@ impl<T> Drop for OwnedFfiPtr<T> {
 // dropped (e.g. the queue closed before drain dispatched it).
 
 pub enum RuntimeEvent {
+    AgentCompletion(Box<dyn FnOnce() + Send>),
+    AgentCreate {
+        callback: unsafe extern "C" fn(
+            *mut crate::agents::CAgent,
+            *const crate::CBoxliteError,
+            *mut c_void,
+        ),
+        user_data: usize,
+        result: Result<crate::agents::CAgent, BoxliteError>,
+    },
     /* Streaming */
     Stdout {
         cb: CBoxStdoutFn,
