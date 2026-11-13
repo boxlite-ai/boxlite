@@ -75,6 +75,40 @@ func TestIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
+	t.Run("initialize migrates and enrolls key", func(t *testing.T) {
+		name, _ := testdb.Create(t, ctx, admin, url, false)
+		initConfig := config.Copy()
+		initConfig.ConnConfig.Database = name
+		initPool, err := pgxpool.NewWithConfig(ctx, initConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer initPool.Close()
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := Initialize(canceled, initPool, nil); err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled initialization = %v; want canceled migration", err)
+		}
+		var relation *string
+		if err := initPool.QueryRow(ctx, "SELECT to_regclass('key_verification_canary')::text").Scan(&relation); err != nil || relation != nil {
+			t.Fatalf("canary table after canceled migration = %v, %v; want absent", relation, err)
+		}
+		cipher := testCipher(t, 1)
+		if err := Initialize(ctx, initPool, cipher); err != nil {
+			t.Fatal(err)
+		}
+		var version int64
+		if err := initPool.QueryRow(ctx, "SELECT max(version_id) FROM goose_db_version WHERE is_applied").Scan(&version); err != nil || version != schemaVersion {
+			t.Fatalf("schema version = %d, %v; want %d", version, err, schemaVersion)
+		}
+		var count int
+		if err := initPool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 1 {
+			t.Fatalf("canary count = %d, %v; want 1", count, err)
+		}
+		if err := VerifyKey(ctx, initPool, cipher); err != nil {
+			t.Fatalf("verify enrolled canary: %v", err)
+		}
+	})
 	t.Run("reject non-UTF8 database", func(t *testing.T) {
 		name, _ := testdb.Create(t, ctx, admin, url, true)
 		asciiConfig := config.Copy()
@@ -168,6 +202,37 @@ func TestIntegration(t *testing.T) {
 	}
 
 	cipher := testCipher(t, 1)
+	t.Run("key verification rejects invalid inputs", func(t *testing.T) {
+		if err := VerifyKey(ctx, pool, nil); err == nil || !strings.Contains(err.Error(), "cipher is nil") {
+			t.Fatalf("nil cipher = %v", err)
+		}
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := VerifyKey(canceled, pool, cipher); err == nil || !strings.Contains(err.Error(), "begin key verification") || !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled key verification = %v", err)
+		}
+	})
+	t.Run("canary plaintext mismatch", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, "DELETE FROM key_verification_canary WHERE id = 1"); err != nil {
+			t.Fatal(err)
+		}
+		envelope, err := cipher.Encrypt(ctx, canaryContext, []byte("different plaintext"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = pool.Exec(ctx, "INSERT INTO key_verification_canary (id, ciphertext, encrypted_dek, key_id) VALUES (1, $1, $2, $3)", envelope.Ciphertext, envelope.WrappedDEK.Ciphertext, envelope.WrappedDEK.KeyID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM key_verification_canary WHERE id = 1"); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := VerifyKey(ctx, pool, cipher); err == nil || !strings.Contains(err.Error(), "key canary plaintext mismatch") {
+			t.Fatalf("mismatched plaintext = %v", err)
+		}
+	})
 	if !t.Run("canary insertion failure identifies operation", func(t *testing.T) {
 		if _, err := pool.Exec(ctx, "DELETE FROM key_verification_canary"); err != nil {
 			t.Fatal(err)
