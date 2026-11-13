@@ -39,11 +39,17 @@ async function check() {
     return
   }
   const { AppModule } = await import('./app.module.js')
+  const { TypedConfigService } = await import('./config/typed-config.service.js')
   const { AppService } = await import('./app.service.js')
   const { OrganizationService } = await import('./organization/services/organization.service.js')
   const { NotificationGateway } = await import('./notification/gateways/notification.gateway.js')
   const app = await NestFactory.create(AppModule, { logger: ['error'], abortOnError: false })
   try {
+    assert.equal(
+      app.get(TypedConfigService).get('production'),
+      true,
+      'API must use the runtime production configuration',
+    )
     // These existing hooks seed PostgreSQL or subscribe to Redis despite SKIP_CONNECTIONS.
     app.get(AppService).onApplicationBootstrap = async () => {}
     app.get(OrganizationService).onModuleInit = async () => {}
