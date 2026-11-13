@@ -568,16 +568,40 @@ body {
     @apply flex h-9 w-full min-w-0 items-center gap-3 border border-border bg-card px-3 transition-colors focus-within:border-foreground sm:w-[380px] sm:flex-none;
   }
   .resource-empty {
-    @apply flex min-h-[280px] flex-col items-center justify-start gap-3 px-6 py-12 text-center;
+    @apply flex min-h-[280px] flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center;
+  }
+  .resource-content {
+    @apply flex min-h-0 flex-1 flex-col overflow-auto;
   }
   .resource-empty-icon {
-    @apply mb-2 flex size-12 items-center justify-center border border-border bg-card text-muted-foreground;
+    @apply mb-2 flex size-12 items-center justify-center text-muted-foreground [&>svg]:size-9 [&>svg]:stroke-1;
   }
   .resource-list-head {
     @apply min-h-11 border-b border-border px-4 py-3 font-sans text-meta font-medium normal-case tracking-normal text-muted-foreground;
   }
   .resource-list-row {
-    @apply min-h-14 border-b border-border/60 px-4 py-3 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+    @apply min-h-12 border-b border-border/60 px-4 py-2 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+  }
+  .resource-object-icon {
+    @apply flex size-5 shrink-0 items-center justify-center text-muted-foreground [&>svg]:size-5;
+  }
+  .resource-table th {
+    @apply h-11 whitespace-nowrap px-4 text-meta font-medium text-muted-foreground;
+  }
+  .resource-table tbody tr {
+    @apply h-12 border-border/60;
+  }
+  .resource-table tbody tr:last-child {
+    @apply border-b;
+  }
+  .resource-table td {
+    @apply px-4 py-2 text-meta;
+  }
+  .resource-table tbody tr:has(.resource-empty) {
+    @apply border-0;
+  }
+  .resource-table td:has(.resource-empty) {
+    @apply p-0;
   }
   .resource-name {
     @apply truncate font-mono text-body font-semibold text-foreground;

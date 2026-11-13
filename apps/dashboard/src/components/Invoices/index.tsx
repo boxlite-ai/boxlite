@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceLoadingState, StatusIndicator } from '@/components/ResourceLayout'
 import { FileText } from '@/components/ui/icon'
 import type { Invoice } from '@/billing-api'
 import type { InvoicesTableProps } from './types'
@@ -72,7 +72,7 @@ function invoiceAmount(invoice: Invoice): string {
  */
 export function InvoicesTable({ data, loading }: InvoicesTableProps) {
   if (loading) {
-    return <div className="border-b border-border/40 py-[13px] font-mono text-body">Loading...</div>
+    return <ResourceLoadingState title="Loading billing documents…" />
   }
 
   if (data.length === 0) {
@@ -108,18 +108,18 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
         const status = statusMark(invoiceStatus(invoice))
         return (
           <div key={invoice.id} className={`${ROW} resource-list-row font-sans`}>
-            <span data-invoice-date className="text-foreground">
+            <span data-invoice-date className="font-mono text-foreground">
               {invoiceDate(invoice)}
             </span>
-            <span data-invoice-type className="uppercase tracking-[0.5px] text-muted-foreground">
-              {invoiceLabel(invoice).toLowerCase()}
+            <span data-invoice-type className="text-muted-foreground">
+              {invoiceLabel(invoice)}
             </span>
-            <span data-invoice-number className="truncate text-muted-foreground">
+            <span data-invoice-number className="truncate font-mono text-muted-foreground">
               {invoice.number}
             </span>
             <span
               data-invoice-amount
-              className={`text-right tabular-nums ${invoice.voided ? 'text-muted-foreground line-through' : 'text-foreground'}`}
+              className={`text-right font-mono tabular-nums ${invoice.voided ? 'text-muted-foreground line-through' : 'text-foreground'}`}
             >
               {invoiceAmount(invoice)}
             </span>

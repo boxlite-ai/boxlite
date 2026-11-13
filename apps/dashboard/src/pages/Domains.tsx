@@ -1,8 +1,9 @@
+import { TechnicalText } from '@/components/TechnicalText'
 import { DomainResourceIcon } from '@/components/ResourceStateIcon'
 import { QuotaTicks } from '@/components/QuotaTicks'
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import { ResourceEmptyState, ResourceFilter, ResourceIdentity } from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -127,7 +128,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               </div>
             ) : (
               <div className="mt-[14px] min-h-0 flex-1 overflow-auto">
-                <table className="w-full min-w-[640px] table-fixed text-left font-mono text-body">
+                <table className="resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body">
                   <colgroup>
                     <col className="w-[36%]" />
                     <col className="w-[16%]" />
@@ -155,17 +156,16 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                         className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
                       >
                         <td className="px-4 py-3 font-semibold text-foreground">
-                          <div className="flex items-center gap-3">
-                            <DomainResourceIcon bound={Boolean(domain.target)} />
-                            <span className="min-w-0 truncate" title={domain.hostname}>
-                              {domain.hostname}
+                          <ResourceIdentity icon={<DomainResourceIcon bound={Boolean(domain.target)} />}>
+                            <span className="resource-name" title={domain.hostname}>
+                              <TechnicalText value={domain.hostname} kind="hostname" />
                             </span>
-                          </div>
+                          </ResourceIdentity>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {domain.target ? (domain.target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
                         </td>
-                        <td className="truncate px-4 py-3 text-muted-foreground">
+                        <td className="truncate px-4 py-3 font-mono text-muted-foreground">
                           {domain.target?.type === 'box' ? (
                             <Link
                               to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(domain.target.box) })}
@@ -177,11 +177,12 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                             (domain.target?.app ?? '—')
                           )}
                         </td>
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                        <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
                           {domain.target?.type === 'box' ? domain.target.port : '—'}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <AsciiButton
+                            variant="quiet"
                             size="icon"
                             aria-label={`Copy ${domain.hostname}`}
                             title="Copy domain"
