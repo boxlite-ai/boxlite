@@ -79,6 +79,19 @@ describe('organization queries', () => {
     expect(() => parseRegistrationQuery(query)).toThrow(BadRequestException)
   })
 
+  it('selects member emails without changing the list cursor', () => {
+    const row = { id: '00000000-0000-4000-8000-000000000001', createdAt: new Date('2026-10-01T00:00:00Z') }
+    const plain = parseRegistrationQuery({ q: 'Acme' })
+    const withEmails = parseRegistrationQuery({ q: 'Acme', include: 'memberEmails' })
+    expect(plain).not.toHaveProperty('includeMemberEmails')
+    expect(withEmails).toEqual({ ...plain, includeMemberEmails: true })
+    const cursor = registrationCursor(withEmails, row)
+    expect(cursor).toBe(registrationCursor(plain, row))
+    expect(registrationAfter({ ...plain, cursor })).toEqual({ id: row.id, createdAt: row.createdAt.toISOString() })
+    for (const include of ['memberemails', 'memberEmails,memberEmails', ['memberEmails', 'memberEmails'], ''])
+      expect(() => parseRegistrationQuery({ include })).toThrow(BadRequestException)
+  })
+
   it('requires explicit usage selection and rejects unrelated partitions', () => {
     expect(parseOrganizationSections({})).toMatchObject({
       includeUsage: false,

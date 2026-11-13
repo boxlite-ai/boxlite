@@ -174,6 +174,13 @@ export class AdminProviderController {
   @Get('organizations')
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
   @ApiQuery({
+    name: 'include',
+    required: false,
+    type: String,
+    enum: ['memberEmails'],
+    description: 'Add up to 200 member emails to each organization; omit to keep the existing fields.',
+  })
+  @ApiQuery({
     name: 'organizationId',
     required: false,
     type: String,

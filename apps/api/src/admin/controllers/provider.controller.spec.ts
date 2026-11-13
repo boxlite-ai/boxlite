@@ -179,7 +179,7 @@ describe('AdminProviderController', () => {
         spec.paths['/api/admin/organizations'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
-      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom', 'boxCountScope', 'organizationId'])
+      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom', 'boxCountScope', 'organizationId', 'include'])
       expect(
         spec.paths['/api/admin/organizations/{organizationId}'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,

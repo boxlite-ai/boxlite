@@ -3951,6 +3951,17 @@ paths:
         schema:
           type: string
         style: form
+      - description: Add up to 200 member emails to each organization; omit to keep
+          the existing fields.
+        explode: true
+        in: query
+        name: include
+        required: false
+        schema:
+          enum:
+          - memberEmails
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -8772,6 +8783,9 @@ components:
         memberCount: 6.027456183070403
         boxCount: 1.4658129805029452
         impactState: impacted
+        memberEmails:
+        - memberEmails
+        - memberEmails
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
         createdAt:
@@ -8801,6 +8815,12 @@ components:
           - impacted
           - not_impacted
           type: string
+        memberEmails:
+          description: Up to 200 non-empty member emails ordered by user ID; present
+            only with include=memberEmails.
+          items:
+            type: string
+          type: array
         observedAt:
           format: date-time
           type: string
@@ -8828,6 +8848,9 @@ components:
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
           impactState: impacted
+          memberEmails:
+          - memberEmails
+          - memberEmails
           observedAt: 2000-01-23T04:56:07.000+00:00
         - createdAt: 2000-01-23T04:56:07.000+00:00
           createdBy: createdBy
@@ -8837,6 +8860,9 @@ components:
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
           impactState: impacted
+          memberEmails:
+          - memberEmails
+          - memberEmails
           observedAt: 2000-01-23T04:56:07.000+00:00
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:

@@ -28,6 +28,7 @@ type Fraction = { numerator: bigint; denominator: bigint }
 // One row per (organization, state, desiredState) rather than one row per box.
 type BoxGroupRow = { organizationId: string; state: BoxState; desiredState: string; boxCount: string; observedAt: Date }
 type MemberCountRow = { organizationId: string; memberCount: string }
+type MemberEmailRow = { organizationId: string; email: string }
 type OrganizationStats = {
   memberCount: number
   boxCount: number
@@ -35,6 +36,7 @@ type OrganizationStats = {
   observedAt: Date | null
 }
 
+const MEMBER_EMAIL_LIMIT = 200
 const escapedLike = (value: string): string => `%${value.replace(/[\\%_]/g, '\\$&')}%`
 const timestamp = (value: Date): string => value.toISOString()
 const impactState = (impacted: boolean): ImpactState => (impacted ? 'impacted' : 'not_impacted')
@@ -100,10 +102,11 @@ export class AdminOrganizationOverviewService {
     const organizations = await this.registrationRows(input)
     const page = organizations.slice(0, input.limit)
     const nextOrganization = organizations.length > input.limit ? page.at(-1) : undefined
-    const stats = await this.organizationStats(
-      page.map((organization) => organization.id),
-      input.boxCountScope,
-    )
+    const organizationIds = page.map((organization) => organization.id)
+    const [stats, memberEmails] = await Promise.all([
+      this.organizationStats(organizationIds, input.boxCountScope),
+      input.includeMemberEmails ? this.memberEmails(organizationIds) : undefined,
+    ])
     const creators = page.length
       ? await this.userRepository.find({
           where: { id: In([...new Set(page.map((row) => row.createdBy))]) },
@@ -132,6 +135,7 @@ export class AdminOrganizationOverviewService {
         observedAt: timestamp(
           latestDate([organization.updatedAt, organizationStats.observedAt]) ?? organization.updatedAt,
         ),
+        ...(memberEmails ? { memberEmails: memberEmails.get(organization.id) ?? [] } : {}),
       }
     })
     return {
@@ -237,6 +241,42 @@ export class AdminOrganizationOverviewService {
       if (isImpactedBox(group)) organization.impactedBoxCount += boxes
     }
     return stats
+  }
+
+  /**
+   * Reads up to MEMBER_EMAIL_LIMIT non-empty emails per organization. The cap is applied
+   * in the database, after empty emails are filtered, so large organizations stay bounded.
+   */
+  private async memberEmails(organizationIds: string[]): Promise<Map<string, string[]>> {
+    const emails = new Map<string, string[]>()
+    if (organizationIds.length === 0) return emails
+
+    // `user` is reserved in Postgres, so the joined table gets its own alias.
+    const ranked = this.organizationUserRepository
+      .createQueryBuilder('member')
+      .innerJoin(User, 'member_user', 'member_user.id = member."userId"')
+      .select('member."organizationId"', 'organizationId')
+      .addSelect('member_user.email', 'email')
+      .addSelect('ROW_NUMBER() OVER (PARTITION BY member."organizationId" ORDER BY member."userId" ASC)', 'position')
+      .where('member."organizationId" IN (:...organizationIds)', { organizationIds })
+      .andWhere(`member_user.email <> ''`)
+    const rows = await this.organizationUserRepository.manager
+      .createQueryBuilder()
+      .addCommonTableExpression(ranked, 'ranked')
+      .select('ranked."organizationId"', 'organizationId')
+      .addSelect('ranked.email', 'email')
+      .from('ranked', 'ranked')
+      .where('ranked.position <= :memberEmailLimit', { memberEmailLimit: MEMBER_EMAIL_LIMIT })
+      .orderBy('ranked."organizationId"', 'ASC')
+      .addOrderBy('ranked.position', 'ASC')
+      .getRawMany<MemberEmailRow>()
+
+    for (const row of rows) {
+      const organizationEmails = emails.get(row.organizationId) ?? []
+      organizationEmails.push(row.email)
+      emails.set(row.organizationId, organizationEmails)
+    }
+    return emails
   }
 
   async detail(organizationId: string, input: DetailQuery) {

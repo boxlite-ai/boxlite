@@ -210,6 +210,12 @@ export class AdminOrganizationOverviewDto extends AdminOrganizationVerifiedRegis
   @ApiProperty({ enum: ['impacted', 'not_impacted'] })
   impactState: 'impacted' | 'not_impacted'
 
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Up to 200 non-empty member emails ordered by user ID; present only with include=memberEmails.',
+  })
+  memberEmails?: string[]
+
   @ApiProperty({ format: 'date-time' })
   observedAt: string
 }
