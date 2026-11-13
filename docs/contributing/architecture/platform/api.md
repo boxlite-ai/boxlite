@@ -215,14 +215,13 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Organizations, membership, and invitations</b> · 24 routes</summary>
+<summary><b>Organizations, membership, and invitations</b> · 23 routes</summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
 | `GET`    | `/organizations`                                                     | Lists organizations available to the caller.             |
 | `POST`   | `/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
-| `GET`    | `/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code.  |
 | `GET`    | `/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |
 | `DELETE` | `/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
