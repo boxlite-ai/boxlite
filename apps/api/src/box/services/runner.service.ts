@@ -46,6 +46,9 @@ import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
+/** Disk usage at or above this percentage is logged as critical pressure. */
+const RUNNER_DISK_CRITICAL_THRESHOLD = 90
+
 @Injectable()
 export class RunnerService {
   private readonly logger = new Logger(RunnerService.name)
@@ -450,6 +453,16 @@ export class RunnerService {
       updateData.cpu = metrics.cpu
       updateData.memoryGiB = metrics.memoryGiB
       updateData.diskGiB = metrics.diskGiB
+
+      const diskUsage = updateData.currentDiskUsagePercentage ?? 0
+      if (diskUsage >= RUNNER_DISK_CRITICAL_THRESHOLD) {
+        this.logger.warn({
+          'event.name': 'runner.disk_pressure',
+          'disk.pressure_level': 'critical',
+          runnerId,
+          diskUsagePercentage: diskUsage,
+        }, `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`)
+      }
 
       updateData.availabilityScore = this.calculateAvailabilityScore(runnerId, {
         cpuLoadAverage: updateData.currentCpuLoadAverage,
