@@ -471,6 +471,24 @@ Two things keep that from recurring:
   Clearing anything left behind means `--any-name`, by a human who has read
   the report first — which is why CI never passes it.
 
+### A removed box stays listed until the runner destroys it
+
+A cloud `rt.remove(...)` returns once the destroy is queued. The runner
+destroys the box afterwards, and `list_info()` keeps listing it until then:
+1–4 seconds on dev, longer on a loaded stage.
+
+A case that checks a removed box is gone must not read the list once. Use
+`conftest.wait_until_unlisted(rt, ids)` instead. It polls `list_info()` for up
+to 60 seconds and returns the IDs still listed, so a real leak still fails:
+
+```python
+leaked = await wait_until_unlisted(rt, created_ids)
+assert not leaked, f"leaked boxes: {leaked}"
+```
+
+A `list_info()` error fails the case; it is never read as "unlisted". The
+design is in [#2663](https://github.com/boxlite-ai/boxlite/issues/2663).
+
 ## Running against local stack
 
 ```bash
