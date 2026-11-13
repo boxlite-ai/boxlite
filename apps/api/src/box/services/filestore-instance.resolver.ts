@@ -84,7 +84,7 @@ export class FilestoreInstanceResolver {
     source: FilestoreLookupSource,
     resourceName: string,
   ): ResolvedFilestoreInstance {
-    if (instance.state && instance.state !== 'READY') {
+    if (instance.state !== undefined && instance.state !== null && !this.isReadyState(instance.state)) {
       throw this.notUsable(source, `${resourceName} is not ready`)
     }
 
@@ -94,10 +94,6 @@ export class FilestoreInstanceResolver {
     const shares = (instance.fileShares ?? [])
       .map((share) => share.name)
       .filter((name): name is string => Boolean(name))
-
-    if (typeof instance.state === 'number' && instance.state !== READY_FILESTORE_STATE) {
-      throw this.notUsable(source, `${resourceName} is not ready`)
-    }
 
     if (addresses.length !== 1 || shares.length !== 1) {
       throw this.notUsable(source, `${resourceName} does not expose exactly one IPv4 address and one file share`)
@@ -109,6 +105,13 @@ export class FilestoreInstanceResolver {
   private notUsable(source: FilestoreLookupSource, reason: string): ServiceUnavailableException | BadRequestError {
     const message = `Filestore instance ${reason}`
     return source === 'request' ? new BadRequestError(message) : new ServiceUnavailableException(message)
+  }
+
+  // The GCP client types `state` as `State | keyof typeof State`: protobuf
+  // decoding yields the number (READY = 2), JSON/REST yields the key name.
+  // Accept both shapes; a present-but-unready state stays unusable.
+  private isReadyState(state: unknown): boolean {
+    return state === READY_FILESTORE_STATE || state === 'READY'
   }
 
   private isNotFound(error: unknown): boolean {

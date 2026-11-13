@@ -125,6 +125,20 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
+  // A filestore volume needs runner-side NFS mount support. apiVersion 2 alone
+  // does not imply it: v2 predates filestore, so an un-upgraded v2 runner
+  // drops the filestore reference and mounts a bucket that does not exist.
+  // The runner declares the capability in its healthcheck; refusing here —
+  // instead of dispatching — keeps the failure at the API with the real
+  // cause instead of a misleading bucket error on the runner.
+  private assertFilestoreVolumeSupport(box: Box): void {
+    if (box.volumes?.some((volume) => volume.filestore) && !this.runner.capabilities?.includes('filestore')) {
+      throw new Error(
+        `Box ${box.id} references a Filestore volume, which requires a runner with the filestore capability; runner ${this.runner.id} has not declared it (old runner binary, or no healthcheck since the upgrade)`,
+      )
+    }
+  }
+
   async createBox(
     box: Box,
     image: string,
@@ -138,6 +152,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
+
+    this.assertFilestoreVolumeSupport(box)
     const payload = {
       id: box.id,
       ...(nestedVirtualization ? { nestedVirtualization: true } : {}),

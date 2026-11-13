@@ -6968,6 +6968,13 @@ components:
         supportsPrivileged:
           description: Runner preserves the guest privileged creation option
           type: boolean
+        capabilities:
+          description: Capabilities the runner binary supports (e.g. "filestore"). Absent
+            from runners predating capability reporting, which the API treats as supporting
+            none of them
+          items:
+            type: string
+          type: array
         metrics:
           allOf:
           - $ref: "#/components/schemas/RunnerHealthMetrics"

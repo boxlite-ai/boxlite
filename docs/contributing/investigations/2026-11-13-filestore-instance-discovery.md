@@ -201,7 +201,11 @@ The expected focused changes are:
 - Replace direct configuration-array lookups in `BoxService.create` with resolver calls.
 - Update focused unit tests, the generated API clients, and `test_filestore.py`.
 
-Runner code, the runner DTO, and the `Volume` database migration do not change.
+Discovery adds no runner functionality. Its only runner-side change removes the
+per-volume `MountOptions` passthrough so the pinned NFSv4.1+hard options cannot
+be overridden; the runner DTO loses that field accordingly, and the `Volume`
+database migration predates this design (introduced when Filestore rows became
+first-class) and is not part of discovery.
 
 ## Test outline
 
@@ -228,6 +232,9 @@ instance was provisioned.
 Deploy the API with the JSON instance-object configuration after provisioning the named
 instances and granting its service account read access. Verify one explicit-instance
 create and one automatic-selection create before opening the endpoint more broadly.
+[Filestore lookup prerequisites](2026-11-13-filestore-lookup-prerequisites.md) specifies
+how deployment reconciles that read access and the Filestore API, and how lookup failures
+retain their GCP cause.
 
 No database migration is required because `Volume.instance` already exists. Volumes
 created by the current branch contain instance names that this resolver can continue to

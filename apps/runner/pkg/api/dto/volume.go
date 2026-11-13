@@ -8,9 +8,10 @@ type VolumeDTO struct {
 	VolumeId  string  `json:"volumeId"`
 	MountPath string  `json:"mountPath"`
 	Subpath   *string `json:"subpath,omitempty"`
-	// Filestore, when set, switches this volume to a GCP Filestore NFS mount
-	// and VolumeId is left empty — the two reference forms are mutually
-	// exclusive per volume, and the API enforces that before dispatch.
+	// Filestore, when set, switches this volume to a GCP Filestore NFS mount.
+	// VolumeId always carries the volume's global id and names the NFS data
+	// directory; Filestore only changes the mount backend, the two fields are
+	// always sent together for a filestore volume.
 	Filestore *FilestoreRef `json:"filestore,omitempty"`
 }
 
@@ -18,11 +19,11 @@ type VolumeDTO struct {
 // row's logical instance name — it keys the mount root
 // (/mnt/boxlite-filestore-<name>) and the mount record, and it is the only
 // piece the public API request or the persisted Volume row ever carries.
-// Server and Export are resolved by the API from GCP at dispatch time and travel only inside
-// the internal dispatch DTO and the box's persisted volume metadata; the
-// runner consumes them as given. Because the API configuration stores only
-// names, recreating an instance under the same name leaves historical volume
-// rows unchanged; the next dispatch discovers its current address.
+// Server and Export are resolved by the API from GCP and travel inside the
+// internal dispatch DTO and the box's persisted volume metadata; the runner
+// consumes them as given. Because only the name is persisted across box
+// restarts, a NEW box create re-discovers the instance's current address;
+// the Start/recovery path replays the address persisted with the box.
 type FilestoreRef struct {
 	Instance string `json:"instance"`
 	// Server and Export name the NFS target the API resolved for Instance.

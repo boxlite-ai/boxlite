@@ -717,3 +717,197 @@ func TestCreateRollsBackTheRecordWhenALaterVolumeFails(t *testing.T) {
 		t.Fatalf("volume mount record survived the failed create: %v", statErr)
 	}
 }
+
+// A Start's metadata replay re-prepares the box's volumes while the box's
+// record from its create is already on disk. The filestore volume writes its
+// entry inside the instance critical section BEFORE the rest of the volume
+// list is processed; when a later volume fails there (here: the object-storage
+// volume's FUSE ensure), the error propagates and the replay never reaches the
+// full record rewrite that ends a successful one. The in-lock write must MERGE
+// into the existing record, never replace it: a replacement publishes only the
+// processed prefix, the truncated record stops counting the s3 volume's
+// reference, and the orphan reclaimer would reclaim a live mount of a box that
+// is still running.
+func TestStartReplayFailureKeepsExistingRecordEntries(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(c)
+	// The filestore root probes mounted (its work is done); the object-storage
+	// mount root's probe is the injected failure, so getVolumeMounts dies on
+	// the second volume of the list.
+	c.probeRunner = func(_ context.Context, path string) (bool, error) {
+		if strings.Contains(path, volumeMountPrefix) {
+			return false, fmt.Errorf("injected fuse ensure failure")
+		}
+		return true, nil
+	}
+
+	fsRoot := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	s3Root := filepath.Join(base, volumeMountPrefix+"vol-x")
+	dataDir := filestoreDataDir(fsRoot, "vol-ok")
+
+	// The box was created earlier and its full record is on disk: one
+	// filestore volume, one object-storage volume.
+	if err := c.recordBoxVolumeMounts(ctx, "abc123def456", []volumeMount{
+		{hostPath: dataDir, mountPath: "/a", rootPath: fsRoot, backend: volumeBackendFilestore, dataDir: dataDir, filestoreInstance: "ml-scratch"},
+		{hostPath: s3Root, mountPath: "/b", rootPath: s3Root, backend: volumeBackendS3},
+	}); err != nil {
+		t.Fatalf("recordBoxVolumeMounts failed: %v", err)
+	}
+
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"vol-ok","mountPath":"/a","filestore":{"instance":"ml-scratch","server":"10.0.0.7","export":"/vol1"}},{"volumeId":"vol-x","mountPath":"/b"}]`,
+	}
+	err := c.ensureVolumeMountsFromMetadata(ctx, "abc123def456", metadata)
+	if err == nil {
+		t.Fatal("expected the injected fuse ensure failure to propagate out of the replay, got nil")
+	}
+	if !strings.Contains(err.Error(), "injected fuse ensure failure") {
+		t.Fatalf("expected the injected fuse ensure failure, got %q", err)
+	}
+
+	// Both entries must still be on record. The pinned failure mode: an
+	// in-lock write that REPLACED the record would leave only the filestore
+	// entry behind; the truncated record would stop counting the s3
+	// reference, and the reclaimer would reclaim a running box's live mount.
+	// Presence is asserted (through the folding reader) rather than an exact
+	// shape: the reader legitimately re-folds the legacy paths field into
+	// extra s3 entries, so the entry count is not the contract here.
+	record, err := c.readBoxVolumeMountRecord("abc123def456")
+	if err != nil {
+		t.Fatalf("readBoxVolumeMountRecord failed: %v", err)
+	}
+	var haveFilestore, haveS3 bool
+	for _, entry := range record.Entries {
+		if entry.Backend == volumeBackendFilestore && entry.DataDir == dataDir && entry.FilestoreInstance == "ml-scratch" {
+			haveFilestore = true
+		}
+		if entry.Backend == volumeBackendS3 && entry.RootPath == s3Root {
+			haveS3 = true
+		}
+	}
+	if !haveFilestore || !haveS3 {
+		t.Errorf("record after the failed replay = %#v; want both the filestore entry (dataDir %s) and the s3 entry (rootPath %s) kept", record.Entries, dataDir, s3Root)
+	}
+}
+
+// The other half of the replay contract: when every volume's preparation
+// succeeds, the replay ends with a full record rewrite, so the record ends up
+// exactly matching the metadata — not a merge of the metadata and whatever the
+// record happened to carry. The stale filestore entry seeded below must be
+// gone after the replay.
+func TestStartReplayRewritesTheFullRecord(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	c.volumeBackend = volumeBackendS3
+	installFakeFilestoreMounts(c)
+	// Every probe answers mounted. The object-storage FUSE mount exec runs
+	// through cmd.Run, not the mountRunner seam, so the fake mount marking can
+	// never close the loop with the fake probe for it — "already mounted" is
+	// the only host-independent way through.
+	c.probeRunner = func(context.Context, string) (bool, error) { return true, nil }
+
+	fsRoot := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
+	s3Root := filepath.Join(base, volumeMountPrefix+"vol-x")
+
+	// A stale entry from the box's earlier life: the full rewrite must drop it.
+	if err := c.recordBoxVolumeMounts(ctx, "abc123def456", []volumeMount{
+		{hostPath: filestoreDataDir(fsRoot, "vol-gone"), mountPath: "/old", rootPath: fsRoot, backend: volumeBackendFilestore, dataDir: filestoreDataDir(fsRoot, "vol-gone"), filestoreInstance: "ml-scratch"},
+	}); err != nil {
+		t.Fatalf("recordBoxVolumeMounts failed: %v", err)
+	}
+
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"vol-ok","mountPath":"/a","filestore":{"instance":"ml-scratch","server":"10.0.0.7","export":"/vol1"}},{"volumeId":"vol-x","mountPath":"/b"}]`,
+	}
+	if err := c.ensureVolumeMountsFromMetadata(ctx, "abc123def456", metadata); err != nil {
+		t.Fatalf("ensureVolumeMountsFromMetadata failed: %v", err)
+	}
+
+	// Asserted through a neutral struct, both entries and the legacy paths
+	// field: the record's own compat UnmarshalJSON folds paths into entries
+	// and would blur the written shape into a different one than the file
+	// carries.
+	data, err := os.ReadFile(filepath.Join(getVolumeMountRecordDir(), "abc123def456.json"))
+	if err != nil {
+		t.Fatalf("record file missing: %v", err)
+	}
+	var written struct {
+		Entries []boxVolumeMountEntry `json:"entries"`
+		Paths   []string              `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatalf("record does not parse: %v", err)
+	}
+	want := []boxVolumeMountEntry{
+		{Backend: volumeBackendFilestore, RootPath: fsRoot, FilestoreInstance: "ml-scratch", DataDir: filestoreDataDir(fsRoot, "vol-ok")},
+		{Backend: volumeBackendS3, RootPath: s3Root},
+	}
+	if !reflect.DeepEqual(written.Entries, want) {
+		t.Errorf("record entries after the replay\n got: %#v\nwant: %#v", written.Entries, want)
+	}
+	if wantPaths := []string{fsRoot, s3Root}; !reflect.DeepEqual(written.Paths, wantPaths) {
+		t.Errorf("record paths = %v, want %v", written.Paths, wantPaths)
+	}
+}
+
+// The final full-list record write of Create can fail after earlier volumes
+// already published their entries in-lock (here: the write seam fails exactly
+// that write while the in-lock merge write before it lands through the real
+// write path). The failed create must remove the record: no box ever exists to
+// destroy, so a surviving entry would count a reference forever and keep the
+// NFS mount from ever reclaiming. Same rule as the later-volume-failure path
+// above, one step later in Create.
+func TestCreateRollsBackTheRecordWhenTheFinalWriteFails(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(c)
+
+	// The seam fails exactly the full-list write (Create's second record
+	// write); the in-lock merge write before it must land through the real
+	// write path, so the seam removes itself for that one call. The write runs
+	// under the instance mutex on this goroutine, so the swap races nothing.
+	var writes atomic.Int64
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+		if writes.Add(1) == 2 {
+			return fmt.Errorf("injected final record write failure")
+		}
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, boxID, record)
+		c.writeRecordSeam = seam
+		return err
+	}
+	c.writeRecordSeam = seam
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id:              "abc123def456",
+		OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected the injected final record write failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "injected final record write failure") {
+		t.Fatalf("expected the injected write failure, got %q", err)
+	}
+
+	// The volume's entry was already on disk inside its instance critical
+	// section when the final write failed. The failed create must remove it.
+	recordPath := filepath.Join(getVolumeMountRecordDir(), "abc123def456.json")
+	if _, statErr := os.Stat(recordPath); !os.IsNotExist(statErr) {
+		t.Fatalf("volume mount record survived the failed create: %v", statErr)
+	}
+}

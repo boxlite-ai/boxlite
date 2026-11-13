@@ -6,6 +6,7 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { IsEnum, IsNotEmpty, IsString, Matches, ValidateIf } from 'class-validator'
+import { FILESTORE_INSTANCE_NAME_PATTERN } from '../../config/filestore-instances'
 
 /**
  * A volume can be mounted by name in place of its id, so a name has to be
@@ -26,13 +27,14 @@ import { IsEnum, IsNotEmpty, IsString, Matches, ValidateIf } from 'class-validat
 export const VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/
 
 /**
- * The Filestore instance's logical name pattern. Must stay in agreement with
- * the runner's registry pattern (`filestoreInstanceNamePattern` in the runner
- * config): the instance name becomes a component of the runner-side mount path
- * (/mnt/boxlite-filestore-<name>), so the same constraints apply — no path
+ * The Filestore instance's logical name pattern. Shared with the API's
+ * FILESTORE_INSTANCES configuration parser (FILESTORE_INSTANCE_NAME_PATTERN in
+ * config/filestore-instances.ts), which validates the same names at startup:
+ * the instance name becomes a component of the runner-side mount path
+ * (/mnt/boxlite-filestore-<name>), so the constraints are — no path
  * separators, no relative components.
  */
-export const FILESTORE_INSTANCE_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
+export const FILESTORE_INSTANCE_PATTERN = FILESTORE_INSTANCE_NAME_PATTERN
 
 export const VOLUME_STORAGE_BACKENDS = ['object_storage', 'filestore'] as const
 

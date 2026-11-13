@@ -152,7 +152,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 
 	for _, vol := range volumes {
 		if vol.Filestore != nil {
-			mount, err := c.filestoreVolumeMount(ctx, boxID, vol, filestoreEnsured, volumeMounts)
+			mount, err := c.filestoreVolumeMount(ctx, boxID, vol, filestoreEnsured)
 			if err != nil {
 				return nil, err
 			}
@@ -207,13 +207,13 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 // bucket-alignment contract), and a destroyed box's data stays reachable by
 // mounting the volume into a new box. `ensured` dedups
 // the ensure within one call; `priorMounts` are the mounts prepared earlier in
-// this call, so the in-lock record write can include them.
+// this call.
 //
 // Holding the lock across the whole sequence is what makes the reclaim's
 // in-lock record rescan sound: reclaim counts references from records under
 // the same per-instance mutex, so a mount cannot be reclaimed in the window
 // between "usable" and "referenced" (design §4.5).
-func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]bool, priorMounts []volumeMount) (volumeMount, error) {
+func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]bool) (volumeMount, error) {
 	// The volume id names a data directory under the instance's mount root.
 	// The control plane mints uuids, which cannot carry separators or '..',
 	// but this boundary must not lean on that — the same posture as the box
@@ -271,13 +271,12 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	// The referencing record is written inside the same critical section —
 	// this is what design §4.5.2 pins: reclaim rescans records under this
 	// instance's mutex, so the reference must become visible while the mount
-	// is still protected. priorMounts (earlier volumes of this box, prepared
-	// before this one) ride along; the caller's final whole-record write
-	// completes the list.
-	allMounts := make([]volumeMount, 0, len(priorMounts)+1)
-	allMounts = append(allMounts, priorMounts...)
-	allMounts = append(allMounts, mount)
-	if err := c.recordBoxVolumeMounts(ctx, boxID, allMounts); err != nil {
+	// is still protected. The entry is merged into the record instead of
+	// replacing it: the record stays authoritative for a running box, and an
+	// in-lock replacement would publish just the processed prefix — a
+	// Start whose later volume failed would leave the record truncated while
+	// the box kept every mount, handing the orphan reclaimer live references.
+	if err := c.mergeBoxVolumeMountRecord(ctx, boxID, []volumeMount{mount}); err != nil {
 		return volumeMount{}, err
 	}
 
@@ -795,6 +794,100 @@ func (c *Client) wrapMountCmd(ctx context.Context, spec mountSpec) *exec.Cmd {
 	return cmd
 }
 
+// readBoxVolumeMountRecord reads a box's record from disk. A missing record is
+// not an error: it means no create or replay ever wrote one for the box, which
+// is the empty record — a caller merging into it starts from nothing rather
+// than failing the merge.
+//
+// Parsed through a neutral alias rather than the record's own UnmarshalJSON.
+// That reader folds the legacy paths into entries unconditionally, and a
+// read-modify-write cycle through it (the merge) would copy the folded
+// duplicates back into the file's entries on every write — the record would
+// grow by its paths count per merge. The two shapes are distinguished instead:
+// a record with entries carries its content in entries (paths is the derived
+// legacy mirror every writer emits alongside them), and only a pre-entries
+// record keeps its references in paths, folded here into s3 entries exactly as
+// the compat reader folds them.
+func (c *Client) readBoxVolumeMountRecord(boxID string) (*boxVolumeMountRecord, error) {
+	path := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &boxVolumeMountRecord{BoxID: boxID}, nil
+		}
+		return nil, err
+	}
+
+	var alias struct {
+		BoxID   string                `json:"boxId"`
+		Paths   []string              `json:"paths"`
+		Entries []boxVolumeMountEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return nil, err
+	}
+
+	record := &boxVolumeMountRecord{BoxID: alias.BoxID, Entries: alias.Entries}
+	if len(alias.Entries) == 0 {
+		for _, legacyPath := range alias.Paths {
+			record.Entries = append(record.Entries, boxVolumeMountEntry{Backend: volumeBackendS3, RootPath: legacyPath})
+		}
+	}
+	if record.BoxID == "" {
+		record.BoxID = boxID
+	}
+	return record, nil
+}
+
+// mergeBoxVolumeMountRecord adds mounts' entries to the box's existing record
+// and rewrites it, keeping every entry already on disk. It is the in-lock
+// write of filestoreVolumeMount, where an in-lock replacement would publish
+// just the processed prefix: a volume list whose later volume fails would
+// leave the record truncated while the box kept every mount, handing the
+// orphan reclaimer live references. The full rewrite that ends a successful
+// volume list (recordBoxVolumeMounts) is what makes the record exact again.
+func (c *Client) mergeBoxVolumeMountRecord(ctx context.Context, boxID string, mounts []volumeMount) error {
+	if boxID == "" || len(mounts) == 0 {
+		return nil
+	}
+
+	record, err := c.readBoxVolumeMountRecord(boxID)
+	if err != nil {
+		return err
+	}
+
+	// boxVolumeMountEntry is comparable, so it keys the seen-set directly: an
+	// entry already on disk (or repeated within this call) is kept as-is, not
+	// duplicated.
+	seen := make(map[boxVolumeMountEntry]bool, len(record.Entries)+len(mounts))
+	for _, entry := range record.Entries {
+		seen[entry] = true
+	}
+	for _, mount := range mounts {
+		entry := boxVolumeMountEntry{
+			Backend:           mount.backend,
+			RootPath:          normalizeVolumePath(mount.rootPath),
+			FilestoreInstance: mount.filestoreInstance,
+		}
+		// dataDir is filestore-only; an empty one stays absent rather than
+		// normalized into a meaningless "."
+		if mount.dataDir != "" {
+			entry.DataDir = normalizeVolumePath(mount.dataDir)
+		}
+		if !seen[entry] {
+			seen[entry] = true
+			record.Entries = append(record.Entries, entry)
+		}
+	}
+
+	// paths (legacy) is rebuilt from the merged entries under the same deduped
+	// rootPath rule recordBoxVolumeMounts writes, so both record readers keep
+	// seeing the same reference set.
+	record.Paths = dedupedRootPaths(record.Entries)
+
+	return c.writeBoxVolumeMountRecord(ctx, boxID, *record)
+}
+
 func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts []volumeMount) error {
 	if boxID == "" || len(mounts) == 0 {
 		return nil
@@ -818,12 +911,25 @@ func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts
 		entries = append(entries, entry)
 	}
 
-	// paths (legacy) is written alongside entries for one release cycle: a
-	// runner binary rolled back to the pre-entries version reads only Paths,
-	// and an entries-only record would read as zero references — its cleanup
-	// would then reclaim live mounts. The deduped rootPath set serves both
-	// readers. Stop writing it once a rollback to a pre-entries binary is no
-	// longer possible (remove this block and the struct's Paths field).
+	record := boxVolumeMountRecord{
+		BoxID:   boxID,
+		Entries: entries,
+		Paths:   dedupedRootPaths(entries),
+	}
+
+	return c.writeBoxVolumeMountRecord(ctx, boxID, record)
+}
+
+// dedupedRootPaths builds the legacy Paths field from entries: the deduped
+// rootPath set, in entry order.
+//
+// paths is written alongside entries for one release cycle: a runner binary
+// rolled back to the pre-entries version reads only Paths, and an entries-only
+// record would read as zero references — its cleanup would then reclaim live
+// mounts. The deduped rootPath set serves both readers. Stop writing it once a
+// rollback to a pre-entries binary is no longer possible (remove this helper
+// and the struct's Paths field).
+func dedupedRootPaths(entries []boxVolumeMountEntry) []string {
 	paths := make([]string, 0, len(entries))
 	seenRoot := make(map[string]bool, len(entries))
 	for _, entry := range entries {
@@ -832,11 +938,17 @@ func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts
 			paths = append(paths, entry.RootPath)
 		}
 	}
+	return paths
+}
 
-	record := boxVolumeMountRecord{
-		BoxID:   boxID,
-		Entries: entries,
-		Paths:   paths,
+// writeBoxVolumeMountRecord persists one box's record: marshal, ensure the
+// record directory, write a uniquely named temp sibling, rename over the
+// record. Every writer of a record — the full rewrite and the in-lock merge —
+// goes through here, so the seam check sits at the top of this function and
+// covers them both.
+func (c *Client) writeBoxVolumeMountRecord(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+	if c.writeRecordSeam != nil {
+		return c.writeRecordSeam(ctx, boxID, record)
 	}
 
 	data, err := json.Marshal(record)
@@ -875,7 +987,7 @@ func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts
 		return fmt.Errorf("failed to replace volume mount record %s: %w", path, err)
 	}
 
-	c.logger.DebugContext(ctx, "recorded box volume mounts", "box", boxID, "entries", len(entries))
+	c.logger.DebugContext(ctx, "recorded box volume mounts", "box", boxID, "entries", len(record.Entries))
 	return nil
 }
 

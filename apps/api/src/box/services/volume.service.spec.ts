@@ -1,6 +1,7 @@
 import { Context } from '../../common/context/context'
 import { NotFoundException, RequestTimeoutException, ServiceUnavailableException } from '@nestjs/common'
 import { VolumeState } from '../enums/volume-state.enum'
+import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { VolumeService } from './volume.service'
 
 describe('VolumeService delete', () => {
@@ -194,8 +195,8 @@ describe('VolumeService validateVolumes query safety', () => {
 // API-side (the runner creates the data directory lazily at first mount, so
 // the volume is READY at once) and nothing to tear down (the NFS directory is
 // left in place for ops cleanup, so delete tombstones the row directly — the
-// volume manager is dormant on APIs without object storage, which is where
-// filestore-only orgs live).
+// volume manager cron runs even when only filestore volumes exist, because
+// deletion is row-only for them).
 describe('VolumeService filestore volumes', () => {
   function createService(
     volume: Record<string, unknown> | null,
@@ -290,6 +291,30 @@ describe('VolumeService filestore volumes', () => {
     await expect(service.create(organization, { storageBackend: 'filestore' }, Context.user())).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     )
+    expect(volumeRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('rejects an explicit instance the resolver cannot find, without persisting a row', async () => {
+    const { service, volumeRepository, filestoreInstanceResolver } = createService(null)
+    filestoreInstanceResolver.resolve.mockRejectedValue(new BadRequestError('Filestore instance ... not found'))
+
+    await expect(
+      service.create(
+        organization,
+        { name: 'nfs-data', storageBackend: 'filestore', instance: 'ml-scratch' },
+        Context.user(),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestError)
+    expect(volumeRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('rejects a hash-assigned instance whose lookup fails, without persisting a row', async () => {
+    const { service, volumeRepository, filestoreInstanceResolver } = createService(null)
+    filestoreInstanceResolver.resolve.mockRejectedValue(new ServiceUnavailableException('Filestore instance ... not found'))
+
+    await expect(
+      service.create(organization, { name: 'nfs-data', storageBackend: 'filestore' }, Context.user()),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException)
     expect(volumeRepository.save).not.toHaveBeenCalled()
   })
 

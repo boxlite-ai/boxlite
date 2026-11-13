@@ -14,8 +14,10 @@ describe('FilestoreInstanceResolver', () => {
     return { resolver, clientFactory }
   }
 
+  // The real @google-cloud/filestore client decodes the protobuf enum as a
+  // number (READY = 2); mocks must match that wire shape, not the key name.
   const readyInstance = {
-    state: 'READY',
+    state: 2,
     networks: [{ ipAddresses: ['10.0.0.7'] }],
     fileShares: [{ name: 'vol1' }],
   }
@@ -59,12 +61,12 @@ describe('FilestoreInstanceResolver', () => {
 
   it('rejects an ambiguous or not-ready instance', async () => {
     const ambiguous = {
-      state: 'READY',
+      state: 2,
       networks: [{ ipAddresses: ['10.0.0.7', '10.0.0.8'] }],
       fileShares: [{ name: 'vol1' }],
     }
-    const notReady = { ...readyInstance, state: 'CREATING' }
-    const noShare = { state: 'READY', networks: [{ ipAddresses: ['10.0.0.7'] }], fileShares: [] }
+    const notReady = { ...readyInstance, state: 1 }
+    const noShare = { state: 2, networks: [{ ipAddresses: ['10.0.0.7'] }], fileShares: [] }
 
     await expect(
       createResolver(jest.fn().mockResolvedValue([ambiguous])).resolver.resolve('ml-scratch', 'request'),
@@ -75,5 +77,31 @@ describe('FilestoreInstanceResolver', () => {
     await expect(
       createResolver(jest.fn().mockResolvedValue([noShare])).resolver.resolve('ml-scratch', 'request'),
     ).rejects.toThrow('one file share')
+  })
+
+  it('accepts the string enum shape alongside the numeric one', async () => {
+    const { resolver } = createResolver(jest.fn().mockResolvedValue([{ ...readyInstance, state: 'READY' }]))
+
+    await expect(resolver.resolve('ml-scratch', 'request')).resolves.toEqual({ server: '10.0.0.7', export: '/vol1' })
+  })
+
+  it('does not cache failed lookups', async () => {
+    const getInstance = jest.fn().mockRejectedValue(new Error('transient GCP outage'))
+    const { resolver } = createResolver(getInstance)
+
+    await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toThrow('Could not look up')
+    await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toThrow('Could not look up')
+
+    // A failed lookup must reach the API again: caching the failure would pin
+    // a transient outage into the 60s cache window.
+    expect(getInstance).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects an instance exposing multiple file shares', async () => {
+    const multiShare = { ...readyInstance, fileShares: [{ name: 'vol1' }, { name: 'vol2' }] }
+
+    await expect(
+      createResolver(jest.fn().mockResolvedValue([multiShare])).resolver.resolve('ml-scratch', 'request'),
+    ).rejects.toThrow('exactly one IPv4 address and one file share')
   })
 })

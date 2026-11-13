@@ -52,6 +52,68 @@ describe('RunnerAdapterV2 createBox', () => {
     expect(jobService.createJob).not.toHaveBeenCalled()
   })
 
+  it.each([undefined, [], ['gpu-passthrough']])(
+    'rejects a filestore volume create when the runner declared capabilities %p',
+    async (capabilities) => {
+      const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+      const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+      await adapter.init({ id: 'runner-1', capabilities } as any)
+
+      await expect(
+        adapter.createBox(
+          {
+            id: 'box-1',
+            volumes: [
+              {
+                volumeId: 'vol-1',
+                mountPath: '/data',
+                filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+              },
+            ],
+          } as any,
+          'base',
+        ),
+      ).rejects.toThrow('requires a runner with the filestore capability')
+      expect(jobService.createJob).not.toHaveBeenCalled()
+    },
+  )
+
+  it('dispatches a filestore volume when the runner declared the capability', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1', capabilities: ['filestore'] } as any)
+
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        volumes: [
+          {
+            volumeId: 'vol-1',
+            mountPath: '/data',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          },
+        ],
+      } as any,
+      'base',
+    )
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({
+        volumes: [
+          expect.objectContaining({
+            volumeId: 'vol-1',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          }),
+        ],
+      }),
+    )
+  })
+
   it('passes secrets through to the CREATE_BOX job payload', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)

@@ -58,8 +58,14 @@ type Client struct {
 	// the readiness probe reads a host binary (mountpoint) a dev machine may
 	// not have. nil means the real exec runs — every production path lands
 	// there because NewClient sets neither.
-	mountRunner        func(*exec.Cmd) error
-	probeRunner        func(context.Context, string) (bool, error)
+	mountRunner func(*exec.Cmd) error
+	probeRunner func(context.Context, string) (bool, error)
+	// writeRecordSeam replaces the box volume mount record write when set —
+	// the same posture as mountRunner replacing the mount exec: a test uses
+	// it to fail one specific record write without touching the filesystem.
+	// nil means the real write runs — every production path lands there
+	// because NewClient sets none of the seams.
+	writeRecordSeam    func(ctx context.Context, boxID string, record boxVolumeMountRecord) error
 	volumeMutexes      map[string]*sync.Mutex
 	volumeMutexesMutex sync.Mutex
 	volumeCleanupMutex sync.Mutex
@@ -586,6 +592,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	if len(volumeMounts) > 0 {
 		if err := c.recordBoxVolumeMounts(ctx, boxDto.Id, volumeMounts); err != nil {
+			// The final write failed after earlier volumes already published
+			// their entries in-lock. Same rule as the getVolumeMounts path:
+			// no box will exist to destroy, so the dangling entries must not
+			// survive.
+			if hasFilestoreRef(boxDto.Volumes) {
+				c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+			}
 			return "", "", err
 		}
 	}

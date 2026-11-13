@@ -25,6 +25,8 @@ type RunnerHealthcheck struct {
 	NestedVirtualizationEnabled *bool `json:"nestedVirtualizationEnabled,omitempty"`
 	// Runner preserves the guest privileged creation option
 	SupportsPrivileged *bool `json:"supportsPrivileged,omitempty"`
+	// Capabilities the runner binary supports (e.g. "filestore"). Absent from runners predating capability reporting, which the API treats as supporting none of them
+	Capabilities []string `json:"capabilities,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
@@ -124,6 +126,36 @@ func (o *RunnerHealthcheck) HasSupportsPrivileged() bool {
 // SetSupportsPrivileged gets a reference to the given bool and assigns it to the SupportsPrivileged field.
 func (o *RunnerHealthcheck) SetSupportsPrivileged(v bool) {
 	o.SupportsPrivileged = &v
+}
+
+// GetCapabilities returns the Capabilities field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetCapabilities() []string {
+	if o == nil || IsNil(o.Capabilities) {
+		return nil
+	}
+	return o.Capabilities
+}
+
+// GetCapabilitiesOk returns a tuple with the Capabilities field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetCapabilitiesOk() ([]string, bool) {
+	if o == nil || IsNil(o.Capabilities) {
+		return nil, false
+	}
+	return o.Capabilities, true
+}
+
+// HasCapabilities returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasCapabilities() bool {
+	if o != nil && !IsNil(o.Capabilities) {
+		return true
+	}
+	return false
+}
+
+// SetCapabilities adds Capabilities to the RunnerHealthcheck
+func (o *RunnerHealthcheck) SetCapabilities(v []string) {
+	o.Capabilities = v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.

@@ -70,8 +70,13 @@ GUEST_PATH = "/filestore"
 
 # The API's words for an instance name its configuration does not know,
 # pinned verbatim so a softened or reworded refusal cannot pass silently
-# (apps/api/src/box/services/volume.service.ts).
+# (apps/api/src/box/services/filestore-instance.resolver.ts).
 UNKNOWN_INSTANCE_MARKER = "unknown Filestore instance"
+
+# The API's words for a deployment that cannot accept a Filestore create at
+# all (empty FILESTORE_INSTANCES), pinned verbatim from
+# apps/api/src/box/services/volume.service.ts:134.
+NO_INSTANCE_MARKER = "Filestore is not configured"
 
 
 @pytest.fixture(scope="module")
@@ -115,12 +120,14 @@ def filestore_instance():
             ),
         )
         body_str = json.dumps(body) if body else ""
-        if not (200 <= status < 300) and (
-            UNKNOWN_INSTANCE_MARKER in body_str
-            or NO_INSTANCE_MARKER in body_str
-            or status in (400, 503)
-            and "was not found" in body_str
-        ):
+        not_configured = NO_INSTANCE_MARKER in body_str
+        unknown_instance = UNKNOWN_INSTANCE_MARKER in body_str
+        not_found = status in (400, 503) and "was not found" in body_str
+        # Only unprovisioned-environment refusals skip; a configured instance
+        # that is present but unusable ("is not ready") is a real defect and
+        # must fail loudly below. Keep the two classes apart.
+        environment_not_provisioned = unknown_instance or not_configured or not_found
+        if not (200 <= status < 300) and environment_not_provisioned:
             warnings.warn(
                 "GCP FileStore "
                 f"instance=[{candidate or 'auto-assignment'}] not available. "

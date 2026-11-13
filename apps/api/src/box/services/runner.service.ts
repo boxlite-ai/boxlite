@@ -375,6 +375,7 @@ export class RunnerService {
       signal?: AbortSignal
       infoFailed?: boolean
       nestedVirtualizationEnabled?: boolean
+      capabilities?: string[]
     },
     dataDiskRef?: RunnerDataDiskRef,
   ): Promise<void> {
@@ -399,6 +400,11 @@ export class RunnerService {
     if (!context?.infoFailed) {
       updateData.supportsPrivileged = supportsPrivileged === true
       updateData.nestedVirtualizationEnabled = context?.nestedVirtualizationEnabled === true
+      // The binary's own declaration, not accumulated state: a runner that
+      // stops reporting a capability (downgrade, or a binary predating the
+      // field) loses it on the next heartbeat, so dispatch can never trust a
+      // capability the running binary no longer has.
+      updateData.capabilities = context?.capabilities ?? null
     }
 
     if (domain) {

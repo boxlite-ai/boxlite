@@ -429,6 +429,11 @@ gate probes; a missing or unknown instance skips the module the same way —
 the test instance can be recycled at any time, so its absence is never a
 broken run.
 
+Only unprovisioned-environment refusals skip: an instance that IS configured
+but unusable ("is not ready") fails the gate loudly instead, because that is a
+defect signal, not a precondition — keep the two classes apart when touching
+the gate's skip conditions.
+
 All cases skip when the API key cannot attach volumes (403 without
 READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. None is marked
 `smoke` because a real GCP instance and mount are deployment dependencies, not
