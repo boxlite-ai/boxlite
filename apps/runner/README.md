@@ -590,6 +590,9 @@ Each CPU reading covers a counter interval, so this is the largest sampled
 interval, not an instantaneous peak. The minute cutoff is inclusive. If no CPU
 sample falls within it, collection logs a warning instead of using older data.
 
+In the loop tests, values a ticker callback writes and the test goroutine reads,
+such as the memory observation count, go through `sync/atomic`.
+
 `Collect(ctx)` reads the current values with a short timeout and is
 called from both `/info` and the v2 healthcheck. Disk numbers come from
 one statfs of the filesystem holding the BoxLite home (`HomeDir()`),

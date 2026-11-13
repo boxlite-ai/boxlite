@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -160,12 +161,13 @@ func TestMemoryObservationOnlyRunsOnMinuteTicker(t *testing.T) {
 		c.memoryUsage = func(context.Context) (*mem.VirtualMemoryStat, error) {
 			return &mem.VirtualMemoryStat{Total: bytesPerGiB, UsedPercent: 90}, nil
 		}
-		observations := 0
-		c.observeMemory = func(context.Context, time.Time, float64) { observations++ }
+		// The ticker goroutine writes the count while this goroutine reads it.
+		var observations atomic.Int32
+		c.observeMemory = func(context.Context, time.Time, float64) { observations.Add(1) }
 		if _, err := c.collect(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if observations != 0 {
+		if observations.Load() != 0 {
 			t.Fatal("health collection triggered incident")
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -173,17 +175,17 @@ func TestMemoryObservationOnlyRunsOnMinuteTicker(t *testing.T) {
 		go func() { defer close(done); c.logResourceUsage(ctx) }()
 		synctest.Wait()
 		time.Sleep(59 * time.Second)
-		if observations != 0 {
+		if observations.Load() != 0 {
 			t.Fatal("early memory observation")
 		}
 		time.Sleep(time.Second)
 		synctest.Wait()
-		if observations != 1 {
+		if observations.Load() != 1 {
 			t.Fatal("missing minute observation")
 		}
 		time.Sleep(time.Minute)
 		synctest.Wait()
-		if observations != 2 {
+		if observations.Load() != 2 {
 			t.Fatal("missing next minute observation")
 		}
 		cancel()
