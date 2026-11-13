@@ -270,11 +270,10 @@ test\:unit\:rust:
 
 # Inline tests also execute installed proxies through the actual CLI binary.
 test\:unit\:cli:
-	@cargo build -p boxlite-cli --bin boxlite
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
+		bash "$(SCRIPT_DIR)/test/with-cli-binary.sh" cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
 	else \
-		cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
+		bash "$(SCRIPT_DIR)/test/with-cli-binary.sh" cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
 	fi
 
 # Hypervisor and VMM crate unit tests alone; they need no VM and no vendored

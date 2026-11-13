@@ -61,6 +61,28 @@ The `serve` command has two test surfaces with different responsibilities:
   make test:integration:cli FILTER=ssh_rest
   ```
 
+`make test:unit:cli` builds the CLI and uses `jq` (required on PATH) to read its
+executable path from Cargo's JSON artifact output before running cargo test or nextest. It exports that exact
+path as `CARGO_BIN_EXE_boxlite` for unit tests that launch subprocesses. This also
+works with cached builds and custom target/build directories, without depending
+on Cargo's internal test layout (which changed in Cargo 1.100).
+
+Collect the CLI portion of coverage independently with:
+
+```bash
+BOXLITE_DEPS_STUB=1 make coverage:cli
+make coverage:report
+```
+
+`coverage:cli` appends profiles; the aggregate `coverage`/`coverage:lcov` targets
+clean profiles first and include this collector. It accepts the existing
+`FILTER`, `NEXTEST_FILTER_EXPR`, and `NEXTEST_PROFILE` settings. The preparatory
+CLI build uses cargo-llvm-cov's instrumentation and selected target/build
+directories, including `CARGO_LLVM_COV_TARGET_DIR` and
+`CARGO_LLVM_COV_BUILD_DIR` overrides. Instrumentation stays inside that build's
+subshell so it cannot alter the following cargo-llvm-cov invocation. Both entry
+points stop before tests if building or resolving the CLI executable fails.
+
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit tests
 and the `auth`, `ssh_cloud`, `custom_kernel_rc`, and `checkpoint` integration
 targets, excluding VM suites such as `ssh_rest.rs`.

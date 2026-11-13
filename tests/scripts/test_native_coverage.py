@@ -203,19 +203,18 @@ with (root / "calls.jsonl").open("a") as output:
             tools = root / "bin"
             tools.mkdir()
             cargo = tools / "cargo"
-            cargo.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, sys\n"
-                'with open(os.environ["CARGO_ARGV_LOG"], "a") as log:\n'
-                '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
-            )
+            from test_cli_binary import CARGO
+
+            cargo.write_text(CARGO)
             cargo.chmod(0o755)
-            (root / "Makefile").write_text(f"include {coverage}\n")
-            log = root / "cargo.jsonl"
+            (root / "Makefile").write_text(
+                f"SCRIPT_DIR := {COLLECTOR.parents[1]}\ninclude {coverage}\n"
+            )
+            log = root / "calls.jsonl"
             env = {
                 **os.environ,
                 "PATH": str(tools) + os.pathsep + os.environ["PATH"],
-                "CARGO_ARGV_LOG": str(log),
+                "CLI_MAKE_ROOT": str(root),
             }
             result = subprocess.run(
                 ["make", "coverage:lcov"],
@@ -227,7 +226,7 @@ with (root / "calls.jsonl").open("a") as output:
                 timeout=15,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            calls = [json.loads(line)["args"] for line in log.read_text().splitlines()]
             cli_calls = [args for args in calls if "boxlite-cli" in args]
             self.assertTrue(cli_calls, "no CLI coverage invocation")
             self.assertTrue(
