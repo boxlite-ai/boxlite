@@ -33,6 +33,7 @@ from conftest import (
     E2E_BOX_NAME_PREFIX,
     bound_box_lifetime,
     e2e_box_name,
+    wait_until_unlisted,
     with_bounded_lifetime,
 )
 
@@ -385,3 +386,45 @@ def test_a_transient_error_is_not_read_as_gone(monkeypatch, offline_sweep):
     monkeypatch.setattr(sweep_mod, "request_json", request_json)
     assert sweep_mod._wait_until_gone(["abcdefghijkl"]) == ["abcdefghijkl"]
     assert offline_sweep, "the settle loop never asked the control plane"
+
+
+class _SettlingRuntime:
+    """A runtime whose `list_info` keeps a removed box for a few reads.
+
+    That is what a cloud stage does: the API answers the force remove before
+    the runner has destroyed the box, so the box stays listed until the next
+    reconcile marks it destroyed.
+    """
+
+    def __init__(self, box_id: str, listed_reads: int | None):
+        self._box_id = box_id
+        self._listed_reads = listed_reads
+        self.reads = 0
+
+    async def list_info(self):
+        self.reads += 1
+        if self._listed_reads is None or self.reads <= self._listed_reads:
+            return [type("Info", (), {"id": self._box_id})()]
+        return []
+
+
+async def test_a_removed_box_still_listed_during_teardown_is_not_a_leak():
+    rt = _SettlingRuntime("abcdefghijkl", listed_reads=2)
+    assert await wait_until_unlisted(rt, ["abcdefghijkl"], timeout=5, interval=0) == []
+    assert rt.reads == 3
+
+
+async def test_a_box_still_listed_after_the_settle_window_is_a_leak():
+    rt = _SettlingRuntime("abcdefghijkl", listed_reads=None)
+    leaked = await wait_until_unlisted(rt, ["abcdefghijkl", "mnopqrstuvwx"], timeout=0.05, interval=0.01)
+    assert leaked == ["abcdefghijkl"]
+
+
+class _FailingListRuntime:
+    async def list_info(self):
+        raise RuntimeError("list failed")
+
+
+async def test_a_list_error_is_not_read_as_unlisted():
+    with pytest.raises(RuntimeError, match="list failed"):
+        await wait_until_unlisted(_FailingListRuntime(), ["abcdefghijkl"], timeout=5, interval=0)
