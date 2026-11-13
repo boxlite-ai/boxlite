@@ -657,8 +657,8 @@ export const capabilitiesFor = ({
   ...(registryCredentials.active
     ? ([{ kind: 'write-registry-credentials', store: registryCredentials }] as ApiCapability[])
     : []),
+  ...(resizeRunnerDisks ? ([{ kind: 'resize-runner-disks' }] as ApiCapability[]) : []),
   ...(storage.checkpoints.active
     ? ([{ kind: 'manage-checkpoint-archives', checkpoints: storage.checkpoints }] as ApiCapability[])
     : []),
-  ...(resizeRunnerDisks ? ([{ kind: 'resize-runner-disks' }] as ApiCapability[]) : []),
 ]

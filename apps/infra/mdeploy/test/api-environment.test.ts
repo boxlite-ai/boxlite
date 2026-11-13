@@ -647,6 +647,8 @@ test('identity OAuth uses a distinct optional client and a secret reference with
   assert.ok(catalog.envOptional.api.includes(secret))
   assert.ok(catalog.envSelectGroup.secret.includes(secret))
   assert.equal(catalog.envSelectGroup.secret.includes(identity), false)
+})
+
 /*
  * The expansion switch and its cap are the API's to interpret; the deploy's
  * whole job is to carry them or not carry them. An absent key is the API's
