@@ -39,7 +39,7 @@ export function ResourcePagination({
   }
   if (totalItems === 0 && pageIndex === 0 && !isPagingLocked) return null
   return (
-    <div className="flex flex-none flex-col gap-3 px-0 py-4 font-mono text-meta text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-none flex-col gap-3 px-0 py-4 font-sans text-meta text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <span>{itemRangeLabel}</span>
         <div className="flex items-center gap-2">

@@ -118,7 +118,7 @@ export function BoxNetworkPanel({
       </div>
 
       <AlertDialog open={confirmingInbound} onOpenChange={setConfirmingInbound}>
-        <AlertDialogContent className="font-mono">
+        <AlertDialogContent className="font-sans">
           <AlertDialogHeader>
             <AlertDialogTitle>Enable inbound access for this box?</AlertDialogTitle>
             {/* Scoped deliberately. Inbound access only lets the proxy serve

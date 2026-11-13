@@ -92,7 +92,7 @@ export function PaymentMethodsPanel({
         </Panel>
       ) : isError ? (
         <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-mono text-body text-muted-foreground">Payment methods unavailable</span>
+          <span className="font-sans text-body text-muted-foreground">Payment methods unavailable</span>
           <SetupButton connected={actionConnected} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       ) : hasPaymentMethods ? (
@@ -115,7 +115,7 @@ export function PaymentMethodsPanel({
                         <span className="font-mono text-meta tabular-nums text-muted-foreground">{display.expiry}</span>
                       )}
                     </div>
-                    <p className="mt-3 font-mono text-meta text-muted-foreground">
+                    <p className="mt-3 font-sans text-meta text-muted-foreground">
                       {method.isDefault ? (
                         <>
                           <span style={{ color: BRAND }}>▸</span> Used for subscription renewal and top-up charges
@@ -137,7 +137,7 @@ export function PaymentMethodsPanel({
         </Panel>
       ) : (
         <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-mono text-body text-muted-foreground">Payment method not connected</span>
+          <span className="font-sans text-body text-muted-foreground">Payment method not connected</span>
           <SetupButton connected={false} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       )}

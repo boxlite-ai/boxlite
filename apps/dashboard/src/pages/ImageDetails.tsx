@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TechnicalText } from '@/components/TechnicalText'
 import { AsciiButton, Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { UseImageSheet } from '@/components/images/UseImageSheet'
@@ -157,7 +158,9 @@ const ImageDetails: React.FC = () => {
       {image && (
         <>
           <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3">
-            <h1 className="truncate font-display text-page font-semibold text-foreground">{image.name}</h1>
+            <h1 className="truncate font-display text-page font-semibold text-foreground">
+              <TechnicalText value={image.name} />
+            </h1>
             <div className="flex items-center gap-2">
               <AsciiButton onClick={() => setCodeRef(imageStartRef(image))} title="The create call in your SDK">
                 Code

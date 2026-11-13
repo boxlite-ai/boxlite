@@ -75,7 +75,7 @@ export function ResourceFilter({
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
         maxLength={maxLength}
-        className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-body text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
+        className="min-w-0 flex-1 border-0 bg-transparent p-0 font-sans text-body text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
       />
       <span className="font-mono text-meta tabular-nums text-muted-foreground">{count}</span>
     </div>

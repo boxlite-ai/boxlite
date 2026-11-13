@@ -325,7 +325,7 @@ const Volumes: React.FC = () => {
           <FormDialogBody>
             {/* Nothing else here says what a volume is — the payload is just a
                 name — and this dialog is where someone meets the concept. */}
-            <p className="mb-[5px] font-mono text-meta leading-relaxed text-muted-foreground">
+            <p className="mb-[5px] font-sans text-meta leading-relaxed text-muted-foreground">
               Storage that outlives a box. Mount it into a box to read and write; the data stays once that box is gone,
               and another box can mount it later.
             </p>
@@ -397,7 +397,7 @@ const Volumes: React.FC = () => {
             {/* Deliberately not the uppercase label treatment used elsewhere:
                 the match is case-sensitive, so rendering the name in any case
                 but its own tells the user to type something that will fail. */}
-            <label htmlFor="volume-delete-confirm" className="font-mono text-meta text-muted-foreground">
+            <label htmlFor="volume-delete-confirm" className="font-sans text-meta text-muted-foreground">
               Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
             </label>
             <input

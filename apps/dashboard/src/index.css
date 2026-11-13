@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/InterVariable-4.001.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Commit Mono';
+  src: url('/fonts/CommitMono-1.143.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+}
+
 html {
   /* Keep short and scrolling routes on the same horizontal grid. */
   scrollbar-gutter: stable;
@@ -20,9 +36,6 @@ html {
   }
 }
 
-/* ASCII / terminal restyle — IBM Plex Mono is loaded from Google Fonts in index.html
-   (same source the design prototypes use), so the console matches them 1:1. */
-
 body {
   margin: 0;
   min-height: 100vh;
@@ -35,6 +48,9 @@ body {
      HSL triples the shadcn primitives already consume, so re-skinning is a token swap.
      Verified exact: hsl(196 100% 47%) === #00B0F0 (the accent/brand blue). */
   :root {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'Commit Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', Menlo, Consolas, monospace;
+
     /* light theme — bg #FFFFFF, card #F3F4F6, fg #13161B, dim #6B7079, border #E2E5EA */
     --background: 0 0% 100%;
     --foreground: 218 17% 9%;
@@ -204,16 +220,17 @@ body {
   }
 
   body {
-    @apply bg-background text-foreground;
-    font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+    @apply bg-background font-sans text-foreground;
     font-size: 13px;
     line-height: 1.45;
   }
 
   code,
   pre,
-  kbd {
-    font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+  kbd,
+  samp {
+    @apply font-mono;
+    font-variant-ligatures: none;
   }
 
   button,
@@ -511,7 +528,7 @@ body {
 /* Code is reading material, not a tracked uppercase label. Keep this scoped to
    the walkthrough so other compact console code blocks retain their scale. */
 .quickstart-code {
-  font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 400;
   line-height: 24px;
@@ -547,22 +564,22 @@ body {
     @apply mb-2 flex size-12 items-center justify-center border border-border bg-card text-muted-foreground;
   }
   .resource-list-head {
-    @apply min-h-11 border-b border-border px-4 py-3 font-mono text-meta font-medium normal-case tracking-normal text-muted-foreground;
+    @apply min-h-11 border-b border-border px-4 py-3 font-sans text-meta font-medium normal-case tracking-normal text-muted-foreground;
   }
   .resource-list-row {
     @apply min-h-14 border-b border-border/60 px-4 py-3 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
   }
   .resource-name {
-    @apply truncate text-body font-semibold text-foreground;
+    @apply truncate font-mono text-body font-semibold text-foreground;
   }
   .resource-link {
     @apply resource-name outline-none underline-offset-4 hover:underline focus-visible:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground;
   }
   .resource-status {
-    @apply inline-flex items-center gap-2 whitespace-nowrap font-mono text-meta font-normal normal-case tracking-normal text-foreground;
+    @apply inline-flex items-center gap-2 whitespace-nowrap font-sans text-meta font-normal normal-case tracking-normal text-foreground;
   }
   .resource-footer {
-    @apply flex flex-wrap items-center justify-between gap-3 px-4 py-4 font-mono text-meta normal-case tracking-normal text-muted-foreground;
+    @apply flex flex-wrap items-center justify-between gap-3 px-4 py-4 font-sans text-meta normal-case tracking-normal text-muted-foreground;
   }
   .form-dialog-body {
     @apply min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-6;
@@ -571,7 +588,7 @@ body {
     @apply font-display text-section font-semibold tracking-normal;
   }
   .form-field-label {
-    @apply mb-2 block font-mono text-meta font-medium normal-case tracking-normal text-foreground;
+    @apply mb-2 block font-sans text-meta font-medium normal-case tracking-normal text-foreground;
   }
   .form-field-input {
     @apply h-10 w-full border border-border bg-background px-3 text-body text-foreground outline-none transition-colors focus:border-foreground/50 focus:ring-2 focus:ring-foreground/10 aria-[invalid=true]:border-destructive;
@@ -582,14 +599,13 @@ body {
   @apply text-body text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand;
 }
 
-/* Quickstart code needs its own boundary on the near-black page. */
+/* Code boundaries use the same quiet structural border as the rest of the console. */
 .quickstart-code-surface {
-  --quickstart-code-border: 0 0% 72%;
+  --quickstart-code-border: var(--border);
   border: 1px solid hsl(var(--quickstart-code-border));
   background: hsl(0 0% 98%);
 }
 .dark .quickstart-code-surface {
-  --quickstart-code-border: 0 0% 30%;
   background: hsl(0 0% 7%);
 }
 @media (min-width: 768px) and (min-height: 800px) {
@@ -599,4 +615,42 @@ body {
     max-height: calc(100svh - 108px);
     overflow-y: auto;
   }
+}
+
+:root {
+  --scroll-edge-color: 0 0% 0% / 0.09;
+}
+.dark {
+  --scroll-edge-color: 0 0% 100% / 0.065;
+}
+/* Local covers disappear with the scroll; shallow edge backgrounds never cover content.
+   Use only on solid native scroll surfaces, not on masked Radix viewports. */
+.scroll-edge {
+  --scroll-surface: var(--background);
+  background-image:
+    linear-gradient(hsl(var(--scroll-surface)) 35%, hsl(var(--scroll-surface) / 0)),
+    linear-gradient(hsl(var(--scroll-surface) / 0), hsl(var(--scroll-surface)) 65%),
+    linear-gradient(hsl(var(--scroll-edge-color)), transparent),
+    linear-gradient(transparent, hsl(var(--scroll-edge-color)));
+  background-position:
+    center top,
+    center bottom,
+    center top,
+    center bottom;
+  background-size:
+    100% 28px,
+    100% 28px,
+    100% 8px,
+    100% 8px;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+.code-scroll-edge {
+  --scroll-surface: var(--code-background);
+}
+.quickstart-code-surface .code-scroll-edge {
+  --scroll-surface: 0 0% 98%;
+}
+.dark .quickstart-code-surface .code-scroll-edge {
+  --scroll-surface: 0 0% 7%;
 }

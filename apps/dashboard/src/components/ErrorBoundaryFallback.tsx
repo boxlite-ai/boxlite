@@ -65,7 +65,7 @@ export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackPro
         <div className="space-y-4">
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
             <h4 className="font-semibold text-red-800 dark:text-red-200 mb-2">Error Details:</h4>
-            <p className="text-red-700 dark:text-red-300 font-mono text-body break-all">{errorMessage}</p>
+            <p className="text-red-700 dark:text-red-300 font-sans text-body break-all">{errorMessage}</p>
           </div>
 
           {caughtError?.stack && (

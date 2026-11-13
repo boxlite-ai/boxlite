@@ -132,7 +132,7 @@ export function CostOverTime() {
           <div className="px-[22px] py-5">
             <div className="mb-3 flex flex-wrap items-center gap-4">
               {Object.entries(chartConfig).map(([key, { label, color }]) => (
-                <span key={key} className="inline-flex items-center gap-1.5 font-mono text-meta">
+                <span key={key} className="inline-flex items-center gap-1.5 font-sans text-meta">
                   <span className="size-[9px] shrink-0" style={{ background: color }} />
                   <span className="text-foreground">{label}</span>
                 </span>
@@ -212,7 +212,7 @@ export function CostOverTime() {
         ) : (
           <div className="max-h-[240px] overflow-y-auto px-[22px] py-4">
             <div
-              className={`${ROW} border-b border-border pb-2 font-mono text-label uppercase tracking-[1px] text-muted-foreground`}
+              className={`${ROW} border-b border-border pb-2 font-sans text-label uppercase tracking-[1px] text-muted-foreground`}
             >
               <span>Hour</span>
               <span className="text-right">Quota</span>

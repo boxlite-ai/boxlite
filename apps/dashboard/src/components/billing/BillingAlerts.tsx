@@ -65,8 +65,8 @@ function StatusBanner({
       <div className="flex items-start gap-2">
         {icon}
         <div className="flex flex-col gap-1">
-          {title && <span className="font-mono text-meta font-semibold">{title}</span>}
-          <span className="font-mono text-meta leading-relaxed text-muted-foreground">{children}</span>
+          {title && <span className="font-sans text-meta font-semibold">{title}</span>}
+          <span className="font-sans text-meta leading-relaxed text-muted-foreground">{children}</span>
         </div>
       </div>
     </div>

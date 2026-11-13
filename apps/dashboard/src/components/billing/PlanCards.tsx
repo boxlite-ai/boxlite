@@ -27,12 +27,12 @@ const CUSTOM_PLAN_CONTACT_URL =
 // instead, so no two rows lined up and each card carried ~100px of nothing.
 const CARD_BADGE_ROW = 'mb-3 flex h-[18px] items-center justify-between gap-3'
 const CARD_BADGE =
-  'border border-border px-1.5 py-0.5 font-mono text-label uppercase tracking-[1px] text-muted-foreground'
+  'border border-border px-1.5 py-0.5 font-sans text-label uppercase tracking-[1px] text-muted-foreground'
 const CARD_PRICE_BAND = 'mb-3 flex min-h-[64px] flex-col justify-start'
 
 function SpecRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 py-2 font-mono text-meta">
+    <div className="flex items-baseline justify-between gap-3 py-2 font-sans text-meta">
       <span className="uppercase tracking-[0.5px] text-muted-foreground">{label}</span>
       <span className="tabular-nums text-foreground">{value}</span>
     </div>
@@ -61,7 +61,7 @@ function PlanCard({
       }`}
     >
       <div className={CARD_BADGE_ROW}>
-        <span className="font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+        <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
           <span style={{ color: BRAND }}>▸</span> {plan.name}
         </span>
         {isActive && <span className={CARD_BADGE}>current</span>}
@@ -113,15 +113,15 @@ export function CustomPlanCard() {
   return (
     <div className="flex flex-col border border-border bg-card px-[22px] py-5 transition-colors hover:border-border-hover">
       <div className={CARD_BADGE_ROW}>
-        <span className="font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+        <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
           <span style={{ color: BRAND }}>▸</span> Custom
         </span>
         <span className={CARD_BADGE}>by request</span>
       </div>
 
       <div className={CARD_PRICE_BAND}>
-        <span className="font-mono text-page font-semibold leading-none tracking-tight text-foreground">Custom</span>
-        <p className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">
+        <span className="font-sans text-page font-semibold leading-none tracking-tight text-foreground">Custom</span>
+        <p className="mt-2 font-sans text-meta leading-relaxed text-muted-foreground">
           Talk with sales about your workload.
         </p>
       </div>
@@ -133,7 +133,7 @@ export function CustomPlanCard() {
 
       <a
         href={CUSTOM_PLAN_CONTACT_URL}
-        className="mt-auto inline-flex w-full items-center justify-center border border-border px-4 py-2 font-mono text-meta text-foreground transition-colors hover:border-border-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="mt-auto inline-flex w-full items-center justify-center border border-border px-4 py-2 font-sans text-meta text-foreground transition-colors hover:border-border-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         Contact sales →
       </a>

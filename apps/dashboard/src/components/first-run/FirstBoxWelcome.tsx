@@ -96,7 +96,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
         className={`mx-auto w-full px-6 pb-12 pt-10 font-display sm:pt-16 min-[1180px]:pt-20 ${gettingCredits ? 'max-w-[1080px] lg:pt-20' : 'max-w-[620px] min-[1180px]:max-w-[960px]'}`}
       >
         <div
-          className={`flex items-center gap-3 font-mono text-label text-muted-foreground ${gettingCredits ? 'mb-10 lg:mb-16' : 'mb-8'} ${!gettingCredits ? 'welcome-journey-form' : ''}`}
+          className={`flex items-center gap-3 font-sans text-label text-muted-foreground ${gettingCredits ? 'mb-10 lg:mb-16' : 'mb-8'} ${!gettingCredits ? 'welcome-journey-form' : ''}`}
           aria-label="Onboarding progress"
         >
           <span className={step === 'organization' ? 'text-foreground' : ''}>1 Organization</span>
@@ -136,7 +136,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               autoComplete="organization"
               className="h-12 w-full border border-border bg-card px-4 text-body outline-none focus:border-foreground/50"
             />
-            <p className="mt-2 font-mono text-meta text-muted-foreground">You can change this later.</p>
+            <p className="mt-2 font-sans text-meta text-muted-foreground">You can change this later.</p>
             <div className="mt-6 flex items-start gap-2.5 text-body leading-6 text-muted-foreground">
               <input
                 id="welcome-terms"

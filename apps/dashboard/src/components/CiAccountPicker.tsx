@@ -176,7 +176,7 @@ export function CiAccountPicker({
 
 export function CiOrganizationRecovery({ settingsUrl, reconnect }: { settingsUrl?: string; reconnect?(): void }) {
   return (
-    <details className="font-mono text-meta text-muted-foreground">
+    <details className="font-sans text-meta text-muted-foreground">
       <summary className="cursor-pointer underline underline-offset-4 hover:text-foreground">
         Missing an organization?
       </summary>

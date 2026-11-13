@@ -557,7 +557,7 @@ Verify that the credentials are valid and authorized for this task before execut
             credential the reader never asked for, at the moment they are
             trying to copy something. The key itself is visible in the prompt
             below; its scope and lifetime belong on the API Keys page. */}
-        <div className="min-w-0 truncate font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+        <div className="min-w-0 truncate font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
           <span className="text-brand">▸</span> Copy this prompt to your agent
         </div>
       </div>
@@ -592,7 +592,7 @@ Verify that the credentials are valid and authorized for this task before execut
       {/* The outcome, drawn before it exists. A ghost row says "a box will
           appear here" more plainly than a sentence about waiting does, and the
           same row then fills in, so nothing jumps when the agent delivers. */}
-      <div className="mt-6 font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+      <div className="mt-6 font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
         <span className="text-brand">▸</span> Your app
       </div>
       <div
@@ -616,7 +616,7 @@ Verify that the credentials are valid and authorized for this task before execut
               : { animation: `${stage === 'waiting' ? 'qs-pulse' : 'live-pulse'} 2s infinite` }
           }
         />
-        <div className="min-w-0 flex-1 font-mono text-meta leading-none">
+        <div className="min-w-0 flex-1 font-sans text-meta leading-none">
           {stage === 'waiting' ? (
             <span className="halftone-brand block h-[10px] w-[220px] max-w-full" aria-hidden />
           ) : (
