@@ -29,6 +29,9 @@ The MCP dispatcher streaming test sends data every 50 ms for longer than its
 one-second idle deadline, leaving scheduling room on coverage-instrumented CI.
 It checks every response byte and total elapsed time; a separate stalled-route
 case still verifies idle cancellation. The fixture stops sending when its socket closes.
+The PostgreSQL worker takeover test expires the stored lease at the pre-persistence
+hook, then acquires a replacement through the real lease store. Preparation keeps
+the normal lease duration, so CI scheduling cannot expire it before the tested boundary.
 
 ### Listener configuration tests
 
