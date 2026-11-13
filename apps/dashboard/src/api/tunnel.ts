@@ -14,12 +14,8 @@ export class TunnelRequestError extends Error {
   }
 }
 
-export function isFullTunnelToken(token: string | null): token is string {
-  return typeof token === 'string' && /^blt_[A-Za-z0-9_-]{43}$/.test(token)
-}
-
 /** Never carry the response or its secret into an error, log, or mutation cache. */
-export function readTunnelDescriptor(value: unknown, isPublic: boolean): TunnelDescriptor {
+export function readTunnelDescriptor(value: unknown): TunnelDescriptor {
   const invalid = () =>
     new TunnelRequestError(
       'Could not confirm tunnel access. This port may be exposed. Revoke it to remove access.',
@@ -34,14 +30,10 @@ export function readTunnelDescriptor(value: unknown, isPublic: boolean): TunnelD
   } catch {
     throw invalid()
   }
-  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || result.isPublic !== isPublic)
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || result.isPublic !== true)
     throw invalid()
-  const validToken = isPublic
-    ? result.token === null
-    : isFullTunnelToken(result.token ?? null) ||
-      (typeof result.token === 'string' && /^blt_\*+[A-Za-z0-9_-]{4}$/.test(result.token))
-  if (!validToken) throw invalid()
-  return { uri: result.uri, isPublic, token: result.token as string | null }
+  if (result.token !== null) throw invalid()
+  return { uri: result.uri, isPublic: true, token: null }
 }
 
 /** Classify the shared Axios wrapper without retaining request credentials or response data. */

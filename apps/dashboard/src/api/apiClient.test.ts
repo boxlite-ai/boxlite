@@ -572,55 +572,29 @@ it('sends organization-scoped onboarding requests with revisions and no generate
 
 describe('tunnel access contract', () => {
   const token = `blt_${'a'.repeat(43)}`
-  const descriptor = { uri: 'https://3000-box.proxy.test', isPublic: false, token }
+  const descriptor = { uri: 'https://3000-box.proxy.test', isPublic: true, token: null }
   const configReply = { capabilities: { private_tunnels_enabled: true } }
 
-  it('checks live private capability before every prepare, preserves the descriptor and scopes all writes', async () => {
+  it('refuses private creation without contacting any server', async () => {
     const requests: any[] = []
-    const api = await makeClient(
-      vi.fn(),
-      200,
-      (cfg: { url: string }) => (cfg.url === '/v1/config' ? configReply : descriptor),
-      requests,
-    )
-    await expect(api.prepareBoxTunnel('org/1', 'box/1', 3000, false)).resolves.toEqual(descriptor)
-    await api.prepareBoxTunnel('org/1', 'box/1', 3000, false)
-    expect(requests.map((r) => [r.method, r.url])).toEqual([
-      ['get', '/v1/config'],
-      ['post', '/v1/org%2F1/boxes/box%2F1/network/tunnel'],
-      ['get', '/v1/config'],
-      ['post', '/v1/org%2F1/boxes/box%2F1/network/tunnel'],
-    ])
-    expect(JSON.parse(requests[1].data)).toEqual({ isPublic: false })
-    expect(requests[1].params).toEqual({ port: 3000 })
-    expect(requests[1].headers.Authorization).toBe('Bearer tok')
+    const api = await makeClient(vi.fn(), 200, configReply, requests)
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).rejects.toMatchObject({ outcome: 'refused' })
+    expect(requests).toHaveLength(0)
   })
 
-  it.each([{}, { capabilities: {} }, { capabilities: { private_tunnels_enabled: false } }])(
-    'never posts or falls back to public when capability is absent: %j',
-    async (body) => {
-      const requests: any[] = []
-      const api = await makeClient(vi.fn(), 200, body, requests)
-      await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).rejects.toMatchObject({ outcome: 'refused' })
-      expect(requests.map((r) => r.method)).toEqual(['get'])
-    },
-  )
-
-  it('does not submit after capability lookup fails or the scope is aborted', async () => {
+  it('does not submit when the scope is aborted', async () => {
     const requests: any[] = []
-    const api = await makeClient(vi.fn(), 503, { message: 'unavailable' }, requests)
-    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).rejects.toThrow('Nothing was submitted')
-    expect(requests).toHaveLength(1)
+    const api = await makeClient(vi.fn(), 200, descriptor, requests)
     const controller = new AbortController()
     controller.abort()
     await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, true, controller.signal)).rejects.toThrow()
-    expect(requests).toHaveLength(1)
+    expect(requests).toHaveLength(0)
   })
 
   it.each([
-    { ...descriptor, isPublic: true },
+    { ...descriptor, isPublic: false },
     { uri: descriptor.uri },
-    { ...descriptor, token: null },
+    { ...descriptor, token },
     { ...descriptor, uri: 'javascript:alert(1)' },
     { ...descriptor, uri: [descriptor.uri] },
     { ...descriptor, uri: 'https://user:secret@example.test' },
@@ -628,19 +602,11 @@ describe('tunnel access contract', () => {
     const api = await makeClient(vi.fn(), 200, (cfg: { url: string }) =>
       cfg.url === '/v1/config' ? configReply : body,
     )
-    const error = await api.prepareBoxTunnel('org-1', 'box-1', 3000, false).catch((e) => e)
+    const error = await api.prepareBoxTunnel('org-1', 'box-1', 3000, true).catch((e) => e)
     expect(error.outcome).toBe('unknown')
     expect(error.message).toContain('may be exposed')
     expect(error.cause).toBeUndefined()
     expect(JSON.stringify(error)).not.toContain(token)
-  })
-
-  it('accepts a masked token for an existing private tunnel without inventing a new secret', async () => {
-    const masked = { ...descriptor, token: `blt_${'*'.repeat(28)}abcd` }
-    const api = await makeClient(vi.fn(), 200, (cfg: { url: string }) =>
-      cfg.url === '/v1/config' ? configReply : masked,
-    )
-    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).resolves.toEqual(masked)
   })
 
   it('surfaces an access-mode conflict without revoking or retrying', async () => {

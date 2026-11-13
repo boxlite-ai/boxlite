@@ -1128,9 +1128,10 @@ credentials receive copy/open actions.
 ### Explicit tunnel request contracts
 
 `ApiClient.prepareBoxTunnel(org, box, port, isPublic, signal)` sends an explicit
-access mode and validates the returned URI, access mode, and token shape. Private
-requests first check `/v1/config` for `private_tunnels_enabled`; a missing or
-failed capability check never falls back to public access.
+public access mode and validates the returned URI and descriptor. Private
+creation is unavailable in the Console: private requests are refused locally before
+any HTTP request. A capability read cannot guarantee which server handles a subsequent
+write during rolling deployments. This frontend change uses existing API endpoints.
 
 `revokeBoxTunnel` deletes the declaration for a port without checking Box state
 or inbound access. Both methods reject ports outside 1–65535 before making a
@@ -1138,8 +1139,8 @@ request and apply bounded request timeouts. They do not automatically retry
 mutations. Refusals are distinguished from uncertain outcomes: transport failures
 or malformed creation responses may follow a successful server mutation. Error
 objects never retain the response or token. URI values must be strings; URL-parser
-coercion cannot turn a malformed response into a usable descriptor. Full and masked
-tokens remain distinct.
+coercion cannot turn a malformed response into a usable descriptor. Public descriptors
+must have a null token.
 
 The Overview Create tunnel action uses these methods directly.
 
@@ -1150,9 +1151,9 @@ access is enabled. Enabling inbound also restores previously configured tunnels
 under their existing access policies. Unknown inbound state offers Refresh status;
 the console never guesses that a failed enable request succeeded.
 
-The port form defaults to Private. The configured result shows its exact port and
-access mode. A newly issued private token can be copied; an existing masked token
-cannot be recovered or copied as a usable credential. Closing the dialog does not
+The port form explicitly discloses public access before submission: anyone with the
+URL can access the port. It offers no Private option or access-token controls. The
+configured result shows its exact port and public access mode. Closing the dialog does not
 revoke access. The console clears its local result on Box, organization, client,
 or permission changes and aborts outstanding requests, including inbound enablement.
 Cancellation stops the client from waiting; it cannot undo a mutation already

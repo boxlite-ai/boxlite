@@ -2,13 +2,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, BoxState, NetworkMode } from '@boxlite-ai/api-client'
 import type { ApiClient } from '@/api/apiClient'
-import { isFullTunnelToken, TunnelRequestError, type TunnelDescriptor } from '@/api/tunnel'
+import { TunnelRequestError, type TunnelDescriptor } from '@/api/tunnel'
 import { CopyButton } from '@/components/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogTitle } from '@/components/ui/dialog'
 import { FormDialogContent, FormDialogHeader, FormDialogBody, FormDialogFooter } from '@/components/ui/form-dialog'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ExternalLink } from '@/components/ui/icon'
 
 interface Props {
@@ -32,7 +31,6 @@ export function BoxTunnelDialog({ api, organizationId, box, onClose, onEnableInb
   const [mode, setMode] = useState<'create' | 'revoke'>('create')
   const [revokePort, setRevokePort] = useState<number | null>(null)
   const [value, setValue] = useState('')
-  const [access, setAccess] = useState('private')
   const [result, setResult] = useState<(TunnelDescriptor & { port: number }) | null>(null)
   const [revoked, setRevoked] = useState(false)
   const [error, setError] = useState<TunnelRequestError | null>(null)
@@ -135,7 +133,7 @@ export function BoxTunnelDialog({ api, organizationId, box, onClose, onEnableInb
     } else if (inbound && canPrepare) {
       void run(
         'create',
-        (signal) => api.prepareBoxTunnel(organizationId, box.id, port, access === 'public', signal),
+        (signal) => api.prepareBoxTunnel(organizationId, box.id, port, true, signal),
         (descriptor) => setResult({ ...descriptor, port }),
       )
     }
@@ -195,44 +193,15 @@ export function BoxTunnelDialog({ api, organizationId, box, onClose, onEnableInb
               <>
                 <div className="flex items-center justify-between text-body">
                   <span className="font-mono">Port {result.port}</span>
-                  <span>{result.isPublic ? 'Public' : 'Private'}</span>
+                  <span>Public</span>
                 </div>
                 <div className="flex min-w-0 items-center gap-2 border border-border bg-card px-3 py-2">
                   <span className="min-w-0 flex-1 break-all font-mono text-meta">{result.uri}</span>
                   <CopyButton type="button" value={result.uri} tooltipText="Copy URL" size="icon-sm" />
                 </div>
                 <p className="text-meta text-muted-foreground">
-                  {result.isPublic
-                    ? 'Anyone with the URL can access this port.'
-                    : 'Organization sign-in or an access token is required. Browser sign-in must be configured on your server.'}
+                  Anyone with the URL can access this port.
                 </p>
-                {!result.isPublic && (
-                  <details className="border-t border-border pt-3">
-                    <summary className="cursor-pointer text-body font-medium">Access token</summary>
-                    <div className="mt-3 space-y-3 text-meta text-muted-foreground">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <code className="min-w-0 flex-1 break-all text-foreground">{result.token}</code>
-                        {isFullTunnelToken(result.token) && (
-                          <CopyButton
-                            type="button"
-                            value={result.token}
-                            tooltipText="Copy access token"
-                            size="icon-sm"
-                          />
-                        )}
-                      </div>
-                      <p>
-                        {isFullTunnelToken(result.token)
-                          ? 'Shown once. Save it now; the token can be reused.'
-                          : 'The full token was shown when this tunnel was first created. It cannot be retrieved again.'}
-                      </p>
-                      <p>
-                        External clients send it in the <code className="text-foreground">X-BoxLite-Access-Token</code>{' '}
-                        header. The URL alone does not grant access.
-                      </p>
-                    </div>
-                  </details>
-                )}
                 {box.state !== BoxState.STARTED && box.autoResume && (
                   <p className="text-meta text-muted-foreground">The Box starts when accessed.</p>
                 )}
@@ -273,34 +242,9 @@ export function BoxTunnelDialog({ api, organizationId, box, onClose, onEnableInb
                   />
                 </div>
                 {mode === 'create' ? (
-                  <>
-                    <div>
-                      <label className="form-field-label" htmlFor="tunnel-access">
-                        Access
-                      </label>
-                      <Select
-                        value={access}
-                        onValueChange={(v) => {
-                          setAccess(v)
-                          setError(null)
-                        }}
-                        disabled={!editable}
-                      >
-                        <SelectTrigger id="tunnel-access" className="form-field-input">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="private">Private</SelectItem>
-                          <SelectItem value="public">Public</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="mt-2 text-meta text-muted-foreground">
-                        {access === 'private'
-                          ? 'Organization members or anyone with the access token.'
-                          : 'Anyone with the URL can access this port.'}
-                      </p>
-                    </div>
-                  </>
+                  <p className="text-body text-muted-foreground">
+                    Public access. Anyone with the URL can access this port.
+                  </p>
                 ) : (
                   <p className="text-body text-muted-foreground">
                     Block new requests to this port. Existing connections may continue. Other ports are unaffected.
@@ -346,7 +290,6 @@ export function BoxTunnelDialog({ api, organizationId, box, onClose, onEnableInb
                   onClick={() => {
                     setResult(null)
                     setValue('')
-                    setAccess('private')
                     setError(null)
                   }}
                 >

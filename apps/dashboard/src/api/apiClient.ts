@@ -505,7 +505,7 @@ export class ApiClient {
     )
   }
 
-  /** Private creation must check current capabilities: older servers ignore the mode. */
+  /** The Console creates public tunnels only; private requests never reach the server. */
   public async prepareBoxTunnel(
     organizationId: string,
     boxId: string,
@@ -515,19 +515,7 @@ export class ApiClient {
   ): Promise<TunnelDescriptor> {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
       throw new TunnelRequestError('Enter a port from 1 to 65535.')
-    if (!isPublic) {
-      let supported: boolean
-      try {
-        const config = await this.http.get('/v1/config', { ...this.v1Config(), signal, timeout: 15_000 })
-        supported = config.data?.capabilities?.private_tunnels_enabled === true
-      } catch {
-        throw new TunnelRequestError('Could not check private tunnel support. Nothing was submitted. Try again.')
-      }
-      if (!supported)
-        throw new TunnelRequestError(
-          'This server does not support private tunnels. Choose Public explicitly to allow unauthenticated access.',
-        )
-    }
+    if (!isPublic) throw new TunnelRequestError('Private tunnel creation is not available in the Console.')
     signal?.throwIfAborted()
     try {
       const response = await this.http.post<unknown>(
@@ -535,7 +523,7 @@ export class ApiClient {
         { isPublic },
         { ...this.v1Config(), params: { port }, signal, timeout: 30_000 },
       )
-      return readTunnelDescriptor(response.data, isPublic)
+      return readTunnelDescriptor(response.data)
     } catch (error) {
       throw tunnelOperationError(error, 'create')
     }

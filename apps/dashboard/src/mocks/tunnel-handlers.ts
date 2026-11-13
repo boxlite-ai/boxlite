@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw'
 import { BoxState, NetworkMode } from '@boxlite-ai/api-client'
 import { MOCK_BOXES } from './fixtures'
 
-// Presentation-only declarations. Secrets are returned once and only their display masks are kept.
+// Presentation-only public declarations for Console previews.
 const declarations = new Map<string, { isPublic: boolean; token: string | null }>()
 const resumable = new Set<BoxState>([
   BoxState.STOPPED,
@@ -27,22 +27,11 @@ export const tunnelHandlers = [
     const body = (await request.json()) as { isPublic?: boolean }
     if (body.isPublic !== undefined && typeof body.isPublic !== 'boolean')
       return HttpResponse.json({ message: 'Invalid access mode' }, { status: 400 })
-    const isPublic = body.isPublic ?? true
-    const key = `${params.organizationId}:${box.id}:${port}`
-    let record = declarations.get(key)
-    if (record && record.isPublic !== isPublic)
-      return HttpResponse.json({ message: 'Tunnel access mode differs; revoke it before recreating' }, { status: 409 })
-    let token = record?.token ?? null
-    if (!record) {
-      token = isPublic
-        ? null
-        : `blt_${btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/, '')}`
-      record = { isPublic, token: token ? `blt_${'*'.repeat(28)}${token.slice(-4)}` : null }
-      declarations.set(key, record)
-    }
+    if (body.isPublic !== true)
+      return HttpResponse.json({ message: 'Only public creation is available in the Console' }, { status: 400 })
+    const isPublic = true
+    const token = null
+    declarations.set(`${params.organizationId}:${box.id}:${port}`, { isPublic, token })
     const encoded = [...box.id].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
     return HttpResponse.json({ uri: `https://${port}-d-${encoded}.proxy.mock.boxlite.ai`, isPublic, token })
   }),

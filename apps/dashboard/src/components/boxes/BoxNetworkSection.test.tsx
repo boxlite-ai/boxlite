@@ -47,8 +47,8 @@ beforeEach(() => {
   mocks.api.setBoxInboundMode.mockResolvedValue(undefined)
   mocks.api.prepareBoxTunnel.mockResolvedValue({
     uri: 'https://3000-box.proxy.test',
-    isPublic: false,
-    token: `blt_${'a'.repeat(43)}`,
+    isPublic: true,
+    token: null,
   })
   mocks.api.revokeBoxTunnel.mockResolvedValue(undefined)
   box = {
@@ -141,10 +141,10 @@ it('confirms revocation against the configured port without permitting a differe
   expect(mocks.api.revokeBoxTunnel).toHaveBeenCalledWith('org-1', 'box-1', 3000, expect.any(AbortSignal))
 })
 
-it('uses Private by default and removes editable fields after success', async () => {
+it('creates a public tunnel and removes editable fields after success', async () => {
   await render()
   await create()
-  expect(mocks.api.prepareBoxTunnel).toHaveBeenCalledWith('org-1', 'box-1', 3000, false, expect.any(AbortSignal))
+  expect(mocks.api.prepareBoxTunnel).toHaveBeenCalledWith('org-1', 'box-1', 3000, true, expect.any(AbortSignal))
   expect(document.querySelector('#tunnel-port')).toBeNull()
   expect(document.body.textContent).toContain('Port 3000')
   expect(document.body.textContent).toContain('Tunnel configured')
@@ -164,35 +164,15 @@ it('uses Private by default and removes editable fields after success', async ()
   expect(mocks.api.revokeBoxTunnel).not.toHaveBeenCalled()
 })
 
-it('sends Public only after an explicit shared-select choice', async () => {
+it('discloses public access before submission and offers no private choice', async () => {
   await render()
   await click(/^Create tunnel$/)
+  expect(document.body.textContent).toContain('Public access. Anyone with the URL')
+  expect(document.querySelector('#tunnel-access')).toBeNull()
+  expect(mocks.api.prepareBoxTunnel).not.toHaveBeenCalled()
   await port('3000')
-  await act(async () =>
-    document
-      .querySelector('#tunnel-access')
-      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
-  )
-  const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((e) => e.textContent === 'Public')
-  expect(option).toBeTruthy()
-  await act(async () => option?.click())
-  expect(document.body.textContent).toContain('Anyone with the URL')
   await click(/^Create tunnel$/, document.querySelector('[role="dialog"]') as HTMLElement)
   expect(mocks.api.prepareBoxTunnel).toHaveBeenCalledWith('org-1', 'box-1', 3000, true, expect.any(AbortSignal))
-})
-
-it('never offers a masked token as a usable copy value', async () => {
-  mocks.api.prepareBoxTunnel.mockResolvedValue({
-    uri: 'https://3000-box.proxy.test',
-    isPublic: false,
-    token: `blt_${'*'.repeat(28)}abcd`,
-  })
-  await render()
-  await create()
-  expect(document.body.textContent).toContain('cannot be retrieved again')
-  expect([...document.querySelectorAll('[data-copy]')].map((e) => e.getAttribute('data-copy'))).toEqual([
-    'https://3000-box.proxy.test',
-  ])
 })
 
 it('can revoke an arbitrary port with inbound off and the Box stopped, without prepare', async () => {
@@ -258,7 +238,7 @@ it('checks inbound before showing port settings and never creates as a side effe
   box = { ...box, network: network(NetworkMode.ENABLED) }
   await render()
   expect(document.querySelector('#tunnel-port')).not.toBeNull()
-  expect(document.querySelector('#tunnel-access')?.textContent).toBe('Private')
+  expect(document.querySelector('#tunnel-access')).toBeNull()
   expect(mocks.api.prepareBoxTunnel).not.toHaveBeenCalled()
 })
 
@@ -425,7 +405,7 @@ it('disables historical revocation while a create request is pending', async () 
   expect(revoke?.disabled).toBe(true)
   await act(async () => revoke?.click())
   expect(mocks.api.revokeBoxTunnel).not.toHaveBeenCalled()
-  expect(document.querySelector('#tunnel-access')).not.toBeNull()
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Public access.')
 })
 
 it('aborts inbound enablement when the authenticated scope changes', async () => {
