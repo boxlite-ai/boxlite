@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getBoxRouteId } from '@/lib/box-identity'
+import { getBoxDisplayName, getBoxRouteId } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import { isStartable, isStoppable } from '@/lib/utils/box'
 import { Box, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
@@ -55,5 +55,5 @@ export function BoxTerminalSession({ box }: { box: Box }) {
     )
   }
 
-  return <BoxTerminal boxId={box.id} className="flex-1" />
+  return <BoxTerminal boxId={box.id} boxName={getBoxDisplayName(box)} className="flex-1" />
 }

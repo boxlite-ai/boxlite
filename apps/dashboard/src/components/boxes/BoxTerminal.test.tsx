@@ -19,8 +19,9 @@ const mocks = vi.hoisted(() => ({
   focus: vi.fn(),
   write: vi.fn(),
   clear: vi.fn(),
+  dispose: vi.fn(),
   bottom: vi.fn(),
-  options: { fontSize: 13, disableStdin: false },
+  options: { fontSize: 13, disableStdin: false, fontFamily: '' },
   input: undefined as ((data: string) => void) | undefined,
   resized: undefined as (() => void) | undefined,
 }))
@@ -48,7 +49,11 @@ vi.mock('@xterm/xterm', () => ({
     cols = 80
     rows = 24
     loadAddon() {}
-    open() {}
+    open(container: HTMLElement) {
+      const screen = document.createElement('div')
+      screen.dataset.testid = 'terminal-screen'
+      container.appendChild(screen)
+    }
     focus() {
       mocks.focus()
     }
@@ -61,7 +66,9 @@ vi.mock('@xterm/xterm', () => ({
     scrollToBottom() {
       mocks.bottom()
     }
-    dispose() {}
+    dispose() {
+      mocks.dispose()
+    }
     onResize(callback: () => void) {
       mocks.resized = callback
       return { dispose() {} }
@@ -108,6 +115,7 @@ describe('BoxTerminal', () => {
   beforeAll(() => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
     vi.stubGlobal('WebSocket', Object.assign(FakeSocket, { OPEN: 1 }))
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
   })
 
   beforeEach(() => {
@@ -152,6 +160,9 @@ describe('BoxTerminal', () => {
     container.remove()
     vi.useRealTimers()
     vi.restoreAllMocks()
+    document.documentElement.style.removeProperty('--font-mono')
+    document.body.style.overflow = ''
+    document.documentElement.style.scrollbarGutter = ''
   })
 
   function render() {
@@ -174,6 +185,64 @@ describe('BoxTerminal', () => {
   function reconnect() {
     act(() => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Reconnect')!.click())
   }
+
+  it('loads the configured font without replacing the active shell', async () => {
+    let loaded!: (faces: FontFace[]) => void
+    const load = vi.fn().mockReturnValue(
+      new Promise<FontFace[]>((resolve) => {
+        loaded = resolve
+      }),
+    )
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: Promise.resolve(), load } })
+    document.documentElement.style.setProperty('--font-mono', '"Commit Mono", monospace')
+    render()
+    await settle()
+    open()
+    flushFrames()
+    mocks.fit.mockClear()
+    expect(load).toHaveBeenCalledWith('13px "Commit Mono", monospace')
+    expect(mocks.options.fontFamily).toBe('ui-monospace, monospace')
+    loaded([{} as FontFace])
+    await settle()
+    flushFrames()
+    expect(mocks.options.fontFamily).toBe('"Commit Mono", monospace')
+    expect(mocks.fit).toHaveBeenCalledTimes(1)
+    expect(mocks.api.startTerminalExec).toHaveBeenCalledTimes(1)
+    expect(mocks.api.killTerminalExec).not.toHaveBeenCalled()
+  })
+
+  it('keeps the active shell and fallback when font delivery fails', async () => {
+    const load = vi.fn().mockRejectedValue(new Error('Font unavailable'))
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: Promise.resolve(), load } })
+    document.documentElement.style.setProperty('--font-mono', '"Commit Mono", monospace')
+    render()
+    await settle()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(mocks.options.fontFamily).toBe('ui-monospace, monospace')
+    expect(FakeSocket.instances).toHaveLength(1)
+    expect(mocks.api.killTerminalExec).not.toHaveBeenCalled()
+  })
+
+  it('ignores a font load that completes after unmount', async () => {
+    let loaded!: (faces: FontFace[]) => void
+    const load = vi.fn().mockReturnValue(
+      new Promise<FontFace[]>((resolve) => {
+        loaded = resolve
+      }),
+    )
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { ready: Promise.resolve(), load } })
+    document.documentElement.style.setProperty('--font-mono', '"Commit Mono", monospace')
+    render()
+    await settle()
+    act(() => root.unmount())
+    const fits = mocks.fit.mock.calls.length
+    loaded([{} as FontFace])
+    await settle()
+    flushFrames()
+    expect(mocks.options.fontFamily).toBe('ui-monospace, monospace')
+    expect(mocks.fit).toHaveBeenCalledTimes(fits)
+    expect(mocks.api.killTerminalExec).toHaveBeenCalledTimes(1)
+  })
 
   // The old socket's close event lands after the new attempt has started, so
   // it must not mark that attempt as failed.
@@ -412,19 +481,15 @@ describe('BoxTerminal', () => {
     render()
     await settle()
     const socket = open()
-    const sizes = container.querySelector('select')!
+    const sizes = container.querySelector<HTMLElement>('[aria-label="Terminal text size"]')
+    expect(sizes).not.toBeNull()
     for (const size of ['12', '16']) {
-      act(() => {
-        sizes.value = size
-        sizes.dispatchEvent(new Event('change', { bubbles: true }))
-      })
+      await act(async () => sizes?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+      const choices = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
+      expect(choices.map((option) => option.textContent)).toEqual(['12 px', '13 px', '14 px', '16 px'])
+      await act(async () => choices.find((option) => option.textContent === `${size} px`)?.click())
       expect(mocks.options.fontSize).toBe(Number(size))
     }
-    act(() => {
-      sizes.value = '99'
-      sizes.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    expect(mocks.options.fontSize).toBe(16)
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="Clear terminal"]')!.click())
     act(() => container.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')!.click())
     expect(mocks.clear).toHaveBeenCalledTimes(1)
@@ -434,5 +499,58 @@ describe('BoxTerminal', () => {
     reconnect()
     await settle()
     expect(mocks.options.fontSize).toBe(16)
+  })
+  it('maximizes and restores without replacing the terminal, buffer or shell', async () => {
+    render()
+    await settle()
+    const socket = open()
+    flushFrames()
+    const region = container.querySelector('[aria-label="Box terminal"]')
+    const screen = container.querySelector('[data-testid="terminal-screen"]')
+    const background = document.createElement('button')
+    const alreadyInert = document.createElement('div')
+    alreadyInert.setAttribute('inert', '')
+    container.append(background, alreadyInert)
+    document.body.style.overflow = 'auto'
+    document.documentElement.style.scrollbarGutter = 'stable'
+    mocks.focus.mockClear()
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Maximize terminal"]')?.click())
+    expect(mocks.focus).toHaveBeenCalledTimes(1)
+    expect(region?.getAttribute('data-maximized')).toBe('true')
+    expect(background.hasAttribute('inert')).toBe(true)
+    expect(document.body.style.overflow).toBe('hidden')
+    act(() => {
+      resize()
+      mocks.input?.('echo preserved\r')
+    })
+    flushFrames()
+    expect(socket.send).toHaveBeenLastCalledWith(new TextEncoder().encode('echo preserved\r'))
+    mocks.focus.mockClear()
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Restore terminal"]')?.click())
+    expect(mocks.focus).toHaveBeenCalledTimes(1)
+    expect(region?.hasAttribute('data-maximized')).toBe(false)
+    expect(container.querySelector('[aria-label="Box terminal"]')).toBe(region)
+    expect(container.querySelector('[data-testid="terminal-screen"]')).toBe(screen)
+    expect(background.hasAttribute('inert')).toBe(false)
+    expect(alreadyInert.hasAttribute('inert')).toBe(true)
+    expect(document.body.style.overflow).toBe('auto')
+    expect(document.documentElement.style.scrollbarGutter).toBe('stable')
+    expect(mocks.api.startTerminalExec).toHaveBeenCalledTimes(1)
+    expect(mocks.api.killTerminalExec).not.toHaveBeenCalled()
+    expect(mocks.clear).not.toHaveBeenCalled()
+    expect(mocks.dispose).not.toHaveBeenCalled()
+  })
+
+  it('restores covered controls and page scrolling when maximized Terminal unmounts', async () => {
+    render()
+    await settle()
+    const background = document.createElement('button')
+    container.append(background)
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Maximize terminal"]')?.click())
+    expect(background.hasAttribute('inert')).toBe(true)
+    await act(async () => root.unmount())
+    expect(background.hasAttribute('inert')).toBe(false)
+    expect(document.body.style.overflow).toBe('')
+    expect(mocks.api.killTerminalExec).toHaveBeenCalledTimes(1)
   })
 })

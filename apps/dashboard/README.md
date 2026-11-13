@@ -1137,3 +1137,9 @@ Mock previews support `?preview=ci-empty` and `?preview=ci-repositories`; the la
 The GitHub account picker keeps account names on their own full-width row below
 the small-screen breakpoint; account type and actions follow on a second row.
 Desktop rows retain aligned columns. Expanded repository details span both layouts.
+
+### Terminal viewport controls
+
+Terminal text size uses the shared themed selector. Changing size refits the existing xterm instance without reconnecting or replacing its buffer. The terminal loads the configured monospace font before applying it; a failed font request keeps a usable fallback and the active shell.
+
+Maximize expands the current terminal in place; Restore returns to its prior layout. Both actions return keyboard focus to the existing terminal so typing continues without an extra click. Covered application controls become inert, and page scrolling is restored when leaving maximized mode or unmounting. Escape remains available to terminal applications. These viewport controls do not change shell authentication, permission checks, reconnection, or runner lifecycle.
