@@ -88,6 +88,9 @@ class CliBinaryMakeTest(unittest.TestCase):
         cargo.write_text(CARGO)
         cargo.chmod(0o755)
         (self.bin / "python3").symlink_to(sys.executable)
+        jq = shutil.which("jq")
+        self.assertIsNotNone(jq, "jq is required for CLI binary tests")
+        (self.bin / "jq").symlink_to(Path(jq).resolve())
         self.temp = self.root / "temporary files"
         self.temp.mkdir()
         self.env = {key: value for key, value in os.environ.items()
