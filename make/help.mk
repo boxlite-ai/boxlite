@@ -153,6 +153,7 @@ help:
 	@echo "    make dev:node       - Build and link Node.js SDK locally (debug mode)"
 	@echo "    make dev:go         - Build Go SDK locally (debug mode)"
 	@echo "    make build:e2e:drivers - Build C/Go/Rust REST acceptance clients"
+	@echo "    make build:e2e:release-drivers - Build clients with target/e2e-release and staged target/e2e-c-sdk"
 	@echo ""
 	@echo "  Distribution:"
 	@echo "    make dist:python    - Build portable wheel with cibuildwheel"

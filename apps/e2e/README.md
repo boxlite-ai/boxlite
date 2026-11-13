@@ -6,6 +6,33 @@ These tests exercise the **full production path**:
 Python SDK (boxlite.Boxlite.rest) → HTTP → NestJS API → HTTP → boxlite-runner → libkrun VM
 ```
 
+Cloud runs accept an optional `tag` in the **E2E cloud** workflow, including
+reusable calls. For example, `tag=v0.13.1` downloads that release's Python wheel,
+Node SDK/native addon and CLI instead of compiling them. Leave `tag` blank to
+build clients from the selected checkout, as before. Only stable `vX.Y.Z` tags
+are accepted; unavailable artifacts fail the run without falling back to source.
+
+```bash
+gh workflow run e2e-cloud.yml -f stage=dev -f tag=v0.13.1
+```
+
+Tests still come from the selected checkout and target the selected deployed
+stage. On dev, C/Go domain drivers link the released C library; Go SDK source
+comes from the release tag. The Rust domain driver compiles against that tag's
+Rust SDK, so dev still has some Rust compilation. All driver source programs
+come from the test checkout, preserving current acceptance coverage. A release
+that lacks APIs required by current tests fails those tests or driver builds.
+Prod retains its Python-only smoke selection. This input changes client versions;
+it does not deploy or change the cloud stack.
+
+The Node release installer removes SDK development/workspace metadata before
+adding the test tools, while retaining runtime dependencies. npm resolves peer
+dependencies before applying `--omit=dev`; resolving the published SDK's build
+metadata can otherwise abort installation with an `edgesOut` error.
+To exercise the real npm resolver and TypeScript tools in a temporary checkout,
+run `E2E_RELEASE_REAL_NPM=1 make test:unit:scripts` with the workflow's Node/npm
+versions. This opt-in check downloads test tools from the npm registry.
+
 Existing `make test:integration:*` tests use the local PyO3 / FFI path
 (`Boxlite.default()`) and bypass both the API and the runner — so a bug that
 only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop,
