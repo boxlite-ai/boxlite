@@ -9,7 +9,7 @@ Expansion grows capacity only; provisioned IOPS/throughput never follow, dilutin
 ## Problem
 
 - Infra provisions each data disk with explicit values (200 GiB / 3,600 IOPS / 240–290 MiB/s, `DATA_DISK` in `apps/infra/mdeploy/stack/providers/gcp/runners.ts`) and sets `ignoreChanges` on the three fields. Pulumi never touches them, so the API is the only performance writer.
-- The API expansion path (`runner-disk-expansion.service.ts` → `gcp-disk-client.ts`) sends `paths: ['sizeGb']` only. The field-mask invariant protects the current performance values from being reset, but never raises them.
+- The API expansion path (`runner-disk-expansion.service.ts` → `gcp-disk-client.ts`) sends `updateMask: 'sizeGb'` only. The field-mask invariant protects the current performance values from being reset, but never raises them.
 - After each expansion the same provisioned IOPS serve a larger volume. IOPS-per-GiB drops one step per expansion, and the data disk drifts toward becoming the bottleneck for image-cache and `/var/lib/boxlite` workloads — the opposite of what an expansion is for.
 
 ## GCP facts (verified against official docs, 2026-11-13)
@@ -27,11 +27,11 @@ Expansion grows capacity only; provisioned IOPS/throughput never follow, dilutin
 | IOPS floor | 3,000 |
 | Default formula | `IOPS = 6×GiB + 3,000`, `throughput = min(2,400, 1.5×GiB + 140)` — **computed once at creation** |
 | Billing | First 3,000 IOPS and 140 MiB/s free; beyond that, billed by provisioning |
-| SDK | @google-cloud/compute@7.9.0 exposes `IDisk.provisionedIops`/`provisionedThroughput` (int64-as-string, same as `sizeGb`); the update request takes a `paths` field mask |
+| SDK | @google-cloud/compute@7.9.0 exposes `IDisk.provisionedIops`/`provisionedThroughput` (int64-as-string, same as `sizeGb`); the update request carries the field mask as an `updateMask` string — the legacy `paths` array is rejected by GCP for multi-field masks (live API, 2026-11-13) |
 
 ## Scope
 
-- Constraints: no runner changes; no API/SDK contract changes; capacity sizing math (`nextSizeGiB`) unchanged; the existing gray-release switch and budget framework stay; the `paths` field-mask invariant holds (never a full PATCH).
+- Constraints: no runner changes; no API/SDK contract changes; capacity sizing math (`nextSizeGiB`) unchanged; the existing gray-release switch and budget framework stay; the `updateMask` field-mask invariant holds (an explicit comma-joined subset of the carried fields, never a full PATCH).
 - Non-goals: VM-machine-level caps (an n4-standard-16 draws at most 80k IOPS / 1.2k MiB/s shared) do not participate in ceiling math — that is a cost/SLO gap, not a correctness boundary (rejected alternative, see Related work). No performance read-back verification. No configurable ratio.
 - Acceptance: one call carries capacity + performance; capacity is never blocked by a performance cooldown; ceiling binding is visible through a metric; a rejected performance field converges to capacity-only within one round without a retry loop.
 
@@ -41,7 +41,7 @@ Expansion grows capacity only; provisioned IOPS/throughput never follow, dilutin
 | --- | --- | --- | --- |
 | GCP-recommended combined update | modify-hyperdisks: "We recommend that you modify size and performance at the same time" | Saves calls and operation polling; the cost is misaligned field budgets (see How it works) | **Adopt**, with the performance-rides gate |
 | AWS Elastic Volumes / ModifyVolume | size + iops + throughput in one async call, per-volume modification budget (up to 4 per 24h) | Same shape as GCP; validates "bundle + budgets + async confirm" as the industry-standard form | Adopt (corroboration) |
-| Terraform provider field-mask pitfall | hashicorp/terraform-provider-google issue: updating both iops+throughput mis-builds the payload/mask | Confirms the `paths` invariant tests must pin all four shapes (size-only / both perf fields / single perf field / never a full PATCH) | Adopt (lesson) |
+| Terraform provider field-mask pitfall | hashicorp/terraform-provider-google issue: updating both iops+throughput mis-builds the payload/mask | Confirms the mask invariant tests must pin all four shapes (size-only / both perf fields / single perf field / never a full PATCH) | Adopt (lesson) |
 | Recompute from GCP's default formula | official default performance formula | Infra deliberately sits below it (3,600 < 4,200; throughput held to what the machine draws: "more is billed and never reached"); recomputing from the formula silently over-bills | **Rejected** |
 | Record creation-time baselines, never read the disk | Saves one `disks.get` | Manual gcloud or future infra changes would drift silently; reading the disk before each PATCH (≤20 per round) costs nothing | **Rejected** |
 | Ceiling includes VM machine caps | n4-standard-16 = 80k IOPS / 1.2k MiB/s shared | Mirroring a machine-type table in the API is disproportionate; the disk-level ceiling already bounds correctness; the beyond-VM part is "billed but never drawn" | **Rejected** |
@@ -113,7 +113,7 @@ Rule notes:
 1. initiate reads the real values: sizeGb=200, iops=3,600, throughput=240 (device scale, unaffected by the ext4 ~2% gap).
 2. ratio = 300/200 = 1.5 → target IOPS = round(3,600×1.5) = 5,400; throughput = round(240×1.5) = 360.
 3. Ceiling: max IOPS = MIN(500×300, 160000) = 150,000 (not reached); max throughput = MIN(2,400, 5,400/4) = 1,350 (not reached). All in range, send as computed.
-4. If the performance cooldown (any performance-carrying attempt within 4h + 10 min margin) is active → send `paths: ['sizeGb']` only; performance rides the next round.
+4. If the performance cooldown (any performance-carrying attempt within 4h + 10 min margin) is active → send `updateMask: 'sizeGb'` only; performance rides the next round.
 5. Confirmation unchanged: zone operation DONE + the runner-reported fs size passes the tolerance → CONFIRMED. Performance fields ride the same operation, no separate confirmation; the "~15 min to take effect" gap is implicitly re-checked by the next initiate's `disks.get`, which also logs the values for observability.
 
 ### Key mechanisms
@@ -130,7 +130,7 @@ Rule notes:
 
 ### Secondary changes
 
-- `GcpDiskClientLike` gains `getDisk(ref)` → `{ sizeGb, provisionedIops?, provisionedThroughput? }`; `resizeDisk(ref, sizeGb, performance?)` takes performance per-field optional; `paths` assembles from the actually-changed fields across 4 shapes: `['sizeGb']`, `['sizeGb','provisionedIops','provisionedThroughput']`, `['sizeGb','provisionedIops']`, `['sizeGb','provisionedThroughput']`; values int64-as-string. Invariant tests pin all 4 shapes: paths is always an explicit non-empty subset, never a full PATCH.
+- `GcpDiskClientLike` gains `getDisk(ref)` → `{ sizeGb, provisionedIops?, provisionedThroughput? }`; `resizeDisk(ref, sizeGb, performance?)` takes performance per-field optional; the mask assembles from the actually-changed fields across 4 shapes, joined into one `updateMask` string: `sizeGb`; `sizeGb,provisionedIops,provisionedThroughput`; `sizeGb,provisionedIops`; `sizeGb,provisionedThroughput`; values int64-as-string. Invariant tests pin all 4 shapes: the mask is always an explicit non-empty subset of the carried fields, never a full PATCH. The legacy `paths` array cannot replace `updateMask`: GCP rejects multi-field `paths` masks outright ("Updating sizeGb,provisionedIops,provisionedThroughput is not supported", live API 2026-11-13), and a same-day probe proved `updateMask` is honored.
 - Pure function `performanceTarget(curIops, curTput, curGiB, newGiB)` → `{ iops?, throughput?, ceilingHit } | undefined`: field-level optional — a field whose clipped target equals its current value returns missing (not sent); undefined means missing baseline (skip performance entirely); ceilingHit feeds the ceiling metric.
 - Config: **zero new knobs**. Performance scaling rides the existing `RUNNER_DISK_EXPANSION_ENABLED` master switch — no separate switch, no ratio knob (ratio fixed at 1.0; no knob without a user). The cooldown constant 4h + 10 min margin is a code constant, in the style of `RATE_LIMIT_COOLDOWN_MS`, not config.
 - Migration: pre-deploy migration adds `performanceUpdated boolean NOT NULL DEFAULT false` to `runner_disk_expansion`; one row in the schema.md table.
@@ -140,12 +140,12 @@ Rule notes:
 
 | Claim / risk | Check | Expected |
 | --- | --- | --- |
-| One call carries capacity + performance | Unit tests pin request shapes (4 paths shapes, int64-as-string) | Constant shapes, never a full PATCH |
-| Capacity never blocked by the performance cooldown | Service integration test: second expansion within 4h sends sizeGb only | Second PATCH paths = sizeGb only |
+| One call carries capacity + performance | Unit tests pin request shapes (4 mask shapes, int64-as-string) | Constant shapes, never a full PATCH |
+| Capacity never blocked by the performance cooldown | Service integration test: second expansion within 4h sends sizeGb only | Second PATCH mask = sizeGb only |
 | Proportional + ceiling math | Pure-function unit tests: ratio, MIN clipping, throughput P/4 clip, unchanged-field drop, undefined on missing baseline | All boundaries pass |
-| Same-value never sent | Pure-function test: IOPS target clipped to current → field missing, paths without provisionedIops | No unchanged fields sent |
+| Same-value never sent | Pure-function test: IOPS target clipped to current → field missing, mask without provisionedIops | No unchanged fields sent |
 | Baseline boosted past the new ceiling | Pure-function test: curIops > IOPS_MAX → target = IOPS_MAX (a lowered repair value), field still sent | Baseline pulled back legally, no deadlock |
-| Single perf field change | Pure + client tests: only IOPS changes → paths has provisionedIops, not provisionedThroughput | All 4 paths shapes pinned |
+| Single perf field change | Pure + client tests: only IOPS changes → mask has provisionedIops, not provisionedThroughput | All 4 mask shapes pinned |
 | Rejected performance converges | Service test: bundled 400 → next round size-only, ERROR log, no loop | One-round convergence |
 | disks.get failure never blocks capacity | Service test: read throws → size-only PATCH still sent + WARN | Capacity proceeds |
 | Rate-limit path does not regress | Existing rate_limited tests pass unchanged | Zero behavior drift |
