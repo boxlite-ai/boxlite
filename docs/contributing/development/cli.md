@@ -83,6 +83,10 @@ directories, including `CARGO_LLVM_COV_TARGET_DIR` and
 subshell so it cannot alter the following cargo-llvm-cov invocation. Both entry
 points stop before tests if building or resolving the CLI executable fails.
 
+After changing these Make entry points, run both `make test:unit:scripts` and
+`make test:apps:infra`. Their Cargo fakes must emit executable artifact metadata;
+fixtures that isolate PATH must also expose the wrapper's real shell utilities.
+
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit tests
 and the `auth`, `ssh_cloud`, `custom_kernel_rc`, and `checkpoint` integration
 targets, excluding VM suites such as `ssh_rest.rs`.
