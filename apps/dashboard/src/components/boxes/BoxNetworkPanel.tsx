@@ -15,10 +15,10 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
-import { useState } from 'react'
-import { BoxDetailField, BoxDetailHeading } from './BoxDetailFields'
 import { ChevronDown } from '@/components/ui/icon'
+import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
+import { useState, type ReactNode } from 'react'
+import { BoxDetailField, BoxDetailHeading } from './BoxDetailFields'
 
 /**
  * Mirrors the palette in BoxDetails so the network section reads as part of the
@@ -27,14 +27,15 @@ import { ChevronDown } from '@/components/ui/icon'
 const STATUS = { idle: '#e0b341' } as const
 
 export type BoxNetworkPanelProps = {
+  /** Additional network fields (for example SSH), before tunnel actions. */
+  children?: ReactNode
   /** The box's policy in both directions; absent when the API did not report it. */
   network?: NetworkInfo
   inboundPending?: boolean
   /** False for viewers, who see the state but cannot change exposure. */
   canManage: boolean
   onToggleInbound: (next: NetworkMode) => void
-  /** Opens the port prompt that resolves a public URL; needs inbound access. */
-  onGetUrl: () => void
+  onCreateTunnel: () => void
 }
 
 /** Display the effective policy without treating CIDRs as hostnames. */
@@ -65,28 +66,14 @@ function OutboundPolicy({ outbound }: { outbound?: NetworkInfo['outbound'] }) {
   )
 }
 
-/** Why "get url" is unavailable: the tunnel route needs inbound access and WRITE_BOXES. */
-function getUrlHint(inboundEnabled: boolean, canManage: boolean): string | undefined {
-  if (!canManage) return 'Getting a url needs permission to manage this box'
-  if (!inboundEnabled) return 'Enable inbound access to get a url'
-  return undefined
-}
-
-/**
- * Both directions of the box's network policy, and a way to get a URL for one
- * of its ports.
- *
- * The section does not list ports, because the console cannot enumerate what is
- * listening inside a guest — see `BoxPreviewUrlDialog` for why. Rather than
- * showing a list of guesses, the URL is fetched on demand for a port the user
- * names, which is something the REST surface answers reliably.
- */
+/** Box-wide network policy, with explicit per-port tunnel actions. */
 export function BoxNetworkPanel({
   network,
   inboundPending = false,
   canManage,
   onToggleInbound,
-  onGetUrl,
+  onCreateTunnel,
+  children,
 }: BoxNetworkPanelProps) {
   const [confirmingInbound, setConfirmingInbound] = useState(false)
   const inboundEnabled = network?.inbound?.mode === NetworkMode.ENABLED
@@ -95,21 +82,7 @@ export function BoxNetworkPanel({
 
   return (
     <>
-      {/* A URL is a tunnel: the API grants it only with inbound access, to members who can manage the box. */}
-      <BoxDetailHeading
-        title="Network"
-        action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onGetUrl}
-            disabled={!inboundEnabled || !canManage}
-            title={getUrlHint(inboundEnabled, canManage)}
-          >
-            Get URL
-          </Button>
-        }
-      />
+      <BoxDetailHeading title="Network" />
 
       {/* Sheet convention: grey key, foreground value; hue carries the risk
           signal (amber when inbound is enabled). Outbound is read-only: no
@@ -138,27 +111,25 @@ export function BoxNetworkPanel({
         </BoxDetailField>
       </dl>
 
+      {children}
+      <div className="mt-4 flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onCreateTunnel}
+          disabled={!canManage}
+          title={!canManage ? 'Managing tunnels requires permission to manage this Box' : undefined}
+        >
+          Create tunnel
+        </Button>
+      </div>
+
       <AlertDialog open={confirmingInbound} onOpenChange={setConfirmingInbound}>
         <AlertDialogContent className="font-sans">
           <AlertDialogHeader>
             <AlertDialogTitle>Enable inbound access for this box?</AlertDialogTitle>
-            {/* Scoped deliberately. Inbound access only lets the proxy serve
-                ports opened as tunnels, under each tunnel's access policy. The web
-                terminal does not go through the proxy: it attaches over `/v1`
-                with the member's own credentials, and the management API is
-                untouched. An earlier "Make this box public?" read as handing
-                over the whole box. */}
             <AlertDialogDescription>
-              Anyone with the URL of a <strong>port opened as a public tunnel</strong> reaches it without signing in.
-              The URL is not a secret — it ends up in browser history, proxy logs and Referer headers. A private tunnel
-              also needs its access token or a sign-in to your organization.
-              <br />
-              <br />
-              The web terminal and the box&apos;s files, commands and settings are not affected; those still require
-              signing in to your organization.
-              <br />
-              <br />
-              If a port serves API keys or customer data, leave inbound disabled.
+              This restores access to previously configured tunnels, using each tunnel’s public or private policy.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -1,24 +1,17 @@
-/*
- * Copyright 2026 BoxLite AI
- * SPDX-License-Identifier: AGPL-3.0
- */
-
-import { useBoxPreviewUrlMutation } from '@/hooks/mutations/useBoxPreviewUrlMutation'
+/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInboundMutation'
+import { useApi } from '@/hooks/useApi'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { Box, NetworkMode } from '@boxlite-ai/api-client'
-import { useCallback, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '@/hooks/queries/queryKeys'
 import { BoxDomainBindings } from './BoxDomainBindings'
 import { BoxNetworkPanel } from './BoxNetworkPanel'
-import { BoxPreviewUrlDialog } from './BoxPreviewUrlDialog'
+import { BoxTunnelDialog } from './BoxTunnelDialog'
 
-/**
- * Wires the network section to the box APIs.
- *
- * Both server calls live in the hooks layer — `useUpdateBoxInboundMutation`
- * (which also owns cache invalidation) and `useBoxPreviewUrlMutation` — so this
- * component issues no HTTP of its own and only orchestrates.
- */
+/** Scope the dialog to its authenticated client; switching context discards secrets and late results. */
 export function BoxNetworkSection({
   box,
   canManage,
@@ -28,43 +21,51 @@ export function BoxNetworkSection({
   canManage: boolean
   children?: ReactNode
 }) {
+  const api = useApi()
+  const { selectedOrganization } = useSelectedOrganization()
+  const organizationId = selectedOrganization?.id
   const toggleInbound = useUpdateBoxInboundMutation()
-  const previewUrl = useBoxPreviewUrlMutation()
+  const queryClient = useQueryClient()
+  const [dialog, setDialog] = useState<{
+    api: typeof api
+    organizationId: string
+    boxId: string
+  } | null>(null)
+  const current = useRef({ api, organizationId, boxId: box.id, canManage })
+  current.current = { api, organizationId, boxId: box.id, canManage }
+  // Render-time reset prevents a previous account's secret from flashing for one effect frame.
+  if (
+    dialog &&
+    (dialog.api !== api || dialog.organizationId !== organizationId || dialog.boxId !== box.id || !canManage)
+  )
+    setDialog(null)
 
-  const [dialogOpen, setDialogOpen] = useState(false)
-
-  const setInbound = useCallback(
-    (mode: NetworkMode) => {
-      toggleInbound.mutate(
-        { boxId: box.id, mode },
-        {
-          // Named for what actually changed: tunnel reachability, not the
-          // box as a whole.
-          onSuccess: () =>
-            toast.success(
-              mode === NetworkMode.ENABLED ? 'Tunnel URLs are open to anyone' : 'Tunnel URLs require signing in',
-            ),
-          onError: () => toast.error('Could not change inbound access'),
+  function open() {
+    if (canManage && organizationId) setDialog({ api, organizationId, boxId: box.id })
+  }
+  function setInbound(mode: NetworkMode) {
+    if (!canManage || toggleInbound.isPending) return
+    const scope = current.current
+    const stillCurrent = () =>
+      current.current.api === scope.api &&
+      current.current.organizationId === scope.organizationId &&
+      current.current.boxId === scope.boxId &&
+      current.current.canManage
+    toggleInbound.mutate(
+      { boxId: box.id, mode },
+      {
+        onSuccess: () => {
+          if (stillCurrent())
+            toast.success(mode === NetworkMode.ENABLED ? 'Inbound access enabled' : 'Inbound access disabled')
         },
-      )
-    },
-    [box.id, toggleInbound],
-  )
-
-  const openDialog = useCallback(() => {
-    // Start clean each time: a URL left over from a previous port would read as
-    // the answer to the port about to be typed.
-    previewUrl.reset()
-    setDialogOpen(true)
-  }, [previewUrl])
-
-  const fetchUrl = useCallback(
-    (port: number) => {
-      previewUrl.mutate({ boxId: box.id, port })
-    },
-    [box.id, previewUrl],
-  )
-
+        onError: () => {
+          if (stillCurrent()) toast.error('Could not change inbound access')
+        },
+      },
+    )
+  }
+  const active =
+    dialog && dialog.api === api && dialog.organizationId === organizationId && dialog.boxId === box.id && canManage
   return (
     <>
       <BoxNetworkPanel
@@ -72,18 +73,29 @@ export function BoxNetworkSection({
         inboundPending={toggleInbound.isPending}
         canManage={canManage}
         onToggleInbound={setInbound}
-        onGetUrl={openDialog}
-      />
-      {children}
+        onCreateTunnel={open}
+      >
+        {children}
+      </BoxNetworkPanel>
       <BoxDomainBindings boxId={box.id} canManage={canManage} />
-      <BoxPreviewUrlDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        url={previewUrl.data}
-        isFetching={previewUrl.isPending}
-        error={previewUrl.isError ? 'Could not get a URL for that port.' : undefined}
-        onFetchUrl={fetchUrl}
-      />
+      {active && (
+        <BoxTunnelDialog
+          api={api}
+          organizationId={dialog.organizationId}
+          box={box}
+          onClose={() => setDialog(null)}
+          onEnableInbound={(signal) => toggleInbound.mutateAsync({ boxId: box.id, mode: NetworkMode.ENABLED, signal })}
+          onRefreshInbound={async (signal) => {
+            const { data } = await api.boxApi.getBox(box.id, dialog.organizationId, undefined, {
+              signal,
+              timeout: 15_000,
+            })
+            if (signal.aborted) return undefined
+            queryClient.setQueryData(queryKeys.boxes.detail(dialog.organizationId, box.id), data)
+            return data.network?.inbound.mode
+          }}
+        />
+      )}
     </>
   )
 }

@@ -1181,5 +1181,25 @@ objects never retain the response or token. URI values must be strings; URL-pars
 coercion cannot turn a malformed response into a usable descriptor. Full and masked
 tokens remain distinct.
 
-These additive methods support the forthcoming tunnel dialog. The existing
-public-URL UI continues using its existing method until that migration.
+The Overview Create tunnel action uses these methods directly; the previous
+public-only Get URL flow has been removed.
+
+### Creating and revoking tunnels
+
+Create tunnel first checks whether the Box can serve a tunnel and whether inbound
+access is enabled. Enabling inbound also restores previously configured tunnels
+under their existing access policies. Unknown inbound state offers Refresh status;
+the console never guesses that a failed enable request succeeded.
+
+The port form defaults to Private. The configured result shows its exact port and
+access mode. A newly issued private token can be copied; an existing masked token
+cannot be recovered or copied as a usable credential. Closing the dialog does not
+revoke access. The console clears its local result on Box, organization, client,
+or permission changes and aborts outstanding requests, including inbound enablement.
+Cancellation stops the client from waiting; it cannot undo a mutation already
+accepted by the server. Reopen the Box to read its current inbound state.
+
+Revoke by port remains available for stopped Boxes and disabled inbound access.
+A result-specific revoke targets that exact port. Uncertain creation locks the
+submitted port and offers revocation instead of retrying creation. Existing
+connections can survive revocation; new requests are blocked after cache expiry.

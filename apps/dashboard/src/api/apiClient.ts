@@ -492,22 +492,17 @@ export class ApiClient {
   }
 
   /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */
-  public async setBoxInboundMode(organizationId: string, boxId: string, mode: NetworkMode): Promise<void> {
-    await this.http.put(this.v1BoxPath(organizationId, boxId, '/network/inbound'), { mode }, this.v1Config())
-  }
-
-  /**
-   * A public URL for one port of the box, through the route `box.network.tunnel()`
-   * uses. It needs inbound access, declares the port public, and resumes a
-   * stopped box that has auto-resume.
-   */
-  public async getTunnelUrl(organizationId: string, boxId: string, port: number): Promise<string> {
-    const response = await this.http.post<{ uri: string }>(
-      this.v1BoxPath(organizationId, boxId, '/network/tunnel'),
-      undefined,
-      { ...this.v1Config(), params: { port } },
+  public async setBoxInboundMode(
+    organizationId: string,
+    boxId: string,
+    mode: NetworkMode,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.http.put(
+      this.v1BoxPath(organizationId, boxId, '/network/inbound'),
+      { mode },
+      { ...this.v1Config(), timeout: 30_000, signal },
     )
-    return response.data.uri
   }
 
   /** Private creation must check current capabilities: older servers ignore the mode. */

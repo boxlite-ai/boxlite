@@ -457,10 +457,12 @@ describe('ApiClient.setBoxInboundMode', () => {
     const { ApiClient } = await import('./apiClient')
     const api = new ApiClient(config, 'tok')
 
-    await api.setBoxInboundMode('org-1', 'box-1', 'enabled')
+    const controller = new AbortController()
+    await api.setBoxInboundMode('org-1', 'box-1', 'enabled', controller.signal)
 
     expect(requests).toHaveLength(1)
     const [request] = requests
+    expect((request as { signal?: AbortSignal }).signal).toBe(controller.signal)
     expect(request.method).toBe('put')
     expect(request.baseURL).toBe('http://api.test/api')
     expect(request.url).toBe('/v1/org-1/boxes/box-1/network/inbound')
@@ -469,20 +471,26 @@ describe('ApiClient.setBoxInboundMode', () => {
   })
 })
 
-describe('ApiClient.getTunnelUrl', () => {
+describe('ApiClient.prepareBoxTunnel', () => {
   it('asks the /v1 tunnel route for a port, as the SDK does', async () => {
     vi.resetModules()
     const axios = (await import('axios')).default
     const requests: Array<{ method?: string; url?: string; params?: unknown }> = []
     axios.defaults.adapter = (async (cfg: never) => {
       requests.push(cfg)
-      return { data: { uri: 'https://3000-d-62.proxy.test' }, status: 200, statusText: '', headers: {}, config: cfg }
+      return {
+        data: { uri: 'https://3000-d-62.proxy.test', isPublic: true, token: null },
+        status: 200,
+        statusText: '',
+        headers: {},
+        config: cfg,
+      }
     }) as never
     const { ApiClient } = await import('./apiClient')
 
-    const uri = await new ApiClient(config, 'tok').getTunnelUrl('org-1', 'box-1', 3000)
+    const uri = await new ApiClient(config, 'tok').prepareBoxTunnel('org-1', 'box-1', 3000, true)
 
-    expect(uri).toBe('https://3000-d-62.proxy.test')
+    expect(uri).toEqual({ uri: 'https://3000-d-62.proxy.test', isPublic: true, token: null })
     expect(requests[0].method).toBe('post')
     expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/network/tunnel')
     expect(requests[0].params).toEqual({ port: 3000 })

@@ -8,6 +8,7 @@ import { onboardingHandlers } from './onboarding-handlers'
 import { domainHandlers } from './domain-handlers'
 import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handlers'
 import { sshHandlers } from './ssh-handlers'
+import { tunnelHandlers } from './tunnel-handlers'
 import { ciHandlers } from './ci-handlers'
 import {
   OrganizationEmail,
@@ -92,6 +93,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 export const handlers = [
   ...ciHandlers(),
   ...sshHandlers,
+  ...tunnelHandlers,
   ...domainHandlers(),
   ...checkpointHandlers,
   ...onboardingHandlers(API_URL),
@@ -238,17 +240,6 @@ export const handlers = [
     const { mode } = (await request.json()) as { mode: NetworkMode }
     box.network.inbound = { mode, allow_net: [] }
     return HttpResponse.json(box.network.inbound)
-  }),
-  // Refuses without inbound access, like the real route.
-  http.post(`${API_URL}/v1/:prefix/boxes/:boxId/network/tunnel`, ({ params, request }) => {
-    const boxId = String(params.boxId)
-    const box = MOCK_BOXES.find((b) => b.id === boxId)
-    if (box?.network?.inbound.mode !== NetworkMode.ENABLED) return new HttpResponse(null, { status: 409 })
-    const port = new URL(request.url).searchParams.get('port')
-    // Mirrors the real hex-encoded direct-preview host shape. Hand-rolled
-    // rather than via Buffer, which does not exist in the browser.
-    const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-    return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful
