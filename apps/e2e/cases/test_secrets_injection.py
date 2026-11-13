@@ -33,6 +33,13 @@ from conftest import drain
 SECRET_NAME = "e2e_probe"
 PLACEHOLDER = f"<BOXLITE_SECRET:{SECRET_NAME}>"
 HOST = "httpbingo.org"
+# The proxy overwrites only configured headers the guest already sent, whatever
+# their value (src/deps/libgvproxy-sys/gvproxy-bridge/mitm.go
+# injectSecretHeaders). The guest sends this header with a dummy that appears
+# nowhere else, so its absence from the echo proves this header was overwritten.
+INJECTED_HEADER = "Authorization"
+HEADER_TEMPLATE = "Bearer {value}"
+GUEST_HEADER_DUMMY = "e2e-guest-authorization-dummy"
 # Echoes the request headers as JSON — the only way to see what left the box.
 ECHO_URL = f"https://{HOST}/headers"
 ECHO_FILE = "/tmp/e2e-secret-echo.json"
@@ -64,7 +71,12 @@ async def box_with_secret(rt, image, secret_value):
         boxlite.BoxOptions(
             image=image,
             secrets=[
-                boxlite.Secret(name=SECRET_NAME, value=secret_value, hosts=[HOST]),
+                boxlite.Secret(
+                    name=SECRET_NAME,
+                    value=secret_value,
+                    hosts=[HOST],
+                    headers={INJECTED_HEADER: HEADER_TEMPLATE},
+                ),
             ],
         ),
     )
@@ -102,11 +114,12 @@ async def test_the_proxy_injects_only_the_configured_header(
 ):
     """What leaves the box carries the value the box never had.
 
-    The placeholder is sent in another header from inside the guest; the echo
-    shows what the host received. That header stays unchanged, and the value
-    arrives only in the injected Authorization header. A stage that drops
-    `secrets` never echoes the value, which is the failure this case exists to
-    catch.
+    The guest sends a dummy in the configured Authorization header and the
+    placeholder in another header; the echo shows what the host received.
+    The dummy is gone, the placeholder arrives unchanged, and the value
+    arrives, so the proxy wrote the configured header and only that one. A
+    stage that drops `secrets` never echoes the value, which is the failure
+    this case exists to catch.
 
     The answer comes back as an exit code rather than as stdout, and the echo
     is graded by a grep inside the guest. Short-exec stdout is dropped
@@ -131,13 +144,21 @@ async def test_the_proxy_injects_only_the_configured_header(
 
     _, err, code = await _run(
         box_with_secret,
-        f"curl -fsS --max-time 20 -H 'X-E2E-Probe: {PLACEHOLDER}' "
-        f"{ECHO_URL} -o {ECHO_FILE}",
+        f"curl -fsS --max-time 20 -H '{INJECTED_HEADER}: {GUEST_HEADER_DUMMY}' "
+        f"-H 'X-E2E-Probe: {PLACEHOLDER}' {ECHO_URL} -o {ECHO_FILE}",
     )
     assert code == 0, (
         f"the box reached {CONTROL_HOST} but not {HOST}, which is the host its "
         f"secret binds and therefore the one the MITM path terminates "
         f"({code}): {err.strip()[:200]!r}"
+    )
+
+    _, _, dummy_present = await _run(
+        box_with_secret, f"grep -qF -- '{GUEST_HEADER_DUMMY}' {ECHO_FILE}"
+    )
+    assert dummy_present == 1, (
+        f"the guest's {INJECTED_HEADER} value reached {HOST} (grep exit "
+        f"{dummy_present}) — the proxy did not overwrite the configured header"
     )
 
     _, _, placeholder_present = await _run(
