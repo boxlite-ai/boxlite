@@ -731,6 +731,10 @@ PHONY_TARGETS += test\:apps\:secret-server
 test\:apps\:secret-server:
 	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
 
+PHONY_TARGETS += test\:apps\:secret-server\:integration
+test\:apps\:secret-server\:integration:
+	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 ./internal/database ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
+
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@$(MAKE) test:apps:infra

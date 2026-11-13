@@ -4,8 +4,8 @@ The internal encryption package protects secret values and routing policy with p
 
 ## Scope
 
-This Go module currently contains only `internal/encryption`; it has no server
-entry point, HTTP endpoints, persistence, authentication, or deployment resources.
+This Go module contains encryption, database initialization, and a migration
+command; it has no HTTP server, authentication, or deployment resources.
 The existing API encryption service and stored values remain unchanged.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
@@ -119,19 +119,45 @@ A future change will add a rewrap API or a keyring provider that routes by key I
 The envelope format allows rewrapping a DEK without changing the value ciphertext,
 but KMS, provider routing, and migration jobs are not implemented here.
 
+## Database migrations
+
+Set `DATABASE_URL` to the separate PostgreSQL database and run
+`secret-server migrate`. The command applies embedded goose migrations under a
+PostgreSQL session lock, with a two-minute deadline. Run it with an account that
+can create schema objects. Migrations are forward-only; deployed application
+versions must tolerate compatible schema changes. The database must use UTF-8
+server encoding. SIGINT and SIGTERM cancel a running migration.
+
+Before serving requests, the future service must call `database.Initialize`.
+It applies migrations and verifies a durable encrypted canary under a separate
+transaction advisory lock. If the canary is absent but versions exist, it first
+decrypts an existing version. A wrong key or corrupt ciphertext fails readiness.
+Canary enrollment uses a read-committed transaction even when the database has a
+different default isolation level.
+
 ## Verification
 
 Run from the repository root with Go 1.25.4 or newer:
 
 ```sh
 make test:apps:secret-server
+make test:apps:secret-server:integration
+make coverage:apps:secret-server:integration
 make lint:apps:secret-server
 make fmt:apps:secret-server
 make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=5s -parallel=2'
 ```
 
-The test target runs with the race detector and `GOWORK=off`, so it needs no VM,
-native SDK library, Node installation, cloud permissions, or external Go modules.
+The unit test target runs with the race detector and `GOWORK=off`. The integration
+target requires infra-local PostgreSQL and permission to create a temporary database.
+It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
+creates a uniquely named database and drops it after the test.
+The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
+Database and command tests share the temporary database setup and cleanup helper.
+It also checks that SIGTERM cancels the migration command while it waits for a lock.
+CI runs the same integration target against a PostgreSQL 17 service on Ubuntu,
+including on draft PRs when Go-related files change. This checks database behavior;
+the infra-local BoxLite VM still needs separate local verification.
 The Nx test target delegates to the same make target for workspace test discovery.
 Nx caching is disabled for this target because the workspace default inputs exclude
 Go test files. Every invocation reaches Go, whose own test cache tracks test changes.
