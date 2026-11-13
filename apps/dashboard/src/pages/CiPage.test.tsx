@@ -115,6 +115,47 @@ describe('CI page', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
   }
+  it('shows absent runner resources as unknown and exposes its failure to keyboard users', async () => {
+    mocks.api.getCiRunners.mockResolvedValue({
+      items: [
+        {
+          ...runner,
+          image: undefined,
+          cpu: undefined,
+          memory: undefined,
+          disk: undefined,
+          state: 'error',
+          errorReason: 'Runner image unavailable',
+          createdAt: '2026-11-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      totalPages: 1,
+      capacity,
+    })
+    await render()
+    const cells = [...document.querySelectorAll('tbody td')].map((cell) => cell.textContent)
+    expect(cells.slice(2, 6)).toEqual(['—', '— vCPU', '— GiB', '— GiB'])
+    const status = document.querySelector<HTMLElement>('tbody [tabindex="0"]')!
+    await act(async () => status.focus())
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe('Runner image unavailable')
+  })
+  it('explicitly retries a failed runner refresh without removing cached rows', async () => {
+    await render()
+    mocks.api.getCiRunners.mockRejectedValueOnce(Error('offline'))
+    await act(async () => cache.invalidateQueries({ queryKey: ['ci-runners'] }))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(document.body.textContent).toContain('Unable to refresh runners')
+    const retry = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Retry')!
+    expect(document.querySelector('tbody')?.textContent).toContain(runner.name)
+    const attempts = mocks.api.getCiRunners.mock.calls.length
+    await act(async () => retry.click())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(document.body.textContent).not.toContain('Unable to refresh runners')
+    expect(mocks.api.getCiRunners).toHaveBeenCalledTimes(attempts + 1)
+    expect(document.querySelector('tbody')?.textContent).toContain(runner.name)
+  })
   it('associates the selected CI tab with its rendered panel', async () => {
     await render()
     const tab = document.querySelector('[role="tab"][aria-selected="true"]')!

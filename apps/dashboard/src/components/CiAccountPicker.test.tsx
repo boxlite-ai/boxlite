@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { act, StrictMode } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CiAccountPicker } from './CiAccountPicker'
@@ -9,6 +10,7 @@ import { prepareCiRedirect } from '@/lib/ci-connect'
 
 describe('CI account state picker', () => {
   let root: Root
+  let cache: QueryClient
   const organization = '12345678-1234-4234-8234-123456789def',
     id = '12345678-1234-4234-8234-123456789abc'
   const api = { selectCiAccount: vi.fn(), getCiRepositories: vi.fn() },
@@ -57,10 +59,13 @@ describe('CI account state picker', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
+    cache = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
     api.selectCiAccount.mockReset()
+    api.getCiRepositories.mockReset()
   })
   afterEach(async () => {
     await act(async () => root?.unmount())
+    cache.clear()
     document.body.innerHTML = ''
     sessionStorage.clear()
   })
@@ -71,13 +76,15 @@ describe('CI account state picker', () => {
     await act(async () =>
       root.render(
         <StrictMode>
-          <CiAccountPicker
-            api={api}
-            organization={organization}
-            result={value}
-            onResult={changed}
-            onSwitch={switched}
-          />
+          <QueryClientProvider client={cache}>
+            <CiAccountPicker
+              api={api}
+              organization={organization}
+              result={value}
+              onResult={changed}
+              onSwitch={switched}
+            />
+          </QueryClientProvider>
         </StrictMode>,
       ),
     )
@@ -86,6 +93,18 @@ describe('CI account state picker', () => {
     [...document.querySelectorAll<HTMLButtonElement>(`[data-account-id="${account}"] button`)].find(
       (button) => button.textContent === 'Connect' || button.textContent === 'Install',
     )!
+  it('opens and closes installed repository details without selecting the account', async () => {
+    api.getCiRepositories.mockResolvedValue({ repositories: [], total: 0, page: 1, next_page: null })
+    await render()
+    const toggle = document.querySelector<HTMLButtonElement>('[aria-label="Repositories for alice"]')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(api.getCiRepositories).toHaveBeenCalled()
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(api.selectCiAccount).not.toHaveBeenCalled()
+  })
   it('shows Install, Connect and completed states according to server account state', async () => {
     await render()
     expect(action(1).textContent).toBe('Connect')

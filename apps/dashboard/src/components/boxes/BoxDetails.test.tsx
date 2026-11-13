@@ -9,6 +9,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import BoxDetails from './BoxDetails'
+import { copyToClipboard } from '@/lib/copy-text'
+import { toast } from 'sonner'
+vi.mock('@/lib/copy-text', () => ({ copyToClipboard: vi.fn() }))
 
 const mocks = vi.hoisted(() => ({
   box: undefined as unknown,
@@ -212,6 +215,31 @@ describe('BoxDetails overview', () => {
     await flushReactWork()
   }
 
+  it('copies the public Box ID and clears confirmation after the timeout', async () => {
+    vi.useFakeTimers()
+    vi.mocked(copyToClipboard).mockResolvedValue(true)
+    try {
+      await renderBoxDetails()
+      const button = document.querySelector<HTMLButtonElement>('[aria-label="Copy Box ID"]')!
+      await act(async () => button.click())
+      expect(copyToClipboard).toHaveBeenCalledWith('box-1')
+      expect(button.querySelector('.text-success')).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(1300))
+      expect(button.querySelector('.text-success')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a clipboard failure without showing copy success', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(false)
+    await renderBoxDetails()
+    const button = document.querySelector<HTMLButtonElement>('[aria-label="Copy Box ID"]')!
+    await act(async () => button.click())
+    expect(toast.error).toHaveBeenCalledWith('Could not copy to clipboard')
+    expect(button.querySelector('.text-success')).toBeNull()
+  })
+
   it('opens SSH before the lifecycle action without starting a shell', async () => {
     await renderBoxDetails()
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
@@ -336,6 +364,21 @@ describe('BoxDetails overview', () => {
 
   // The API's reason for a private pull no credential covers names the fix;
   // the page carries the way to it, with the registry already chosen.
+  it('links a curated image by name when its catalog has no ID', async () => {
+    mocks.images = [{ id: null, name: 'curated-python', curated: true, curatedRef: 'python:3.12' }]
+    mocks.box = { ...makeRunningBox(), image: 'python:3.12' }
+    await renderBoxDetails()
+    const image = [...document.querySelectorAll('a')].find((a) => a.textContent === 'python:3.12')
+    expect(image?.getAttribute('href')).toBe('/dashboard/images/curated-python')
+  })
+  it('does not invent an image link when the Box has no image metadata', async () => {
+    mocks.box = { ...makeRunningBox(), image: undefined }
+    await renderBoxDetails()
+    const label = [...document.querySelectorAll('dt')].find((dt) => dt.textContent === 'Image')!
+    expect(label.nextElementSibling?.textContent).toBe('—')
+    expect(label.nextElementSibling?.querySelector('a')).toBeNull()
+  })
+
   it('offers to connect the registry a private pull was refused by', async () => {
     mocks.box = {
       ...(makeRunningBox() as object),

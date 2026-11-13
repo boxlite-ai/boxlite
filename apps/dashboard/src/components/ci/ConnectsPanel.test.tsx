@@ -161,6 +161,49 @@ describe('CI connects panel', () => {
     await act(async () => button('Connect GitHub').click())
     expect(mocks.api.startCiConnect).toHaveBeenCalledTimes(1)
   })
+  it('expands and collapses repository inventory without changing the connection', async () => {
+    mocks.api.getCiSettings.mockResolvedValue({
+      ...settings,
+      connections: [{ ...settings.connections[0], account_type: 'Organization', listener_status: 'provisioning' }],
+    })
+    await render()
+    const toggle = document.querySelector<HTMLButtonElement>('[aria-label="Repositories for alice"]')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.querySelector('tbody')?.textContent).toContain('Organization')
+    expect(document.querySelector('tbody')?.textContent).toContain('Provisioning')
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(mocks.api.getCiRepositories).toHaveBeenCalled()
+    await act(async () => toggle.click())
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(mocks.api.updateCiConnection).not.toHaveBeenCalled()
+  })
+  it('retries a failed configuration read while keeping connected accounts visible', async () => {
+    mocks.api.getCiConnectConfiguration.mockRejectedValueOnce(Error('offline'))
+    await render()
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(document.body.textContent).toContain('Unable to load GitHub App configuration')
+    await act(async () => button('Retry GitHub configuration').click())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(mocks.api.getCiConnectConfiguration).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).not.toContain('Unable to load GitHub App configuration')
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+  })
+  it('retains connection inventory on refresh failure and retries explicitly', async () => {
+    await render()
+    mocks.api.getCiSettings.mockRejectedValueOnce(Error('offline'))
+    await act(async () => cache.invalidateQueries({ queryKey: ['ci-settings'] }))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(document.body.textContent).toContain('Could not refresh connections')
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+    const attempts = mocks.api.getCiSettings.mock.calls.length
+    await act(async () => button('Retry').click())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(document.body.textContent).not.toContain('Could not refresh connections')
+    expect(mocks.api.getCiSettings).toHaveBeenCalledTimes(attempts + 1)
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+  })
+
   it('shows connections without capacity controls', async () => {
     await render()
     expect(document.querySelector('tbody')?.textContent).toContain('alice')

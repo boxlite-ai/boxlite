@@ -1201,3 +1201,11 @@ With mock mode enabled, add `?preview=resource-empty`, `?preview=resource-error`
 `/dashboard/boxes?preview=fleet` adds seven Boxes on initial load, allowing review of the fleet statistics threshold. The web-api fixture includes outbound allow rules for Network inspection. Preview handlers run only through the mock worker; they do not change backend behavior.
 
 A filtered Box list with no matches uses the same clear-filter state as other resources. Clear filter preserves unrelated filters and returns to the list; a truly empty account retains its creation guidance.
+
+### Recovery regression coverage
+
+The dashboard suite exercises clipboard success and refusal, public tunnel descriptor
+validation and actionable errors, lifecycle labels, and keyboard access to checkpoint
+and runner failure reasons. CI tests also cover repository disclosure without changing
+the selected account, missing runner metadata, and explicit retries that retain cached
+connections and runners. These tests use the existing frontend API contracts.
