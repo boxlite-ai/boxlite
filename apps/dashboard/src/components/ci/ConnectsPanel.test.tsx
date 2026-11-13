@@ -46,6 +46,14 @@ describe('CI connects panel', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe = vi.fn()
+        unobserve = vi.fn()
+        disconnect = vi.fn()
+      },
+    )
     mocks.api.getCiRepositories.mockResolvedValue({
       repositories: [],
       total: 0,
@@ -78,6 +86,7 @@ describe('CI connects panel', () => {
   })
   afterEach(async () => {
     await act(async () => root?.unmount())
+    vi.unstubAllGlobals()
     cache.clear()
     document.body.innerHTML = ''
   })
@@ -156,7 +165,36 @@ describe('CI connects panel', () => {
     await render()
     expect(document.querySelector('tbody')?.textContent).toContain('alice')
     expect(button('Capacity')).toBeUndefined()
-    expect(button('Edit')).toBeUndefined()
+    expect(button('Edit limit')).toBeUndefined()
+  })
+  it('filters account names without case sensitivity and restores results after clearing', async () => {
+    await render()
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter connections"]')!
+    expect(input).not.toBeNull()
+    const filter = async (value: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    await filter(' ALICE ')
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+    await filter('missing')
+    expect(document.querySelector('table')).toBeNull()
+    expect(document.body.textContent).toContain('No matching connections')
+    expect(button('Clear filter')).toBeDefined()
+    await act(async () => button('Clear filter').click())
+    expect(input.value).toBe('')
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+  })
+  it('preserves an unfamiliar listener state as supplied by the server', async () => {
+    mocks.api.getCiSettings.mockResolvedValue({
+      ...settings,
+      connections: [{ ...settings.connections[0], listener_status: 'awaiting_policy' }],
+    })
+    await render()
+    expect(document.querySelector('tbody')?.textContent).toContain('awaiting_policy')
+    expect(document.querySelector('tbody')?.textContent).not.toContain('Ready')
   })
   it('offers repository access repair from an existing connection Update', async () => {
     await render()
@@ -193,17 +231,19 @@ describe('CI connects panel', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
-    expect(document.querySelector('tbody')?.textContent).not.toContain('alice')
+    expect(document.querySelector('[aria-label="Repositories for alice"]')).toBeNull()
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
   })
   it('opens a prefilled policy update, cancels locally and saves without deleting the connection', async () => {
     await render()
     await act(async () => button('Update').click())
-    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')?.checked).toBe(true)
+    expect(
+      document.querySelector<HTMLButtonElement>('[role="dialog"] [role="checkbox"]')?.getAttribute('aria-checked'),
+    ).toBe('true')
     await act(async () => button('Cancel').click())
     expect(mocks.api.updateCiConnection).not.toHaveBeenCalled()
     await act(async () => button('Update').click())
-    await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] [role="checkbox"]')!.click())
     mocks.api.getCiSettings.mockResolvedValue({
       ...settings,
       connections: [{ ...settings.connections[0], allow_private_repositories: false }],
@@ -228,7 +268,7 @@ describe('CI connects panel', () => {
     )
     await render()
     await act(async () => button('Update').click())
-    await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] [role="checkbox"]')!.click())
     await act(async () => {
       button('Update connection').click()
       button('Update connection').click()
@@ -238,7 +278,9 @@ describe('CI connects panel', () => {
     expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(
       'Unable to update this connection',
     )
-    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')?.checked).toBe(false)
+    expect(
+      document.querySelector<HTMLButtonElement>('[role="dialog"] [role="checkbox"]')?.getAttribute('aria-checked'),
+    ).toBe('false')
   })
   it('keeps a failed delete actionable inside its confirmation dialog', async () => {
     mocks.api.deleteCiConnection.mockRejectedValueOnce(Error('unavailable'))

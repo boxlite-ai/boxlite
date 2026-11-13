@@ -86,13 +86,13 @@ describe('CI account state picker', () => {
     [...document.querySelectorAll<HTMLButtonElement>(`[data-account-id="${account}"] button`)].find(
       (button) => button.textContent === 'Connect' || button.textContent === 'Install',
     )!
-  it('shows Install, Connect and completed pixel checks according to server account state', async () => {
+  it('shows Install, Connect and completed states according to server account state', async () => {
     await render()
     expect(action(1).textContent).toBe('Connect')
     expect(action(2).textContent).toBe('Connect')
     expect(action(3).textContent).toBe('Install')
     expect(action(4)).toBeUndefined()
-    expect(document.querySelector('[data-account-id="4"] .text-success')?.textContent).toContain('Connected')
+    expect(document.querySelector('[data-account-id="4"]')?.textContent).toContain('Connected')
     expect(document.querySelectorAll('input[type=radio]')).toHaveLength(0)
     expect(document.body.textContent).toContain('Signed in as alice')
     expect(document.querySelector('summary')?.textContent).toBe('Missing an organization?')
@@ -112,7 +112,7 @@ describe('CI account state picker', () => {
         }),
     )
     await render()
-    await act(async () => document.querySelector<HTMLInputElement>('input')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="checkbox"]')!.click())
     await act(async () => {
       action(2).click()
       action(2)?.click()

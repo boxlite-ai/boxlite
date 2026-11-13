@@ -1127,3 +1127,13 @@ Initial capability and inventory failures share one recovery region and Retry re
 Runners use single-line resource rows, explicit status text and fixed 25-row pagination. Server-side search stays editable after a failed request. Initial failures show a retry state; refresh failures retain cached rows, including a successful empty inventory. Cached page counts remain available after a refresh failure, allowing navigation to another page. Paging stays locked during active requests; placeholder data does not provide a page count. Polling and socket invalidation remain active.
 
 Owners edit the concurrency limit in a centered modal. Numeric text stays editable until submission validates it; zero pauses new jobs, and “Use account limit” clears the draft to inherit the account allowance. Cancellation discards the draft. Saving locks dismissal and duplicate submission, while failures keep the draft available for correction. Focus returns to Edit limit when the modal closes.
+
+### CI GitHub connection management
+
+Connects filters account names locally and uses the shared table, empty, loading and retry states. Refresh failures retain existing connections. Repository details expand within the account row, and policy updates use the themed checkbox and form dialog. Failed updates retain the draft; pending mutations remain scoped to the original organization. The callback recovery screen keeps the same authorization and storage-recovery behavior with aligned typography and buttons.
+
+Mock previews support `?preview=ci-empty` and `?preview=ci-repositories`; the latter includes enough repositories to exercise paging. These fixtures run only with dashboard mocking enabled and do not change production APIs.
+
+The GitHub account picker keeps account names on their own full-width row below
+the small-screen breakpoint; account type and actions follow on a second row.
+Desktop rows retain aligned columns. Expanded repository details span both layouts.

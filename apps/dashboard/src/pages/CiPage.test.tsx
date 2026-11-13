@@ -128,22 +128,34 @@ describe('CI page', () => {
     expect(document.body.textContent).toContain('No CI runners')
     expect(document.querySelector('thead')).toBeNull()
   })
-  it.each([['/dashboard/ci', 'getCiRunners', 'Filter runners', 'Runners could not be loaded']] as const)(
-    'presents an initial failure with recovery on %s',
-    async (path, method, label, title) => {
-      mocks.api[method].mockRejectedValue(new Error('Unavailable'))
-      await render(path)
-      expect(document.querySelector(`[aria-label="${label}"]`)).not.toBeNull()
-      expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)?.disabled).toBe(false)
-      expect(document.querySelector('[role="alert"] h2')?.textContent).toBe(title)
-      expect(document.querySelector('thead')).toBeNull()
-      const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
-      expect(retry).toBeDefined()
-      const calls = mocks.api[method].mock.calls.length
-      await act(async () => retry!.click())
-      expect(mocks.api[method].mock.calls.length).toBeGreaterThan(calls)
-    },
-  )
+  it.each([
+    ['/dashboard/ci', 'getCiRunners', 'Filter runners', 'Runners could not be loaded'],
+    ['/dashboard/ci/connects', 'getCiSettings', 'Filter connections', 'Could not load connections'],
+  ] as const)('presents an initial failure with recovery on %s', async (path, method, label, title) => {
+    mocks.api[method].mockRejectedValue(new Error('Unavailable'))
+    await render(path)
+    expect(document.querySelector(`[aria-label="${label}"]`)).not.toBeNull()
+    expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)?.disabled).toBe(path !== '/dashboard/ci')
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe(title)
+    expect(document.querySelector('thead')).toBeNull()
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
+    expect(retry).toBeDefined()
+    const calls = mocks.api[method].mock.calls.length
+    await act(async () => retry!.click())
+    expect(mocks.api[method].mock.calls.length).toBeGreaterThan(calls)
+  })
+  it('retains connections when only the refresh fails', async () => {
+    await render('/dashboard/ci/connects')
+    mocks.api.getCiSettings.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      await cache.invalidateQueries({ queryKey: ['ci-settings'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+  })
   it('retains a successful empty runner inventory after a refresh fails', async () => {
     mocks.api.getCiRunners.mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0, capacity })
     await render()
@@ -156,6 +168,12 @@ describe('CI page', () => {
     })
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('Unable to refresh runners')
     expect(document.body.textContent).toContain('No CI runners yet')
+  })
+  it('omits table headings when no GitHub accounts are connected', async () => {
+    mocks.api.getCiSettings.mockResolvedValue({ available: true, connections: [] })
+    await render('/dashboard/ci/connects')
+    expect(document.body.textContent).toContain('No GitHub accounts connected')
+    expect(document.querySelector('thead')).toBeNull()
   })
   it('offers clear-filter recovery after a runner search has no matches', async () => {
     mocks.api.getCiRunners.mockImplementation(async (_org, page, _limit, name) => ({
@@ -585,7 +603,7 @@ describe('CI page', () => {
     await act(async () =>
       [...document.querySelectorAll('button')].find((item) => item.textContent === 'Update')!.click(),
     )
-    await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] [role="checkbox"]')!.click())
     await act(async () =>
       [...document.querySelectorAll('button')].find((item) => item.textContent === 'Update connection')!.click(),
     )
