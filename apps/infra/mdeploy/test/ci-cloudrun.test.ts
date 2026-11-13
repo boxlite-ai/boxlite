@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { gcpApiProvider } from '../stack/providers/gcp/api.ts'
+import * as gcpSdk from '@pulumi/gcp'
+import { componentTargets } from '../src/components.ts'
 
 class Value {
   constructor(readonly __output: any) {}
@@ -139,6 +141,27 @@ test('the Cloud Run API retains background CPU and adds a service-level minimum 
   const off = capture(false).service
   assert.equal(off.scaling, undefined)
   assert.equal(off.template.containers[0].resources.cpuIdle, false)
+})
+
+test('API targeting includes newly configured secret grants absent from the previous state', () => {
+  const { records } = capture(true)
+  const service = records.find((record) => record.type === 'gcp.cloudrunv2.Service' && record.name === 'Api')!
+  const prefix = 'urn:pulumi:ci-test::boxlite::'
+  const apiType = (gcpSdk.cloudrunv2.Service as any).__pulumiType
+  const targets = componentTargets({
+    components: 'api',
+    app: 'boxlite',
+    stage: 'ci-test',
+    environment: {},
+    resources: [{ type: apiType, urn: `${prefix}${apiType}::${service.name}` }],
+  })
+  const grants = records.filter((record) => record.type === 'gcp.secretmanager.SecretIamMember')
+  const grantType = (gcpSdk.secretmanager.SecretIamMember as any).__pulumiType
+  assert.ok(grants.some((grant) => grant.name === 'ApiSecretAccess-CI_GITHUB_APP_PRIVATE_KEY'))
+  for (const grant of grants) {
+    const urn = `${prefix}${grantType}::${grant.name}`
+    assert.ok(urn.startsWith(targets[1]!.slice(0, -1)), `${grant.name} is outside the target scope`)
+  }
 })
 
 test('CI refs reach actual Cloud Run envs and per-secret grants, without plaintext payloads', () => {

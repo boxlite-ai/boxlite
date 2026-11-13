@@ -149,19 +149,12 @@ test('a release is refused unless the tarball it will install is already attache
   assert.match(gate, /boxlite-runner-\$\{VERSION\}-linux-amd64\.tar\.gz/)
   assert.match(gate, /"\$\{tarball\}\.sha256"/, 'the checksum is not required')
 
-  /*
-   * And asked for every release rollout, not only one whose components name
-   * the runner. A version pins the whole stage: the apply exports `VERSION`
-   * whatever `components` said, `selectRunnerBinary` prefers it over the
-   * workspace version, and the fleet's boot URL becomes this release's
-   * tarball. Skipping the check for `components: api` left exactly that
-   * address unguarded.
-   */
-  assert.doesNotMatch(gate, /\$COMPONENTS/, 'the asset check is conditioned on components again')
+  // API-only updates leave Runner policies unchanged; every path installing a Runner still checks its assets.
+  assert.match(gate, /if \[ "\$COMPONENTS" = 'api' \]; then exit 0; fi/)
   const addressing = source.slice(source.indexOf('- name: Address what this deploy installs'))
   assert.match(
     addressing.slice(0, addressing.indexOf('GITHUB_ENV')),
     /elif \[ -n "\$VERSION" \]; then\n\s*(?:#[^\n]*\n\s*)*printf 'VERSION=%s/,
-    'the apply no longer exports the version the gate was widened for',
+    'the inline program still needs its explicit release version',
   )
 })

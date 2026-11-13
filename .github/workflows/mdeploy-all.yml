@@ -38,7 +38,7 @@ on:
           - stage
           - prod
       components:
-        description: Which artifacts this ref needs before it is deployed
+        description: GCP API or Runner update, or full-stack deployment (api+runner; also supports AWS)
         required: true
         default: api+runner
         type: choice
@@ -273,6 +273,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.classify.outputs.version }}
+          COMPONENTS: ${{ inputs.components }}
         run: |
           set -Eeuo pipefail
           if ! release="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,assets 2>&1)"; then
@@ -283,13 +284,8 @@ jobs:
             echo "::error title=release::$VERSION is still a draft release; publishing it is what starts its builds"
             exit 1
           fi
-          # Asked for every release rollout, not only one whose components name
-          # the runner. On this line the version pins the whole stage: the apply
-          # exports VERSION, `selectRunnerBinary` prefers it over the workspace
-          # version, and the fleet's boot URL becomes this release's tarball
-          # whatever `components` said. `components` decides which images are
-          # published or promoted; it does not decide which runner a stage runs.
-          #
+          # API-only updates do not install a Runner binary.
+          if [ "$COMPONENTS" = 'api' ]; then exit 0; fi
           # The names are `build-runner-binary.yml`'s and `runnerArtifactFor`'s.
           # Asked by name rather than by count, because a release carries the
           # SDK archives too.
@@ -371,6 +367,12 @@ jobs:
           set -Eeuo pipefail
           output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}")"
           echo "$output" >> "$GITHUB_OUTPUT"
+
+      - name: Check component deployment support
+        if: inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'
+        run: |
+          echo '::error title=components::AWS/SST does not support independent API/Runner deployment; select api+runner'
+          exit 1
 
       - name: Federate an AWS identity
         if: steps.config.outputs.kind == 'ecr'
@@ -616,10 +618,8 @@ jobs:
           # whether it exists, so the apply reports success and the host 404s at
           # boot.
           #
-          # The release line has no such hole and needs no such test: a version
-          # pins the whole stage, VERSION is exported whatever `components`
-          # said, and `resolve` proved that release carries its tarball before
-          # any Environment was bound.
+          # VERSION still supplies valid program inputs for the full graph;
+          # component targeting determines which workload actually changes.
           source=release
           case "$COMPONENTS" in
             *runner*) [ -z "$VERSION" ] && source=build ;;
@@ -738,6 +738,7 @@ jobs:
           service_account: ${{ vars.GCP_DEPLOYER }}
 
       - name: Verify the images
+        if: inputs.components != 'runner'
         working-directory: apps/infra
         env:
           STAGE: ${{ inputs.stage }}
@@ -771,12 +772,14 @@ jobs:
       # `npm run mstage state unlock -- --stage <stage>`.
       - name: Apply
         working-directory: apps/infra
+        env:
+          COMPONENTS: ${{ inputs.components }}
         run: |
           set -Eeuo pipefail
           if [ "${{ inputs.apply }}" = "true" ]; then
-            npm run mdeploy -- --stage "${{ inputs.stage }}" ${{ inputs.confirm && '--confirm' || '' }}
+            npm run mdeploy -- --stage "${{ inputs.stage }}" --components "$COMPONENTS" ${{ inputs.confirm && '--confirm' || '' }}
           else
-            npm run mdeploy -- --stage "${{ inputs.stage }}" --diff
+            npm run mdeploy -- --stage "${{ inputs.stage }}" --components "$COMPONENTS" --diff
           fi
 
       - name: Report
@@ -799,6 +802,11 @@ jobs:
           if [ -n "${RUNNER_ARTIFACT_SOURCE:-}" ]; then
             runner="$RUNNER_ARTIFACT_SOURCE at ${VERSION:-${RUNNER_ARTIFACT_REF:-the workspace version}}"
           fi
+          images="${BOXLITE_IMAGE_TAG:-$unchosen}"
+          case "${{ inputs.components }}" in
+            api) runner='not selected (unchanged)' ;;
+            runner) images='not selected (unchanged)' ;;
+          esac
           {
             echo "### ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} · $LINE"
             echo
@@ -808,7 +816,7 @@ jobs:
             echo "| resolved | \`$LINE\` |"
             echo "| commit | \`$SHA\` |"
             echo "| components | \`${{ inputs.components }}\` |"
-            echo "| images | \`${BOXLITE_IMAGE_TAG:-$unchosen}\` |"
+            echo "| images | \`$images\` |"
             echo "| runner | \`$runner\` |"
             echo "| cloud | \`${{ steps.config.outputs.kind == 'ecr' && 'aws' || 'gcp' }}\` in \`${{ steps.config.outputs.region }}\` |"
             echo "| intent | \`${{ inputs.apply && 'apply' || 'preview' }}\` |"
@@ -817,6 +825,6 @@ jobs:
             echo "From a checkout:"
             echo
             echo '```'
-            echo "npm run mdeploy -- --stage ${{ inputs.stage }} --diff"
+            echo "npm run mdeploy -- --stage ${{ inputs.stage }} --components ${{ inputs.components }} --diff"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
