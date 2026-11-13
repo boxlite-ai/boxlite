@@ -32,6 +32,7 @@ function makeService() {
   const boxRepository = {
     findOneByIdOrName: jest.fn(),
     conditionalStartForProxy: jest.fn(),
+    insert: jest.fn(),
   } as any
   const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn() } as any
   // assertOrganizationIsNotSuspended mirrors the real implementation: throw
@@ -1335,7 +1336,7 @@ describe('BoxService volume reference resolution', () => {
   })
 
   it('fails the dispatch loudly when the instance left the configuration after the volume was created', async () => {
-    const { service } = makeService({
+    const { service, boxRepository } = makeService({
       volumeService: {
         validateVolumes: jest
           .fn()
@@ -1357,6 +1358,8 @@ describe('BoxService volume reference resolution', () => {
         Context.user(),
       ),
     ).rejects.toThrow("unknown Filestore instance 'ml-scratch'")
+    // A failed dispatch must not leave a persisted box row behind.
+    expect(boxRepository.insert).not.toHaveBeenCalled()
   })
 
   it('keeps a bucket-backed volume entry free of any filestore key', async () => {

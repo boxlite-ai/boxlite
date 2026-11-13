@@ -599,6 +599,18 @@ resolved target the dispatch carries.
   name is released by the same `name-deleted` rename). The NFS data
   directory itself is left in place for ops cleanup.
 
+### Runner/API version skew
+
+The runner declares `capabilities: ["filestore"]` in its healthcheck; the API
+persists the declaration on the runner row and refuses (loudly, at dispatch)
+to hand a filestore volume to a v2 runner that has not declared it. A runner
+binary predating capability reporting declares nothing, so during a rolling
+upgrade a filestore volume can only land on an upgraded runner. Upgrade order
+that keeps filestore creates working: runners first, API second — an upgraded
+runner with the old API is idle for filestore (the old API never creates
+filestore volumes), while the reverse order would put filestore creates on
+runners the API does not yet trust.
+
 ### Troubleshooting: box started but its filestore mountpoint is empty
 
 Start re-mounts lost mounts (e.g. after a host reboot) and logs failures
