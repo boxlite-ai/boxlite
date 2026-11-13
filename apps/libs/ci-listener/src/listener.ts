@@ -15,6 +15,7 @@ import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity } fro
 import { RepositoryCompensation, RepositoryScanSession } from './compensation/scanner'
 import { ScanClaim } from './compensation/queue'
 import { decodeDemand, DemandUncertain, LabelDemand, rebuildDemand } from './demand'
+import { CredentialCollector } from './credential-retirement'
 
 export interface ListenerBackend extends PoolBackend {
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -29,6 +30,8 @@ export interface ListenerHost {
   accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'>
   report(error: unknown, operation: string): void
   observe?(event: WorkerEvent): void
+  /** Permanently retire background discovery/replay and their local handles. */
+  close?(): Promise<void>
 }
 interface Runtime {
   backend: ListenerBackend
@@ -57,12 +60,14 @@ export class Listener {
   private readonly journal: ExecutionJournal
   private readonly worker: PoolSettings
   private readonly compensation: RepositoryCompensation
+  private readonly credentials: CredentialCollector
   private readonly timing: { tickMs: number; leaseMs: number; discoveryMs: number; compensationMs: number }
   private running = false
   private readonly retiring = new Set<Runtime>()
   private wake?: () => void
   constructor(private readonly options: ListenerOptions) {
     this.journal = new ExecutionJournal(options.state)
+    this.credentials = new CredentialCollector(options.state)
     this.worker = { ...options.worker, labels: [...options.worker.labels] }
     this.timing = { tickMs: 1000, leaseMs: 30000, discoveryMs: 300000, compensationMs: 300000, ...options.timing }
     if (
@@ -95,10 +100,15 @@ export class Listener {
     this.running = true
     const scanStop = new AbortController()
     let scans: Promise<void> | undefined
+    let superseded = false
     try {
       while (!signal.aborted) {
         try {
           await this.journal.initialize()
+          if (await this.options.state.superseded()) {
+            superseded = true
+            break
+          }
           scans ??= this.compensation.run(AbortSignal.any([signal, scanStop.signal]))
           await this.retireKnown()
           const lease = await this.options.state.acquire(randomUUID(), this.timing.leaseMs)
@@ -112,10 +122,39 @@ export class Listener {
     } finally {
       scanStop.abort()
       try {
-        await scans
+        if (superseded) {
+          // A pending scan must not delay retirement of independent owners.
+          const retirement = this.drain(signal)
+          const [, scan] = await Promise.allSettled([retirement, scans])
+          if (scan.status === 'rejected') this.options.host.report(scan.reason, 'compensation-retirement')
+          await retirement
+          // A scan may return a reader after the first drain has finished.
+          await this.drain(signal)
+        } else await scans
       } finally {
         this.running = false
       }
+    }
+  }
+  private async drain(signal: AbortSignal): Promise<void> {
+    let backoff = this.timing.tickMs
+    for (;;) {
+      const results = await Promise.allSettled([
+        this.retireKnown(),
+        this.compensation.close(),
+        this.options.host.close?.(),
+      ])
+      const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+      if (!failures.length) return
+      const error = new AggregateError(failures, 'Superseded Listener retirement remains pending')
+      if (signal.aborted) throw error
+      this.options.host.report(error, 'listener-retirement')
+      try {
+        await delay(backoff, undefined, { signal })
+      } catch {
+        throw error
+      }
+      backoff = Math.min(backoff * 2, 60000)
     }
   }
   private async session(lease: ExecutionLease, external: AbortSignal): Promise<void> {
@@ -149,6 +188,12 @@ export class Listener {
       while (!signal.aborted) {
         try {
           await this.cycle(session, signal)
+          try {
+            await this.credentials.step(lease)
+          } catch (error) {
+            if (error instanceof LeaseLost) throw error
+            this.options.host.report(error, 'credential-collection')
+          }
         } catch (error) {
           if (error instanceof LeaseLost) throw error
           if (!signal.aborted) this.options.host.report(error, 'listener-cycle')
@@ -463,7 +508,21 @@ export class Listener {
           }
         }
       }
-      if (current) await refreshCounts(repairs)
+      if (current) {
+        try {
+          await refreshCounts(repairs)
+        } catch (error) {
+          if (error instanceof LeaseLost || error instanceof StateCorrupt || signal.aborted) throw error
+          // Failed queue reads retain demand, but must not strand known stopped
+          // resources. Unverified balancing cannot dispatch unsent reservations.
+          try {
+            await runtime.pool.balance(session.lease, closedCapacity, [], signal)
+          } catch (recovery) {
+            if (!(recovery instanceof DemandUncertain)) throw recovery
+          }
+          throw error
+        }
+      }
       const readCounts = (): LabelDemand[] => {
         const values = current ? [...counters.values()].filter(related).map(decodeDemand) : []
         if (values.some((value) => value.accountId !== scope.installation.account.id)) throw new StateCorrupt()
@@ -478,11 +537,12 @@ export class Listener {
         await runtime.pool.balance(session.lease, await resolve(demands), demands, signal)
       } catch (error) {
         if (!(error instanceof DemandUncertain) || !current) throw error
-        // PAT hosts and missed running events cannot derive a trustworthy deficit
-        // from transport counters alone. Rebuild once before any resource mutation.
+        // Notifications cannot authorize expansion or idle retirement. A partial
+        // rebuild is not an empty queue and cannot authorize either operation.
         await refreshCounts(repositories(scope))
         demands = readCounts()
-        await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
+        if (!deferredRepositories.size)
+          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
       }
       for (const notice of current ? notices : [])
         if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))

@@ -28,6 +28,7 @@ import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
+import { ImageAdmissionService } from '../image/services/image-admission.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
@@ -212,6 +213,25 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       box: { phase: 'known', id: box.box_id },
     })
     return { ...value, box }
+  }
+  async function ageCreation(key: string, age = 300000) {
+    await db.query(
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{createdAt}',to_jsonb($3::bigint)) WHERE namespace=$1 AND record_key=$2",
+      [store.namespace, key, Date.now() - age],
+    )
+  }
+  function recoveringPool(host: ReturnType<CiNativeWorkers['open']>) {
+    return new WorkerPool(
+      journal,
+      scopeKey(scope()),
+      async () => ({
+        workers: host,
+        admit: jest.fn(),
+        job: async (notice) => ({ ...notice, status: 'queued' as const, labels: ['boxlite'], runner: null }),
+        runners: jest.fn(),
+      }),
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+    )
   }
   async function forDelivery() {
     const value = await created()
@@ -432,6 +452,216 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(restarted.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
     await expect(restarted.create(config)).rejects.toThrow('already attempted')
     expect(await db.getRepository(Box).count()).toBe(1)
+  })
+  it('creation fallback regression: a real cold-pull refusal releases its slot and later demand can create', async () => {
+    const { host, config, row } = await prepared()
+    let started = 0
+    const admission = new ImageAdmissionService(
+      { incr: async () => ++started, expire: async () => 1, ttl: async () => 60 } as any,
+      {} as any,
+      {} as any,
+    )
+    const image = { ref: 'quay.io/example/runner:latest', isOrgOwned: true }
+    for (let pull = 0; pull < 6; pull++) await admission.spendColdPullBudget({ id: org } as any, image)
+    beforePersist.mockImplementation(() => admission.spendColdPullBudget({ id: org } as any, image))
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+    const pool = recoveringPool(host)
+    try {
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      expect(await journal.used(org)).toBe(0)
+      expect((await inspectJournal(store.state, lease)).allocations.has(row.record.key)).toBe(false)
+      started = 0
+      // Keep the real Box repository/ledger while modeling asynchronous VM startup.
+      const create = jest.mocked(platform.create).getMockImplementation()!
+      jest.mocked(platform.create).mockImplementationOnce(async (...args) => {
+        const box = await create(...args)
+        await db.getRepository(Box).update(box.id, { state: BoxState.STARTING })
+        return box
+      })
+      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }), { repository: 30, run: 40, job: 50 })
+      expect(await db.getRepository(Box).count()).toBe(1)
+      expect(await journal.used(org)).toBe(1)
+    } finally {
+      await pool.close()
+    }
+  })
+  it.each(['platform', 'non-Error provider', 'organization', 'commerce'])(
+    'creation fallback regression: unclassified %s failures record a durable refusal',
+    async (boundary) => {
+      const { host, config, row } = await prepared()
+      if (boundary === 'platform') beforePersist.mockRejectedValueOnce(Error('Unclassified placement failure'))
+      if (boundary === 'non-Error provider') beforePersist.mockRejectedValueOnce('Provider refused creation')
+      if (boundary === 'organization') organizations.findOne.mockRejectedValueOnce(Error('Organization unavailable'))
+      if (boundary === 'commerce') limits.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
+      await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+      await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
+      expect(await db.getRepository(Box).count()).toBe(0)
+      const pool = recoveringPool(host)
+      try {
+        await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+        expect(await journal.used(org)).toBe(0)
+      } finally {
+        await pool.close()
+      }
+    },
+  )
+  it('creation correction regression: repairs historical missing-ledger attempts at five minutes after restart', async () => {
+    const { config, row } = await prepared()
+    const restarted = new CiNativeWorkers(store, platform, organizations as any, limits as any, runners as any).open(
+      scope(),
+      lease,
+    )
+    await ageCreation(row.record.key, 299000)
+    await expect(restarted.get(config.name)).rejects.toThrow('ID is not durably known')
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await journal.used(org)).toBe(1)
+    await ageCreation(row.record.key)
+    await db.query('DELETE FROM ci_installation_binding; DELETE FROM organization_user')
+    const pool = recoveringPool(restarted)
+    try {
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      expect(await journal.used(org)).toBe(0)
+      expect((await inspectJournal(store.state, lease)).allocations.size).toBe(0)
+      expect(await db.getRepository(Box).count()).toBe(0)
+    } finally {
+      await pool.close()
+    }
+  })
+  it('creation fallback regression: an actual image catalog refusal returns capacity', async () => {
+    const { host, config } = await prepared()
+    const previous = process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+    process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io'
+    const pool = recoveringPool(host)
+    try {
+      const admission = new ImageAdmissionService(
+        {} as any,
+        { exists: async () => false, count: async () => 1 } as any,
+        {} as any,
+      )
+      beforePersist.mockImplementationOnce(() =>
+        admission.assert({ id: org, imageCountLimit: 1 } as any, 'quay.io/example/runner:latest'),
+      )
+      await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      expect(await journal.used(org)).toBe(0)
+      expect(await db.getRepository(Box).count()).toBe(0)
+    } finally {
+      await pool.close()
+      if (previous === undefined) delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      else process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = previous
+    }
+  })
+  it('creation correction regression: concurrent recovery releases once without adopting a foreign Box', async () => {
+    const { host, config, row } = await prepared()
+    const foreign = new Box('test-region', config.name)
+    Object.assign(foreign, {
+      organizationId: randomUUID(),
+      osUser: 'runner',
+      labels: {},
+      state: BoxState.STARTED,
+    })
+    await db.getRepository(Box).save(foreign)
+    await ageCreation(row.record.key)
+    const results = await Promise.all([host.get(config.name).catch((e) => e), host.get(config.name).catch((e) => e)])
+    expect(results.some((error) => error instanceof ConfirmedWorkerCreationRejected)).toBe(true)
+    const pool = recoveringPool(host)
+    try {
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      expect(await journal.used(org)).toBe(0)
+      expect(await db.getRepository(Box).findOneByOrFail({ id: foreign.id })).toMatchObject({ state: BoxState.STARTED })
+      expect(platform.stop).not.toHaveBeenCalled()
+      expect(platform.destroy).not.toHaveBeenCalled()
+    } finally {
+      await pool.close()
+    }
+  })
+  it('creation correction boundary: a committed Box wins even when its creation acknowledgment was lost', async () => {
+    const { host, config, row } = await prepared()
+    const create = jest.mocked(platform.create).getMockImplementation()!
+    jest.mocked(platform.create).mockImplementationOnce(async (...args) => {
+      await create(...args)
+      throw Error('Lost creation acknowledgment')
+    })
+    await expect(host.create(config)).rejects.toThrow('Lost creation acknowledgment')
+    await ageCreation(row.record.key)
+    expect(await host.get(config.name)).toMatchObject({ status: 'running' })
+    expect(await db.getRepository(Box).count()).toBe(1)
+    expect(await journal.used(org)).toBe(1)
+  })
+  it('creation correction boundary: missing ownership of an existing Box never grants cleanup', async () => {
+    const { host, config, row } = await prepared()
+    const box = new Box('test-region', config.name)
+    Object.assign(box, { organizationId: org, osUser: 'runner', labels: {}, state: BoxState.STARTED })
+    await db.getRepository(Box).save(box)
+    await ageCreation(row.record.key)
+    await expect(host.get(config.name)).rejects.toThrow('exists without its original ledger')
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await journal.used(org)).toBe(1)
+    expect(await db.getRepository(Box).count()).toBe(1)
+  })
+  it('creation correction boundary: lease loss and proof-write failure retain the reservation', async () => {
+    const { host, config, row } = await prepared()
+    await ageCreation(row.record.key)
+    const stale = workers.open(scope(), { ...lease, owner: 'not-the-owner' })
+    await expect(stale.get(config.name)).rejects.toThrow('lease')
+    const transaction = store.transaction.bind(store)
+    let calls = 0
+    const fail = jest.spyOn(store, 'transaction').mockImplementation((work) => {
+      if (++calls === 2) throw Error('Correction proof unavailable')
+      return transaction(work)
+    })
+    try {
+      await expect(host.get(config.name)).rejects.toThrow('Correction proof unavailable')
+    } finally {
+      fail.mockRestore()
+    }
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await journal.used(org)).toBe(1)
+  })
+  it('creation correction regression: fences a Box insert paused before its original ledger callback', async () => {
+    const { host, config, row } = await prepared()
+    let resume!: () => void, entered!: () => void
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const inserted = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const create = jest.mocked(platform.create).getMockImplementation()!
+    jest.mocked(platform.create).mockImplementationOnce((dto, organization, ctx, options) =>
+      create(dto, organization, ctx, {
+        ...options,
+        onPersist: async (tx, box) => {
+          entered()
+          await paused
+          await options!.onPersist!(tx, box)
+        },
+      }),
+    )
+    const creation = host.create(config).catch((error) => error)
+    await inserted
+    let correction: unknown
+    try {
+      await ageCreation(row.record.key)
+      correction = await host.get(config.name).catch((error) => error)
+    } finally {
+      resume()
+      await creation
+    }
+    expect(correction).toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+    const pool = recoveringPool(host)
+    try {
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+      expect(await journal.used(org)).toBe(0)
+    } finally {
+      await pool.close()
+    }
   })
   it('creation refusal boundary: quota-like errors after entering persistence never become no-creation proofs', async () => {
     const { host, config, row } = await prepared()
@@ -663,12 +893,6 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const { host, config } = await prepared()
     organizations.findOne.mockResolvedValueOnce({ id: randomUUID() })
     await expect(host.create(config)).rejects.toThrow('persistence intent')
-    expect(await db.getRepository(Box).count()).toBe(0)
-  })
-  it('preserves Commerce failure instead of admitting an unmetered Box', async () => {
-    const { host, config } = await prepared()
-    limits.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
-    await expect(host.create(config)).rejects.toThrow('Commerce unavailable')
     expect(await db.getRepository(Box).count()).toBe(0)
   })
   it('allows current admin authority without membership but denies a missing actor', async () => {
