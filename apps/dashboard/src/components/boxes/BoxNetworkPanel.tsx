@@ -17,7 +17,8 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
 import { useState } from 'react'
-import { BoxSectionHeader } from './BoxSectionHeader'
+import { BoxDetailField, BoxDetailHeading } from './BoxDetailFields'
+import { ChevronDown } from '@/components/ui/icon'
 
 /**
  * Mirrors the palette in BoxDetails so the network section reads as part of the
@@ -36,12 +37,32 @@ export type BoxNetworkPanelProps = {
   onGetUrl: () => void
 }
 
-/** `enabled · 2 hosts allowed`: an allowlist narrows egress, so it is part of the value. */
-function outboundLabel(outbound: NetworkInfo['outbound']): string {
-  if (outbound.mode !== NetworkMode.ENABLED) return 'disabled'
-  const allowed = outbound.allow_net.length
-  if (allowed === 0) return 'enabled'
-  return `enabled · ${allowed} ${allowed === 1 ? 'host' : 'hosts'} allowed`
+/** Display the effective policy without treating CIDRs as hostnames. */
+function OutboundPolicy({ outbound }: { outbound?: NetworkInfo['outbound'] }) {
+  if (outbound?.mode === NetworkMode.DISABLED) return <>disabled</>
+  if (outbound?.mode !== NetworkMode.ENABLED) return <>unknown</>
+  if (outbound.allow_net.length === 0) return <>Unrestricted</>
+  return (
+    <details className="group min-w-0">
+      <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring">
+        <span>
+          Restricted · {outbound.allow_net.length} {outbound.allow_net.length === 1 ? 'rule' : 'rules'}
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+        />
+      </summary>
+      <ul
+        aria-label="Allowed outbound destinations"
+        className="mt-2 space-y-1 border-l border-border pl-3 font-mono text-meta text-muted-foreground [overflow-wrap:anywhere]"
+      >
+        {outbound.allow_net.map((rule, index) => (
+          <li key={`${index}:${rule}`}>{rule}</li>
+        ))}
+      </ul>
+    </details>
+  )
 }
 
 /** Why "get url" is unavailable: the tunnel route needs inbound access and WRITE_BOXES. */
@@ -68,14 +89,16 @@ export function BoxNetworkPanel({
   onGetUrl,
 }: BoxNetworkPanelProps) {
   const [confirmingInbound, setConfirmingInbound] = useState(false)
-  const inboundEnabled = network?.inbound.mode === NetworkMode.ENABLED
+  const inboundEnabled = network?.inbound?.mode === NetworkMode.ENABLED
+  const inboundDisabled = network?.inbound?.mode === NetworkMode.DISABLED
+  const inboundKnown = inboundEnabled || inboundDisabled
 
   return (
     <>
       {/* A URL is a tunnel: the API grants it only with inbound access, to members who can manage the box. */}
-      <BoxSectionHeader
+      <BoxDetailHeading
         title="Network"
-        right={
+        action={
           <Button
             variant="outline"
             size="sm"
@@ -91,31 +114,29 @@ export function BoxNetworkPanel({
       {/* Sheet convention: grey key, foreground value; hue carries the risk
           signal (amber when inbound is enabled). Outbound is read-only: no
           route changes it after create. */}
-      <div className="mb-4 grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
-        <span className="text-meta text-muted-foreground">Outbound</span>
-        <span className="min-w-0 [overflow-wrap:anywhere]">
-          {network ? outboundLabel(network.outbound) : 'unknown'}
-        </span>
-      </div>
+      <dl>
+        <BoxDetailField label="Outbound" className="font-sans">
+          <OutboundPolicy outbound={network?.outbound} />
+        </BoxDetailField>
 
-      {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}
-      <div className="mb-4 grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
-        <span className="text-meta text-muted-foreground">Inbound</span>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
-            {network ? (inboundEnabled ? 'enabled' : 'disabled') : 'unknown'}
-          </span>
-          {canManage && network ? (
-            <Switch
-              aria-label="Inbound access"
-              checked={inboundEnabled}
-              disabled={inboundPending}
-              onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
-              className="shrink-0"
-            />
-          ) : null}
-        </div>
-      </div>
+        {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}
+        <BoxDetailField label="Inbound" className="font-sans">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+            <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
+              {inboundEnabled ? 'enabled' : inboundDisabled ? 'disabled' : 'unknown'}
+            </span>
+            {canManage && inboundKnown ? (
+              <Switch
+                aria-label="Inbound access"
+                checked={inboundEnabled}
+                disabled={inboundPending}
+                onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
+                className="shrink-0"
+              />
+            ) : null}
+          </div>
+        </BoxDetailField>
+      </dl>
 
       <AlertDialog open={confirmingInbound} onOpenChange={setConfirmingInbound}>
         <AlertDialogContent className="font-sans">

@@ -49,9 +49,17 @@ describe('BoxNetworkPanel', () => {
   it('reports both directions, with the outbound allowlist size', () => {
     render(network(NetworkMode.DISABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8']))
 
-    expect(row('outbound')).toBe('outboundenabled · 2 hosts allowed')
+    expect(container.querySelector('summary')?.textContent).toBe('Restricted · 2 rules')
+    expect(container.querySelector('[aria-label="Allowed outbound destinations"]')?.textContent).toBe(
+      'api.openai.com10.0.0.0/8',
+    )
     expect(row('inbound')).toBe('inbounddisabled')
     expect(container.textContent).not.toContain('Disabled blocks all inbound tunnel access.')
+  })
+
+  it('distinguishes unrestricted egress from an unknown policy', () => {
+    render(network(NetworkMode.DISABLED, NetworkMode.ENABLED))
+    expect(row('outbound')).toBe('outboundunrestricted')
   })
 
   it('reports enabled inbound and blocked egress', () => {

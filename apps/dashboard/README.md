@@ -1149,3 +1149,18 @@ Maximize expands the current terminal in place; Restore returns to its prior lay
 Overview and Terminal share one Box header, lifecycle actions, SSH controls and tab position. The route selects the content pane; entering Terminal does not request the Overview image or volume catalogs. Leaving Terminal still unmounts its shell, while maximizing inside Terminal preserves it. Changing Box or organization resets Box-scoped UI state.
 
 Overview presents provisioned CPU, memory and disk without implying measured usage. Configuration and activity share a compact panel; mounted volumes remain conditional. Long references wrap inside their fields. The status label reuses the list's presentation, including Pulling image. Existing lifecycle permissions and mutation behavior remain intact.
+
+### Inspecting Box network policy
+
+The Overview Network section distinguishes disabled, unrestricted, restricted,
+and unknown outbound policies. Expand a restricted policy to inspect the exact
+API-reported destination rules; rules may contain hostnames or CIDRs. The
+console does not infer live traffic, reachability, or open guest ports.
+
+Domains lists organization-owned bindings targeting this Box, including the
+destination port. Other Boxes, application targets, and unbound domains are
+excluded. Management permission is required to fetch and display bindings.
+Loading, empty results, and failures remain distinct; refresh failures retain
+known bindings with a retry action. Organization changes never reuse the previous
+organization’s bindings as placeholder data. Only HTTP(S) URLs without embedded
+credentials receive copy/open actions.

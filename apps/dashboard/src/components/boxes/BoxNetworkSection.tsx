@@ -8,6 +8,7 @@ import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInbou
 import { Box, NetworkMode } from '@boxlite-ai/api-client'
 import { useCallback, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
+import { BoxDomainBindings } from './BoxDomainBindings'
 import { BoxNetworkPanel } from './BoxNetworkPanel'
 import { BoxPreviewUrlDialog } from './BoxPreviewUrlDialog'
 
@@ -74,6 +75,7 @@ export function BoxNetworkSection({
         onGetUrl={openDialog}
       />
       {children}
+      <BoxDomainBindings boxId={box.id} canManage={canManage} />
       <BoxPreviewUrlDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
