@@ -1227,3 +1227,9 @@ existing route behavior. The SDK example's Quickstart link uses the shared link 
 The Wallet tab retains loaded invoices and credit activity while refreshing. A failed refresh shows a retry notice above the cached table; first-load failure uses the shared resource error state instead of an empty table. Pagination remains available when the cached response includes its page count.
 
 An unsuccessful refresh does not mean the wallet has no records. Both histories keep their existing query keys and payment operations; Retry repeats only the read request.
+
+### Management section hierarchy
+
+Billing and Organization section headings share the resource heading layout: a quiet uppercase label, optional count, divider and optional action. Existing SectionTitle callers delegate to the shared heading so dense management panels use one hierarchy.
+
+Interface labels use the sans-serif role. Currency, quota and plan-comparison values use monospace with tabular figures for scanning; this does not change amounts or billing behavior.

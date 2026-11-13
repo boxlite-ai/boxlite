@@ -16,6 +16,28 @@ export function ResourceIdentity({ icon, children }: { icon: ReactNode; children
   )
 }
 
+/** One section hierarchy for resource details and management panels. */
+export function ResourceSectionHeading({
+  title,
+  count,
+  right,
+  className,
+}: {
+  title: string
+  count?: ReactNode
+  right?: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={cn('mb-4 flex min-w-0 flex-wrap items-center gap-3', className)}>
+      <h2 className="text-meta font-medium uppercase tracking-[0.08em] text-muted-foreground">{title}</h2>
+      {count && <span className="font-mono text-meta tabular-nums text-muted-foreground">{count}</span>}
+      <span aria-hidden="true" className="min-w-3 flex-1 border-t border-border/60" />
+      {right}
+    </div>
+  )
+}
+
 /** Centers feedback within the containing resource region, including embedded lists. */
 export function ResourceEmptyState({
   title,
