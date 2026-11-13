@@ -8,6 +8,11 @@
 
 use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
@@ -23,12 +28,38 @@ use super::{Database, db_err};
 #[derive(Clone)]
 pub struct BoxStore {
     db: Database,
+    #[cfg(any(test, feature = "test-support"))]
+    config_reads: Arc<AtomicUsize>,
+    #[cfg(any(test, feature = "test-support"))]
+    state_reads: Arc<AtomicUsize>,
 }
 
 impl BoxStore {
     /// Create a new BoxStore from a Database.
     pub fn new(db: Database) -> Self {
-        Self { db }
+        Self {
+            db,
+            #[cfg(any(test, feature = "test-support"))]
+            config_reads: Arc::new(AtomicUsize::new(0)),
+            #[cfg(any(test, feature = "test-support"))]
+            state_reads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "unit-test instrumentation"))]
+    pub fn reset_read_counts(&self) {
+        self.config_reads.store(0, Ordering::Relaxed);
+        self.state_reads.store(0, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "unit-test instrumentation"))]
+    pub fn read_counts(&self) -> (usize, usize) {
+        (
+            self.config_reads.load(Ordering::Relaxed),
+            self.state_reads.load(Ordering::Relaxed),
+        )
     }
 
     /// Get a reference to the underlying database.
@@ -44,6 +75,8 @@ impl BoxStore {
     /// Load box configuration by ID.
     #[allow(dead_code)] // API symmetry with load_state
     pub fn load_config(&self, box_id: &str) -> BoxliteResult<Option<BoxConfig>> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.config_reads.fetch_add(1, Ordering::Relaxed);
         let conn = self.db.conn();
 
         let json: Option<String> = db_err!(
@@ -80,6 +113,8 @@ impl BoxStore {
 
     /// Load box state by ID.
     pub fn load_state(&self, box_id: &str) -> BoxliteResult<Option<BoxState>> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.state_reads.fetch_add(1, Ordering::Relaxed);
         let conn = self.db.conn();
 
         let json: Option<String> = db_err!(

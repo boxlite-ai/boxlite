@@ -1080,12 +1080,28 @@ impl RuntimeImpl {
         })
     }
 
+    fn cached_box_impl(&self, id: &BoxID) -> Option<SharedBoxImpl> {
+        let sync = self.sync_state.read().unwrap();
+        sync.active_boxes_by_id
+            .get(id)
+            .and_then(|weak| weak.upgrade())
+    }
+
     pub(crate) async fn apply_box_observation(
         self: &Arc<Self>,
         id: &BoxID,
         run: BoxRun,
         event: BoxEvent,
     ) -> BoxliteResult<Option<crate::litebox::HealthStatus>> {
+        if let Some(box_impl) = self.cached_box_impl(id) {
+            // The facade owns its config and state; update_box still refreshes state
+            // under lifecycle admission, so resolving it needs no persistence reads.
+            return match box_impl.apply_observation(run, event).await {
+                // A deleted row dropped the event before cache-first resolution too.
+                Err(BoxliteError::NotFound(_)) => Ok(None),
+                result => result,
+            };
+        }
         let Some((config, state)) = self.box_manager.box_by_id(id)? else {
             return Ok(None);
         };

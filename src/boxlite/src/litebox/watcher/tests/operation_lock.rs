@@ -49,6 +49,81 @@ async fn watched_box_with_policy(removes: bool) -> (tempfile::TempDir, Arc<BoxIm
 }
 
 #[tokio::test]
+async fn cached_health_observation_reads_only_admission_state() {
+    let (_home, bx, watcher) = watched_box().await;
+    let store = bx.runtime.box_manager.store();
+    store.reset_read_counts();
+
+    let health = bx
+        .runtime
+        .apply_box_observation(
+            bx.id(),
+            watcher.observed_run(),
+            BoxEvent::Health {
+                healthy: true,
+                retries: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(health.is_some());
+    assert_eq!(store.read_counts(), (0, 1));
+}
+
+#[tokio::test]
+async fn uncached_health_observation_loads_facade_and_admission_state() {
+    let (_home, bx, watcher) = watched_box().await;
+    bx.runtime
+        .invalidate_box_impl(bx.id(), bx.config.name.as_deref());
+    let store = bx.runtime.box_manager.store();
+    store.reset_read_counts();
+
+    let health = bx
+        .runtime
+        .apply_box_observation(
+            bx.id(),
+            watcher.observed_run(),
+            BoxEvent::Health {
+                healthy: true,
+                retries: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(health.is_some());
+    assert_eq!(store.read_counts(), (1, 2));
+}
+
+#[tokio::test]
+async fn cached_health_observation_drops_deleted_box() {
+    let (_home, bx, watcher) = watched_box().await;
+    // Delete only the row, leaving the facade cached and its entity lock intact.
+    bx.runtime.box_manager.remove_box(bx.id()).unwrap();
+    let store = bx.runtime.box_manager.store();
+    store.reset_read_counts();
+
+    let health = bx
+        .runtime
+        .apply_box_observation(
+            bx.id(),
+            watcher.observed_run(),
+            BoxEvent::Health {
+                healthy: true,
+                retries: 0,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(health.is_none());
+    // Cache-first resolution proves itself here: only the admission refresh read state,
+    // and no config load happened for a facade the cache already held.
+    assert_eq!(store.read_counts(), (0, 1));
+}
+
+#[tokio::test]
 async fn watcher_exit_waits_for_entity_lock() {
     let (_home, bx, mut watcher) = watched_box().await;
     let locker = bx

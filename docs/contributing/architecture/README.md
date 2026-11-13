@@ -132,8 +132,11 @@ still permits a restart; attach-before-start still permits preparing a fresh box
 
 Watcher observes processes and probes health without holding admission. It reports
 events through `RuntimeImpl::apply_box_observation` using a weak runtime reference;
-resolving an event does not arm another watcher. `BoxImpl::apply_observation`
-acquires lifecycle write admission, checks PID/`started_at`, and applies the report:
+resolving an event does not arm another watcher. Observation resolution reuses the
+in-process handle cache without reading config/state; only a cache miss loads them.
+The state refresh under lifecycle admission remains the sole authority.
+`BoxImpl::apply_observation` acquires lifecycle write admission, checks
+PID/`started_at`, and applies the report:
 health persistence or shared stop finalization (exit records, cache invalidation,
 and configured removal). The name distinguishes this state-changing commit phase
 from the watcher's process observation and health probing outside admission.
