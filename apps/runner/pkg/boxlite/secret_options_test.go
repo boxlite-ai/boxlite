@@ -11,8 +11,8 @@ import (
 
 func TestSecretSpecsPreservesFields(t *testing.T) {
 	got := secretSpecs([]dto.SecretDTO{
-		{Name: "openai", Value: "sk-test", Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
-		{Name: "httpbin", Value: "v2", Hosts: []string{"httpbin.org"}, Placeholder: ""},
+		{Name: "openai", Value: "sk-test", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
+		{Name: "httpbin", Value: "v2", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"httpbin.org"}, Placeholder: ""},
 	})
 
 	if len(got) != 2 {

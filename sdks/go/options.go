@@ -229,30 +229,36 @@ type Secret struct {
 	Value       string
 	Hosts       []string
 	Placeholder string
+	// Headers maps names to templates containing exactly one {value}.
+	// Required and non-empty; no default header is supplied.
+	Headers map[string]string
 }
 
 type boxConfig struct {
-	name       string
-	cpus       *float64
-	memoryMiB  int
-	diskSizeGB int
-	rootfsPath string
-	env        [][2]string
-	volumes    []volumeEntry
-	ports      []PortSpec
-	workDir    string
-	user       string
-	entrypoint []string
-	cmd        []string
-	autoRemove *bool
-	autoStop   *uint32
-	autoDelete *uint32
-	autoResume *bool
-	detach     *bool
-	network    *NetworkSpec
-	networkErr error // deferred WithNetwork validation error, surfaced at conversion
-	secrets    []Secret
-	advanced   *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
+	checkpointSet      bool
+	checkpointOverride bool
+	name               string
+	cpus               *float64
+	memoryMiB          int
+	diskSizeGB         int
+	rootfsPath         string
+	checkpoint         string
+	env                [][2]string
+	volumes            []volumeEntry
+	ports              []PortSpec
+	workDir            string
+	user               string
+	entrypoint         []string
+	cmd                []string
+	autoRemove         *bool
+	autoStop           *uint32
+	autoDelete         *uint32
+	autoResume         *bool
+	detach             *bool
+	network            *NetworkSpec
+	networkErr         error // deferred WithNetwork validation error, surfaced at conversion
+	secrets            []Secret
+	advanced           *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
 // volumeEntry is one mount. Exactly one origin is set: managedVolume for a
@@ -271,12 +277,18 @@ func WithName(name string) BoxOption {
 
 // WithCPUs sets the CPU allocation. Fractions require Linux and round guest vCPUs up.
 func WithCPUs(n float64) BoxOption {
-	return func(c *boxConfig) { c.cpus = &n }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.cpus = &n
+	}
 }
 
 // WithMemory sets the memory limit in MiB.
 func WithMemory(mib int) BoxOption {
-	return func(c *boxConfig) { c.memoryMiB = mib }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.memoryMiB = mib
+	}
 }
 
 // WithDiskSize sets the per-box COW disk virtual size in GB.
@@ -285,7 +297,22 @@ func WithMemory(mib int) BoxOption {
 // write headroom; the guest's ext4 is automatically resized via resize2fs
 // on first boot.
 func WithDiskSize(gb int) BoxOption {
-	return func(c *boxConfig) { c.diskSizeGB = gb }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.diskSizeGB = gb
+	}
+}
+
+// WithCheckpoint creates the box from a REST-managed checkpoint, by ID or name.
+//
+// Pass an empty image to [Runtime.Create]. The box inherits the checkpoint's
+// saved settings, so only [WithName] may accompany it; the server accepts no
+// overrides. Local runtimes return an unsupported error.
+func WithCheckpoint(checkpoint string) BoxOption {
+	return func(c *boxConfig) {
+		c.checkpointSet = true
+		c.checkpoint = checkpoint
+	}
 }
 
 // WithRootfsPath prefers a local OCI image layout directory over pulling from a registry.
@@ -296,12 +323,17 @@ func WithDiskSize(gb int) BoxOption {
 //
 // The directory should contain a valid OCI bundle (oci-layout, index.json, blobs/sha256/, …).
 func WithRootfsPath(path string) BoxOption {
-	return func(c *boxConfig) { c.rootfsPath = path }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.rootfsPath = path
+	}
 }
 
 // WithEnv adds an environment variable.
 func WithEnv(key, value string) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		c.env = append(c.env, [2]string{key, value})
 	}
 }
@@ -312,6 +344,8 @@ func WithEnv(key, value string) BoxOption {
 // Use [WithManagedVolume] against a REST runtime.
 func WithBindMount(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath})
 	}
 }
@@ -319,6 +353,8 @@ func WithBindMount(hostPath, guestPath string) BoxOption {
 // WithBindMountReadOnly binds a host path into the box as read-only.
 func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath, readOnly: true})
 	}
 }
@@ -332,6 +368,8 @@ func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 // and rejects one at create.
 func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		c.volumes = append(c.volumes, volumeEntry{managedVolume: managedVolume, guestPath: guestPath})
 	}
 }
@@ -346,35 +384,51 @@ func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 // an available local port.
 func WithPort(spec PortSpec) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		c.ports = append(c.ports, spec)
 	}
 }
 
 // WithWorkDir sets the working directory inside the container.
 func WithWorkDir(dir string) BoxOption {
-	return func(c *boxConfig) { c.workDir = dir }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.workDir = dir
+	}
 }
 
 // WithUser sets the user the container process runs as, in Docker's
 // `<name|uid>[:<group|gid>]` form. Empty leaves the image's USER directive
 // in force.
 func WithUser(user string) BoxOption {
-	return func(c *boxConfig) { c.user = user }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.user = user
+	}
 }
 
 // WithEntrypoint overrides the image's ENTRYPOINT.
 func WithEntrypoint(args ...string) BoxOption {
-	return func(c *boxConfig) { c.entrypoint = args }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.entrypoint = args
+	}
 }
 
 // WithCmd overrides the image's CMD.
 func WithCmd(args ...string) BoxOption {
-	return func(c *boxConfig) { c.cmd = args }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.cmd = args
+	}
 }
 
 // WithNetwork sets the structured network configuration for the box.
 func WithNetwork(spec NetworkSpec) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		resolved, err := spec.resolve()
 		if err != nil {
 			c.networkErr = err
@@ -399,6 +453,8 @@ func WithNetwork(spec NetworkSpec) BoxOption {
 // WithSecret adds a secret injected into outbound HTTPS request headers.
 func WithSecret(secret Secret) BoxOption {
 	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
 		c.secrets = append(c.secrets, secret)
 	}
 }
@@ -406,30 +462,45 @@ func WithSecret(secret Secret) BoxOption {
 // WithAutoStopInterval configures the cloud AutoStop idle TTL in seconds.
 // A value of 0 disables AutoStop. Local runtimes return Unsupported.
 func WithAutoStopInterval(seconds uint32) BoxOption {
-	return func(c *boxConfig) { c.autoStop = &seconds }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.autoStop = &seconds
+	}
 }
 
 // WithAutoDeleteInterval configures the cloud AutoDelete TTL in seconds.
-// A value of 0 disables AutoDelete. Local runtimes return Unsupported.
+// Zero disables AutoDelete. Locally, a positive value means remove on stop.
 func WithAutoDeleteInterval(seconds uint32) BoxOption {
-	return func(c *boxConfig) { c.autoDelete = &seconds }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.autoDelete = &seconds
+	}
 }
 
 // WithAutoResumeEnabled configures whether the box automatically resumes when
 // accessed after AutoStop. Defaults to true to preserve existing behavior.
 func WithAutoResumeEnabled(enabled bool) BoxOption {
-	return func(c *boxConfig) { c.autoResume = &enabled }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.autoResume = &enabled
+	}
 }
 
 // WithAutoRemove sets whether the box is auto-removed on stop.
 // Deprecated: use WithAutoDeleteInterval.
 func WithAutoRemove(v bool) BoxOption {
-	return func(c *boxConfig) { c.autoRemove = &v }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.autoRemove = &v
+	}
 }
 
 // WithDetach sets whether the box survives parent process exit.
 func WithDetach(v bool) BoxOption {
-	return func(c *boxConfig) { c.detach = &v }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.detach = &v
+	}
 }
 
 // buildAndFreeCOptions runs buildCOptions, immediately frees the C
@@ -462,10 +533,33 @@ func buildAndFreeCOptions(image string, cfg *boxConfig) error {
 //	box, _ := runtime.Create(ctx, "alpine:latest",
 //	    boxlite.WithAdvancedOptions(adv))
 func WithAdvancedOptions(adv *AdvancedBoxOptions) BoxOption {
-	return func(c *boxConfig) { c.advanced = adv }
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.advanced = adv
+	}
 }
 
+// buildCOptions validates caller presence before converting defaults to the C ABI.
 func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
+	if cfg.checkpointSet || cfg.checkpoint != "" {
+		if cfg.checkpoint == "" || strings.ContainsRune(cfg.checkpoint, '\x00') || cfg.checkpointOverride {
+			return nil, &Error{Code: ErrInvalidArgument, Message: "a checkpoint requires a nonempty selector and accepts only WithName"}
+		}
+	}
+	// C strings cannot carry NUL; reject it before conversion can hide it from Rust.
+	for _, secret := range cfg.secrets {
+		if len(secret.Headers) == 0 {
+			return nil, &Error{Code: ErrInvalidArgument, Message: fmt.Sprintf("secret %q has no headers; recreate the box with headers", secret.Name)}
+		}
+		if strings.IndexByte(secret.Value, 0) >= 0 {
+			return nil, &Error{Code: ErrInvalidArgument, Message: "secret value contains NUL"}
+		}
+		for name, template := range secret.Headers {
+			if strings.IndexByte(name, 0) >= 0 || strings.IndexByte(template, 0) >= 0 {
+				return nil, &Error{Code: ErrInvalidArgument, Message: "secret headers contain NUL"}
+			}
+		}
+	}
 	image = strings.TrimSpace(image)
 	rootfsPath := strings.TrimSpace(cfg.rootfsPath)
 
@@ -475,7 +569,10 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			useLocalOCI = true
 		}
 	}
-	if image == "" && !useLocalOCI {
+	if cfg.checkpoint != "" && (image != "" || rootfsPath != "") {
+		return nil, fmt.Errorf("boxlite: WithCheckpoint cannot be combined with an image or WithRootfsPath")
+	}
+	if image == "" && !useLocalOCI && cfg.checkpoint == "" {
 		return nil, fmt.Errorf("boxlite: image reference is required when WithRootfsPath is unset, missing, or not a directory")
 	}
 
@@ -489,6 +586,11 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		return nil, freeError(&cerr)
 	}
 
+	if cfg.checkpoint != "" {
+		cCheckpoint := toCString(cfg.checkpoint)
+		C.boxlite_options_set_checkpoint(cOpts, cCheckpoint)
+		C.free(unsafe.Pointer(cCheckpoint))
+	}
 	if useLocalOCI {
 		cPath := toCString(rootfsPath)
 		C.boxlite_options_set_rootfs_path(cOpts, cPath)
@@ -616,8 +718,18 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		}
 		cPlaceholder := toCString(placeholder)
 		cHosts, hostCount := toCStringArray(secret.Hosts)
-		C.boxlite_options_add_secret(cOpts, cName, cValue, cPlaceholder, cHosts, C.int(hostCount))
+		names := make([]string, 0, len(secret.Headers))
+		templates := make([]string, 0, len(secret.Headers))
+		for name, template := range secret.Headers {
+			names = append(names, name)
+			templates = append(templates, template)
+		}
+		cNames, headerCount := toCStringArray(names)
+		cTemplates, _ := toCStringArray(templates)
+		C.boxlite_options_add_secret_with_headers(cOpts, cName, cValue, cPlaceholder, cHosts, C.int(hostCount), cNames, cTemplates, C.int(headerCount))
 		freeCStringArray(cHosts, hostCount)
+		freeCStringArray(cNames, headerCount)
+		freeCStringArray(cTemplates, headerCount)
 		C.free(unsafe.Pointer(cName))
 		C.free(unsafe.Pointer(cValue))
 		C.free(unsafe.Pointer(cPlaceholder))

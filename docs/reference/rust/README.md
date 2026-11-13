@@ -1109,7 +1109,7 @@ frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 
-Secret injected into a request header on outbound HTTPS requests to `hosts`.
+Secret rendered into configured headers on outbound HTTPS requests to `hosts`.
 
 ```rust
 pub struct Secret {
@@ -1117,9 +1117,13 @@ pub struct Secret {
     pub hosts: Vec<String>,
     pub placeholder: String, // dummy guest value; default: <BOXLITE_SECRET:{name}>
     pub value: String,
-    pub header: Option<String>, // default: Authorization, written as `Bearer {value}`
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
 }
 ```
+
+Creation requires `Some` with a non-empty map. `None` is retained only to decode legacy metadata; activation rejects it.
+Each template contains exactly one `{value}`; only headers already present in
+the original request are replaced. See the [validation rules](../configuration.md#secrets).
 
 ### PortSpec
 

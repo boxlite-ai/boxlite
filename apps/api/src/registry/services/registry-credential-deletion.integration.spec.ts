@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { DataSource, EntityManager } from 'typeorm'
 import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
@@ -95,7 +96,7 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     const options = {
       ...connection,
       database: databaseName,
-      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion],
+      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion, Checkpoint],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
     }
@@ -138,7 +139,10 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     Object.assign(createService, {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'us' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationService: {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      },
       organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
       redis: { exists: jest.fn().mockResolvedValue(1) },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },

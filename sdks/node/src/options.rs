@@ -17,6 +17,10 @@ use napi_derive::napi;
 use crate::advanced_options::JsContainerCapabilities;
 use crate::advanced_options::{JsAdvancedBoxOptions, JsSecurityOptions};
 
+#[cfg(test)]
+#[path = "../tests/options/checkpoint_options.rs"]
+mod checkpoint_options;
+
 /// Health check options for boxes.
 ///
 /// Defines how to periodically check if a box's guest agent is responsive.
@@ -174,7 +178,11 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
-    /// CPU allocation (default: 1, range: 0.01-16); fractional values require a Linux execution host
+    /// REST-managed checkpoint to create from (alternative to image). The box
+    /// inherits the saved settings, so every other option must be left unset.
+    pub checkpoint: Option<String>,
+
+    /// CPU allocation (default: 1, range: 0.125-16); fractional values require a Linux execution host
     pub cpus: Option<f64>,
 
     /// Memory limit in MiB (default: 512)
@@ -342,6 +350,9 @@ pub struct JsSecret {
 
     /// Placeholder string visible to the guest.
     pub placeholder: Option<String>,
+    /// Required, non-empty header-name to template map.
+    #[napi(ts_type = "Record<string, string>")]
+    pub headers: serde_json::Value,
 }
 
 /// Structured network configuration.
@@ -485,12 +496,44 @@ impl TryFrom<JsNetworkSpec> for (NetworkSpec, NetworkSpec) {
 impl TryFrom<JsBoxOptions> for BoxOptions {
     type Error = boxlite_shared::errors::BoxliteError;
 
+    /// Reject supplied checkpoint settings before conversion erases defaults.
     #[allow(deprecated)]
     fn try_from(js_opts: JsBoxOptions) -> Result<Self, Self::Error> {
+        if js_opts.checkpoint.is_some()
+            && (js_opts.cpus.is_some()
+                || js_opts.memory_mib.is_some()
+                || js_opts.disk_size_gb.is_some()
+                || js_opts.working_dir.is_some()
+                || js_opts.env.is_some()
+                || js_opts.volumes.is_some()
+                || js_opts.network.is_some()
+                || js_opts.ports.is_some()
+                || js_opts.auto_remove.is_some()
+                || js_opts.auto_stop.is_some()
+                || js_opts.auto_delete.is_some()
+                || js_opts.auto_resume.is_some()
+                || js_opts.detach.is_some()
+                || js_opts.entrypoint.is_some()
+                || js_opts.cmd.is_some()
+                || js_opts.user.is_some()
+                || js_opts.advanced.is_some()
+                || js_opts.security.is_some()
+                || js_opts.health_check.is_some()
+                || js_opts.secrets.is_some())
+        {
+            return Err(Self::Error::InvalidArgument(
+                "a box created from a checkpoint inherits its saved settings; leave every other option unset".into(),
+            ));
+        }
         if let Some(cpus) = js_opts.cpus {
             boxlite::runtime::cpu_count::CpuCount::new(cpus)?;
         }
-        let auto_remove = js_opts.auto_remove.unwrap_or(false);
+        // This SDK keeps boxes on stop unless asked otherwise. A checkpoint box
+        // inherits its saved settings instead, so an unset value must stay at
+        // the core default: only a caller-set option counts as an override.
+        let auto_remove = js_opts
+            .auto_remove
+            .unwrap_or_else(|| js_opts.checkpoint.is_some() && BoxOptions::default().auto_remove);
         let auto_delete = js_opts.auto_delete;
         // Convert volumes
         let volumes = js_opts
@@ -514,9 +557,15 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .map(PortSpec::from)
             .collect();
 
-        // Convert image/rootfs_path to RootfsSpec
-        let rootfs = match &js_opts.rootfs_path {
-            Some(path) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
+        // Convert image/rootfs_path/checkpoint to RootfsSpec
+        let rootfs = match (&js_opts.checkpoint, &js_opts.rootfs_path) {
+            (Some(_), _) if js_opts.image.is_some() || js_opts.rootfs_path.is_some() => {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    "checkpoint cannot be combined with image or rootfsPath".into(),
+                ));
+            }
+            (Some(checkpoint), _) => RootfsSpec::Checkpoint(checkpoint.clone()),
+            (None, Some(path)) if !path.is_empty() => RootfsSpec::RootfsPath(path.clone()),
             _ => {
                 let image = js_opts
                     .image
@@ -553,16 +602,28 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .secrets
             .unwrap_or_default()
             .into_iter()
-            .map(|secret| Secret {
-                placeholder: secret
-                    .placeholder
-                    .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", secret.name)),
-                name: secret.name,
-                value: secret.value,
-                hosts: secret.hosts.unwrap_or_default(),
-                header: None,
+            .map(|secret| {
+                // Deserialize the map shape explicitly: N-API's HashMap conversion
+                // also accepts arrays as numeric header names.
+                let headers = serde_json::from_value::<std::collections::BTreeMap<String, String>>(
+                    secret.headers,
+                )
+                .map_err(|_| {
+                    Self::Error::InvalidArgument(
+                        "Secret.headers must map header names to string templates".into(),
+                    )
+                })?;
+                Ok(Secret {
+                    placeholder: secret
+                        .placeholder
+                        .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", secret.name)),
+                    name: secret.name,
+                    value: secret.value,
+                    hosts: secret.hosts.unwrap_or_default(),
+                    headers: Some(headers),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, Self::Error>>()?;
 
         let mut advanced = AdvancedBoxOptions::default();
         advanced.set_privileged(privileged);
@@ -911,6 +972,7 @@ mod tests {
         let js = JsBoxOptions {
             image: Some("alpine:latest".into()),
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -944,12 +1006,12 @@ mod tests {
             secrets: None,
         };
 
-        for cores in [0.01, 0.125, 1.5, 2.0] {
+        for cores in [0.125, 0.126, 1.5, 2.0] {
             let mut options = js.clone();
             options.cpus = Some(cores);
             assert_eq!(BoxOptions::try_from(options).unwrap().cpus, Some(cores));
         }
-        for cores in [0.0, -0.5, 0.009, 0.1255, f64::NAN, f64::INFINITY] {
+        for cores in [0.0, -0.5, 0.124, 0.1255, f64::NAN, f64::INFINITY] {
             let mut options = js.clone();
             options.cpus = Some(cores);
             assert!(BoxOptions::try_from(options).is_err(), "{cores}");
@@ -1005,10 +1067,11 @@ mod tests {
     }
 
     #[test]
-    fn box_options_from_js_secrets_default_placeholder() {
+    fn secret_headers_binding_preserves_templates() {
         let js = JsBoxOptions {
             image: Some("python:slim".into()),
             rootfs_path: None,
+            checkpoint: None,
             cpus: None,
             memory_mib: None,
             disk_size_gb: None,
@@ -1033,6 +1096,7 @@ mod tests {
                 value: "sk-test".into(),
                 hosts: Some(vec!["api.openai.com".into()]),
                 placeholder: None,
+                headers: serde_json::json!({"Authorization": "Bot {value}", "X-Key": "{value}"}),
             }]),
         };
 
@@ -1041,6 +1105,9 @@ mod tests {
         assert_eq!(opts.secrets[0].name, "openai");
         assert_eq!(opts.secrets[0].hosts, vec!["api.openai.com"]);
         assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+        let wire = serde_json::to_value(&opts.secrets[0]).unwrap();
+        assert_eq!(wire["headers"]["Authorization"], "Bot {value}");
+        assert_eq!(wire["headers"]["X-Key"], "{value}");
     }
 
     #[test]

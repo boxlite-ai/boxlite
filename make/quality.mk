@@ -204,7 +204,7 @@ lint\:c:
 
 fmt\:go:
 	@echo "🔧 Formatting Go code..."
-	@cd sdks/go && go fmt ./...
+	@cd sdks/go && gofmt -w .
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w .
 	@cd apps/image-service && go fmt ./...
 	@cd apps/runner && gofmt -w .

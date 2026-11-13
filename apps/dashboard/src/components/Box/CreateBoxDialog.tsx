@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/form-dialog'
 import { AsciiButton } from '@/components/ascii'
 import { AsciiChip, BRAND, PanelNote } from '@/components/ascii'
-import { Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Dialog, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { RoutePath } from '@/enums/RoutePath'
@@ -74,17 +74,24 @@ function Stepper({
   min = 1,
   max,
   onExceed,
+  fractional = false,
+  onValidityChange,
 }: {
   value: number
   onChange: (v: number) => void
   min?: number
   max?: number
   onExceed?: () => void
+  fractional?: boolean
+  onValidityChange?: (valid: boolean) => void
 }) {
+  const [invalid, setInvalid] = useState(false)
   const [text, setText] = useState(String(value))
   useEffect(() => {
     setText(String(value))
-  }, [value])
+    setInvalid(false)
+    onValidityChange?.(true)
+  }, [value, onValidityChange])
   const clamp = (n: number) => {
     const v = Math.max(min, n)
     return max != null ? Math.min(max, v) : v
@@ -94,6 +101,21 @@ function Stepper({
   // wouldn't re-sync `text` when the clamped result equalled the previous
   // parent value, leaving a stale typed number in the box).
   const handleTyped = (raw: string) => {
+    if (fractional) {
+      const n = Number(raw)
+      const valid = /^\d+(?:\.\d{0,3})?$/.test(raw) && Number.isFinite(n) && n >= min
+      setInvalid(!valid)
+      onValidityChange?.(valid)
+      if (!valid) {
+        setText(raw)
+        return
+      }
+      if (max != null && n > max) onExceed?.()
+      const next = clamp(n)
+      setText(next === n ? raw : String(next))
+      onChange(next)
+      return
+    }
     const digits = raw.replace(/[^0-9]/g, '')
     if (digits === '') {
       setText('')
@@ -111,19 +133,23 @@ function Stepper({
   // Text sync is unconditional so `text` stays consistent even when the parent
   // value doesn't change (e.g., already at max).
   const commit = (raw: string) => {
+    if (fractional) {
+      handleTyped(raw)
+      return
+    }
     const n = parseInt(raw, 10)
     const next = Number.isFinite(n) ? clamp(n) : min
     onChange(next)
     setText(String(next))
   }
   const btn =
-    'flex size-11 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
+    'flex size-11 flex-none items-center justify-center font-mono text-em text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
   return (
     <div className="flex items-stretch border border-border bg-card">
       <button
         type="button"
         aria-label="decrease"
-        onClick={() => onChange(clamp(value - 1))}
+        onClick={() => onChange(clamp(fractional ? (Math.round(value * 1000) - 100) / 1000 : value - 1))}
         disabled={value <= min}
         className={cn(btn, 'border-r border-border')}
       >
@@ -131,19 +157,21 @@ function Stepper({
       </button>
       <input
         value={text}
-        inputMode="numeric"
+        inputMode={fractional ? 'decimal' : 'numeric'}
+        aria-invalid={invalid}
+        title={invalid ? 'Enter at least 0.125 CPU with up to three decimal places' : undefined}
         aria-label="value"
         onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
         }}
-        className="min-w-0 flex-1 bg-transparent py-[9px] text-center font-mono text-[13px] text-foreground outline-none"
+        className="min-w-0 flex-1 bg-transparent py-[9px] text-center font-mono text-body text-foreground outline-none"
       />
       <button
         type="button"
         aria-label="increase"
-        onClick={() => onChange(clamp(value + 1))}
+        onClick={() => onChange(clamp(fractional ? (Math.round(value * 1000) + 100) / 1000 : value + 1))}
         disabled={max != null && value >= max}
         className={cn(btn, 'border-l border-border')}
       >
@@ -163,6 +191,8 @@ function ResourceField({
   onChange,
   max,
   onExceed,
+  fractional,
+  onValidityChange,
 }: {
   label: string
   unit: string
@@ -170,13 +200,23 @@ function ResourceField({
   onChange: (v: number) => void
   max?: number
   onExceed?: () => void
+  fractional?: boolean
+  onValidityChange?: (valid: boolean) => void
 }) {
   return (
     <div className="flex flex-col gap-[9px]">
-      <div className="font-mono text-[10px] uppercase tracking-[1px]">
-        {label} <span className="text-muted-foreground">({unit})</span>
+      <div className="font-mono text-label uppercase tracking-[1px]">
+        {label} <span className="normal-case tracking-normal text-muted-foreground">({unit})</span>
       </div>
-      <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
+      <Stepper
+        value={value}
+        onChange={onChange}
+        min={fractional ? 0.125 : 1}
+        max={max}
+        onExceed={onExceed}
+        fractional={fractional}
+        onValidityChange={onValidityChange}
+      />
       {max != null && (
         <span className="font-mono text-meta text-muted-foreground">
           Max {max} {unit}
@@ -193,7 +233,7 @@ function ResourceField({
 function CappedResourcesNote({ items }: { items: { label: string; unit: string; max: number }[] }) {
   if (items.length === 0) return null
   return (
-    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-warning-foreground">
+    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-meta leading-relaxed text-warning-foreground">
       Adjusted to your organization&apos;s max: {items.map((r) => `${r.label} ${r.max} ${r.unit}`).join(' · ')}. Need
       more?{' '}
       <a
@@ -226,14 +266,14 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
 
   const ROW = 'flex shrink-0 flex-col gap-1 border-t border-border px-4 py-4 sm:px-6'
   const LABEL = 'form-field-label'
-  const FIGURE = 'font-mono text-[20px] font-bold tracking-[-0.5px] sm:text-[24px]'
+  const FIGURE = 'font-mono text-section font-bold tracking-[-0.5px] sm:text-page'
 
   if (!config.billingApiUrl) {
     return (
       <div className={cn(ROW, 'sm:flex-row sm:items-baseline sm:justify-between')}>
         <span className={LABEL}>Price per hour</span>
         <span className={FIGURE}>
-          $0.00 <span className="text-[11px] font-normal text-muted-foreground">/ hr · free in preview</span>
+          $0.00 <span className="text-meta font-normal text-muted-foreground">/ hr · free in preview</span>
         </span>
       </div>
     )
@@ -267,19 +307,22 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
           aria-expanded={breakdownOpen}
           aria-controls="box-price-breakdown"
           onClick={() => setBreakdownOpen((wasOpen) => !wasOpen)}
-          className={cn(LABEL, 'self-start transition-colors hover:text-foreground')}
+          className={cn(
+            LABEL,
+            'mb-0 inline-flex min-h-6 items-center gap-1 self-start transition-colors hover:text-foreground',
+          )}
         >
           <span style={{ color: BRAND }}>{breakdownOpen ? '▾' : '▸'}</span> Est. price per hour
         </button>
         <span className={FIGURE}>
           {formatPriceCents(quote.totalCents)}
-          <span className="text-[11px] font-normal text-muted-foreground"> / hr</span>
+          <span className="text-meta font-normal text-muted-foreground"> / hr</span>
         </span>
       </div>
       {breakdownOpen && (
         <div id="box-price-breakdown" className="mt-1 flex flex-col gap-0.5">
           {quote.lines.map((line) => (
-            <div key={line.code} className="flex items-baseline justify-between gap-3 font-mono text-[11px]">
+            <div key={line.code} className="flex items-baseline justify-between gap-3 font-mono text-meta">
               <span className="text-muted-foreground">
                 {line.label} · {line.quantity} {line.quantityUnit} × {formatPriceCents(line.unitPriceCents, 6)}/
                 {line.quantityUnit}·hr
@@ -418,7 +461,7 @@ function SelectField({
   if (customOpen) {
     return (
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+        <span className="font-mono text-meta font-medium">{label}</span>
         <div className="flex items-stretch">
           <input
             autoFocus
@@ -430,17 +473,17 @@ function SelectField({
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
             }}
-            className="w-[56px] border border-border bg-card px-[10px] py-[7px] text-center font-mono text-[12.5px] text-foreground outline-none focus:border-brand"
+            className="w-[56px] border border-border bg-card px-[10px] py-[7px] text-center font-mono text-meta text-foreground outline-none focus:border-brand"
           />
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label={`${ariaLabel} unit`}
-              className="flex min-w-[64px] items-center justify-between gap-1 border border-l-0 border-border bg-card px-[9px] py-[7px] font-mono text-[12px] text-muted-foreground outline-none data-[state=open]:border-brand"
+              className="flex min-w-[64px] items-center justify-between gap-1 border border-l-0 border-border bg-card px-[9px] py-[7px] font-mono text-meta text-muted-foreground outline-none data-[state=open]:border-brand"
             >
               <span>{DURATION_UNITS.find((u) => u.id === customUnit)?.label}</span>
               <ChevronDown className="size-3 shrink-0" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="font-mono text-[12px]">
+            <DropdownMenuContent align="end" className="font-mono text-meta">
               {DURATION_UNITS.map((u) => (
                 <DropdownMenuItem
                   key={u.id}
@@ -462,16 +505,16 @@ function SelectField({
 
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+      <span className="font-mono text-meta font-medium">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={ariaLabel}
-          className="flex min-w-[104px] items-center justify-between gap-2 border border-border bg-card px-[11px] py-[7px] font-mono text-[12.5px] text-foreground outline-none data-[state=open]:border-brand"
+          className="flex min-w-[104px] items-center justify-between gap-2 border border-border bg-card px-[11px] py-[7px] font-mono text-meta text-foreground outline-none data-[state=open]:border-brand"
         >
           <span>{current?.label ?? formatLifecycleSeconds(value)}</span>
           <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="font-mono text-[12px]">
+        <DropdownMenuContent align="end" className="font-mono text-meta">
           {options.map((o) => (
             <DropdownMenuItem
               key={o.seconds}
@@ -512,14 +555,14 @@ function MountRow({
         <DropdownMenu>
           <DropdownMenuTrigger
             aria-label="Volume"
-            className="flex min-w-0 flex-1 items-center justify-between gap-2 border border-border bg-card px-[11px] py-[8px] font-mono text-[12.5px] outline-none data-[state=open]:border-brand"
+            className="flex min-w-0 flex-1 items-center justify-between gap-2 border border-border bg-card px-[11px] py-[8px] font-mono text-meta outline-none data-[state=open]:border-brand"
           >
             <span className={cn('truncate', !selected && 'text-muted-foreground')}>
               {selected?.name ?? 'Select a volume'}
             </span>
             <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="font-mono text-[12px]">
+          <DropdownMenuContent align="start" className="font-mono text-meta">
             {volumes.length === 0 && <DropdownMenuItem disabled>No volumes yet</DropdownMenuItem>}
             {volumes.map((v) => {
               const ready = v.state === VolumeState.READY
@@ -542,21 +585,21 @@ function MountRow({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <span className="self-center font-mono text-[12px] text-muted-foreground">→</span>
+        <span className="self-center font-mono text-meta text-muted-foreground">→</span>
 
         <input
           value={mount.mountPath}
           onChange={(e) => onChange({ ...mount, mountPath: e.target.value })}
           placeholder="/data"
           aria-label="Mount path"
-          className="min-w-0 flex-1 border border-border bg-card px-[11px] py-[8px] font-mono text-[12.5px] text-foreground outline-none focus:border-brand"
+          className="min-w-0 flex-1 border border-border bg-card px-[11px] py-[8px] font-mono text-meta text-foreground outline-none focus:border-brand"
         />
 
         <button
           type="button"
           onClick={onRemove}
           aria-label="Remove mount"
-          className="shrink-0 border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+          className="shrink-0 border border-border px-[10px] font-mono text-meta text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
         >
           ✕
         </button>
@@ -627,6 +670,7 @@ export const CreateBoxDialog = ({
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState('')
   const [cpu, setCpu] = useState(initialCpu)
+  const [cpuValid, setCpuValid] = useState(true)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
   // 0 means "never" for both — a legitimate value, not the accidental-empty-input
@@ -666,6 +710,7 @@ export const CreateBoxDialog = ({
     // "+ Box" row action lands on a form that is holding it.
     setMounts(prefillVolume ? [{ volumeId: prefillVolume, mountPath: '/data' }] : [])
     setSizePreset('small')
+    setCpuValid(true)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
@@ -726,6 +771,7 @@ export const CreateBoxDialog = ({
   // why the number on screen doesn't match the tier they clicked.
   const applySizePreset = (id: SizePresetId) => {
     setSizePreset(id)
+    setCpuValid(true)
     const spec = SIZE_PRESETS.find((p) => p.id === id)
     if (!spec || spec.cpu == null || spec.memory == null || spec.disk == null) return // `custom` only reveals the controls
     const nextCpu = limits.cpu != null && spec.cpu > limits.cpu ? limits.cpu : spec.cpu
@@ -738,6 +784,7 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
+    if (!cpuValid) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -789,7 +836,8 @@ export const CreateBoxDialog = ({
 
       <DialogContent className={cn('sm:max-w-[560px]', className)}>
         <DialogHeader>
-          <DialogTitle>Create a box for your agent</DialogTitle>
+          <DialogTitle>New Box</DialogTitle>
+          <DialogDescription className="sr-only">Create a Box for your agent.</DialogDescription>
         </DialogHeader>
 
         <FormDialogBody>
@@ -809,7 +857,7 @@ export const CreateBoxDialog = ({
               {/* Submitting an empty name is a real, supported path — the API then assigns
                   an adjective-animal name of its own. Say so here, or the placeholder reads
                   as a promise that the box will be called something like "my-new-box". */}
-              <div id="create-box-name-hint" className="font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <div id="create-box-name-hint" className="font-mono text-meta leading-relaxed text-muted-foreground">
                 Optional — auto-named like <span className="text-foreground">cozy-otter</span>.
               </div>
             </div>
@@ -832,6 +880,7 @@ export const CreateBoxDialog = ({
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     aria-label="Choose a known image"
+                    title="Choose a known image"
                     className="flex shrink-0 items-center px-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground data-[state=open]:text-foreground"
                   >
                     <ChevronDown className="size-3.5" />
@@ -892,7 +941,7 @@ export const CreateBoxDialog = ({
                   selected={sizePreset === p.id}
                   aria-pressed={sizePreset === p.id}
                   onClick={() => applySizePreset(p.id)}
-                  className="px-2 py-[7px] text-[12px]"
+                  className="px-2 py-[7px] text-meta"
                 >
                   {p.label}
                 </AsciiChip>
@@ -904,8 +953,8 @@ export const CreateBoxDialog = ({
                 line too was pure duplication — it only earns its place when
                 there's no other visible readout of the current size. */}
             {sizePreset !== 'custom' && (
-              <div className="font-mono text-[11px] text-muted-foreground">
-                · {cpu} vCPU · {memory} GiB · {disk} GiB
+              <div className="font-mono text-meta text-muted-foreground">
+                {cpu} vCPU · {memory} GiB RAM · {disk} GiB disk
               </div>
             )}
 
@@ -924,6 +973,8 @@ export const CreateBoxDialog = ({
             {sizePreset === 'custom' && (
               <div className="grid grid-cols-1 gap-[14px] border-t border-dashed border-border pt-[13px] sm:grid-cols-3">
                 <ResourceField
+                  fractional
+                  onValidityChange={setCpuValid}
                   label="CPU"
                   unit="vCPU"
                   value={cpu}
@@ -960,11 +1011,11 @@ export const CreateBoxDialog = ({
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
               aria-expanded={showAdvanced}
-              className="flex w-full items-center justify-between font-mono text-label uppercase tracking-[1.2px] text-muted-foreground transition-colors hover:text-foreground"
+              className="flex min-h-6 w-full items-center justify-between font-mono text-meta font-medium text-foreground transition-colors hover:text-brand"
             >
               <span>
                 <span style={{ color: BRAND }}>{showAdvanced ? '▾' : '▸'}</span> Advanced
-                <span className="ml-2 normal-case tracking-normal text-muted-foreground/70">
+                <span className="ml-2 font-normal text-muted-foreground">
                   volumes · lifecycle
                   {mounts.length > 0 ? ` · ${mounts.length} mount${mounts.length > 1 ? 's' : ''}` : ''}
                 </span>
@@ -989,7 +1040,7 @@ export const CreateBoxDialog = ({
                   <button
                     type="button"
                     onClick={() => setMounts((prev) => [...prev, { volumeId: '', mountPath: '/data' }])}
-                    className="border border-border px-[10px] py-[4px] font-mono text-[11px] transition-colors hover:border-brand"
+                    className="inline-flex h-7 items-center border border-border px-[10px] font-mono text-meta transition-colors hover:border-brand"
                   >
                     + Mount a volume
                   </button>
@@ -1049,7 +1100,7 @@ export const CreateBoxDialog = ({
                   waking even with auto-stop off, so this is its own row, not a
                   modifier of one. */}
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-[10px] uppercase tracking-[1px]">Wake on access</span>
+                    <span className="font-mono text-meta font-medium">Wake on access</span>
                     <Switch aria-label="Wake on access" checked={autoResume} onCheckedChange={setAutoResumeEnabled} />
                   </div>
                   {/* Wake is served by the API's own REST/WS proxy
@@ -1073,7 +1124,7 @@ export const CreateBoxDialog = ({
                   {/* Same shape as CappedResourcesNote above — left rule, tinted
                   ground, mono 11px — in the destructive tone. */}
                   {deleteDelaySeconds > 0 && (
-                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-destructive">
+                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-mono text-meta leading-relaxed text-destructive">
                       Permanent. The box and everything on its disk are gone — this cannot be undone.
                     </p>
                   )}
@@ -1082,10 +1133,15 @@ export const CreateBoxDialog = ({
             </>
           )}
           <div className="-mx-6">
+            {!cpuValid && (
+              <p role="alert" className="text-destructive">
+                Enter at least 0.125 CPU with up to three decimal places.
+              </p>
+            )}
             <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
             {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
             {(lifecycleError || mountError) && (
-              <p className="border-t border-border px-6 pt-3 font-mono text-[11px] text-destructive">
+              <p className="border-t border-border px-6 pt-3 font-mono text-meta text-destructive">
                 {lifecycleError ?? mountError}
               </p>
             )}
@@ -1101,7 +1157,12 @@ export const CreateBoxDialog = ({
             type="button"
             onClick={handleCreate}
             disabled={
-              submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
+              submitting ||
+              !cpuValid ||
+              !selectedOrganization?.id ||
+              !nameValid ||
+              Boolean(lifecycleError) ||
+              Boolean(mountError)
             }
           >
             {submitting ? 'Creating…' : 'Create Box'}

@@ -50,15 +50,15 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 	recoverDto := dto.RecoverBoxDTO{
 		FromVolumeId: "vol-1",
 		OsUser:       "root",
-		CpuQuota:     2,
+		CpuQuota:     cpuQuota(2),
 		GpuQuota:     1,
 		MemoryQuota:  4,
 		StorageQuota: 10,
 		Env:          map[string]string{"FOO": "bar"},
 		Volumes:      []dto.VolumeDTO{{VolumeId: "vol-1", MountPath: "/data"}},
 		Secrets: []dto.SecretDTO{
-			{Name: "openai", Value: "sk-test", Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
-			{Name: "github", Value: "gh-test"},
+			{Name: "openai", Value: "sk-test", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
+			{Name: "github", Value: "gh-test", Headers: map[string]string{"Authorization": "Bearer {value}"}},
 		},
 		OutboundEnabled:  &outboundEnabled,
 		OutboundAllowNet: []string{"10.0.0.0/8"},
@@ -72,14 +72,14 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 	if createDto.OsUser != recoverDto.OsUser {
 		t.Errorf("createDto.OsUser = %q, want %q", createDto.OsUser, recoverDto.OsUser)
 	}
-	if createDto.CpuQuota != recoverDto.CpuQuota {
-		t.Errorf("createDto.CpuQuota = %d, want %d", createDto.CpuQuota, recoverDto.CpuQuota)
+	if createDto.CpuQuota == nil || *createDto.CpuQuota != *recoverDto.CpuQuota {
+		t.Errorf("createDto.CpuQuota = %v, want allocation %v", createDto.CpuQuota, *recoverDto.CpuQuota)
 	}
 	if createDto.GpuQuota != recoverDto.GpuQuota {
 		t.Errorf("createDto.GpuQuota = %d, want %d", createDto.GpuQuota, recoverDto.GpuQuota)
 	}
 	if createDto.MemoryQuota != recoverDto.MemoryQuota {
-		t.Errorf("createDto.MemoryQuota = %d, want %d", createDto.MemoryQuota, recoverDto.MemoryQuota)
+		t.Errorf("createDto.MemoryQuota = %v, want %v", createDto.MemoryQuota, recoverDto.MemoryQuota)
 	}
 	if createDto.StorageQuota != recoverDto.StorageQuota {
 		t.Errorf("createDto.StorageQuota = %d, want %d", createDto.StorageQuota, recoverDto.StorageQuota)

@@ -1900,7 +1900,7 @@ paths:
         name: minCpu
         required: false
         schema:
-          minimum: 1
+          minimum: 0.01
           type: number
         style: form
       - description: Maximum CPU
@@ -1909,7 +1909,7 @@ paths:
         name: maxCpu
         required: false
         schema:
-          minimum: 1
+          minimum: 0.01
           type: number
         style: form
       - description: Minimum memory in GiB
@@ -1918,7 +1918,7 @@ paths:
         name: minMemoryGiB
         required: false
         schema:
-          minimum: 1
+          minimum: 0.125
           type: number
         style: form
       - description: Maximum memory in GiB
@@ -1927,7 +1927,7 @@ paths:
         name: maxMemoryGiB
         required: false
         schema:
-          minimum: 1
+          minimum: 0.125
           type: number
         style: form
       - description: Minimum disk space in GiB
@@ -4418,6 +4418,59 @@ paths:
       summary: Query recorded resource usage with fixed snapshot pagination
       tags:
       - admin
+  /admin/organizations/{organizationId}/nested-virtualization:
+    get:
+      operationId: adminGetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Read organization nesting allowlist
+      tags:
+      - admin
+    put:
+      operationId: adminSetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/adminSetOrganizationNestedVirtualization_request"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Set organization nesting allowlist
+      tags:
+      - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -4957,6 +5010,23 @@ components:
       required:
       - text
       type: object
+    TurnstileConfig:
+      example:
+        sitekey: sitekey
+        action: signup
+      properties:
+        sitekey:
+          description: Public Turnstile widget sitekey
+          type: string
+        action:
+          description: Turnstile challenge action
+          enum:
+          - signup
+          type: string
+      required:
+      - action
+      - sitekey
+      type: object
     PosthogConfig:
       properties:
         apiKey:
@@ -5027,6 +5097,9 @@ components:
       type: object
     BoxliteConfiguration:
       example:
+        turnstile:
+          sitekey: sitekey
+          action: signup
         version: 0.0.1
         posthog: ""
         oidc: ""
@@ -5044,6 +5117,8 @@ components:
         analyticsApiUrl: https://analytics.example.com
         rateLimit: ""
       properties:
+        turnstile:
+          $ref: "#/components/schemas/TurnstileConfig"
         version:
           description: BoxLite version
           example: 0.0.1
@@ -7372,6 +7447,7 @@ components:
       type: object
     RunnerHealthcheck:
       example:
+        nestedVirtualizationEnabled: true
         supportsPrivileged: true
         metrics: ""
         serviceHealth:
@@ -7386,6 +7462,9 @@ components:
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        nestedVirtualizationEnabled:
+          description: Runner runtime authorizes nested virtualization
+          type: boolean
         supportsPrivileged:
           description: Runner preserves the guest privileged creation option
           type: boolean
@@ -7510,6 +7589,9 @@ components:
       - ROLLBACK_EXPORT_BOX
       - ROLLBACK_IMPORT_BOX
       - DISCARD_EXPORTED_BOX
+      - EXPORT_CHECKPOINT
+      - UPLOAD_CHECKPOINT
+      - IMPORT_CHECKPOINT
       type: string
     Job:
       example:
@@ -7545,6 +7627,7 @@ components:
           - BOX
           - ARTIFACT
           - BACKUP
+          - CHECKPOINT
           example: BOX
           type: string
         resourceId:
@@ -9911,6 +9994,17 @@ components:
       - message
       - statusCode
       type: object
+    AdminOrganizationNestedVirtualization:
+      example:
+        enabled: true
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
+      type: object
     WebhookAppPortalAccess:
       example:
         token: appsk_...
@@ -10349,6 +10443,16 @@ components:
           type: array
       required:
       - series
+      type: object
+    adminSetOrganizationNestedVirtualization_request:
+      additionalProperties: false
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
       type: object
     WebhookController_getStatus_200_response:
       example:

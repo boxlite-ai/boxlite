@@ -26,6 +26,8 @@ pub(crate) struct ErrorResponse {
 pub(crate) struct FlatErrorResponse {
     pub message: String,
     pub code: Option<String>,
+    #[serde(rename = "boxId")]
+    pub box_id: Option<String>,
 }
 
 impl FlatErrorResponse {
@@ -35,8 +37,14 @@ impl FlatErrorResponse {
     /// arrive as a server fault, and hid the HTTP status from the mapper for
     /// good: the status-driven fallback was unreachable behind it.
     pub(crate) fn into_error_model(self) -> ErrorModel {
+        // Every language binding and the CLI preserve the message, while their
+        // existing error ABIs have no structured field for an admitted Box ID.
+        let message = match self.box_id {
+            Some(box_id) => format!("{} (boxId: {box_id})", self.message),
+            None => self.message,
+        };
         ErrorModel {
-            message: self.message,
+            message,
             error_type: "HttpError".to_string(),
             code: self.code.unwrap_or_default(),
             request_id: None,
@@ -162,6 +170,9 @@ impl CreateBoxRequest {
         let (image, rootfs_path) = match &options.rootfs {
             RootfsSpec::Image(img) => (Some(img.clone()), None),
             RootfsSpec::RootfsPath(path) => (None, Some(path.clone())),
+            // `RestRuntime::create` sends a checkpoint source as its own
+            // minimal request and never reaches this conversion.
+            RootfsSpec::Checkpoint(_) => (None, None),
         };
 
         let env = if options.env.is_empty() {
@@ -363,7 +374,7 @@ pub(crate) struct CreateBoxSecret {
     pub hosts: Vec<String>,
     pub placeholder: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub header: Option<String>,
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
@@ -373,7 +384,7 @@ impl From<&crate::runtime::options::Secret> for CreateBoxSecret {
             value: secret.value.clone(),
             hosts: secret.hosts.clone(),
             placeholder: secret.placeholder.clone(),
-            header: secret.header.clone(),
+            headers: secret.headers.clone(),
         }
     }
 }
@@ -1018,14 +1029,17 @@ mod tests {
             value: "key".into(),
             hosts: vec!["generativelanguage.googleapis.com".into()],
             placeholder: "<BOXLITE_SECRET:gemini>".into(),
-            header: Some("x-goog-api-key".into()),
+            headers: Some(std::collections::BTreeMap::from([(
+                "x-goog-api-key".into(),
+                "{value}".into(),
+            )])),
         };
         let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
-        assert_eq!(json["header"], "x-goog-api-key");
+        assert_eq!(json["headers"]["x-goog-api-key"], "{value}");
 
-        secret.header = None;
+        secret.headers = None;
         let json = serde_json::to_value(CreateBoxSecret::from(&secret)).unwrap();
-        assert!(json.get("header").is_none());
+        assert!(json.get("headers").is_none());
     }
 
     #[test]
@@ -1049,7 +1063,10 @@ mod tests {
             value: "sk-test".into(),
             hosts: vec!["api.openai.com".into()],
             placeholder: "<BOXLITE_SECRET:openai>".into(),
-            header: None,
+            headers: Some(std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                "Bearer {value}".into(),
+            )])),
         }]);
         req.auto_stop = Some(900);
         req.auto_delete = Some(604800);
@@ -1088,7 +1105,10 @@ mod tests {
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
                 placeholder: "<BOXLITE_SECRET:openai>".into(),
-                header: None,
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer {value}".into(),
+                )])),
             }],
             volumes: vec![VolumeSpec::managed_volume("volume-123", "/data")],
             auto_stop: Some(1800),

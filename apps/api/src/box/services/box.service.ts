@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { assertCpuAllocation } from '../utils/cpu-allocation'
+import { requestedMemoryMib } from '../utils/memory-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
+import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager, Raw } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
@@ -14,6 +16,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -42,7 +45,7 @@ import { OrganizationEvents } from '../../organization/constants/organization-ev
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
+import { BoxDto, BoxDtoReads, BoxSecret, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import {
   DISABLED_OUTBOUND_RULES_ERROR,
@@ -115,9 +118,68 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  /** Internal transactional admission/ownership; never accepted from a public DTO. */
+  onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
+
+function validateSecrets(secrets: BoxSecret[] | undefined): void {
+  const forbidden = new Set([
+    'host',
+    'connection',
+    'proxy-connection',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'keep-alive',
+    'te',
+    'trailer',
+    'upgrade',
+    'content-length',
+    'transfer-encoding',
+  ])
+  // RFC 9110 token syntax; the denied names are Go httputil hopHeaders
+  // plus Host and Content-Length, matching the Rust create check.
+  const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+  // HTTP field values deliberately reject these control bytes, except HTAB.
+  // eslint-disable-next-line no-control-regex
+  const controls = /[\x00-\x08\x0a-\x1f\x7f]/
+  const seen = new Set<string>()
+
+  for (const secret of secrets ?? []) {
+    if (!secret.hosts?.length || secret.hosts.some((host) => !host)) {
+      throw new BadRequestError(`Secret ${secret.name} must list non-empty hosts`)
+    }
+    const headers = secret.headers
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers) || Object.keys(headers).length === 0) {
+      throw new BadRequestError(`secret ${JSON.stringify(secret.name)} has no headers; recreate the box with headers`)
+    }
+    if (typeof secret.value !== 'string' || controls.test(secret.value)) {
+      throw new BadRequestError(`Secret ${secret.name} has an invalid header value`)
+    }
+    const ownHeaders = new Set<string>()
+    const hosts = new Set(secret.hosts.map((value) => value.toLowerCase()))
+    for (const [header, template] of Object.entries(headers)) {
+      const normalizedHeader = header.toLowerCase()
+      if (!token.test(header) || forbidden.has(normalizedHeader) || ownHeaders.has(normalizedHeader)) {
+        throw new BadRequestError(`Secret ${secret.name} has an invalid or duplicate header name`)
+      }
+      ownHeaders.add(normalizedHeader)
+      // Check template and value separately: braces in the value are literal,
+      // and rendering cannot introduce a control byte absent from both inputs.
+      if (typeof template !== 'string' || !/^[^{}]*\{value\}[^{}]*$/.test(template) || controls.test(template)) {
+        throw new BadRequestError(`Secret ${secret.name} has an invalid header template`)
+      }
+      for (const host of hosts) {
+        const key = `${host}\0${normalizedHeader}`
+        if (seen.has(key)) {
+          throw new BadRequestError(`Conflicting secrets on host ${host} for header ${header}`)
+        }
+        seen.add(key)
+      }
+    }
+  }
+}
 
 @Injectable()
 export class BoxService {
@@ -179,13 +241,13 @@ export class BoxService {
   private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
-    persist: () => Promise<Box>,
+    persist: (runner: Runner) => Promise<Box>,
   ): Promise<Box> {
     const runner = await this.runnerService.getRandomAvailableRunner(
       box.privileged ? { ...runnerParams, requiresPrivileged: true } : runnerParams,
     )
     box.runnerId = runner.id
-    return persist()
+    return persist(runner)
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -195,6 +257,7 @@ export class BoxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
+    assertCpuAllocation(warmPoolItem.cpu)
     // The far side of `requiresFreshBox`'s image rule. A warm box is created
     // with no organization and handed to whichever one claims it, so a pool row
     // naming a tenant's image would put that image's contents in front of
@@ -223,6 +286,7 @@ export class BoxService {
     box.cpu = warmPoolItem.cpu
     box.gpu = warmPoolItem.gpu
     box.mem = warmPoolItem.mem
+    box.memoryMib = warmPoolItem.mem * 1024
     box.disk = warmPoolItem.disk
 
     box.pending = true
@@ -238,6 +302,12 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    // Authentication caches organizations; admission must use the current policy.
+    const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
+    organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
+      nestedVirtualizationEnabled,
+    })
+    validateSecrets(createBoxDto.secrets)
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
@@ -249,6 +319,7 @@ export class BoxService {
 
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
+      const memoryMib = requestedMemoryMib(mem)
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
       // Reject over-limit requests at the boundary (the "security option"
@@ -272,7 +343,7 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -343,7 +414,8 @@ export class BoxService {
       box.imageIsOrgOwned = resolvedImage.isOrgOwned
       box.cpu = cpu
       box.gpu = gpu
-      box.mem = mem
+      box.mem = Math.ceil(mem)
+      box.memoryMib = memoryMib
       box.disk = disk
 
       // POL-205: unset inbound access on the internal create DTO defaults disabled.
@@ -383,11 +455,15 @@ export class BoxService {
       // and a name collision, which the insert itself settles, come after it.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        const insert = () =>
+          options.onPersist
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
+            : this.boxRepository.insert(box, options.maxCreatedBoxes)
         return createBoxDto.name
-          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
+          ? insert()
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.boxRepository.insert(box, options.maxCreatedBoxes)
+              return insert()
             })
       })
 
@@ -564,7 +640,21 @@ export class BoxService {
     }
 
     baseFindOptions.cpu = createRangeFilter(minCpu, maxCpu)
-    baseFindOptions.mem = createRangeFilter(minMemoryGiB, maxMemoryGiB)
+    if (minMemoryGiB !== undefined || maxMemoryGiB !== undefined) {
+      baseFindOptions.memoryMib = Raw(
+        (alias) => {
+          const legacy = `${alias.slice(0, alias.lastIndexOf('.') + 1)}mem`
+          const gib = `COALESCE(${alias}, ${legacy} * 1024) / 1024.0`
+          return [
+            minMemoryGiB !== undefined && `${gib} >= :minMemoryGiB`,
+            maxMemoryGiB !== undefined && `${gib} <= :maxMemoryGiB`,
+          ]
+            .filter(Boolean)
+            .join(' AND ')
+        },
+        { minMemoryGiB, maxMemoryGiB },
+      )
+    }
     baseFindOptions.disk = createRangeFilter(minDiskGiB, maxDiskGiB)
     baseFindOptions.updatedAt = createRangeFilter(lastEventAfter, lastEventBefore)
 
@@ -879,19 +969,43 @@ export class BoxService {
     return url
   }
 
-  async destroy(boxIdOrName: string, organizationId: string | undefined, ctx: Context): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+  private async lifecycleBox(
+    id: string,
+    organizationId: string | undefined,
+    lookup: 'id' | 'id-or-name',
+    lockTimeoutMs?: number,
+  ) {
+    if (lookup === 'id-or-name') return this.findOneByIdOrName(id, organizationId, undefined, lockTimeoutMs)
+    const box = await this.findOne(id, true)
+    if (!organizationId || box.organizationId !== organizationId || box.state === BoxState.DESTROYED)
+      throw new NotFoundException(`Box with ID ${id} not found`)
+    return box
+  }
 
-    if (box.pending) {
+  async destroy(
+    boxIdOrName: string,
+    organizationId: string | undefined,
+    ctx: Context,
+    lookup: 'id' | 'id-or-name' = 'id-or-name',
+  ): Promise<Box> {
+    const selected = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
+    const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(
+      selected.id,
+      selected.organizationId,
+    )
+
+    if (box.pending && !checkpointState?.activeJobId) {
       throw new BoxError('Box state change in progress')
     }
 
     const updateData = Box.getSoftDeleteUpdate(box)
 
-    const updatedBox = await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: box.pending, state: box.state },
-    })
+    const updatedBox = checkpointState?.activeJobId
+      ? await this.boxRepository.deleteCheckpointTarget(box, checkpointState)
+      : await this.boxRepository.updateWhere(box.id, {
+          updateData,
+          whereCondition: { pending: box.pending, state: box.state },
+        })
 
     recordBoxRequested('box.delete', updatedBox, ctx)
 
@@ -986,8 +1100,14 @@ export class BoxService {
     return updated
   }
 
-  async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId, undefined, ctx.lockTimeoutMs)
+  async stop(
+    boxIdOrName: string,
+    organizationId: string | undefined,
+    ctx: Context,
+    force?: boolean,
+    lookup: 'id' | 'id-or-name' = 'id-or-name',
+  ): Promise<Box> {
+    const box = await this.lifecycleBox(boxIdOrName, organizationId, lookup, ctx.lockTimeoutMs)
 
     this.assertBoxNotErrored(box)
 
@@ -1287,11 +1407,12 @@ export class BoxService {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
-    const result = await this.boxRepository.delete({
-      state: BoxState.ERROR,
-      desiredState: BoxDesiredState.DESTROYED,
-      updatedAt: LessThan(sevenDaysAgo),
-    })
+    const result = await this.boxRepository
+      .createQueryBuilder()
+      .delete()
+      .where({ state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: LessThan(sevenDaysAgo) })
+      .andWhere(`NOT ${CANCELLED_CHECKPOINT_TARGET_SQL}`)
+      .execute()
 
     if (result.affected > 0) {
       this.logger.debug(`Cleaned up ${result.affected} stale error boxes`)

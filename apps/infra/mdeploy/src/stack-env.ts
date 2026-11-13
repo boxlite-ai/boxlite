@@ -20,6 +20,7 @@
  * there would read whatever that shell happened to hold.
  */
 
+import { renderRunnerEnvironment } from '../stack/runner-environment.ts'
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { clickHouseRetentionHours } from '../stack/clickhouse-retention.ts'
 import {
@@ -86,7 +87,11 @@ export const userDomainFrom = (environment: NodeJS.ProcessEnv): UserDomain | nul
   }
   return {
     domain,
-    dnsZoneId: required(environment, 'CLOUDFLARE_USER_ZONE_ID', `the records for *.${domain} go into the zone that holds it`),
+    dnsZoneId: required(
+      environment,
+      'CLOUDFLARE_USER_ZONE_ID',
+      `the records for *.${domain} go into the zone that holds it`,
+    ),
   }
 }
 
@@ -276,6 +281,14 @@ const channels = ({
   home: Cloud
 }) => {
   const api = apiEnvironmentFrom({ environment, declaration, region, stage, home })
+  // Invocation metadata bypasses stored stage groups, like the image tag.
+  const generationKey = environment.CI_SCHEDULER_GENERATION === undefined ? 'GITHUB_RUN_ID' : 'CI_SCHEDULER_GENERATION'
+  const generation = environment[generationKey]
+  if (generation !== undefined) {
+    if (!/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(Number(generation)))
+      throw new StackEnvError(`${generationKey} must be a canonical positive safe integer`)
+    api.environment.CI_SCHEDULER_GENERATION = generation
+  }
   const split = (group: string) =>
     splitServiceChannels({
       delivered: serviceSecretsFrom({ group, declaration, environment }),
@@ -285,6 +298,11 @@ const channels = ({
   const proxy = split(PROXY_GROUP)
   const collector = split(OTEL_GROUP)
   const runner = split(RUNNER_GROUP)
+  renderRunnerEnvironment(runner.values.BOXLITE_RUNNER_ENV, [
+    ...Object.keys(runner.values),
+    ...Object.keys(runner.addresses),
+    ...Object.keys(runner.addresses).map((name) => `${name}_ARN`),
+  ])
   return {
     apiEnvironment: api.environment,
     apiSecrets: api.secrets,

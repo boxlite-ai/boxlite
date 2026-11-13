@@ -95,6 +95,9 @@ export const awsStorageProvider =
         ),
         credentialVending: { roleName, roleArn },
       },
+      // Reserved: the API has no S3 checkpoint store yet, so this cloud keeps
+      // no checkpoint bucket, so no archive prefix is supplied to the API.
+      checkpoints: { active: false },
       ready: [],
     }
   }

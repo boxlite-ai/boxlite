@@ -142,7 +142,8 @@ export const PROVIDERS: Provider[] = [
 
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
-const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
+// `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own box.
+const ROW_GRID = 'grid min-w-[680px] grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
 
 /** The same Covers label is used for display and local filtering. */
 function registryCoverage(prefix?: string): string {
@@ -317,7 +318,7 @@ export function RegistriesPanel() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {unsupported ? (
           <div className="py-10 text-center font-mono text-meta text-muted-foreground">
             Private registries are not enabled in this environment. Public images still work.

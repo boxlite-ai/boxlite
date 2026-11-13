@@ -5,8 +5,9 @@
 package dto
 
 type SecretDTO struct {
-	Name        string   `json:"name" validate:"required"`
-	Value       string   `json:"value" validate:"required"`
-	Hosts       []string `json:"hosts,omitempty"`
-	Placeholder string   `json:"placeholder,omitempty"`
+	Name        string            `json:"name" validate:"required"`
+	Value       string            `json:"value" validate:"required"`
+	Hosts       []string          `json:"hosts,omitempty"`
+	Placeholder string            `json:"placeholder,omitempty"`
+	Headers     map[string]string `json:"headers" validate:"required,min=1"`
 }

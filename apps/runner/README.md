@@ -4,35 +4,65 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
-The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
-Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
-API for SDK clients and the control-plane API. One runner process hosts many
-boxes; each box hosts many executions; each execution can be attached to at
-most one client at a time.
+## Memory quotas
 
-Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3003`
-behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
-and [runner operations](../infra/docs/runners.md).
+Create and recovery `memoryQuota` values are GiB numbers, including exact fractions:
+`0.29296875` maps to 300 MiB in the runtime's `WithMemory` option.
+The conversion rejects non-integral MiB, non-finite values, values below 128 MiB,
+and values beyond the runtime option's unsigned 32-bit MiB range before runtime side effects.
+Backend and host limits still apply. Internal callers that omit memory retain the
+historical 128 MiB default; HTTP requests must supply at least `0.125` GiB.
+Cloud enforces the same 128 MiB minimum and its organization quotas.
+Upgrade Runners before Cloud starts sending fractional-GiB quotas; older Runners
+decode this field as an integer and reject them.
 
-`BOXLITE_KERNEL_PATH` selects an operator-installed kernel for newly created
-Boxes. It must be an absolute readable regular file; invalid settings fail
-startup. The Runner enables the local `custom-kernel` RC capability through
-the Go/C SDK and preserves the guest privilege policy separately. An unset
-path keeps the bundled default. Cloud deployment downloads and verifies the
-file; the Runner itself performs no download. Existing Boxes retain their
-saved boot configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
-custom-kernel Boxes: clearing it removes the feature opt-in needed to restart them.
-The `--kernel` flag belongs to the local CLI; the Runner uses the environment
-variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
+## Nested virtualization capability
 
-The health response includes `custom_kernel: "supported"` to identify binaries
-that implement this setting. It describes build capability; deployment also
-checks the running process's kernel environment and listening socket.
+Cloud requests nesting when creating a Box. Runner captures its process
+`BOXLITE_EXPERIMENTAL` at startup and combines authorization with current Linux
+Intel/AMD KVM nested settings. Missing permission or unsupported hosts select an
+ordinary new Box. Guest privilege remains independent.
 
-For the system-wide context (CDN, load balancers, where the runner fits in
-the request path), see the [hosted platform](../../docs/contributing/architecture/platform/README.md).
+V0 `/info` reports `nestedVirtualizationEnabled`; Cloud carries the report through
+its authenticated V2 heartbeat. Actual creation uses the standard Go
+`AdvancedBoxOptions.SetNestedVirtualization` binding. Runtime create saves this
+existing option in BoxConfig. No Cloud per-box database field is added.
+
+Start uses ordinary `Box.Start(ctx)` and the saved configuration. Organization
+allowlist changes affect future creates, never upgrade or downgrade an existing
+Box on stop/start. Creation replay adopts the existing choice. Local runtime
+compatibility checks, kernel and privileged settings retain their main behavior.
+A nested Box can fail to start if its host later cannot provide that capability.
+
+There is no private Runner start bridge, start-option ABI or Runner-only SDK build
+tag. Runner tests cover creation/replay and optional fallback without booting VMs;
+real VM/L2 and cross-Runner reconstruction require separate qualification.
+
+Cloud stages deliver process settings through
+[`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
 
 ---
+
+## Regenerating the runner client
+
+With Java 11 or newer available, run `make generate:runner-client` from the
+repository root after updating the committed runner Swagger schema. This generates the TypeScript client without
+starting the control-plane API or requiring its database configuration.
+
+## Secret recovery safety
+
+Secret `headers` maps survive creation and recovery. Recovery validates all
+header names, templates, control bytes and host/header conflicts before
+destroying the existing Box; invalid saved configuration leaves its identity
+and stored state intact. Direct creation uses the same check, including rejecting
+missing, null and empty maps, with an error asking the caller to recreate the box with headers.
+
+Upgrade every eligible runner before upgrading the API or enabling custom
+`headers` requests. Old runners silently ignore the map and use the default
+Authorization template; there is no capability gate to prevent mixed-version
+dispatch. Creation and recovery with custom headers must remain on upgraded
+runners, including during rollback.
+See the [secret contract](../../docs/reference/configuration.md#secrets).
 
 ## What this README covers
 
@@ -665,6 +695,7 @@ Supported job types:
 CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
 EXPORT_BOX, IMPORT_BOX,
 ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX
+EXPORT_CHECKPOINT, UPLOAD_CHECKPOINT, IMPORT_CHECKPOINT
 ```
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
@@ -675,6 +706,101 @@ under the API-side trace.
 This is the production path. The HTTP routes under `/boxes/` and
 `/artifacts/` exist for direct/SDK use; v2 turns those into pull-based
 job execution.
+
+### Portable archive storage
+
+The [checkpoint design](https://github.com/boxlite-ai/boxlite/issues/2367)
+defines the capture, transfer and recovery contracts; the transfer helper alone
+does not provide target recovery ownership.
+
+Checkpoint creation requires an idle, stopped source; running and transitional
+sources are refused without stopping them. The runner rechecks `stopped` while
+holding the source operation lease, so a concurrent start cannot race export.
+
+Checkpoint capture separates native export from upload. `EXPORT_CHECKPOINT`
+owns the source `BOX` job slot; it reports an immutable archive record and never
+uploads. The API then releases the source and submits `UPLOAD_CHECKPOINT` in
+the checkpoint's own job slot. An upload does not hold the source's executor
+operation lease, so a later source start can proceed independently.
+
+Each capture uses `<BOXLITE_HOME_DIR>/work/checkpoints/<checkpoint-id>/<export-job-id>/`.
+Its record pins the image digest that built the source disk, archive size,
+SHA-256 and object URI. Redelivery reuses that capture; it never substitutes a
+fresh source export if the published file is missing or corrupt. Fixed lock
+files serialize duplicate deliveries across processes sharing the work directory.
+
+The accepted checkpoint job continues waiting for native export after caller
+cancellation. An upload retains its archive until the API acknowledges its
+terminal job status; a rejected callback leaves it for replay. Cleanup removes
+the large archive while retaining a small record that prevents a late export
+job from capturing the changed source again. These rules apply to checkpoint
+jobs; the migration job sequence keeps its existing export/upload contract.
+
+Checkpoint downloads stay under the fixed
+`<BOXLITE_HOME_DIR>/work/checkpoints/<checkpoint-id>/` root, in a private
+`.download-<import-job-id>-*` directory per import attempt, including
+duplicate deliveries of the same job. Transfer failures, unexpected lengths,
+SHA-256 mismatches and link destinations are rejected and staging is removed.
+Runner owns these cloud metadata checks and the pinned-image/platform-identity
+policy; native runtime has no checkpoint-specific archive preparer.
+
+`IMPORT_CHECKPOINT` downloads and verifies SHA-256, imports a candidate under an
+operation-specific native name, publishes its public-to-native identity mapping,
+and only then removes the predecessor. Import failures retain the original Box.
+
+Runner streams the archive to a temporary plain tar, changing only the first
+manifest member's pinned image and six platform environment keys. It copies
+the remaining tar bytes unchanged, preserving GNU sparse members. It performs
+no separate disk validation or startup preflight; the existing native import
+owns archive extraction and validation. This adds one stream read and temporary
+write, without extracting disk files or recompressing them.
+
+The download and adapted tar stay owned until native import finishes. The
+request carries a stable operation and monotonically increasing target sequence,
+independently of job attempts. The existing journal under
+`<BOXLITE_HOME_DIR>/work/checkpoint-operations/` publishes the identity mapping
+with an atomic file replacement and directory synchronization. All runner
+lookups and BoxSync use that mapping, including after process restart; candidates
+and obsolete predecessors are hidden from public inventory.
+
+Import retries first look up the deterministic candidate name, so a lost native
+receipt does not duplicate the import. Publication failure never removes the old
+Box. Cleanup failure leaves both disks and a retryable journal; retry removes the
+predecessor without downloading or importing again. Accepted work keeps the target
+lease after caller cancellation. These guarantees cover import failures and process
+restarts, while native disk persistence retains the existing import contract.
+
+Ordinary create invalidates the previous checkpoint operation before changing
+the target. Explicit destroy durably retires the public target before native
+destruction, even when no import has arrived yet; all delayed checkpoint imports
+are then refused. Missing native targets count as successfully destroyed.
+Migration cleanup invalidates its previous operation while keeping the public
+target reusable. An accepted import can be
+replayed after the box starts without replacing it or reading the object again.
+The lease covers runner lifecycle entry points; callers directly using native
+runtime handles do not participate in this runner coordination.
+
+The runner shares `ArchiveStore` between archive producers and consumers.
+The control plane chooses each object's location: `gs://bucket/key` uses GCS,
+`s3://bucket/key` uses S3, and a bare key uses `AWS_DEFAULT_BUCKET`.
+Malformed locations and unsupported schemes fail before export begins.
+
+GCS uses Application Default Credentials and initializes its client on first
+use. Missing credentials can be retried on a later operation. S3 configuration
+is independent: an absent `AWS_DEFAULT_BUCKET` disables S3 transfers without
+preventing GCS transfers or runner startup. Operators must grant the runner's
+credentials access to the buckets selected by the control plane.
+
+A GCS upload succeeds only after its writer commits; a failed local read
+cancels the upload. GCS downloads use a unique, owner-only temporary file next
+to the destination, then rename the complete file into place. Download or
+rename failures preserve the prior destination and remove the staging file.
+Deleting an absent object is idempotent; permission failures remain errors.
+
+S3 retains MinIO's existing download/resume behavior. Callers must provide
+different local destinations for concurrent S3 downloads; close or rename
+failures may leave MinIO staging files. The GCS staging guarantees do not
+extend to S3. Callers own local archive retention and object removal.
 
 ### v2 healthcheck
 
@@ -778,18 +904,17 @@ that the guest listener restarts.
 
 ```bash
 # All runner tests
-cd apps/runner && go test -tags boxlite_dev ./...
+make test:apps:runner
 
 # Just the attach + exec_manager suites
-cd apps/runner && go test -tags boxlite_dev ./pkg/api/controllers/... ./pkg/boxlite/...
+make test:apps:runner FILTER='Attach|ExecManager'
 
 # With race detector (recommended; cleanupLoop ticker + attach goroutines)
-cd apps/runner && go test -tags boxlite_dev -race ./...
+make test:apps:runner GOTEST_FILTER='-race'
 ```
 
-The `boxlite_dev` build tag is required because the Go SDK uses FFI
-symbols that aren't in the released `libboxlite.a`. The dev tag links
-against the local cargo-built version.
+These make targets configure `boxlite_dev` to link the local C library.
+Runner uses the standard Go SDK start operation without a separate build tag.
 
 If you hit "libboxlite.a not found" or unresolved-symbol errors:
 
@@ -835,3 +960,11 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
 
 - **Spec**:
   - [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) — formal API schema
+
+## Fractional CPU allocations
+
+Create and recovery requests accept `cpuQuota` as a number of cores from `0.125` to `16`, in increments of `0.001`.
+Omission retains the one-core default; explicit zero, non-finite values, and excess precision are rejected.
+The HTTP and v2 job paths preserve the number through the Go SDK; recovery validates it before destroying the old Box.
+Fractional Linux allocations use the Runtime's cgroup quota and rounded-up guest topology, with its existing best-effort membership behavior.
+Upgrade all Runners and matching native libraries before enabling fractional creation in the API, including migration destinations.

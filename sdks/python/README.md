@@ -5,6 +5,43 @@ Python bindings for BoxLite - an embeddable virtual machine runtime for secure, 
 Access the [agent API](../../docs/reference/agents.md) through `Box.agents`
 and `SimpleBox.agents`, including synchronous wrappers, grouped options and error handling.
 
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
+## Managed checkpoints
+
+Checkpoint settings must be omitted, including explicit defaults such as
+`detach=False`, `tty=False`, or `advanced=AdvancedBoxOptions(privileged=False)`.
+Explicit empty `env`, `volumes`, `ports`, or `secrets` lists also reject.
+Omitted collection arguments default to `None` and normalize to empty lists;
+ordinary image creation continues accepting empty lists.
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
+The source must be stopped before `create`; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+On REST runtimes, `runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
+`get(key)` and `remove(key, force=False)`. `SyncBoxlite.checkpoints` exposes the same
+operations synchronously. These independent archives survive source deletion.
+
+```python
+checkpoint = await runtime.checkpoints.create("source", "dev-base")
+worker = await runtime.create(BoxOptions(checkpoint=checkpoint.id), name="worker")
+```
+
+A box created from a checkpoint inherits all saved execution settings. Setting any
+other `BoxOptions` field, including `image` or `rootfs_path`, raises an
+invalid-argument error before a request is sent. A cloud capture can initially report
+`creating`; query it until `ready` before use. Force removal only ignores absence.
+Storage belongs to the server. Local runtime checkpoint operations, including
+`create` with a checkpoint, raise an unsupported-operation error.
+See [CLI lifecycle details](../../src/cli/README.md#checkpoint-management).
+
 ## Overview
 
 The BoxLite Python SDK provides a Pythonic API for creating and managing isolated execution environments. Built with PyO3, it wraps the Rust BoxLite runtime with async-first Python bindings.
@@ -277,7 +314,7 @@ Configuration options for creating a box.
 **Parameters:**
 
 - `image: str` - OCI image URI (default: `"python:slim"`)
-- `cpus: float` - CPU allocation (default: 1, range: 0.01–16, step: 0.001); fractions require a Linux execution host
+- `cpus: float` - CPU allocation (default: 1, range: 0.125–16, step: 0.001); fractions require a Linux execution host
 - `memory_mib: int` - Memory in MiB (default: 512, range: 128-65536)
 - `disk_size_gb: int | None` - Container disk size in GB, never smaller than the image (default: None, the image size)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
@@ -291,7 +328,10 @@ Configuration options for creating a box.
     pass `False` for a private cloud tunnel. Call `forward()` for a listener;
     connections reuse the declaration and cannot undo revocation. See
     [private tunnel examples](../../docs/concepts/networking.md#private-cloud-tunnels).
-- `secrets: List[Secret]` - Secrets injected into the `Authorization` header of outbound HTTPS requests
+- `secrets: List[Secret]` - Secrets overwrite configured headers already present on outbound HTTPS requests.
+  `Secret(..., headers={"x-goog-api-key": "{value}"})` selects a raw API key header;
+  multiple entries share the same secret value. Each template must contain exactly one `{value}`.
+  `headers` is a required keyword argument; omission, `None`, empty maps and strings are rejected.
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
@@ -354,6 +394,7 @@ options = boxlite.BoxOptions(
             name="openai",
             value="sk-...",
             hosts=["api.openai.com"],
+            headers={"Authorization": "Bearer {value}"},
         ),
     ],
 )
@@ -1023,6 +1064,11 @@ make test:unit:python
 # Integration tests (need a VM; boxes pull through the local test registry)
 make test:integration:python
 ```
+
+Checkpoint REST boundary tests need the native extension but do not boot a VM.
+Unit jobs omit them when the extension is absent. The native coverage job builds
+the extension and requires it with `BOXLITE_REQUIRE_NATIVE=1`, so missing or broken
+native builds fail instead of silently skipping these checks.
 
 ### Building Wheels
 

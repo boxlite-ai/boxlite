@@ -21,7 +21,9 @@ import {
   Logger,
   Res,
   Req,
+  BadRequestException,
   ForbiddenException,
+  HttpException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Request, Response } from 'express'
@@ -37,6 +39,8 @@ import { UserContext } from '../common/decorators/user-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
+import { recordBoxRequested } from '../box/utils/box-business-event.util'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
@@ -48,6 +52,8 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+
+const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -79,6 +85,7 @@ export class BoxliteBoxController {
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
+    private readonly checkpointRecoverService: CheckpointRecoverService,
   ) {}
 
   @Post()
@@ -97,6 +104,7 @@ export class BoxliteBoxController {
       body: (req: TypedRequest<CreateBoxDto>) => ({
         name: req.body?.name,
         image: req.body?.image,
+        checkpoint_id: req.body?.checkpoint_id,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -124,6 +132,10 @@ export class BoxliteBoxController {
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
+    if (dto.checkpoint_id !== undefined) {
+      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
+    }
+
     // Attaching a managed volume grants the box read/write access to its data,
     // so it is authorized independently of WRITE_BOXES: the caller must hold the
     // volume permissions too. WRITE_BOXES alone must not reach another key's
@@ -142,6 +154,54 @@ export class BoxliteBoxController {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
     return boxToBoxResponse(box)
+  }
+
+  /** Admit an inherited configuration, record its request, then wait without losing its identity. */
+  private async createBoxFromCheckpoint(
+    authContext: OrganizationAuthContext,
+    dto: CreateBoxDto,
+    ctx: Context,
+    request?: Request,
+  ): Promise<BoxResponseDto> {
+    const overrides = Object.entries(dto)
+      .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
+      .map(([field]) => field)
+    if (overrides.includes('image')) {
+      throw new BadRequestException('checkpoint_id and image are mutually exclusive')
+    }
+    if (overrides.length) {
+      throw new BadRequestException(
+        `A box created from a checkpoint inherits its settings; only name may be set, remove: ${overrides.join(', ')}`,
+      )
+    }
+    if (dto.name !== undefined && (typeof dto.name !== 'string' || !CHECKPOINT_BOX_NAME.test(dto.name))) {
+      throw new BadRequestException('Invalid box name')
+    }
+
+    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
+    const box = await this.checkpointRecoverService.createBox(
+      authContext.organization,
+      dto.checkpoint_id,
+      dto.name,
+      maxCreatedBoxes,
+    )
+    recordBoxRequested('box.create', box, ctx)
+    if (request) request[AUDIT_TARGET_ID] = box.id
+    try {
+      return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))
+    } catch (error) {
+      // Admission already created this identity. Clients must query it after
+      // any wait failure instead of submitting another anonymous Box.
+      const status = error instanceof HttpException ? error.getStatus() : 500
+      const detail = error instanceof HttpException ? error.getResponse() : 'Checkpoint box creation failed'
+      throw new HttpException(
+        { ...(typeof detail === 'string' ? { message: detail } : detail), boxId: box.id },
+        status,
+        {
+          cause: error,
+        },
+      )
+    }
   }
 
   // Mirrors OrganizationResourceActionGuard: a system admin and an interactive

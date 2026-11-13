@@ -31,6 +31,8 @@ import type {
   JsOptions,
 } from "./native-contracts.js";
 export type {
+  CheckpointHandle,
+  CheckpointInfo,
   Domain,
   DomainHandle,
   DomainList,

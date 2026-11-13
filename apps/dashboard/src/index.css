@@ -47,14 +47,14 @@ body {
     --secondary: 220 14% 96%;
     --secondary-foreground: 218 17% 9%;
     --muted: 220 14% 96%;
-    --muted-foreground: 219 6% 45%;
+    --muted-foreground: 219 6% 42%;
     --accent: 220 14% 93%;
     --accent-foreground: 218 17% 9%;
 
     /* brand accent (the design's --accent blue) — kept distinct from shadcn's neutral
        hover "accent" so hovers stay neutral and the blue stays intentional. */
     --brand: 196 100% 47%;
-    --brand-foreground: 0 0% 100%;
+    --brand-foreground: 218 17% 9%;
 
     --border: 218 16% 90%;
     --border-hover: 218 10% 75%;
@@ -93,6 +93,7 @@ body {
     --warning-separator: 43 55% 84%;
 
     --destructive: 5 71% 50%;
+    --destructive-solid: 5 71% 50%;
     --destructive-background: 5 60% 95%;
     --destructive-foreground: 5 66% 46%;
     --destructive-separator: 5 48% 85%;
@@ -131,7 +132,7 @@ body {
     --accent-foreground: 0 0% 100%;
 
     --brand: 196 100% 47%;
-    --brand-foreground: 0 0% 100%;
+    --brand-foreground: 218 17% 9%;
 
     --border: 0 0% 16%;
     --border-hover: 0 0% 23%;
@@ -166,6 +167,7 @@ body {
     --warning-separator: 38 30% 18%;
 
     --destructive: 5 71% 58%;
+    --destructive-solid: 5 71% 50%;
     --destructive-background: 5 34% 12%;
     --destructive-foreground: 5 85% 72%;
     --destructive-separator: 5 29% 18%;
@@ -192,6 +194,13 @@ body {
 
   * {
     @apply border-border outline-ring/50;
+  }
+
+  /* One focus indicator for anything that does not draw its own: keyboard focus must
+     always be visible, including on scroll containers and tab panels. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
   }
 
   body {
@@ -544,7 +553,7 @@ body {
     @apply min-h-14 border-b border-border/60 px-4 py-3 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
   }
   .resource-name {
-    @apply truncate text-sm font-semibold text-foreground;
+    @apply truncate text-body font-semibold text-foreground;
   }
   .resource-link {
     @apply resource-name outline-none underline-offset-4 hover:underline focus-visible:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground;
@@ -559,7 +568,7 @@ body {
     @apply min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-6;
   }
   .form-dialog [data-slot='dialog-title'] {
-    @apply font-display text-lg font-semibold tracking-normal;
+    @apply font-display text-section font-semibold tracking-normal;
   }
   .form-field-label {
     @apply mb-2 block font-mono text-meta font-medium normal-case tracking-normal text-foreground;

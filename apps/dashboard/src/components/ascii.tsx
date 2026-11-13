@@ -98,11 +98,11 @@ export function StatCard({
       )}
     >
       <div className="flex items-start justify-between gap-1">
-        <span className="font-mono text-[9px] uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-[10px] sm:tracking-[1.5px]">
+        <span className="font-mono text-label uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-label sm:tracking-[1.5px]">
           <span style={{ color: BRAND }}>▸</span> {label}
         </span>
         {live && (
-          <span className="inline-flex shrink-0 items-center gap-[5px] font-mono text-[9px] tracking-[1px] text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-[5px] font-mono text-meta tracking-[1px] text-muted-foreground">
             <span
               className="size-[6px] rounded-full"
               style={{ background: BRAND, animation: 'live-pulse 1.6s infinite' }}
@@ -112,7 +112,7 @@ export function StatCard({
         )}
       </div>
       {/* mobile: compact numeric value (the dot-matrix is too tall for a 3-up row) */}
-      <div className="font-mono text-[20px] font-semibold leading-none tracking-[-0.5px] sm:hidden">{value}</div>
+      <div className="font-mono text-section font-semibold leading-none tracking-[-0.5px] sm:hidden">{value}</div>
       {/* desktop: dot-matrix value + sub label */}
       <div className="hidden items-end gap-[10px] sm:flex">
         {isNumeric(value) ? (
@@ -122,7 +122,7 @@ export function StatCard({
         ) : (
           <div className="font-mono text-[34px] font-semibold leading-none tracking-[-1px]">{value}</div>
         )}
-        <span className="mb-[2px] font-mono text-[10px] uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
+        <span className="mb-[2px] font-mono text-label uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
       </div>
     </Tag>
   )
@@ -133,10 +133,10 @@ export function SectionTitle({ title, count, right }: { title: string; count?: R
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-[2px]">
       <div className="flex items-center gap-3">
-        <span className="font-mono text-[11px] uppercase tracking-[1.5px] text-foreground">
+        <span className="font-mono text-meta uppercase tracking-[1.5px] text-foreground">
           <span style={{ color: BRAND }}>▸</span> {title}
         </span>
-        {count && <span className="font-mono text-[11px] text-muted-foreground">{count}</span>}
+        {count && <span className="font-mono text-meta text-muted-foreground">{count}</span>}
       </div>
       {right}
     </div>
@@ -171,13 +171,13 @@ export function SegmentedBar({ used, limit, segments = 40 }: { used: number; lim
 export function Metric({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+      <span className="font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
         <span style={{ color: BRAND }}>▸</span> {label}
       </span>
-      <span className="font-mono text-[26px] font-semibold leading-none tracking-tight tabular-nums text-foreground">
+      <span className="font-mono text-page font-semibold leading-none tracking-tight tabular-nums text-foreground">
         {value}
       </span>
-      {sub && <span className="font-mono text-[11px] text-muted-foreground">{sub}</span>}
+      {sub && <span className="font-mono text-meta text-muted-foreground">{sub}</span>}
     </div>
   )
 }
@@ -223,7 +223,7 @@ export function AsciiChip({
     <button
       type="button"
       className={cn(
-        'border px-4 py-2 font-mono text-[13px] tabular-nums transition-colors',
+        'border px-4 py-2 font-mono text-body tabular-nums transition-colors',
         // What is not chosen recedes; the chosen one is simply at full value
         // with a heavier label. A brand hairline is the weakest mark available
         // and it measured 2.49:1 on the light theme, so brand is kept for
@@ -266,5 +266,5 @@ export function Panel({ className, children }: { className?: string; children: R
  * and a caption underneath it look like the same kind of line.
  */
 export function PanelNote({ children }: { children: ReactNode }) {
-  return <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">{children}</p>
+  return <p className="mt-1.5 font-mono text-meta text-muted-foreground">{children}</p>
 }

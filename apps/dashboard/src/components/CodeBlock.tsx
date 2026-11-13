@@ -6,7 +6,8 @@
 
 import { useTheme } from '@/contexts/ThemeContext'
 import { cn } from '@/lib/utils'
-import { Highlight, Prism, themes, type PrismTheme, type Token } from 'prism-react-renderer'
+import { Highlight, Prism, themes, type Token } from 'prism-react-renderer'
+import { readableCodeTheme } from '@/lib/readable-code-theme'
 import type { Key } from 'react'
 import { CopyButton } from './CopyButton'
 
@@ -26,21 +27,10 @@ interface HighlightProps {
   getTokenProps: (props: { token: Token; key: number }) => React.HTMLAttributes<HTMLSpanElement>
 }
 
-const oneDark = {
-  ...themes.oneDark,
-  plain: {
-    ...themes.oneDark.plain,
-    background: 'transparent',
-  },
-}
-
-const oneLight = {
-  ...themes.oneLight,
-  plain: {
-    ...themes.oneLight.plain,
-    background: 'transparent',
-  },
-}
+// The surfaces the code is drawn on: `--code-background` in each theme, and the darker of the
+// Quickstart surfaces. A token colour that passes on these passes on all of them.
+const oneDark = readableCodeTheme(themes.oneDark, '#121212')
+const oneLight = readableCodeTheme(themes.oneLight, '#f5f7fa')
 
 const languageAliases: Record<string, string> = {
   sh: 'bash',
@@ -125,17 +115,19 @@ const CodeBlock: React.FC<CodeBlockProps> = ({
       )}
     >
       <Highlight
-        theme={(resolvedTheme === 'dark' ? oneDark : oneLight) as PrismTheme}
+        theme={resolvedTheme === 'dark' ? oneDark : oneLight}
         code={preserveWhitespace ? code : code.trim()}
         language={highlightLanguage}
       >
         {({ style, tokens, getLineProps, getTokenProps }: HighlightProps) => (
           <pre
             className={cn(
-              'scrollbar-elevated overflow-x-auto rounded-none p-4 pr-12 text-body leading-6',
+              'scrollbar-elevated overflow-x-auto rounded-none p-4 text-body leading-6',
+              // The copy button sits in this gutter, outside the scroller, so a long line never runs under it.
+              showCopy && 'mr-11',
               codeAreaClassName,
             )}
-            style={style}
+            style={{ ...style, background: 'transparent' }}
           >
             {tokens.map((line, i) => {
               const props = getLineProps({ line, key: i })

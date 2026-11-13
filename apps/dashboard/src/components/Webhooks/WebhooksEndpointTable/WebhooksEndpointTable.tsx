@@ -227,7 +227,7 @@ export function WebhooksEndpointTable({
             <AlertDialogDescription>
               Are you sure you want to delete this webhook endpoint? This action cannot be undone.
               {deleteEndpoint && (
-                <div className="mt-2 text-sm">
+                <div className="mt-2 text-body">
                   <strong>URL:</strong> {deleteEndpoint.url}
                 </div>
               )}
@@ -249,7 +249,7 @@ export function WebhooksEndpointTable({
             <AlertDialogDescription>
               Are you sure you want to {disableEndpoint?.disabled ? 'enable' : 'disable'} this webhook endpoint?
               {disableEndpoint && (
-                <div className="mt-2 text-sm">
+                <div className="mt-2 text-body">
                   <strong>URL:</strong> {disableEndpoint.url}
                 </div>
               )}

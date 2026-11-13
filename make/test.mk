@@ -2,10 +2,14 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:unit\:openapi\:server
 PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
+PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
+PHONY_TARGETS += _guest-boot-probe
+PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -238,10 +242,10 @@ test\:unit\:sdk:
 	@echo "── SDK unit suites (python, node, c, go) ──"
 	$(call run_suites,test:unit:python test:unit:node test:unit:c test:unit:go)
 
-# SDK integration suites: Python integration + Node integration + C SDK test suite.
+# SDK integration suites run on the VM-capable E2E runner, including Go archives.
 test\:integration\:sdk:
-	@echo "── SDK integration suites (python, node, c) ──"
-	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c)
+	@echo "── SDK integration suites (python, node, c, go) ──"
+	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c test:integration:go)
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 #
@@ -343,7 +347,14 @@ test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-
 # Boot the real kernel through the native engine inside boxlite-shim: the M1 initramfs to its marker,
 # a typed Unsupported failure into the exit file, and an alpine box through the runtime up to
 # boxlite-guest as PID 1 on the ext4 root (the first-box progress test).
-test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+VMM_GUEST ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/boxlite-guest
+VMM_GUEST_PROBE ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/examples/guest-boot-probe
+export VMM_GUEST VMM_GUEST_PROBE
+
+_guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
+	@bash "$(SCRIPT_DIR)/test/build-guest-boot-probe.sh"
+
+test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe
 	@cargo test -p boxlite --features native --lib --no-run
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
 	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
@@ -510,14 +521,15 @@ test\:unit\:gvproxy:
 # Rust client at, so a class it gets wrong is a class every conformance run
 # gets wrong.
 #
-# Discovery is restricted to the modules that import only the stdlib
-# (openapi/reference-server/errors.py, like config.py). The rest of that
-# directory needs python-dotenv, fastapi and pydantic, which no setup target
-# here installs — discovering the whole directory would fail this suite on
-# every checkout that does not intend to run the server.
+# Run the dependency-backed server contract suite as well as the stdlib-only
+# error mapping checks. The server target supplies its own Python dependencies.
 test\:unit\:openapi:
+	@$(MAKE) test:unit:openapi:server
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+
+test\:unit\:openapi\:server: _ensure-python-deps
+	@. .venv/bin/activate && uv run --with fastapi --with uvicorn --with sse-starlette --with PyJWT --with python-multipart --with python-dotenv --with pyyaml --python .venv/bin/python python -m unittest discover -s openapi/reference-server/tests -p 'test_handle_cache.py' -v
 
 test\:unit\:scripts:
 	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
@@ -626,8 +638,8 @@ test\:unit\:go:
 	@$(MAKE) dev:go
 	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
 
-# Go SDK archive round-trip integration test. Intentionally excluded from
-# default test matrices and CI.
+# Native Go archive import/export tests require a supported host.
+# Keep them in the VM-capable integration workflow, outside hosted unit coverage.
 test\:integration\:go: dev\:go
 	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
 	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v $(GOTEST_FILTER) ./integration/archive
@@ -673,6 +685,14 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
 	@cd apps/infra && npm run typecheck
 
+test\:apps\:infra\:mdeploy: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mdeploy
+	@cd apps/infra && npm exec -- tsx --conditions=development --test --test-concurrency=1 mdeploy/test/*.test.ts
+
+test\:apps\:infra\:mstage: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mstage
+	@cd apps/infra && npm exec -- tsx --conditions=development --test --test-concurrency=1 mstage/test/*.test.ts
+
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
 	@cd apps && yarn nx run api:test --runInBand $(if $(TEST_FILES),--testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
@@ -680,9 +700,20 @@ test\:apps\:api: _ensure-apps-deps
 test\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
+test\:apps\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx run ci-listener:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+PHONY_TARGETS += test\:apps\:github-ci-runner
+test\:apps\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx run github-ci-runner:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
 	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:integration\:runner
+test\:integration\:runner: dev\:go
+	@cd apps/runner && go test -count=1 -tags boxlite_dev,boxlite_integration ./pkg/boxlite $(GOTEST_FILTER)
 
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)

@@ -99,36 +99,7 @@ func run() int {
 		defer telemetry.ShutdownTracer(logger, tp)
 	}
 
-	// Initialize BoxLite runtime
-	var insecureRegs []string
-	if cfg.InsecureRegistries != "" {
-		for _, r := range strings.Split(cfg.InsecureRegistries, ",") {
-			if trimmed := strings.TrimSpace(r); trimmed != "" {
-				insecureRegs = append(insecureRegs, trimmed)
-			}
-		}
-	}
-
-	registryProxy := blclient.RegistryProxy{
-		Host:     cfg.RegistryProxyHost,
-		Username: cfg.RegistryProxyUsername,
-		Password: cfg.RegistryProxyPassword,
-	}
-	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
-		Logger:                       logger,
-		HomeDir:                      cfg.BoxliteHomeDir,
-		KernelPath:                   cfg.KernelPath,
-		InsecureRegistries:           insecureRegs,
-		RegistryProxy:                registryProxy,
-		AWSRegion:                    cfg.AWSRegion,
-		AWSEndpointUrl:               cfg.AWSEndpointUrl,
-		AWSAccessKeyId:               cfg.AWSAccessKeyId,
-		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
-		VolumeStorageBackend:         cfg.VolumeStorageBackend,
-		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
-		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
-		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
-	})
+	boxliteClient, err := blclient.NewClient(ctx, buildBoxliteClientConfig(cfg, logger))
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)
 		return 2
@@ -250,11 +221,12 @@ func run() int {
 		}()
 
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
-			Logger:         logger,
-			Backend:        boxBackend,
-			Collector:      metricsCollector,
-			ArchiveStore:   migrationArchiveStore(cfg, logger),
-			MigrateWorkDir: migrationWorkDir(cfg, boxliteClient.HomeDir()),
+			Logger:            logger,
+			Backend:           boxBackend,
+			Collector:         metricsCollector,
+			ArchiveStore:      archiveStore(cfg, logger),
+			MigrateWorkDir:    migrationWorkDir(cfg, boxliteClient.HomeDir()),
+			CheckpointWorkDir: filepath.Join(boxliteClient.HomeDir(), "work", "checkpoints"),
 		})
 		if err != nil {
 			logger.Error("Failed to create executor service", "error", err)
@@ -325,14 +297,50 @@ func run() int {
 	}
 }
 
-// migrationArchiveStore builds the object-store client that box migration moves
-// archives through. It is optional on purpose: a runner deployed without a
-// bucket still serves every other job type, and a migration job that reaches it
-// fails with a configuration error the control plane can see, instead of the
-// runner refusing to start.
-func migrationArchiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
+// buildBoxliteClientConfig keeps startup policy mapping separate from runtime
+// construction, so configuration can be checked without starting the server.
+func buildBoxliteClientConfig(cfg *config.Config, logger *slog.Logger) blclient.ClientConfig {
+	var insecureRegs []string
+	if cfg.InsecureRegistries != "" {
+		for _, r := range strings.Split(cfg.InsecureRegistries, ",") {
+			if trimmed := strings.TrimSpace(r); trimmed != "" {
+				insecureRegs = append(insecureRegs, trimmed)
+			}
+		}
+	}
+
+	return blclient.ClientConfig{
+		Logger:               logger,
+		HomeDir:              cfg.BoxliteHomeDir,
+		KernelPath:           cfg.KernelPath,
+		ExperimentalFeatures: cfg.ExperimentalFeatures,
+		InsecureRegistries:   insecureRegs,
+		RegistryProxy: blclient.RegistryProxy{
+			Host:     cfg.RegistryProxyHost,
+			Username: cfg.RegistryProxyUsername,
+			Password: cfg.RegistryProxyPassword,
+		},
+		AWSRegion:                    cfg.AWSRegion,
+		AWSEndpointUrl:               cfg.AWSEndpointUrl,
+		AWSAccessKeyId:               cfg.AWSAccessKeyId,
+		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
+		VolumeStorageBackend:         cfg.VolumeStorageBackend,
+		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
+		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
+		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
+	}
+}
+
+// archiveStore selects the transport per object URI. GCS initializes its ADC
+// client on first use, independently from optional S3 configuration.
+func archiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
+	return &storage.SchemeArchiveStore{GCS: &storage.GCSArchiveStore{}, S3: s3ArchiveStore(cfg, logger)}
+}
+
+// s3ArchiveStore leaves other runner capabilities available without S3.
+func s3ArchiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
 	if cfg.AWSDefaultBucket == "" {
-		logger.Warn("Box migration disabled: AWS_DEFAULT_BUCKET is not set")
+		logger.Warn("S3 archive store disabled: AWS_DEFAULT_BUCKET is not set")
 		return nil
 	}
 
@@ -344,7 +352,7 @@ func migrationArchiveStore(cfg *config.Config, logger *slog.Logger) storage.Arch
 		Bucket:          cfg.AWSDefaultBucket,
 	})
 	if err != nil {
-		logger.Warn("Box migration disabled: object store client unavailable", "error", err)
+		logger.Warn("S3 archive store disabled: object store client unavailable", "error", err)
 		return nil
 	}
 

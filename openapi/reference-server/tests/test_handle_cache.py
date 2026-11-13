@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from pydantic import ValidationError
+import yaml
 
 
 SERVER_PATH = Path(__file__).resolve().parents[1] / "server.py"
@@ -129,6 +130,29 @@ class _DummyRequest:
 
 
 class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
+    def test_required_headers_reject_missing_null_empty(self):
+        for extra in ({}, {"headers": None}, {"headers": {}}):
+            with self.subTest(extra=extra), self.assertRaises(ValidationError):
+                SERVER.SecretSpec.model_validate({"name": "x", "value": "token", "hosts": ["api.test.com"], **extra})
+
+    def test_openapi_secret_headers_map(self):
+        spec = yaml.safe_load((SERVER_DIR.parent / "box.openapi.yaml").read_text())
+        secret = spec["components"]["schemas"]["SecretSpec"]
+        headers = secret["properties"].get("headers", {})
+        self.assertEqual(headers.get("type"), "object")
+        self.assertEqual(headers.get("additionalProperties"), {"type": "string"})
+        self.assertEqual(headers.get("minProperties"), 1)
+        self.assertIn("headers", secret["required"])
+
+    def test_build_box_options_forwards_secret_headers(self):
+        templates = {"Authorization": "Bot {value}", "X-Key": "{value}"}
+        request = SERVER.CreateBoxRequest.model_validate({"secrets": [{
+            "name": "bot", "value": "token", "hosts": ["api.example.com"], "headers": templates,
+        }]})
+        with patch.object(SERVER.boxlite, "Secret", side_effect=lambda **kw: kw, create=True):
+            options = SERVER.build_box_options(request)
+        self.assertEqual(options.kwargs["secrets"][0].get("headers"), templates)
+
     def test_box_metadata_reports_known_privilege_and_omits_unknown(self) -> None:
         """The response preserves the native metadata's privilege knowledge."""
         for privileged in (False, True, None):

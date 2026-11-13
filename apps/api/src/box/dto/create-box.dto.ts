@@ -7,6 +7,7 @@
 import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
+import { CpuAllocation } from '../utils/cpu-allocation'
 import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
@@ -141,12 +142,15 @@ export class CreateBoxDto {
   target?: string
 
   @ApiPropertyOptional({
-    description: 'CPU cores allocated to the box',
-    example: 2,
-    type: 'integer',
+    description: 'CPU allocation in cores, in increments of 0.001; fractional allocations require Linux',
+    example: 0.5,
+    type: 'number',
+    minimum: 0.125,
+    maximum: 16,
+    multipleOf: 0.001,
   })
   @IsOptional()
-  @IsNumber()
+  @CpuAllocation()
   cpu?: number
 
   @ApiPropertyOptional({
@@ -159,9 +163,11 @@ export class CreateBoxDto {
   gpu?: number
 
   @ApiPropertyOptional({
-    description: 'Memory allocated to the box in GB',
+    description: 'Memory allocated to the box in GiB, in whole MiB increments',
     example: 1,
-    type: 'integer',
+    type: 'number',
+    minimum: 0.125,
+    multipleOf: 1 / 1024,
   })
   @IsOptional()
   @IsNumber()

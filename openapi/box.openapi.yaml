@@ -153,6 +153,8 @@ tags:
     description: Runtime and per-box metrics
   - name: Images
     description: Container image management
+  - name: Checkpoints
+    description: Independent managed disk archives
   - name: Volumes
     description: Managed persistent volumes
   - name: Registries
@@ -305,6 +307,14 @@ paths:
         Creates a new box with the specified configuration.
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
+
+        `checkpoint_id` creates the box from a ready managed checkpoint
+        instead of an image. The box inherits every saved execution setting,
+        so only `name` may accompany it; any other field is refused with 400.
+        It requires `checkpoints_enabled` and a REST service: local SDK
+        operations return Unsupported. A cloud wait failure after admission,
+        including 408, carries `boxId` in the error body; query that box
+        before retrying an unnamed create.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -328,6 +338,23 @@ paths:
                 $ref: "#/components/schemas/Box"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "408":
+          description: Checkpoint create accepted but still running; the error body includes boxId to query.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, boxId]
+                properties:
+                  message:
+                    type: string
+                  code:
+                    type: string
+                  boxId:
+                    type: string
+                    description: Admitted Box identity; query it before retrying creation.
         "409":
           $ref: "#/components/responses/ConflictError"
         "422":
@@ -425,8 +452,9 @@ paths:
       operationId: startBox
       summary: Start a box (initialize VM)
       description: |
-        Initializes the VM for a box. Idempotent: if already running, returns
-        current state. Transitions: configured → running, stopped → running.
+        Initializes the VM and starts its main command. A running VM can have
+        an unstarted container; this call starts it. It is not a read-only check.
+        Transitions: configured → running, stopped → running.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -1590,6 +1618,108 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequestError"
 
+  /{prefix}/checkpoints:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    post:
+      operationId: createCheckpoint
+      summary: Capture an independent disk checkpoint
+      description: |
+        Export the source box directly, without a snapshot or temporary clone.
+        The source must be stopped and idle; other states return 409.
+        Stop the box and wait for stopped before capture; capture never stops it automatically.
+        Requires Box write permission. Sources with volumes or secrets are
+        refused. A local capture returns ready after export; cloud capture
+        returns creating and becomes ready only after upload succeeds.
+      tags: [Checkpoints]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckpointRequest"
+      responses:
+        "201":
+          description: Checkpoint record created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+    get:
+      operationId: listCheckpoints
+      summary: List checkpoints in the routing scope
+      tags: [Checkpoints]
+      parameters:
+        - $ref: "#/components/parameters/pageToken"
+      responses:
+        "200":
+          description: Checkpoint page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckpointList"
+
+  /{prefix}/checkpoints/{checkpoint_key}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: checkpoint_key
+        in: path
+        required: true
+        description: Checkpoint ID or name
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    get:
+      operationId: getCheckpoint
+      summary: Get checkpoint metadata and state
+      tags: [Checkpoints]
+      responses:
+        "200":
+          description: Checkpoint metadata without environment values or object location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: removeCheckpoint
+      summary: Delete checkpoint storage and metadata
+      description: |
+        Requires Box write permission. Refuses active capture and unfinished
+        box creation from this checkpoint. Does not
+        remove boxes previously created from this checkpoint. Storage failure
+        retains deleting state and quota until a successful retry.
+      tags: [Checkpoints]
+      parameters:
+        - name: force
+          in: query
+          description: Ignore absence only; never bypass active use
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "204":
+          description: Storage and metadata removed, or missing with force
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
   /{prefix}/images/{image_name}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -1955,7 +2085,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "invalid argument: cpus must be between 1 and 16"
+              message: "invalid argument: cpus must be between 0.125 and 16, in increments of 0.001 cores"
               type: InvalidArgumentError
               code: invalid_argument
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
@@ -2135,6 +2265,14 @@ components:
             snapshots_enabled:
               type: boolean
               description: Whether snapshot create/list/get/remove/restore is supported
+              example: true
+            checkpoints_enabled:
+              type: boolean
+              description: Whether managed checkpoint capture, use and deletion are supported
+              example: true
+            import_enabled:
+              type: boolean
+              description: Whether ordinary archive import is supported
               example: true
             clone_enabled:
               type: boolean
@@ -2385,7 +2523,7 @@ components:
           example: python:3.11-slim
         cpus:
           type: number
-          minimum: 0.01
+          minimum: 0.125
           maximum: 255
           multipleOf: 0.001
           description: |
@@ -2490,6 +2628,58 @@ components:
         - failed
         - unknown
 
+    Checkpoint:
+      type: object
+      required: [id, name, source_box_id, created_at, size_bytes, state]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source_box_id:
+          type: string
+          description: Recorded source identity; source deletion does not remove the checkpoint
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+          minimum: 0
+          description: Complete archive bytes; zero before an archive receipt is available
+        state:
+          type: string
+          enum: [creating, ready, failed, deleting]
+        error_reason:
+          type: string
+          description: Optional failure description without environment values or object locations
+
+    CheckpointList:
+      type: object
+      required: [checkpoints]
+      properties:
+        checkpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Checkpoint"
+        next_page_token:
+          type: string
+          description: Opaque continuation token; omitted on the final page
+
+    CreateCheckpointRequest:
+      type: object
+      additionalProperties: false
+      required: [source_box_id]
+      properties:
+        source_box_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
     CreateBoxRequest:
       type: object
       description: |
@@ -2523,9 +2713,17 @@ components:
           description: |
             Path to a pre-built rootfs (alternative to `image`).
             Mutually exclusive with `image`.
+        checkpoint_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: |
+            ID or name of a ready managed checkpoint to create the box from
+            (alternative to `image`). Mutually exclusive with `image` and
+            `rootfs_path`. Only `name` may accompany it.
         cpus:
           type: number
-          minimum: 0.01
+          minimum: 0.125
           maximum: 16
           multipleOf: 0.001
           description: |
@@ -2593,7 +2791,8 @@ components:
             $ref: "#/components/schemas/SecretSpec"
           description: |
             Secrets injected into a request header on outbound HTTPS requests.
-            Requests to a secret's hosts carry its value. A host that echoes the
+            Requests to a secret's hosts replace only configured headers already
+            present in the request. A host that echoes the
             injected header returns the value to the guest, so bind secrets only to
             trusted hosts.
         detach:
@@ -2863,7 +3062,7 @@ components:
     SecretSpec:
       type: object
       description: Secret injected into a request header on outbound HTTPS requests to its hosts
-      required: [name, value, hosts]
+      required: [name, value, hosts, headers]
       properties:
         name:
           type: string
@@ -2881,6 +3080,23 @@ components:
           description: |
             Dummy value for the guest environment; the proxy never parses it.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
+        headers:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+          description: |
+            Header names mapped to templates containing exactly one {value} and
+            no other braces. Required; omitted, null and empty maps are rejected.
+            Only headers already present in the original request are overwritten;
+            all entries use this secret's value, substituted once without recursion.
+            Empty maps, invalid HTTP token names, case-insensitive duplicate names,
+            and Host, Content-Length, Connection, Proxy-Connection,
+            Proxy-Authenticate, Proxy-Authorization, Keep-Alive, TE, Trailer,
+            Upgrade and Transfer-Encoding are rejected. Templates and rendered
+            values must not contain ASCII controls other than HTAB or contain DEL.
+            Different secrets must not configure the same case-insensitive host
+            and header pair; repeated hosts within one secret are deduplicated.
 
     Snapshot:
       type: object

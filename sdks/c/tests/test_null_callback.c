@@ -61,6 +61,14 @@ static void test_create_box_null_cb(CBoxliteRuntime *rt) {
   BoxliteErrorCode oc = boxlite_options_new("alpine:latest", &opts, &err);
   assert(oc == Ok);
 
+  const char *hosts[] = {"example.com"};
+  boxlite_options_add_secret(opts, "legacy", "value", "${LEGACY}", hosts, 1);
+  const char *header_names[] = {"X-Api-Key"};
+  const char *header_templates[] = {"{value}"};
+  boxlite_options_add_secret_with_headers(opts, "custom", "value", "${CUSTOM}",
+                                          hosts, 1, header_names,
+                                          header_templates, 1);
+
   err = (CBoxliteError){0};
   BoxliteErrorCode code = boxlite_create_box(rt, opts, NULL, NULL, &err);
   assert_null_cb_rejected(code, &err, "boxlite_create_box(cb=NULL)");

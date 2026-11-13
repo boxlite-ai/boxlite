@@ -15,6 +15,7 @@
 
 
 export interface DtoSecretDTO {
+    'headers': { [key: string]: string; };
     'hosts'?: Array<string>;
     'name': string;
     'placeholder'?: string;

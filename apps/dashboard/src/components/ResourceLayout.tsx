@@ -19,7 +19,7 @@ export function ResourceEmptyState({
       <div className="resource-empty-icon" aria-hidden="true">
         {icon ?? <Container className="size-6" />}
       </div>
-      <h2 className="font-display text-lg font-semibold text-foreground">{title}</h2>
+      <h2 className="font-display text-section font-semibold text-foreground">{title}</h2>
       {description && <div className="max-w-md text-body leading-relaxed text-muted-foreground">{description}</div>}
       {children && <div className="mt-2 flex flex-wrap items-center justify-center gap-3">{children}</div>}
     </div>
@@ -56,12 +56,14 @@ export function ResourceFilter({
   onChange,
   count,
   disabled,
+  maxLength,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   count: ReactNode
   disabled?: boolean
+  maxLength?: number
 }) {
   return (
     <div className="resource-filter">
@@ -72,9 +74,10 @@ export function ResourceFilter({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={disabled}
-        className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[13px] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
+        maxLength={maxLength}
+        className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-body text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
       />
-      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{count}</span>
+      <span className="font-mono text-meta tabular-nums text-muted-foreground">{count}</span>
     </div>
   )
 }

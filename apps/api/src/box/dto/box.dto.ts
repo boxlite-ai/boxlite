@@ -9,6 +9,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
 import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.constant'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { NetworkInfoResponseDto } from './network-info.dto'
@@ -79,10 +80,18 @@ export class BoxSecret {
   hosts: string[]
 
   @ApiPropertyOptional({
-    description: 'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
+    description:
+      'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
     example: '<BOXLITE_SECRET:openai>',
   })
   placeholder?: string
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'string' },
+    description: 'Required non-empty header templates containing exactly one {value}.',
+  })
+  headers: Record<string, string>
 }
 
 /** What a conversion reads from outside the box row. See {@link BoxDto.fromBox}. */
@@ -378,7 +387,7 @@ export class BoxDto {
       env: box.env,
       cpu: box.cpu,
       gpu: box.gpu,
-      memory: box.mem,
+      memory: memoryGiBOf(box),
       disk: box.disk,
       privileged: box.privileged,
       network: NetworkInfoResponseDto.fromBox(box),

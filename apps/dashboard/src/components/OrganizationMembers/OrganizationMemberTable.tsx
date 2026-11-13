@@ -193,7 +193,7 @@ const getColumns = ({
         <div>
           <div className="resource-name">{row.original.email}</div>
           {row.original.kind === 'invitation' && (
-            <div className="mt-1 text-xs text-muted-foreground">
+            <div className="mt-1 text-meta text-muted-foreground">
               Invited by {row.original.invitedBy} · Expires {new Date(row.original.expiresAt).toLocaleString()}
             </div>
           )}
@@ -212,7 +212,7 @@ const getColumns = ({
       header: () => {
         return <div className="w-24">Role</div>
       },
-      cell: ({ row }) => <div className="text-sm">{capitalize(row.original.role)}</div>,
+      cell: ({ row }) => <div className="text-body">{capitalize(row.original.role)}</div>,
     },
   ]
 

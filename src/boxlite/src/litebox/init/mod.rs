@@ -222,6 +222,12 @@ impl BoxBuilder {
     pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
 
+        // Reattach must remain available to stop a legacy shim. Only a new VM
+        // consumes stored headers to build its proxy configuration.
+        if self.state.status != BoxStatus::Running {
+            self.config.options.validate_secret_headers()?;
+        }
+
         let total_start = Instant::now();
 
         let BoxBuilder {
@@ -352,6 +358,84 @@ mod plan_tests {
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::pipeline::ExecutionMode;
 
+    #[tokio::test]
+    async fn required_headers_activation_preserves_stored_state() {
+        use crate::litebox::config::ContainerRuntimeConfig;
+        use crate::runtime::{
+            id::BoxIDMint,
+            options::{BoxOptions, BoxliteOptions},
+            rt_impl::RuntimeImpl,
+            types::ContainerID,
+        };
+        for status in [BoxStatus::Stopped, BoxStatus::Running] {
+            for suffix in [
+                ",\"headers\":{\"Host\":\"{value}\"}",
+                ",\"headers\":{\"Bad Header\":\"{value}\"}",
+                ",\"headers\":{\"X-Bad\":\"{value}{value}\"}",
+                ",\"headers\":{\"X-Bad\":\"{value}\\r\\n\"}",
+                "",
+                ",\"headers\":null",
+                ",\"headers\":{}",
+                ",\"headers\":{\"X-Key\":\"{value}\"}",
+            ] {
+                let home = tempfile::tempdir().unwrap();
+                let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                    home_dir: home.path().into(),
+                    ..Default::default()
+                })
+                .unwrap();
+                let id = BoxIDMint::mint();
+                let secret = serde_json::from_str(&format!(r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"private-token"{suffix}}}"#)).unwrap();
+                let config = BoxConfig {
+                    id: id.clone(),
+                    name: None,
+                    created_at: chrono::Utc::now(),
+                    container: ContainerRuntimeConfig {
+                        id: ContainerID::new(),
+                    },
+                    options: BoxOptions {
+                        secrets: vec![secret],
+                        auto_delete: Some(0),
+                        ..Default::default()
+                    },
+                    engine_kind: crate::vmm::VmmKind::Libkrun,
+                    box_home: runtime.layout.boxes_dir().join(id.as_str()),
+                };
+                std::fs::create_dir_all(&config.box_home).unwrap();
+                std::fs::write(config.box_home.join("keep"), "original").unwrap();
+                let mut state = BoxState::new();
+                state.status = status;
+                runtime.box_manager.add_box(&config, &state).unwrap();
+                let before = serde_json::to_value(&state).unwrap();
+                let builder = BoxBuilder::new(runtime.clone(), config.clone(), state).unwrap();
+                if status == BoxStatus::Running {
+                    continue;
+                }
+                if suffix.contains("X-Key") {
+                    continue;
+                }
+                let result = builder.build().await;
+                assert!(
+                    result.is_err(),
+                    "activation accepted missing headers for {status:?}"
+                );
+                let error = result.err().unwrap().to_string();
+                assert!(
+                    error.contains("secret \"x\"") && !error.contains("private-token"),
+                    "{error}"
+                );
+                assert!(runtime.get_info(id.as_str()).await.unwrap().is_some());
+                let (_, after) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+                assert_eq!(serde_json::to_value(after).unwrap(), before);
+                assert_eq!(
+                    std::fs::read_to_string(config.box_home.join("keep")).unwrap(),
+                    "original"
+                );
+                assert!(!config.box_home.join("sockets").exists());
+            }
+        }
+    }
+
     fn plan_shape(status: BoxStatus) -> Vec<(ExecutionMode, Vec<String>)> {
         get_execution_plan(status)
             .unwrap()
@@ -480,5 +564,90 @@ mod plan_tests {
 
         let enabled = ExperimentalFeatures::parse("native-vmm").unwrap();
         validate_persisted_options(&enabled, &options).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod required_start_safety_tests {
+    use super::*;
+    use crate::litebox::config::ContainerRuntimeConfig;
+    use crate::runtime::{
+        id::BoxIDMint,
+        options::{BoxOptions, BoxliteOptions, RootfsSpec},
+        rt_impl::RuntimeImpl,
+        types::ContainerID,
+    };
+
+    #[tokio::test]
+    async fn required_headers_public_start_preserves_state() {
+        assert_rejection_preserves_state(BoxStatus::Stopped, false).await;
+    }
+
+    #[tokio::test]
+    async fn required_headers_restart_keeps_stopped_box_data() {
+        assert_rejection_preserves_state(BoxStatus::Running, true).await;
+    }
+
+    async fn assert_rejection_preserves_state(status: BoxStatus, stop_first: bool) {
+        for extra in ["", ",\"headers\":null", ",\"headers\":{}"] {
+            let home = tempfile::tempdir().unwrap();
+            let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: home.path().join("runtime"),
+                ..Default::default()
+            })
+            .unwrap();
+            let id = BoxIDMint::mint();
+            let secret = serde_json::from_str(&format!(r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"token"{extra}}}"#)).unwrap();
+            let config = BoxConfig {
+                id: id.clone(),
+                name: None,
+                created_at: chrono::Utc::now(),
+                container: ContainerRuntimeConfig {
+                    id: ContainerID::new(),
+                },
+                options: BoxOptions {
+                    rootfs: RootfsSpec::RootfsPath(home.path().to_string_lossy().into_owned()),
+                    secrets: vec![secret],
+                    auto_delete: Some(0),
+                    detach: true,
+                    ..Default::default()
+                },
+                engine_kind: crate::vmm::VmmKind::Libkrun,
+                box_home: runtime.layout.boxes_dir().join(id.as_str()),
+            };
+            std::fs::create_dir_all(&config.box_home).unwrap();
+            std::fs::write(config.box_home.join("keep"), "original").unwrap();
+            let mut state = BoxState::new();
+            state.status = status;
+            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            let mut handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+            assert_eq!(handle.info().await.unwrap().id, id);
+            if stop_first {
+                handle.stop().await.unwrap();
+                handle = runtime.get(id.as_str()).await.unwrap().unwrap();
+                assert_eq!(handle.info().await.unwrap().status, BoxStatus::Stopped);
+            }
+            let (_, before) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+            let before = serde_json::to_value(before).unwrap();
+            let result = handle.start().await;
+            let (_, after) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(after).unwrap(),
+                before,
+                "activation modified stored state"
+            );
+            assert_eq!(
+                std::fs::read_to_string(config.box_home.join("keep")).unwrap(),
+                "original"
+            );
+            let message = result
+                .expect_err("activation accepted missing headers")
+                .to_string();
+            assert!(
+                message.contains("secret \"x\" has no headers; recreate the box with headers"),
+                "{status:?}: {message}"
+            );
+        }
     }
 }

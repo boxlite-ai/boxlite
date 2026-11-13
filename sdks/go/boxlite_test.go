@@ -321,6 +321,15 @@ func TestBoxOptions(t *testing.T) {
 	}
 }
 
+func TestWithSecretPreservesHeaders(t *testing.T) {
+	secret := Secret{Name: "test", Value: "value", Hosts: []string{"api.example.com"}, Headers: map[string]string{"x-goog-api-key": "{value}"}}
+	config := &boxConfig{}
+	WithSecret(secret)(config)
+	if got := config.secrets[0].Headers["x-goog-api-key"]; got != "{value}" {
+		t.Fatalf("template = %q", got)
+	}
+}
+
 func TestAdvancedOptionsSetCapabilitiesDeepCopies(t *testing.T) {
 	advanced, err := NewAdvancedBoxOptions()
 	if err != nil {

@@ -31,6 +31,18 @@ type ContainerCapabilities struct {
 	Drop []string
 }
 
+// SetNestedVirtualization selects nesting when creating a box. The runtime
+// must authorize "nested-virtualization"; restart retains the saved value.
+func (a *AdvancedBoxOptions) SetNestedVirtualization(enabled bool) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if C.boxlite_advanced_options_set_nested_virtualization(a.handle, boolToCInt(enabled)) != C.Ok {
+		return fmt.Errorf("boxlite: invalid advanced options handle")
+	}
+	return nil
+}
+
 // SetKernelPath selects a local kernel file (RC). The runtime must explicitly
 // enable "custom-kernel" with WithExperimentalFeatures, including on restart.
 func (a *AdvancedBoxOptions) SetKernelPath(path string) error {

@@ -24,8 +24,11 @@ definitions:
           type: string
         type: array
       cpuQuota:
-        minimum: 1
-        type: integer
+        description: CPU allocation in cores (0.125–16), in increments of 0.001; omitted
+          means 1.
+        maximum: 16
+        minimum: 0.125
+        type: number
       entrypoint:
         items:
           type: string
@@ -44,12 +47,16 @@ definitions:
       image:
         type: string
       memoryQuota:
-        minimum: 1
-        type: integer
+        minimum: 0.125
+        type: number
       metadata:
         additionalProperties:
           type: string
         type: object
+      nestedVirtualization:
+        description: Requires explicit authorization on the Runner process; omitted
+          means off.
+        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -137,8 +144,11 @@ definitions:
   RecoverBoxDTO:
     properties:
       cpuQuota:
-        minimum: 1
-        type: integer
+        description: CPU allocation in cores (0.125–16), in increments of 0.001; omitted
+          means 1.
+        maximum: 16
+        minimum: 0.125
+        type: number
       env:
         additionalProperties:
           type: string
@@ -151,8 +161,8 @@ definitions:
         minimum: 0
         type: integer
       memoryQuota:
-        minimum: 1
-        type: integer
+        minimum: 0.125
+        type: number
       osUser:
         type: string
       outboundAllowNet:
@@ -201,6 +211,8 @@ definitions:
         type: string
       metrics:
         $ref: '#/definitions/RunnerMetrics'
+      nestedVirtualizationEnabled:
+        type: boolean
       serviceHealth:
         items:
           $ref: '#/definitions/RunnerServiceInfo'
@@ -262,6 +274,10 @@ definitions:
     type: object
   dto.SecretDTO:
     properties:
+      headers:
+        additionalProperties:
+          type: string
+        type: object
       hosts:
         items:
           type: string
@@ -273,6 +289,7 @@ definitions:
       value:
         type: string
     required:
+      - headers
       - name
       - value
     type: object

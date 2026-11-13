@@ -89,7 +89,7 @@ export function CycleOverview({
                 facts the heading does not carry — and the price sits beside
                 the name rather than pushed to the far edge, where at 11px it
                 read as a footnote to the largest figure on the page. */}
-              <span className="font-mono text-[18px] font-semibold tracking-tight text-foreground">
+              <span className="font-mono text-section font-semibold tracking-tight text-foreground">
                 {mode.kind === 'plan'
                   ? mode.plan.planName
                   : mode.kind === 'free-trial'
@@ -102,13 +102,13 @@ export function CycleOverview({
                 </span>
               )}
               {mode.kind === 'plan' && mode.plan.status.toLowerCase() !== 'active' && (
-                <span className="border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                <span className="border border-border px-2 py-0.5 font-mono text-label uppercase tracking-[1px] text-muted-foreground">
                   {mode.plan.status}
                 </span>
               )}
             </div>
             {mode.kind !== 'plan' ? (
-              <span className="ml-auto font-mono text-[11px] text-muted-foreground">no subscription</span>
+              <span className="ml-auto font-mono text-meta text-muted-foreground">no subscription</span>
             ) : null}
           </div>
 
@@ -220,7 +220,7 @@ function FreeTrialFigures({
         <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="used after credits" />
       </div>
       <div className="border-t border-border px-[22px] py-4 lg:col-span-2">
-        <div className="flex items-center gap-4 font-mono text-[12px]">
+        <div className="flex items-center gap-4 font-mono text-meta">
           <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Credits used</span>
           <span className="w-[140px] shrink-0 tabular-nums text-foreground">
             {formatAmount(spentCents)} / {formatAmount(mode.grantedCents)}

@@ -5,6 +5,7 @@
  */
 
 import { otelSdk } from './tracing'
+import { installCiWebhookBodyParser } from './ci/ci-webhook-body'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { NestFactory } from '@nestjs/core'
 import { NestExpressApplication } from '@nestjs/platform-express'
@@ -40,6 +41,7 @@ import { mcpStrategy } from './mcp/mcp.controller'
 import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
+import { CiListenerService } from './ci/ci-listener.service'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -59,6 +61,7 @@ async function bootstrap() {
     // after authentication.
     bodyParser: false,
   })
+  installCiWebhookBodyParser(app)
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
   useApiBodyParsers(app)
@@ -246,6 +249,7 @@ async function bootstrap() {
       }
       socket.destroy()
     })
+    await app.get(CiListenerService).start()
   } else {
     await app.init()
     app.flushLogs()

@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import React, { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 export type ImagesTab = 'images' | 'registries'
 
@@ -20,6 +21,7 @@ export type ImagesTab = 'images' | 'registries'
  * tab is a route, so a box's pull error can link straight to the second one.
  */
 const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
+  usePageTitle(tab === 'registries' ? 'Private registries' : 'Images')
   const navigate = useNavigate()
   const { search } = useLocation()
   const [showImageHelp, setShowImageHelp] = useState(false)

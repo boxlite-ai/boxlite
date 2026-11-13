@@ -96,6 +96,7 @@ fn options_from_manifest(
             );
         }
     }
+    options.validate_secret_headers()?;
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
@@ -294,6 +295,29 @@ mod tests {
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
             exported_at: "2026-07-26T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn required_headers_import_rejects_before_install() {
+        for suffix in ["", ",\"headers\":null", ",\"headers\":{}"] {
+            let secret = serde_json::from_str(&format!(r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"private-token"{suffix}}}"#)).unwrap();
+            let manifest = v3_manifest(BoxOptions {
+                secrets: vec![secret],
+                ..Default::default()
+            });
+            for policy in [
+                ArchiveImportPolicy::Trusted,
+                ArchiveImportPolicy::UntrustedRemote,
+            ] {
+                let error = options_from_manifest(&manifest, policy)
+                    .expect_err("import accepted missing headers");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("secret \"x\" has no headers; recreate the box with headers")
+                );
+            }
         }
     }
 
@@ -661,6 +685,114 @@ mod tests {
             assert!(error.to_string().contains(field));
             value["box_options"][field] = serde_json::Value::Null;
             serde_json::from_value::<ArchiveManifest>(value.clone()).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod required_import_safety_tests {
+    use super::*;
+    use crate::runtime::options::BoxliteOptions;
+
+    #[tokio::test]
+    async fn required_headers_import_preserves_archive_and_store() {
+        for extra in [
+            ",\"headers\":{\"Host\":\"{value}\"}",
+            "",
+            ",\"headers\":null",
+            ",\"headers\":{}",
+            ",\"headers\":{\"X-Key\":\"{value}\"}",
+        ] {
+            for untrusted in [false, true] {
+                let home = tempfile::tempdir().unwrap();
+                let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                    home_dir: home.path().join("runtime"),
+                    ..Default::default()
+                })
+                .unwrap();
+                let disk = home.path().join("disk.qcow2");
+                crate::disk::qcow2::write_test_qcow2(&disk, None);
+                let secret = serde_json::from_str(&format!(r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"token"{extra}}}"#)).unwrap();
+                let manifest = ArchiveManifest {
+                    version: 3,
+                    box_name: None,
+                    image: "alpine:latest".into(),
+                    box_options: Some(BoxOptions {
+                        secrets: vec![secret],
+                        ..Default::default()
+                    }),
+                    guest_disk_checksum: String::new(),
+                    container_disk_checksum: sha256_file(&disk).unwrap(),
+                    exported_at: "2026-11-10T00:00:00Z".into(),
+                };
+                let manifest_path = home.path().join("manifest.json");
+                std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+                let path = home.path().join("saved.boxlite");
+                crate::litebox::archive::build_zstd_tar_archive(&path, &manifest_path, &disk, 1)
+                    .unwrap();
+                let before = std::fs::read(&path).unwrap();
+                let sentinel = runtime.layout.boxes_dir().join("keep");
+                std::fs::create_dir_all(&sentinel).unwrap();
+                std::fs::write(sentinel.join("data"), "original").unwrap();
+                let archive = if untrusted {
+                    BoxArchive::from_untrusted_upload(&path)
+                } else {
+                    BoxArchive::new(&path)
+                };
+                let result = import_box(&runtime, archive, None).await;
+                if extra.contains("X-Key") {
+                    let imported = result.expect("valid headers must remain importable");
+                    let (config, _) = runtime
+                        .box_manager
+                        .box_by_id(imported.id())
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(
+                        serde_json::to_value(config.options).unwrap()["secrets"][0]["headers"]["X-Key"],
+                        "{value}"
+                    );
+                    assert_eq!(std::fs::read(&path).unwrap(), before);
+                    assert_eq!(
+                        std::fs::read_to_string(sentinel.join("data")).unwrap(),
+                        "original"
+                    );
+                    assert_eq!(
+                        std::fs::read_dir(runtime.layout.temp_dir())
+                            .unwrap()
+                            .count(),
+                        0
+                    );
+                    continue;
+                }
+                assert!(result.is_err(), "import accepted headers {extra:?}");
+                let message = result.err().unwrap().to_string();
+                assert!(
+                    message.contains(if extra.contains("Host") {
+                        "header cannot be"
+                    } else {
+                        "secret \"x\" has no headers; recreate the box with headers"
+                    }),
+                    "{message}"
+                );
+                assert!(runtime.list_info().await.unwrap().is_empty());
+                assert_eq!(std::fs::read(&path).unwrap(), before);
+                assert_eq!(
+                    std::fs::read_to_string(sentinel.join("data")).unwrap(),
+                    "original"
+                );
+                assert_eq!(
+                    std::fs::read_dir(runtime.layout.boxes_dir())
+                        .unwrap()
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    std::fs::read_dir(runtime.layout.temp_dir())
+                        .unwrap()
+                        .count(),
+                    0
+                );
+            }
         }
     }
 }
