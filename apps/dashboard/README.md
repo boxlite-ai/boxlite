@@ -1213,3 +1213,11 @@ Form bodies show subtle scroll edges only when more content is available. Resour
 names use the technical-value font while preset labels remain interface text.
 
 Grouped inputs and textareas inherit their InputGroup surface and focus ring; the inner controls remain transparent without an inset shadow. Standalone fields retain their subtle inset surface.
+
+### Content tabs and template filters
+
+Image views, SDK example languages and Webhook views use the shared underline
+tabs and semantic icons. Template categories remain compact selected choices,
+with category icons and wrapping at constrained widths. Selecting a language
+still changes only the displayed example; selecting an Image view preserves its
+existing route behavior. The SDK example's Quickstart link uses the shared link color.

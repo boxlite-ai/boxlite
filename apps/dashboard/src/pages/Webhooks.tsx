@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { CreateEndpointDialog } from '@/components/Webhooks/CreateEndpointDialog'
 import { WebhooksEndpointTable } from '@/components/Webhooks/WebhooksEndpointTable'
@@ -106,17 +107,13 @@ const Webhooks: React.FC = () => {
 
       <PageContent>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-6">
-          <TabsList className="shadow-none bg-transparent w-auto p-0 pb-0 justify-start border-b rounded-none">
-            <TabsTrigger
-              value="endpoints"
-              className="data-[state=inactive]:border-b-transparent data-[state=active]:border-b-foreground border-b rounded-none !shadow-none -mb-0.5 pb-1.5"
-            >
+          <TabsList variant="underline" aria-label="Webhook views">
+            <TabsTrigger value="endpoints">
+              <TabIcon name="endpoints" />
               Endpoints
             </TabsTrigger>
-            <TabsTrigger
-              value="messages"
-              className="data-[state=inactive]:border-b-transparent data-[state=active]:border-b-foreground border-b rounded-none !shadow-none -mb-0.5 pb-1.5"
-            >
+            <TabsTrigger value="messages">
+              <TabIcon name="messages" />
               Messages
             </TabsTrigger>
           </TabsList>

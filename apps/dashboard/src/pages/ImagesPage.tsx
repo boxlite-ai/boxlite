@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BOXLITE_CUSTOM_IMAGE_DOCS_URL } from '@/constants/ExternalLinks'
+import { TabIcon } from '@/components/ui/TabIcon'
 import { ImageCatalog } from '@/components/images/ImageCatalog'
 import { RegistriesPanel } from '@/components/images/RegistriesPanel'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
+import { BOXLITE_CUSTOM_IMAGE_DOCS_URL } from '@/constants/ExternalLinks'
 import React, { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -58,9 +59,15 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
             navigate(value === 'registries' ? `${RoutePath.IMAGE_REGISTRIES}${search}` : RoutePath.IMAGES)
           }
         >
-          <TabsList variant="segmented">
-            <TabsTrigger value="images">Images</TabsTrigger>
-            <TabsTrigger value="registries">Private registries</TabsTrigger>
+          <TabsList variant="underline" aria-label="Image views">
+            <TabsTrigger value="images">
+              <TabIcon name="images" />
+              Images
+            </TabsTrigger>
+            <TabsTrigger value="registries">
+              <TabIcon name="registries" />
+              Private registries
+            </TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
