@@ -24,10 +24,13 @@ const state = vi.hoisted(() => ({
   placeholder: false,
   socketEnabled: false,
   filteredTotal: undefined as number | undefined,
+  fleetTotal: 0,
+  requestError: undefined as Error | undefined,
 }))
 
 const mocks = vi.hoisted(() => ({
   useBoxes: vi.fn(),
+  refetch: vi.fn(),
   setQueryData: vi.fn(),
   invalidateQueries: vi.fn(),
   handlers: new Map<string, (event: unknown) => void>(),
@@ -93,7 +96,9 @@ vi.mock('@/hooks/useBoxes', async (importOriginal) => ({
           },
       isLoading: false,
       isPlaceholderData: state.placeholder,
-      error: undefined,
+      error: state.requestError,
+      refetch: mocks.refetch,
+      isFetching: false,
     }
   },
 }))
@@ -122,7 +127,7 @@ vi.mock('@/hooks/queries/useApiKeysQuery', () => ({
 }))
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({
-    data: state.pending || state.boxCountPending ? undefined : 0,
+    data: state.pending || state.boxCountPending ? undefined : state.fleetTotal,
     isSuccess: !state.pending && !state.boxCountPending,
   }),
   useQueryClient: () => ({
@@ -179,11 +184,13 @@ describe('Boxes page, empty account', () => {
     state.items = []
     state.total = 0
     state.role = OrganizationUserRoleEnum.OWNER
+    state.requestError = undefined
     state.pending = false
     state.boxCountPending = false
     state.placeholder = false
     state.socketEnabled = false
     state.filteredTotal = undefined
+    state.fleetTotal = 0
     mocks.handlers.clear()
     mocks.setQueryData.mockReset()
     // Most cases are about the empty state itself, so start from a browser that
@@ -199,6 +206,30 @@ describe('Boxes page, empty account', () => {
     vi.clearAllMocks()
   })
 
+  it('keeps the server-side filter editable after a failed request', () => {
+    state.pending = true
+    state.requestError = new Error('unavailable')
+    render()
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter boxes"]')!
+    expect(input.disabled).toBe(false)
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'web')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(mocks.useBoxes.mock.lastCall?.[1].filters.idOrName).toBe('web')
+  })
+
+  it('offers recovery instead of a successful empty inventory after initial failure', async () => {
+    state.pending = true
+    state.requestError = new Error('unavailable')
+    render()
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
+    expect(retry).toBeDefined()
+    expect(document.body.textContent).not.toContain('No Boxes yet')
+    await act(async () => retry?.click())
+    expect(mocks.refetch).toHaveBeenCalledTimes(1)
+  })
+
   function render() {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -207,6 +238,14 @@ describe('Boxes page, empty account', () => {
       root.render(<Boxes />)
     })
   }
+
+  it.each([9, 10])('shows the overview only at ten organization Boxes (count=%i)', (count) => {
+    state.fleetTotal = count
+    // A filtered or empty page does not determine whether the overview is shown.
+    state.total = 0
+    render()
+    expect(document.querySelector('[aria-label="Boxes overview"]') !== null).toBe(count >= 10)
+  })
 
   it('shows the filtered total rather than the current page size', () => {
     state.items = [{ id: 'box-1', name: 'web-api', state: 'started', createdAt: '2026-06-01T00:00:00.000Z' }]

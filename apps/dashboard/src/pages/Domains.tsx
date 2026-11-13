@@ -1,9 +1,16 @@
+/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { QuotaTicks } from '@/components/QuotaTicks'
 import { TechnicalText } from '@/components/TechnicalText'
 import { DomainResourceIcon } from '@/components/ResourceStateIcon'
-import { QuotaTicks } from '@/components/QuotaTicks'
-/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-
-import { ResourceEmptyState, ResourceFilter, ResourceIdentity } from '@/components/ResourceLayout'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -19,6 +26,7 @@ import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { copyToClipboard } from '@/lib/copy-text'
+import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
@@ -74,8 +82,8 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           label="Filter domains"
           value={filter}
           onChange={(value) => setFilter(value)}
-          count={query.isSuccess ? rows.length : '—'}
-          disabled={!canManage || !query.isSuccess}
+          count={data ? rows.length : '—'}
+          disabled={!canManage || data === undefined}
         />
         <AsciiButton
           variant="primary"
@@ -102,33 +110,46 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         )}
       </div>
 
-      {!canManage ? (
-        <div role="alert" className="flex flex-1 items-center justify-center text-body text-muted-foreground">
-          You need Box write permission to manage domains.
-        </div>
-      ) : query.isPending ? (
-        <div role="status" className="flex flex-1 items-center justify-center text-body text-muted-foreground">
-          Loading domains…
-        </div>
-      ) : query.isError ? (
-        <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-body">
-          <p className="text-destructive">Unable to load domains: {query.error.message}</p>
-          <AsciiButton onClick={() => void query.refetch()}>Retry</AsciiButton>
-        </div>
-      ) : (
-        data && (
+      <div className="resource-content scroll-edge mt-[14px]">
+        {!canManage ? (
+          <ResourceEmptyState
+            title="Permission required"
+            icon={<Globe />}
+            description="You need Box write permission to manage domains."
+          />
+        ) : data === undefined ? (
+          query.isError ? (
+            <ResourceErrorState
+              title="Could not load domains"
+              retrying={query.isFetching}
+              onRetry={() => void query.refetch()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading domains…" />
+          )
+        ) : (
           <>
+            {query.isError && (
+              <ResourceErrorNotice
+                title="Could not refresh domains. Showing previously loaded data."
+                retrying={query.isFetching}
+                onRetry={() => void query.refetch()}
+              />
+            )}
             {data.domains.length === 0 ? (
-              <div className="mt-[14px]">
-                <ResourceEmptyState
-                  title="No Domains yet."
-                  icon={<Globe className="size-6" />}
-                  description="Request a name, then connect it to your Box using the CLI or SDK."
-                />
-              </div>
+              <ResourceEmptyState
+                title="No Domains yet."
+                icon={<Globe className="size-6" />}
+                description="Request a name, then connect it to your Box using the CLI or SDK."
+              />
             ) : (
-              <div className="mt-[14px] min-h-0 flex-1 overflow-auto">
-                <table className="resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body">
+              <div className="resource-content">
+                <table
+                  className={cn(
+                    'resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body',
+                    rows.length === 0 && 'hidden',
+                  )}
+                >
                   <colgroup>
                     <col className="w-[36%]" />
                     <col className="w-[16%]" />
@@ -199,18 +220,16 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                   </tbody>
                 </table>
                 {rows.length === 0 && (
-                  <div className="flex flex-col items-center gap-3 py-10 text-center text-body text-muted-foreground">
-                    <p>No domain matches “{filter.trim()}”</p>
-                    <AsciiButton size="sm" onClick={() => setFilter('')}>
-                      Clear filter
-                    </AsciiButton>
-                  </div>
+                  <ResourceFilterEmptyState
+                    title={`No domain matches “${filter.trim()}”`}
+                    onClear={() => setFilter('')}
+                  />
                 )}
               </div>
             )}
           </>
-        )
-      )}
+        )}
+      </div>
 
       <Dialog
         open={open}

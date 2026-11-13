@@ -1,4 +1,9 @@
-import { ResourceFilter } from '@/components/ResourceLayout'
+import {
+  ResourceFilter,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+} from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -166,16 +171,12 @@ const Boxes: React.FC = () => {
     isLoading: boxesDataIsLoading,
     isPlaceholderData: boxesDataIsPlaceholderData,
     error: boxesDataError,
+    isFetching: boxesFetching,
+    refetch: refetchBoxes,
   } = useBoxes(queryKey, queryParams)
   const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
   // Zero boxes and no filter narrowing the view: nothing to list, so the page
   // leads with how boxes get made.
-
-  useEffect(() => {
-    if (boxesDataError) {
-      handleApiError(boxesDataError, 'Failed to fetch boxes')
-    }
-  }, [boxesDataError])
 
   const updateBoxInCache = useCallback(
     (boxId: string, updates: Partial<Box>) => {
@@ -642,7 +643,7 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  // Fleet stat cards — real data, independent of the table's current filter/page.
+  // Fleet overview — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
 
   // Counts come straight from the paginated endpoint's `total` (limit=1, no full fetch).
@@ -728,7 +729,7 @@ const Boxes: React.FC = () => {
             <button
               type="button"
               onClick={() => navigate(RoutePath.QUICKSTART)}
-              className="inline-flex min-h-6 items-center text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+              className="resource-guide-link inline-flex min-h-6 items-center"
             >
               First time here? Follow Quickstart →
             </button>
@@ -766,6 +767,7 @@ const Boxes: React.FC = () => {
       <div className="resource-toolbar">
         <ResourceFilter
           label="Filter boxes"
+          disabled={boxesDataIsLoading}
           value={filters.idOrName ?? ''}
           onChange={(value) => handleFiltersChange({ ...filters, idOrName: value || undefined })}
           count={boxesDataIsPlaceholderData ? '—' : (boxesData?.total ?? '—')}
@@ -787,44 +789,65 @@ const Boxes: React.FC = () => {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
-        <BoxTable
-          onCreateCheckpoint={
-            checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
-              ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
-              : undefined
-          }
-          boxIsLoading={boxIsLoading}
-          boxStateIsTransitioning={boxStateIsTransitioning}
-          handleStart={handleStart}
-          handleStop={handleStop}
-          handleDelete={(id: string) => {
-            setBoxToDelete(id)
-            setShowDeleteDialog(true)
-          }}
-          handleBulkDelete={handleBulkDelete}
-          handleBulkStart={handleBulkStart}
-          handleBulkStop={handleBulkStop}
-          data={boxesData?.items || []}
-          loading={boxesDataIsLoading}
-          isPageFetching={boxesDataIsPlaceholderData}
-          onRowClick={(box: Box) => {
-            navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
-          }}
-          pageCount={boxesData?.totalPages || 0}
-          totalItems={boxesData?.total || 0}
-          onPaginationChange={handlePaginationChange}
-          pagination={{
-            pageIndex: paginationParams.pageIndex,
-            pageSize: paginationParams.pageSize,
-          }}
-          sorting={sorting}
-          onSortingChange={handleSortingChange}
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          handleRecover={handleRecover}
-          onOpenQuickstart={() => navigate(RoutePath.QUICKSTART)}
-        />
+      <div className="resource-content mt-[14px]">
+        {boxesData === undefined ? (
+          boxesDataError ? (
+            <ResourceErrorState
+              title="Could not load Boxes"
+              retrying={boxesFetching}
+              onRetry={() => void refetchBoxes()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading Boxes…" />
+          )
+        ) : (
+          <>
+            {boxesDataError && (
+              <ResourceErrorNotice
+                title="Could not refresh Boxes. Showing previously loaded data."
+                retrying={boxesFetching}
+                onRetry={() => void refetchBoxes()}
+              />
+            )}
+            <BoxTable
+              onCreateCheckpoint={
+                checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
+                  ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
+                  : undefined
+              }
+              boxIsLoading={boxIsLoading}
+              boxStateIsTransitioning={boxStateIsTransitioning}
+              handleStart={handleStart}
+              handleStop={handleStop}
+              handleDelete={(id: string) => {
+                setBoxToDelete(id)
+                setShowDeleteDialog(true)
+              }}
+              handleBulkDelete={handleBulkDelete}
+              handleBulkStart={handleBulkStart}
+              handleBulkStop={handleBulkStop}
+              data={boxesData?.items || []}
+              loading={boxesDataIsLoading}
+              isPageFetching={boxesDataIsPlaceholderData}
+              onRowClick={(box: Box) => {
+                navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
+              }}
+              pageCount={boxesData?.totalPages || 0}
+              totalItems={boxesData?.total || 0}
+              onPaginationChange={handlePaginationChange}
+              pagination={{
+                pageIndex: paginationParams.pageIndex,
+                pageSize: paginationParams.pageSize,
+              }}
+              sorting={sorting}
+              onSortingChange={handleSortingChange}
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              handleRecover={handleRecover}
+              onOpenQuickstart={() => navigate(RoutePath.QUICKSTART)}
+            />
+          </>
+        )}
       </div>
 
       {checkpointSource && checkpointSource.organizationId === selectedOrganization?.id && (

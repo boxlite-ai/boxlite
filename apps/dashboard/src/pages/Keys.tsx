@@ -1,4 +1,3 @@
-import { ResourceFilter } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -6,6 +5,12 @@ import { ResourceFilter } from '@/components/ResourceLayout'
  */
 
 import { CreateApiKeyDialog } from '@/components/CreateApiKeyDialog'
+import {
+  ResourceFilter,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+} from '@/components/ResourceLayout'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { useRevokeApiKeyMutation } from '@/hooks/mutations/useRevokeApiKeyMutation'
 import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
@@ -107,13 +112,36 @@ const Keys: React.FC = () => {
         />
       </div>
 
-      <ApiKeyTable
-        data={filteredKeys}
-        onClearFilter={needle ? () => setFilter('') : undefined}
-        loading={apiKeysQuery.isLoading || apiKeysQuery.isRefetching}
-        isLoadingKey={isLoadingKey}
-        onRevoke={handleRevoke}
-      />
+      <div className="resource-content">
+        {apiKeysQuery.data === undefined ? (
+          apiKeysQuery.isError ? (
+            <ResourceErrorState
+              title="Could not load API keys"
+              retrying={apiKeysQuery.isFetching}
+              onRetry={() => void apiKeysQuery.refetch()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading API keys…" />
+          )
+        ) : (
+          <>
+            {apiKeysQuery.isError && (
+              <ResourceErrorNotice
+                title="Could not refresh API keys. Showing previously loaded data."
+                retrying={apiKeysQuery.isFetching}
+                onRetry={() => void apiKeysQuery.refetch()}
+              />
+            )}
+            <ApiKeyTable
+              data={filteredKeys}
+              onClearFilter={needle ? () => setFilter('') : undefined}
+              loading={false}
+              isLoadingKey={isLoadingKey}
+              onRevoke={handleRevoke}
+            />
+          </>
+        )}
+      </div>
     </div>
   )
 }
