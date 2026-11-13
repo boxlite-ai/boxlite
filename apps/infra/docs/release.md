@@ -1,6 +1,6 @@
 ## TL;DR
 
-Tag a stable version and publish its GitHub Release, which builds the application images into `dev`; then roll that tag out to `prod` with `mdeploy-all`.
+Tag a stable version, publish its release images to GHCR, then deploy that existing tag with `mdeploy-all`.
 
 # Release runbook
 
@@ -13,7 +13,8 @@ pre-release suffixes are not supported.
 - The release commit is merged into `main`, and the version numbers in the repository are already
   updated to this release.
 - All required checks on `main` have passed.
-- You can run GitHub Actions workflows and approve the `dev` and `prod` Environments.
+- You can run GitHub Actions workflows and approve the target stage's Environment;
+  the release publisher needs package write permission without a cloud Environment.
 
 ## 1. Tag the version and publish the GitHub Release
 
@@ -45,7 +46,7 @@ Pushing the tag alone starts no release build; publishing the Release does:
   `Build Runner Binary`, which attaches the Runner files below.
 
 `Publish Release Images` dispatches `mbuild-release` from `main`, which publishes the application
-images for this tag to `dev`.
+images for this tag to GHCR.
 
 Wait for the release workflows to finish, and check that the Release has at least these assets:
 
@@ -60,16 +61,19 @@ until they exist.
 ## 2. Wait for mbuild-release to publish the application images
 
 Open **Actions → Publish Release Images** and confirm that it dispatched **mbuild-release**.
-Approve the `dev` Environment for `mbuild-release`, then wait for the workflow to finish. It reads
-the artifact declarations from the tagged commit, then builds the three current images in parallel
-and publishes them to `dev`:
+Wait for `mbuild-release` to finish; publication needs package write permission and no cloud
+Environment approval. It reads the tagged commit's declaration, then builds the four current images
+in parallel and publishes them to GHCR:
 
 - `api`
 - `proxy`
 - `otel-collector` (the collector)
+- `registry-proxy`
 
-Published images are tagged `vX.Y.Z-<commit-sha>`. Deploy to production only after all three
-matrix jobs have succeeded.
+Images use `ghcr.io/boxlite-ai/boxlite/<artifact>:vX.Y.Z-<full-commit-sha>`, preserving AR's artifact/tag layout.
+Publication logs each manifest digest. Deploy only after every declared artifact has succeeded.
+A partial publication can be retried: existing images are reused, missing images are built, and none are overwritten.
+Dependency audit failures stop immediately; image scanning runs after import into the receiving cloud registry.
 
 If the automatic dispatch failed and you need to recover by hand, open
 **Actions → mbuild-release → Run workflow** and enter:
@@ -108,9 +112,12 @@ Open **Actions → mdeploy-all → Run workflow** and enter:
 Approve the `prod` Environment. `mdeploy-all` then:
 
 1. Checks the tag, the GitHub Release and the Runner artifacts.
-2. Calls `mbuild-release` to promote the images already published in `dev` to `prod`, without
-   rebuilding them.
-3. Verifies the images in `prod` and deploys the version to production.
+2. Requires the selected images in GHCR, then imports their immutable digests into prod's AR/ECR repository.
+3. Verifies copied digests, enforces prod's image scan policy and deploys the version.
+
+If GHCR lacks an image, deployment stops and asks you to run `mbuild-release` manually as in step 2.
+It never triggers that build itself, including for historical releases or images already present in the cloud registry.
+Authentication and network failures remain registry errors; resolve those before retrying.
 
 Or start it with the GitHub CLI:
 
@@ -138,8 +145,8 @@ commit, image tags and deployment results in the workflow summary match this rel
 - **Missing Runner artifact**: `Build Runner Binary` attaches the tarball and its `.sha256`, but
   only after `Build C SDK` succeeds. Wait for or fix whichever of the two has not succeeded.
 - **Invalid tag, or tag not on main**: use a stable `vX.Y.Z` tag whose commit is on `main`.
-- **Image already published or promoted**: do not move or reuse the release tag. Check the earlier
-  workflow runs and the registry state before deciding whether to continue with `mdeploy-all`.
+- **Missing GHCR image**: run `mbuild-release` manually; re-running publication fills missing images without rebuilding existing ones.
+- **Destination digest differs from GHCR**: deployment refuses to overwrite that release identity; inspect both registries before retrying.
 
-The full build, promotion and deployment mechanics are in
+The full publication, import and deployment mechanics are in
 [Deploy through GitHub Actions](deployment.md#deploy-through-github-actions).
