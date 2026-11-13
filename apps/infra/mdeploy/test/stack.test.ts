@@ -611,17 +611,17 @@ test('the API is granted exactly the capabilities its storage supports', () => {
   ])
 })
 
-test('the checkpoint archive grant comes after every grant an existing stage already holds', () => {
+test('adding the resize grant does not shift the checkpoint grant an existing stage already holds', () => {
   // Providers name each grant by its index; a grant inserted ahead of others
   // would move them to new resources, and on GCP that deletes the bindings.
   const kinds = (deployed: ReturnType<typeof bundle>) =>
     deployed.seen.api.request.capabilities.map((capability: any) => capability.kind)
-  const before = bundle()
+  const before = bundle({ checkpoints: true, resizeRunnerDisks: false })
   deployStack({ providers: before.providers, config, inputs: inputs() })
-  const after = bundle({ checkpoints: true })
+  const after = bundle({ checkpoints: true, resizeRunnerDisks: true })
   deployStack({ providers: after.providers, config, inputs: inputs() })
 
-  assert.deepEqual(kinds(after), [...kinds(before), 'manage-checkpoint-archives'])
+  assert.deepEqual(kinds(after), [...kinds(before), 'resize-runner-disks'])
 })
 
 test('checkpoints are on only where storage keeps a bucket for them, for the API and the hosts alike', () => {
