@@ -7,29 +7,46 @@ import { HttpStatus, Logger } from '@nestjs/common'
 import { User } from './user.entity'
 import { UserService } from './user.service'
 import { Context } from '../common/context/context'
-import { CommerceUnavailableError } from '../commerce/commerce.errors'
+import { CommerceConflictError, CommerceUnavailableError } from '../commerce/commerce.errors'
 import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 
 const INVITER_ID = '0b5f4d6e-8c1a-4f7b-9e2d-3a6c8b1f0e47'
 const NEW_USER = { id: 'user-1', name: 'User One', email: 'new@boxlite.dev', emailVerified: true }
+const CREATED_AT = new Date('2026-10-02T10:34:13.123Z')
 
 function makeService(commerceOverrides: Record<string, jest.Mock> = {}) {
+  // What the creation transaction did, in order; 'commit' only if it committed.
+  const steps: string[] = []
   const commerce = {
     isConfigured: jest.fn().mockReturnValue(true),
+    acceptsInviteeEmail: jest.fn().mockReturnValue(true),
     resolveReferralCode: jest.fn().mockResolvedValue(INVITER_ID),
+    publishReferralNewer: jest.fn(async () => {
+      steps.push('publish referral')
+    }),
     ...commerceOverrides,
   }
   let inserted: User
   const entityManager = {
     insert: jest.fn(async (_entity, user: User) => {
-      inserted = user
+      steps.push('insert user')
+      inserted = Object.assign(user, { createdAt: CREATED_AT })
     }),
     findOneByOrFail: jest.fn(async () => inserted),
   }
-  const transaction = jest.fn(async (callback) => callback(entityManager))
-  const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([{ id: 'org-1' }]) }
+  const transaction = jest.fn(async (callback) => {
+    const result = await callback(entityManager)
+    steps.push('commit')
+    return result
+  })
+  const eventEmitter = {
+    emitAsync: jest.fn(async () => {
+      steps.push('create default organization')
+      return [{ id: 'org-1' }]
+    }),
+  }
   const service = new UserService({} as never, eventEmitter as never, { transaction } as never, commerce as never)
-  return { service, commerce, entityManager, transaction }
+  return { service, commerce, entityManager, transaction, steps }
 }
 
 describe('UserService referral attribution', () => {
@@ -54,7 +71,7 @@ describe('UserService referral attribution', () => {
       User,
       expect.objectContaining({ id: 'user-1', referredByOrganizationId: INVITER_ID }),
     )
-    expect(logged.at(-1)?.[0]).toBe('user.registration success')
+    expect(logged[logged.length - 1][0]).toBe('user.registration success')
   })
 
   it.each([undefined, '', '   '])('creates an unreferred user for a %p code without asking Commerce', async (code) => {
@@ -64,6 +81,7 @@ describe('UserService referral attribution', () => {
 
     expect(commerce.isConfigured).not.toHaveBeenCalled()
     expect(commerce.resolveReferralCode).not.toHaveBeenCalled()
+    expect(commerce.publishReferralNewer).not.toHaveBeenCalled()
     expect(entityManager.insert).toHaveBeenCalledWith(User, expect.objectContaining({ referredByOrganizationId: null }))
   })
 
@@ -74,24 +92,88 @@ describe('UserService referral attribution', () => {
     await service.create(NEW_USER as never, Context.user(), 'garbage')
 
     expect(commerce.resolveReferralCode).not.toHaveBeenCalled()
+    expect(commerce.publishReferralNewer).not.toHaveBeenCalled()
     expect(entityManager.insert).toHaveBeenCalledWith(User, expect.objectContaining({ referredByOrganizationId: null }))
+  })
+
+  // Commerce credits the inviter whether or not the invitee has verified the email.
+  it.each([true, false])(
+    'reports the referral as the last step before the account commits (email verified: %p)',
+    async (emailVerified) => {
+      const { service, commerce, steps } = makeService()
+
+      await service.create({ ...NEW_USER, emailVerified } as never, Context.user(), 'ABCD2345EF')
+
+      expect(steps).toEqual(['insert user', 'create default organization', 'publish referral', 'commit'])
+      expect(commerce.publishReferralNewer).toHaveBeenCalledWith(
+        INVITER_ID,
+        expect.objectContaining({ id: 'user-1', email: 'new@boxlite.dev', createdAt: CREATED_AT }),
+      )
+    },
+  )
+
+  it.each([
+    [CommerceConflictError, HttpStatus.CONFLICT, 'referral_conflict'],
+    [CommerceUnavailableError, HttpStatus.SERVICE_UNAVAILABLE, 'referral_unavailable'],
+  ])('rolls the sign-up back when the referral event fails with %p', async (Failure, status, code) => {
+    const { service, steps } = makeService({
+      publishReferralNewer: jest.fn().mockRejectedValue(new Failure('Commerce refused the referral event')),
+    })
+
+    const error = await service.create(NEW_USER as never, Context.user(), 'ABCD2345EF').catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ReferralRegistrationException)
+    expect(error.getStatus()).toBe(status)
+    expect(error.getResponse()).toMatchObject({ code })
+    // The failure escaped the transaction callback, so the transaction never committed.
+    expect(steps).toEqual(['insert user', 'create default organization'])
+    expect(logged[logged.length - 1]).toEqual([
+      'user.registration exception',
+      expect.objectContaining({ 'exception.type': code }),
+    ])
+  })
+
+  it('propagates an unexpected referral event failure unchanged', async () => {
+    const failure = new TypeError('boom')
+    const { service, steps } = makeService({ publishReferralNewer: jest.fn().mockRejectedValue(failure) })
+
+    await expect(service.create(NEW_USER as never, Context.user(), 'ABCD2345EF')).rejects.toBe(failure)
+
+    expect(steps).not.toContain('commit')
+    expect(logged[logged.length - 1]).toEqual([
+      'user.registration exception',
+      expect.objectContaining({ 'exception.type': 'internal' }),
+    ])
   })
 
   it.each([
     [
       'an unknown or malformed code',
-      () => jest.fn().mockResolvedValue(null),
+      () => ({ resolveReferralCode: jest.fn().mockResolvedValue(null) }),
+      1,
       HttpStatus.UNPROCESSABLE_ENTITY,
       'invalid_referral_code',
     ],
     [
       'Commerce being unavailable',
-      () => jest.fn().mockRejectedValue(new CommerceUnavailableError('Commerce referral code lookup is unavailable')),
+      () => ({
+        resolveReferralCode: jest
+          .fn()
+          .mockRejectedValue(new CommerceUnavailableError('Commerce referral code lookup is unavailable')),
+      }),
+      1,
       HttpStatus.SERVICE_UNAVAILABLE,
       'referral_unavailable',
     ],
-  ])('refuses the registration for %s before creating anything', async (_label, resolver, status, code) => {
-    const { service, transaction } = makeService({ resolveReferralCode: resolver() })
+    [
+      'an email Commerce would refuse in the referral event',
+      () => ({ acceptsInviteeEmail: jest.fn().mockReturnValue(false) }),
+      0,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'referral_email_required',
+    ],
+  ])('refuses the registration for %s before creating anything', async (_label, overrides, lookups, status, code) => {
+    const { service, commerce, transaction } = makeService(overrides())
 
     const error = await service.create(NEW_USER as never, Context.user(), 'ABCD2345EF').catch((caught) => caught)
 
@@ -99,6 +181,7 @@ describe('UserService referral attribution', () => {
     expect(error.getStatus()).toBe(status)
     expect(error.getResponse()).toMatchObject({ code })
     expect(transaction).not.toHaveBeenCalled()
+    expect(commerce.resolveReferralCode).toHaveBeenCalledTimes(lookups)
     expect(logged).toEqual([
       ['user.registration requested', expect.objectContaining({ 'correlation.id': 'user-1', 'actor.kind': 'user' })],
       [
@@ -115,7 +198,7 @@ describe('UserService referral attribution', () => {
     await expect(service.create(NEW_USER as never, Context.user(), 'ABCD2345EF')).rejects.toBe(failure)
 
     expect(transaction).not.toHaveBeenCalled()
-    expect(logged.at(-1)).toEqual([
+    expect(logged[logged.length - 1]).toEqual([
       'user.registration exception',
       expect.objectContaining({ 'exception.type': 'internal' }),
     ])
