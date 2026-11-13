@@ -25,6 +25,14 @@ that lacks APIs required by current tests fails those tests or driver builds.
 Prod retains its Python-only smoke selection. This input changes client versions;
 it does not deploy or change the cloud stack.
 
+The Node release installer removes SDK development/workspace metadata before
+adding the test tools, while retaining runtime dependencies. npm resolves peer
+dependencies before applying `--omit=dev`; resolving the published SDK's build
+metadata can otherwise abort installation with an `edgesOut` error.
+To exercise the real npm resolver and TypeScript tools in a temporary checkout,
+run `E2E_RELEASE_REAL_NPM=1 make test:unit:scripts` with the workflow's Node/npm
+versions. This opt-in check downloads test tools from the npm registry.
+
 Existing `make test:integration:*` tests use the local PyO3 / FFI path
 (`Boxlite.default()`) and bypass both the API and the runner — so a bug that
 only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop,

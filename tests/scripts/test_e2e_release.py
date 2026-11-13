@@ -84,11 +84,11 @@ class ReleaseInstallTest(unittest.TestCase):
                 member.size = len(content)
                 archive.addfile(member, io.BytesIO(content))
 
-    def run_install(self, component, **environment):
+    def run_install(self, component, *, timeout=30, **environment):
         result = subprocess.run(
             ["bash", str(self.script), component],
             env={**self.env, **environment},
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=timeout,
         )
         self.assertEqual(list(self.temp.iterdir()), [], "download directory leaked")
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -129,10 +129,10 @@ class ReleaseInstallTest(unittest.TestCase):
         self.assertEqual(result.returncode, 19)
         self.assertEqual([call["tool"] for call in calls], ["gh"])
 
-    def node_assets(self):
+    def node_assets(self, manifest=None, javascript="release JavaScript"):
         self.archive("boxlite-ai-boxlite-0.13.1.tgz", {
-            "package/package.json": '{"version":"0.13.1"}',
-            "package/dist/index.js": "release JavaScript",
+            "package/package.json": json.dumps(manifest or {"version": "0.13.1"}),
+            "package/dist/index.js": javascript,
             "package/native/boxlite.js": "release loader",
         })
         self.archive("boxlite-ai-boxlite-linux-x64-gnu-0.13.1.tgz", {
@@ -150,7 +150,7 @@ class ReleaseInstallTest(unittest.TestCase):
         self.assertEqual((sdk / "native/boxlite.linux-x64-gnu.node").read_text(), "release addon")
         self.assertEqual(json.loads((sdk / "package.json").read_text())["version"], "0.13.1")
         configure, npm, npx, node = calls[-4:]
-        self.assertEqual(configure["args"], ["pkg", "delete", "optionalDependencies", "--workspaces=false"])
+        self.assertEqual(configure["args"], ["pkg", "delete", "optionalDependencies", "devDependencies", "workspaces", "--workspaces=false"])
         self.assertEqual(Path(npm["cwd"]).resolve(), sdk.resolve())
         self.assertIn("--ignore-scripts", npm["args"])
         self.assertIn("--workspaces=false", npm["args"])
@@ -171,6 +171,24 @@ class ReleaseInstallTest(unittest.TestCase):
         result, calls = self.run_install("node", FAIL_TOOL="npx")
         self.assertEqual(result.returncode, 19)
         self.assertEqual(calls[-1]["tool"], "npx")
+
+    @unittest.skipUnless(os.environ.get("E2E_RELEASE_REAL_NPM"), "opt-in real npm installation")
+    def test_node_tool_installation_with_real_npm_and_sdk_peer_metadata(self):
+        # Keep the SDK's actual development/peer overlap and checkout lockfile:
+        # npm's resolver can fail before --omit=dev filters the install tree.
+        manifest = json.loads((ROOT / "sdks/node/package.json").read_text())
+        self.node_assets(manifest, "export class JsBoxlite { static rest() {} }")
+        sdk = self.root / "sdks/node"
+        sdk.mkdir(parents=True)
+        shutil.copyfile(ROOT / "sdks/node/package-lock.json", sdk / "package-lock.json")
+        tools = Path(self.env["PATH"].split(os.pathsep)[0])
+        for name in ["npm", "npx", "node"]:
+            executable = shutil.which(name)
+            self.assertIsNotNone(executable, f"real {name} is required")
+            (tools / name).unlink()
+            (tools / name).symlink_to(executable)
+        result, _ = self.run_install("node", timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_cli_pins_installer_version_and_publishes_its_path(self):
         (self.assets / "install.sh").write_text(

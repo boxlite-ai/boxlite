@@ -47,8 +47,9 @@ case "$component" in
         (
             cd "$root/sdks/node"
             # The release carries the SDK; these tools run the checkout's test drivers.
-            # Keep the downloaded addon; allow test tools' own platform dependencies.
-            npm pkg delete optionalDependencies --workspaces=false
+            # SDK build metadata can break npm's peer resolution even with --omit=dev.
+            # Keep runtime dependencies and the downloaded addon; install only test tools.
+            npm pkg delete optionalDependencies devDependencies workspaces --workspaces=false
             npm install --ignore-scripts --workspaces=false --omit=dev --save-prod \
                 --package-lock=false playwright-core@1.58.0 tsx
             npx --no-install tsx --eval 'const ready: boolean = true; if (!ready) throw Error("tsx unavailable")'
