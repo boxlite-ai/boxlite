@@ -82,7 +82,8 @@ on:
   # unaffected); the conclusion job reports success-or-skipped.
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    # Native stack entry must publish the trunk's required Test conclusion.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, stacked]
 
 concurrency:
   group: test-${{ github.event_name }}-${{ github.ref }}

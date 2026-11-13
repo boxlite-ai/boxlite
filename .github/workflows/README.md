@@ -90,6 +90,12 @@ for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 commit cancels its superseded lint, test and client-drift runs. Release and deployment jobs keep
 their existing sequencing.
 
+Joining a [native GitHub stack](https://docs.github.com/en/pull-requests/tutorials/roll-out-stacked-prs#5-update-your-programmatic-tooling)
+emits `pull_request.stacked`, which starts Test with the existing suite and draft filters.
+GitHub evaluates native stack PRs against the stack's trunk, so `branches: [main]`
+covers upper layers when the trunk is `main`; every layer needs `Test (conclusion)`.
+Adding the trigger does not retroactively start missing runs for PRs already in a stack.
+
 Draft PRs defer the Rust, Python, Node and Go SDK coverage matrices, including Go
 vet and golangci-lint, which reuse the Go job's native build. The Lint and Format
 workflow (including Go formatting), CodeQL, managed Code Quality, API tests and
