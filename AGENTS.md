@@ -44,6 +44,14 @@ Commit the specification together with both updated generated files:
 
 Do not edit generated files by hand. See [version declarations and release finalization](docs/reference/README.md#adding-an-operation-or-request-field) for the contract and release workflow.
 
+For a version bump PR, after updating the workspace and SDK versions:
+
+1. Finalize pending API declarations with `make finalize:openapi BASE=origin/main`.
+2. Validate the release metadata with `make check:openapi:release`.
+3. Include the updated specification and both generated files listed above in the same bump PR.
+
+Finalization requires a stable workspace version newer than the Git base. It replaces `next-release` declarations while preserving existing version minima and `unplanned` declarations. See [finalizing a release](docs/reference/README.md#finalizing-a-release).
+
 ## Code Style
 
 - [docs/contributing/development/rust-style.md](./docs/contributing/development/rust-style.md)
