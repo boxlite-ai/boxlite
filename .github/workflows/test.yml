@@ -7,7 +7,7 @@
 # - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
 # - Node.js: vitest unit project
-# - Go: SDK, networking bridge, the runner and the image service; API: Jest with Postgres and Redis
+# - Go: SDK, networking bridge, runner, image service and Secret Server; API: Jest with Postgres and Redis
 # - Dashboard: vitest with jsdom, v8 coverage
 # - Plugins: Python package tests and real CLI check/dist commands
 # - Nix: the flake dev shell builds the CLI and boots a box (non-blocking)
@@ -50,6 +50,7 @@ on:
       - 'apps/libs/ci-listener/**'
       - 'apps/github-ci-runner/**'
       - 'apps/image-service/**'
+      - 'apps/secret-server/**'
       - 'apps/dashboard/**'
       - 'apps/libs/api-client/**'
       - 'apps/runner/**'
@@ -250,6 +251,7 @@ jobs:
               - 'sdks/go/**/!(*.md)'
               - 'src/deps/libgvproxy-sys/**/!(*.md)'
               - 'apps/image-service/**/!(*.md)'
+              - 'apps/secret-server/**/!(*.md)'
               - 'apps/runner/**/!(*.md)'
               - 'apps/go.work'
               - 'apps/go.work.sum'
@@ -627,7 +629,7 @@ jobs:
 
       - uses: ./.github/actions/sccache
 
-      - name: Run Go SDK, networking, runner and image-service tests with coverage
+      - name: Run Go SDK, networking and app tests with coverage
         run: make coverage:go
 
       - name: Qualify nested runtime metadata with KVM coverage
@@ -671,7 +673,7 @@ jobs:
       - name: Upload Go coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out,target/coverage/image-service.out
+          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out,target/coverage/image-service.out,target/coverage/secret-server.out
           flags: go
           use_oidc: true
           disable_search: true

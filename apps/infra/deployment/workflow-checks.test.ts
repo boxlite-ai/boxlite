@@ -55,6 +55,9 @@ for (const [path, expected] of [
   ['sdks/go/options.go', ['rust', 'go']],
   ['sdks/go/integration/archive/checkpoint_test.go', ['rust', 'go']],
   ['apps/runner/cmd/runner/main.go', ['go']],
+  ['apps/secret-server/internal/encryption/cipher.go', ['go']],
+  ['apps/secret-server/internal/encryption/cipher_test.go', ['go']],
+  ['apps/secret-server/go.mod', ['go']],
   ['sdks/python/boxlite/options.py', ['rust', 'python']],
   ['sdks/python/boxlite/sync_api/_ssh.py', ['rust', 'python']],
   ['sdks/python/tests/test_ssh_native_rest.py', ['rust', 'python']],
@@ -77,11 +80,16 @@ for (const [path, expected] of [
 
 // Anything a suite filter selects on must also reach the workflow that runs
 // the filter, or a push to main changes the suite's inputs and tests nothing.
-for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
+for (const path of ['apps/runner/cmd/runner/main.go', 'apps/secret-server/internal/encryption/cipher.go', 'apps/secret-server/internal/encryption/cipher_test.go', 'apps/secret-server/go.mod', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
   test(`a push that selects a suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
+
+test('Go coverage uploads the Secret Server report', () => {
+  const upload = workflow('test.yml').jobs.go.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action'))
+  assert.ok(upload.with.files.split(',').includes('target/coverage/secret-server.out'))
+})
 
 // The rust job runs the external coverage collector; its inputs must also
 // reach the workflow on push, or a main-branch change tests nothing.
