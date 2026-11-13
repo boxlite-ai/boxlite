@@ -541,6 +541,34 @@ describe('BoxTerminal', () => {
     expect(mocks.dispose).not.toHaveBeenCalled()
   })
 
+  it('returns keyboard focus from maximized xterm to Restore without consuming Escape or Tab', async () => {
+    render()
+    await settle()
+    open()
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Maximize terminal"]')?.click())
+    const screen = container.querySelector('[data-testid="terminal-screen"]')!
+    const textarea = document.createElement('textarea')
+    screen.appendChild(textarea)
+    textarea.focus()
+    const terminalKey = vi.fn()
+    textarea.addEventListener('keydown', terminalKey)
+    const shortcut = new KeyboardEvent('keydown', { key: 'F6', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })
+    await act(async () => { textarea.dispatchEvent(shortcut) })
+    const restore = container.querySelector<HTMLButtonElement>('[aria-label="Restore terminal"]')!
+    expect(document.activeElement).toBe(restore)
+    expect(shortcut.defaultPrevented).toBe(true)
+    expect(terminalKey).not.toHaveBeenCalled()
+    textarea.focus()
+    for (const key of ['Escape', 'Tab', 'F6']) {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+      textarea.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(false)
+    }
+    expect(terminalKey).toHaveBeenCalledTimes(3)
+    await act(async () => restore.click())
+    expect(container.querySelector('[aria-label="Box terminal"]')?.hasAttribute('data-maximized')).toBe(false)
+  })
+
   it('restores covered controls and page scrolling when maximized Terminal unmounts', async () => {
     render()
     await settle()

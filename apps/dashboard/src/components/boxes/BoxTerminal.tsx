@@ -40,6 +40,7 @@ export function BoxTerminal({ boxId, boxName, className }: { boxId: string; boxN
   const organizationId = selectedOrganization?.id
   const regionRef = useRef<HTMLDivElement>(null)
   const [maximized, setMaximized] = useState(false)
+  const viewportButtonRef = useRef<HTMLButtonElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const refitRef = useRef<(() => void) | null>(null)
@@ -221,6 +222,13 @@ export function BoxTerminal({ boxId, boxName, className }: { boxId: string; boxN
       ref={regionRef}
       role="region"
       aria-label="Box terminal"
+      onKeyDownCapture={(event) => {
+        if (event.key !== 'F6' || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return
+        if (!(event.target instanceof Node) || !containerRef.current?.contains(event.target)) return
+        event.preventDefault()
+        event.stopPropagation()
+        viewportButtonRef.current?.focus()
+      }}
       data-maximized={maximized || undefined}
       className={cn('flex min-h-0 min-w-0 flex-col bg-black', className, maximized && 'fixed inset-0 z-50')}
     >
@@ -236,6 +244,7 @@ export function BoxTerminal({ boxId, boxName, className }: { boxId: string; boxN
             className={cn('size-1.5 shrink-0', status === 'open' ? 'bg-success' : 'bg-muted-foreground')}
           />
           <span>{STATUS_LINE[status]}</span>
+          {maximized && <span className="ml-2 text-muted-foreground">Ctrl+Shift+F6: toolbar</span>}
         </div>
         <div role="group" aria-label="Terminal controls" className="flex flex-wrap items-center gap-1">
           {status !== 'connecting' && status !== 'open' && (
@@ -311,8 +320,10 @@ export function BoxTerminal({ boxId, boxName, className }: { boxId: string; boxN
           <Button
             variant="ghost"
             size="icon-sm"
+            ref={viewportButtonRef}
+            aria-keyshortcuts="Control+Shift+F6"
             aria-label={maximized ? 'Restore terminal' : 'Maximize terminal'}
-            title={maximized ? 'Restore terminal' : 'Maximize terminal'}
+            title={`${maximized ? 'Restore terminal' : 'Maximize terminal'} (Ctrl+Shift+F6 to focus)`}
             aria-pressed={maximized}
             onClick={() => {
               setMaximized((value) => !value)
