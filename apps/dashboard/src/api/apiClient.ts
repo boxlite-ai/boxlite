@@ -43,6 +43,11 @@ import type { DomainList, HeldDomain } from './domain-types'
 import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
 
+export interface VolumeStorageCapabilities {
+  object_storage_enabled: boolean
+  filestore_enabled: boolean
+}
+
 // A burst of in-flight requests can all 401 at once when the access token goes
 // invalid; this in-page guard ensures at most one re-login redirect per page
 // load. It is reset if onUnauthorized throws (a failed handler must not wedge
@@ -240,6 +245,10 @@ export class ApiClient {
   }
 
   public async getCheckpointCapabilities(): Promise<{ checkpoints_enabled: boolean }> {
+    return (await this.http.get('/v1/config', this.v1Config())).data.capabilities
+  }
+
+  public async getVolumeStorageCapabilities(): Promise<VolumeStorageCapabilities> {
     return (await this.http.get('/v1/config', this.v1Config())).data.capabilities
   }
 

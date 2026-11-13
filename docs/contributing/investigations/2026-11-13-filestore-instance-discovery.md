@@ -131,6 +131,7 @@ GCP, the create also fails before a Volume row is written. The response distingu
 
 | Failure | Public status |
 | --- | --- |
+| No Filestore instance is configured | 503 |
 | Explicit instance does not exist | 400 |
 | Hash-selected configured instance does not exist | 503 |
 | Filestore API authentication or access fails | 503 |
@@ -193,6 +194,9 @@ The expected focused changes are:
 - Replace `apps/api/src/config/filestore-instances.ts` with name-list parsing.
 - Add a Filestore resolver around the official `@google-cloud/filestore` client.
 - Extend `CreateVolumeDto` and the OpenAPI schema with optional `storageBackend`.
+- Return the derived `storageBackend` and Filestore-only `instance` in `VolumeDto`.
+- Expose `object_storage_enabled` and `filestore_enabled` from `/v1/config`.
+- Give the Dashboard a storage-backend selector, list display, and immediate-ready copy for Filestore.
 - Use the selector and resolver in `VolumeService.enqueueCreation`.
 - Replace direct configuration-array lookups in `BoxService.create` with resolver calls.
 - Update focused unit tests, the generated API clients, and `test_filestore.py`.
@@ -209,6 +213,8 @@ Focused tests cover:
 - Mapping of a Filestore API response to a server address and export.
 - Rejection of multiple shares, zero shares, and ambiguous addresses.
 - Volume create and box dispatch error mapping, including no persisted row on failure.
+- `/v1/config` advertising each volume backend only when its configuration is present.
+- Dashboard defaulting, disabled options, payload shape, and list rendering.
 
 The Filestore E2E case keeps `FILESTORE_E2E_INSTANCE` as an optional way to pin a named
 instance. When omitted, it creates with `storageBackend: "filestore"` and therefore does
@@ -228,3 +234,18 @@ created by the current branch contain instance names that this resolver can cont
 look up, provided those names are real GCP instance IDs. If a stored name was only a
 local alias and not a GCP instance ID, that row must be corrected before the new dispatch
 path ships.
+
+## Dashboard behavior
+
+The Dashboard reads `/v1/config` and keeps backend availability as an operator-visible
+capability, not an inferred convention. It offers **ObjectStorage** and **FileStore**,
+defaults to object storage, and never asks the user for an instance, NFS server, export,
+or mount option.
+
+When Filestore is not configured, its option stays visible but disabled with a concise
+configuration note. When object storage is unavailable and Filestore is available, the
+Dashboard starts on Filestore. When neither backend is configured, creation is disabled.
+Submitting FileStore sends only `{ "name": "...", "storageBackend": "filestore" }`; the
+server assigns and resolves the instance. The success copy says the volume was created,
+because FileStore volumes are `READY` immediately. The list shows only the backend name,
+not the assigned instance; operators can inspect that fact through the API if needed.

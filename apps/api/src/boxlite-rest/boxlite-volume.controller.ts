@@ -21,6 +21,7 @@ type RestVolumeSummary = {
   id: string
   name: string
   state: VolumeState
+  storage_backend: 'object_storage' | 'filestore'
   created_at: string
   // Filestore-only: the NFS instance holding the volume's data directory.
   // Absent for object-storage volumes, whose data lives in boxlite-volume-<id>.
@@ -99,6 +100,7 @@ export class BoxliteVolumeController {
       id: volume.id,
       name: volume.name,
       state: volume.state,
+      storage_backend: volume.instance ? 'filestore' : 'object_storage',
       created_at: volume.createdAt.toISOString(),
       ...(volume.instance ? { instance: volume.instance } : {}),
     }

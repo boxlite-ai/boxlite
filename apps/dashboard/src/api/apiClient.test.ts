@@ -445,6 +445,17 @@ describe('ApiClient checkpoints', () => {
   })
 })
 
+describe('ApiClient volume storage capabilities', () => {
+  it('discovers volume backend capabilities using the authenticated REST client', async () => {
+    const requests: any[] = []
+    const capabilities = { object_storage_enabled: true, filestore_enabled: false }
+    const api = await makeClient(vi.fn(), 200, { capabilities }, requests)
+
+    await expect(api.getVolumeStorageCapabilities()).resolves.toEqual(capabilities)
+    expect(requests[0]).toMatchObject({ method: 'get', url: '/v1/config' })
+  })
+})
+
 describe('ApiClient.setBoxInboundMode', () => {
   it('sends the mode to the /v1 inbound route of the selected organization', async () => {
     vi.resetModules()

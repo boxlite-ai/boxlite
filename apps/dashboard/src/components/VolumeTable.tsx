@@ -179,6 +179,11 @@ export function VolumeTable({ data, loading, processingVolumeAction, onDelete, o
                   <div className="space-y-2">
                     <p>Create a volume, then mount it when creating a Box. Its data survives Box deletion.</p>
                     <p>
+                      Volumes are shared, persistent directories backed by object storage or Filestore, perfect for
+                      reusing datasets, caching dependencies, or passing files across boxes.
+                    </p>
+                    <p>
+                      Create one via the SDK or CLI. <br />
                       <a
                         href={BOXLITE_VOLUMES_DOCS_URL}
                         target="_blank"

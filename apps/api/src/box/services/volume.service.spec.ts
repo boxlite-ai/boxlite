@@ -1,5 +1,5 @@
 import { Context } from '../../common/context/context'
-import { NotFoundException, RequestTimeoutException } from '@nestjs/common'
+import { NotFoundException, RequestTimeoutException, ServiceUnavailableException } from '@nestjs/common'
 import { VolumeState } from '../enums/volume-state.enum'
 import { VolumeService } from './volume.service'
 
@@ -287,8 +287,8 @@ describe('VolumeService filestore volumes', () => {
   it('rejects Filestore placement when no instances are configured', async () => {
     const { service, volumeRepository } = createService(null, [], [])
 
-    await expect(service.create(organization, { storageBackend: 'filestore' }, Context.user())).rejects.toThrow(
-      'no Filestore instances are configured',
+    await expect(service.create(organization, { storageBackend: 'filestore' }, Context.user())).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
     )
     expect(volumeRepository.save).not.toHaveBeenCalled()
   })
