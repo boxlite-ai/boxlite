@@ -640,8 +640,14 @@ query its resources, or reserve capacity. Targets use committed Box CPU and exac
 MiB allocation; legacy rows fall back to `mem * 1024`. CPU accepts 0.125–16 in
 0.001 steps, and memory growth rounds upward in 128 MiB increments from the current
 allocation. For example, 300 MiB requested as 500 MiB becomes 556 MiB; a CPU-only
-resize keeps 300 MiB. Organization limits use the exact target divided by 1024. Boot ceilings are enforced during execution, so an accepted
-job can fail without changing the committed size or billing.
+resize keeps 300 MiB. Memory quota checks use the exact target divided by 1024.
+Admission resolves per-box limits through `OrganizationBoxLimitsService`, as
+creation does: administrator overrides take precedence, while default stored
+limits use the verified Commerce grant, including its cache and fallback policy.
+For example, a stored default of 4 CPUs with an effective grant of 8 permits an
+8-CPU resize; a grant of 2 rejects a 3-CPU resize before any job is written.
+Boot ceilings are enforced during execution, so an accepted job can fail without
+changing the committed size or billing.
 
 Explicit same-size requests also create idempotent jobs. Matching in-flight
 requests join their job even if the Runner's score falls after admission.

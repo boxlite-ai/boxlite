@@ -26,6 +26,7 @@ import {
 } from '../box/services/resize-resources'
 import { Organization } from '../organization/entities/organization.entity'
 import { OrganizationService } from '../organization/services/organization.service'
+import { OrganizationBoxLimitsService } from '../organization/services/organization-box-limits.service'
 import { UsageService } from '../usage/services/usage.service'
 import { TypedConfigService } from '../config/typed-config.service'
 import { ResizeBoxDto } from './dto/resize-box.dto'
@@ -44,6 +45,7 @@ export class BoxResizeService {
     private readonly config: TypedConfigService,
     private readonly jobs: JobService,
     private readonly cache: BoxLookupCacheInvalidationService,
+    private readonly organizationBoxLimits: OrganizationBoxLimitsService,
   ) {}
 
   async resize(id: string, organization: Organization, request: ResizeBoxDto): Promise<BoxResources> {
@@ -57,7 +59,8 @@ export class BoxResizeService {
     this.assertRunning(box)
     const target = resizeTarget(request, { cpus: box.cpu, memory_mib: memoryMibOf(box) })
     const targetMemoryGiB = target.memory_mib / 1024
-    assertWithinPerBoxLimits(target.cpus, targetMemoryGiB, box.disk, organization)
+    const limits = await this.organizationBoxLimits.resolve(organization)
+    assertWithinPerBoxLimits(target.cpus, targetMemoryGiB, box.disk, limits)
     const runner = await this.runners.findAvailableRunner(box.runnerId)
     if (!runner || runner.apiVersion !== '2')
       throw new ServiceUnavailableException('Runner is unavailable for resize admission')

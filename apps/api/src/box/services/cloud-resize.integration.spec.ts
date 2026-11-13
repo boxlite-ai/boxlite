@@ -23,6 +23,8 @@ import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 import { AddCloudResizeJobs1793232000000 } from '../../migrations/pre-deploy/1793232000000-add-cloud-resize-jobs-migration'
 import { BoxResizeService } from '../../boxlite-rest/box-resize.service'
 import { Organization } from '../../organization/entities/organization.entity'
+import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
+import { PerBoxLimits } from './per-box-limits'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { boxLookupCacheKeyById } from '../utils/box-lookup-cache.util'
 import { RESIZE_MAX_DURATION_MINUTES } from './resize-resources'
@@ -47,6 +49,9 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
   let enabled: boolean
   let runtimeResources: typeof target
   let organization: Organization
+  let organizationBoxLimits: OrganizationBoxLimitsService
+  let commerceLimits: PerBoxLimits
+  let commerceQueries = 0
   const availableRunner = jest.fn()
   let resourceQueries = 0
   const removeCache = jest.fn().mockResolvedValue(undefined)
@@ -96,6 +101,16 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       leases,
     )
     server = createServer((req, res) => {
+      if (req.url?.startsWith('/organization/')) {
+        commerceQueries++
+        if (req.headers.authorization !== 'Bearer test-commerce-key') {
+          res.writeHead(401).end()
+          return
+        }
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ plan: { perBoxLimits: commerceLimits } }))
+        return
+      }
       resourceQueries++
       if (req.headers.authorization !== 'Bearer test-runner-key') {
         res.writeHead(401).end()
@@ -105,6 +120,16 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       res.end(JSON.stringify({ resize_jobs_v1: true, resources: runtimeResources }))
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    organizationBoxLimits = new OrganizationBoxLimitsService(
+      {
+        get: (key: string) =>
+          ({
+            billingApiUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+            'usageExport.token': 'test-commerce-key',
+          })[key],
+      } as never,
+      redis,
+    )
     coordinator = new BoxResizeService(
       db,
       { findOneByIdOrName: async () => box } as never,
@@ -121,6 +146,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       { get: () => enabled } as never,
       jobs,
       cache,
+      organizationBoxLimits,
     )
   })
 
@@ -135,6 +161,8 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
 
   beforeEach(async () => {
     enabled = true
+    commerceQueries = 0
+    commerceLimits = { maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }
     resourceQueries = 0
     availableRunner.mockReset().mockResolvedValue({ apiVersion: '2' })
     removeCache.mockClear()
@@ -194,6 +222,50 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     throw new Error(`resize did not reach ${phase}`)
   }
   const stopJob = () => jobs.createJob(null, JobType.STOP_BOX, runnerId, ResourceType.BOX, box.id)
+
+  it.each([
+    ['CPU', { maxCpuPerBox: 8 }, { cpus: 8 }, { cpus: 8, memory_mib: 1024 }],
+    ['memory', { maxMemoryPerBox: 16 }, { memory_mib: 16384 }, { cpus: 1, memory_mib: 16384 }],
+  ] as const)('admits resize at the higher effective %s grant', async (_, grant, request, expected) => {
+    await freshAdmission()
+    Object.assign(organization, commerceLimits)
+    Object.assign(commerceLimits, grant)
+    const wait = jest.spyOn(coordinator as any, 'waitFor').mockResolvedValue(undefined)
+    try {
+      await coordinator.resize(box.id, organization, request)
+      const accepted = await untilJob('APPLY')
+      expect(accepted.getPayload()).toMatchObject(expected)
+      expect(commerceQueries).toBe(1)
+      expect(await db.getRepository(Job).count()).toBe(1)
+    } finally {
+      wait.mockRestore()
+    }
+  })
+
+  it.each([
+    ['CPU', { maxCpuPerBox: 2 }, { cpus: 3 }],
+    ['memory', { maxMemoryPerBox: 2 }, { memory_mib: 2049 }],
+  ] as const)('rejects resize above the lower effective %s grant before writes', async (_, grant, request) => {
+    await freshAdmission()
+    Object.assign(organization, commerceLimits)
+    Object.assign(commerceLimits, grant)
+    const wait = jest.spyOn(coordinator as any, 'waitFor').mockResolvedValue(undefined)
+    try {
+      await expect(coordinator.resize(box.id, organization, request)).rejects.toThrow('per-box limit of 2')
+      expect(commerceQueries).toBe(1)
+      expect(availableRunner).not.toHaveBeenCalled()
+      expect(await db.getRepository(Job).count()).toBe(0)
+      expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+        cpu: 1,
+        memoryMib: 1024,
+        pending: false,
+        resizeJobId: null,
+      })
+      expect(await open()).toHaveLength(1)
+    } finally {
+      wait.mockRestore()
+    }
+  })
 
   it.each([300, null])('preserves exact MiB in CPU-only resize and recovery from %s', async (memoryMib) => {
     await freshAdmission()
