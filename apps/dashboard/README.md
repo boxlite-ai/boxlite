@@ -510,9 +510,9 @@ configure additional system images, so three is not a fixed UI limit.
 
 Some fields are set once and never cleared. `upstreamMissingAt` is written the
 first time a pull finds a digest gone from its registry, and nothing resets it
-if the registry gets it back. The image page therefore says "Gone upstream 5h
-ago", with "BoxLite's copy still starts boxes" on hover, rather than a present
-tense "Missing" that would turn false the moment the registry recovered.
+if the registry gets it back. The image page therefore says "Gone upstream", with the observation time and
+"BoxLite's copy still starts boxes" available on hover, focus, or in version
+details, rather than a present-tense "Missing" that becomes false when the registry recovers.
 Likewise the pin history says "unpins are not recorded", because the API
 writes no event when a tag is unpinned, and a history that dropped a tag
 without saying so would look like a bug.
@@ -1105,3 +1105,11 @@ API Key and Webhook empty states no longer advertise generic home-page links as 
 
 The source scan catches inline URLs and appended paths; it does not prove a destination's meaning or availability. When updating a guide, open the destination and check its content against the UI task.
 
+
+### Inspecting image versions
+
+Image details presents Tags, Versions, referencing Boxes, and pin history as single-line rows beneath a compact summary. The detail page offers View SDK example instead of duplicate Box creation controls. Curated images retain their short reference in SDK examples; organization images use their existing start reference.
+
+Select a version digest to inspect and copy its complete digest, original pull reference, first-seen timestamp, and recorded upstream status. A missing upstream digest remains a past observation: only runners that cached the version can still start it; other runners need an available version pinned under a new alias. The Versions table scrolls horizontally in narrow containers, reserving space for the digest and upstream marker. Full provenance remains available in the dialog.
+
+Pinning guidance belongs in the Pin a tag dialog. Pin/unpin permissions, OCI tag validation, API error feedback, and running Box behavior are unchanged. Referencing Boxes retain their detail links and status indicators. The page scrolls naturally instead of placing its tables in a second vertical scrolling region.

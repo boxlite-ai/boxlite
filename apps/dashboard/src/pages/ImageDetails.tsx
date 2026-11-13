@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { TechnicalText } from '@/components/TechnicalText'
-import { AsciiButton, Panel, PanelNote, SectionTitle } from '@/components/ascii'
-import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
+import { TechnicalText, FormattedBytes } from '@/components/TechnicalText'
+import { AsciiButton, PanelNote } from '@/components/ascii'
 import { UseImageSheet } from '@/components/images/UseImageSheet'
-import { BoxState } from '@/components/BoxTable/BoxState'
+import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
+import { CopyButton } from '@/components/CopyButton'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -16,8 +16,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog'
 import { ArrowLeft } from '@/components/ui/icon'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -28,7 +30,7 @@ import { useImageQuery } from '@/hooks/queries/useImagesQuery'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { formatBytes, timeAgo } from '@/lib/format'
+import { timeAgo } from '@/lib/format'
 import { imageStartRef, shortDigest, TAG_PATTERN } from '@/lib/image-ref'
 import { cn } from '@/lib/utils'
 import { ImageDetail, ImageVersion, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
@@ -36,35 +38,46 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { generatePath, Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
-const TAG_GRID = 'grid grid-cols-[0.8fr_1.6fr_1fr_80px] items-center gap-3 px-2'
-const VERSION_GRID = 'grid grid-cols-[1.3fr_0.8fr_0.5fr_1.2fr_0.6fr_0.6fr_90px] items-center gap-3 px-2'
-const BOX_GRID = 'grid grid-cols-[1fr_1fr_1fr] items-center gap-3 px-2'
-const HISTORY_GRID = 'grid grid-cols-[0.7fr_1.4fr_0.9fr_0.6fr] items-center gap-3 px-2'
+const TAG_GRID = 'grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.6fr)_minmax(0,1fr)_80px] items-center gap-6'
+const VERSION_GRID =
+  'grid min-w-[700px] grid-cols-[minmax(300px,1.8fr)_minmax(100px,0.8fr)_90px_110px] items-center gap-4'
+const BOX_GRID = 'grid grid-cols-3 items-center gap-6'
+const HISTORY_GRID =
+  'grid grid-cols-[minmax(0,0.7fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,0.6fr)] items-center gap-6'
 // The most alias events an image's detail carries, newest first: the API's
 // IMAGE_HISTORY_LIMIT. A full page means older events exist and are not shown.
 const HISTORY_LIMIT = 100
 
 function Field({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="font-mono text-label uppercase text-muted-foreground">{label}</span>
-      <span title={title} className="truncate font-mono text-body text-foreground">
+    <div className="flex min-w-0 items-baseline gap-3">
+      <span className="shrink-0 font-sans text-meta text-muted-foreground">{label}</span>
+      <span title={title} className="truncate font-mono text-meta text-foreground">
         {value}
       </span>
     </div>
   )
 }
 
-function HeaderRow({ grid, children }: { grid: string; children: React.ReactNode }) {
+/** Quiet section hierarchy shared by all groups on this detail page. */
+function DetailSection({ title, count, right }: { title: string; count?: React.ReactNode; right?: React.ReactNode }) {
   return (
-    <div className={cn(grid, 'border-b border-border pb-2 font-mono text-meta font-medium text-muted-foreground')}>
-      {children}
+    <div className="mb-2 flex min-h-9 items-center justify-between gap-3 border-b border-border">
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-body font-semibold">{title}</h2>
+        {count && <span className="text-meta text-muted-foreground">{count}</span>}
+      </div>
+      {right}
     </div>
   )
 }
 
+function HeaderRow({ grid, children }: { grid: string; children: React.ReactNode }) {
+  return <div className={cn(grid, 'resource-list-head')}>{children}</div>
+}
+
 function EmptyRow({ children }: { children: React.ReactNode }) {
-  return <p className="px-2 py-[16px] font-mono text-meta text-muted-foreground">{children}</p>
+  return <p className="px-2 py-[16px] font-sans text-meta text-muted-foreground">{children}</p>
 }
 
 /**
@@ -86,8 +99,6 @@ const ImageDetails: React.FC = () => {
   const unpinTag = useUnpinImageTagMutation()
 
   const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_IMAGES)
-  const canCreateBox = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
-  const [newBoxImage, setNewBoxImage] = useState<string | null>(null)
   const [codeRef, setCodeRef] = useState<string | null>(null)
   const [pinning, setPinning] = useState(false)
   const [pinForm, setPinForm] = useState({ alias: '', versionId: '' })
@@ -143,52 +154,51 @@ const ImageDetails: React.FC = () => {
   const tagTaken = image?.aliases.includes(pinForm.alias) ?? false
 
   return (
-    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex min-w-0 flex-col pb-8 pt-5 lg:pt-[26px]">
       <button
         type="button"
         onClick={() => navigate(RoutePath.IMAGES)}
-        className="mb-[14px] inline-flex w-fit items-center gap-2 font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
+        className="mb-[14px] inline-flex w-fit items-center gap-2 font-sans text-meta text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft className="size-4" />
         Images
       </button>
 
-      {isLoading && <p className="font-mono text-body text-muted-foreground">Loading…</p>}
+      {isLoading && <p className="font-sans text-body text-muted-foreground">Loading…</p>}
 
       {image && (
         <>
-          <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3">
-            <h1 className="truncate font-display text-page font-semibold text-foreground">
+          <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+            <h1
+              className="min-w-0 flex-1 truncate font-mono text-page font-semibold text-foreground"
+              title={image.name}
+            >
               <TechnicalText value={image.name} />
             </h1>
             <div className="flex items-center gap-2">
-              <AsciiButton onClick={() => setCodeRef(imageStartRef(image))} title="The create call in your SDK">
-                Code
-              </AsciiButton>
-              {canCreateBox && (
-                <AsciiButton variant="primary" onClick={() => setNewBoxImage(imageStartRef(image))}>
-                  New Box
-                </AsciiButton>
-              )}
+              <AsciiButton onClick={() => setCodeRef(imageStartRef(image))}>View SDK example</AsciiButton>
             </div>
           </div>
 
-          <Panel className="px-[18px] py-[16px]">
-            <div className="grid grid-cols-2 gap-5 sm:grid-cols-4">
-              <Field label="Source" value={image.curated ? 'Built-in' : 'Pulled by your boxes'} />
+          <div className="pb-5">
+            <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <Field
+                label="Source"
+                value={<span className="font-sans">{image.curated ? 'Built-in' : 'Pulled by your boxes'}</span>}
+              />
               <Field label="Versions" value={image.curated ? '—' : image.versionCount} />
-              <Field label="Size" value={image.curated ? '—' : formatBytes(image.sizeBytes)} />
+              <Field label="Size" value={image.curated ? '—' : <FormattedBytes bytes={image.sizeBytes} />} />
               <Field label="Last started" value={image.curated ? '—' : timeAgo(image.lastUsedAt)} />
             </div>
             {image.curated && (
               <PanelNote>
-                Maintained by BoxLite as <span className="text-foreground">{image.curatedRef}</span>. Free, always
+                Maintained by BoxLite as <TechnicalText value={image.curatedRef ?? image.name} />. Free, always
                 available, and not counted against your limit. Its tag is managed for you.
               </PanelNote>
             )}
-          </Panel>
+          </div>
 
-          <div className="mt-[18px] flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="mt-2 flex min-w-0 flex-col">
             {!image.curated && (
               <TagsSection
                 image={image}
@@ -200,43 +210,31 @@ const ImageDetails: React.FC = () => {
               />
             )}
 
-            <SectionTitle title="Versions" />
-            <HeaderRow grid={VERSION_GRID}>
-              <span>Digest</span>
-              <span>Tags</span>
-              <span>Size</span>
-              <span>Pulled from</span>
-              <span>Last started</span>
-              <span>First seen</span>
-              <span />
-            </HeaderRow>
-            {image.versions.length === 0 ? (
-              <EmptyRow>
-                {image.curated
-                  ? 'Built-in images are operator configuration; no versions are recorded for them.'
-                  : 'No versions recorded yet.'}
-              </EmptyRow>
-            ) : (
-              image.versions.map((version) => (
-                <VersionRow
-                  key={version.id}
-                  image={image}
-                  version={version}
-                  onUse={canCreateBox ? () => setNewBoxImage(`${image.name}@${version.digest}`) : undefined}
-                />
-              ))
-            )}
+            <DetailSection title="Versions" />
+            <div className="min-w-0 overflow-x-auto">
+              <HeaderRow grid={VERSION_GRID}>
+                <span>Digest</span>
+                <span>Tags</span>
+                <span>Size</span>
+                <span>Last started</span>
+              </HeaderRow>
+              {image.versions.length === 0 ? (
+                <EmptyRow>
+                  {image.curated
+                    ? 'Built-in images are operator configuration; no versions are recorded for them.'
+                    : 'No versions recorded yet.'}
+                </EmptyRow>
+              ) : (
+                image.versions.map((version) => <VersionRow key={version.id} image={image} version={version} />)
+              )}
+            </div>
 
             {!image.curated && (
               <>
                 <div className="mt-[26px]">
-                  <SectionTitle
+                  <DetailSection
                     title="Boxes referencing this image"
-                    count={
-                      boxes.length === 0
-                        ? 'none'
-                        : `${boxes.length}${truncated ? '+' : ''} · all must be destroyed before removal`
-                    }
+                    count={boxes.length === 0 ? 'none' : `${boxes.length}${truncated ? '+' : ''}`}
                   />
                 </div>
                 {boxes.length === 0 ? (
@@ -249,14 +247,16 @@ const ImageDetails: React.FC = () => {
                       <span>Created</span>
                     </HeaderRow>
                     {boxes.map((box) => (
-                      <div key={box.id} className={cn(BOX_GRID, 'border-b border-border/60 py-[11px] text-body')}>
+                      <div key={box.id} className={cn(BOX_GRID, 'resource-list-row')}>
                         <Link
                           to={generatePath(RoutePath.BOX_DETAILS, { boxId: box.id })}
                           className="truncate font-mono text-meta font-medium text-foreground hover:underline"
                         >
                           {box.name}
                         </Link>
-                        <BoxState state={box.state} errorReason={box.errorReason} className="text-meta" />
+                        <span title={box.errorReason}>
+                          <BoxStatusIndicator box={box} />
+                        </span>
                         <span className="font-mono text-meta text-muted-foreground">{timeAgo(box.createdAt)}</span>
                       </div>
                     ))}
@@ -264,7 +264,7 @@ const ImageDetails: React.FC = () => {
                 )}
 
                 <div className="mt-[26px]">
-                  <SectionTitle title="Pin history" count="unpins are not recorded" />
+                  <DetailSection title="Pin history" count="unpins are not recorded" />
                 </div>
                 <HeaderRow grid={HISTORY_GRID}>
                   <span>Tag</span>
@@ -282,7 +282,7 @@ const ImageDetails: React.FC = () => {
                   image.history.map((event) => (
                     <div
                       key={`${event.aliasName}-${event.createdAt}-${event.toVersionId}`}
-                      className={cn(HISTORY_GRID, 'border-b border-border/60 py-[11px] text-body')}
+                      className={cn(HISTORY_GRID, 'resource-list-row')}
                     >
                       <span className="truncate font-mono text-meta text-foreground">{event.aliasName}</span>
                       <span className="truncate font-mono text-meta text-muted-foreground" title={event.toDigest}>
@@ -300,7 +300,7 @@ const ImageDetails: React.FC = () => {
                   ))
                 )}
                 {image.history.length >= HISTORY_LIMIT && (
-                  <p className="px-2 py-[12px] font-mono text-meta text-muted-foreground">
+                  <p className="px-2 py-[12px] font-sans text-meta text-muted-foreground">
                     Showing the latest {HISTORY_LIMIT} events; older ones are not listed.
                   </p>
                 )}
@@ -314,8 +314,8 @@ const ImageDetails: React.FC = () => {
                 <DialogHeader>
                   <DialogTitle>Pin a tag</DialogTitle>
                   <DialogDescription>
-                    Boxes that start from <span className="font-mono text-foreground">{image.name}:tag</span> get this
-                    version until the tag is unpinned.
+                    A tag stays pinned to its digest even if the upstream tag moves. To change its version, unpin it and
+                    pin it again. Boxes already running are unaffected.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3 py-4">
@@ -351,7 +351,7 @@ const ImageDetails: React.FC = () => {
                         {readyVersions.map((version) => (
                           <SelectItem key={version.id} value={version.id} className="font-mono">
                             {shortDigest(version.digest)} · {version.aliases.join(', ') || 'no tag'} ·{' '}
-                            {formatBytes(version.sizeBytes)}
+                            <FormattedBytes bytes={version.sizeBytes} />
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -372,11 +372,6 @@ const ImageDetails: React.FC = () => {
         </>
       )}
 
-      <CreateBoxDialog
-        open={newBoxImage !== null}
-        onOpenChange={(open) => !open && setNewBoxImage(null)}
-        prefillImage={newBoxImage ?? undefined}
-      />
       <UseImageSheet imageRef={codeRef} onClose={() => setCodeRef(null)} />
     </div>
   )
@@ -407,7 +402,7 @@ function TagsSection({
 
   return (
     <div className="mb-[26px]">
-      <SectionTitle
+      <DetailSection
         title="Tags"
         count={`${image.aliases.length} pinned`}
         right={
@@ -431,7 +426,7 @@ function TagsSection({
           const version = versionOf(alias)
           const event = pinnedAt(alias)
           return (
-            <div key={alias} className={cn(TAG_GRID, 'border-b border-border/60 py-[11px] text-body')}>
+            <div key={alias} className={cn(TAG_GRID, 'resource-list-row')}>
               <span className="truncate font-mono text-meta font-medium text-foreground">{alias}</span>
               <span className="truncate font-mono text-meta text-muted-foreground" title={version?.digest}>
                 {version ? shortDigest(version.digest) : '—'}
@@ -441,7 +436,14 @@ function TagsSection({
               </span>
               <div className="flex justify-end">
                 {canWrite && (
-                  <AsciiButton variant="danger" size="sm" type="button" onClick={() => onUnpin(alias)} disabled={busy}>
+                  <AsciiButton
+                    variant="quiet-danger"
+                    size="sm"
+                    type="button"
+                    onClick={() => onUnpin(alias)}
+                    title="Release this tag; running Boxes keep their version"
+                    disabled={busy}
+                  >
                     Unpin
                   </AsciiButton>
                 )}
@@ -450,59 +452,83 @@ function TagsSection({
           )
         })
       )}
-      <PanelNote>
-        A tag stays pinned to the digest it first resolved to; a new push upstream does not move it. To repoint one,
-        unpin it and pin it again. Boxes already running are unaffected either way.
-      </PanelNote>
     </div>
   )
 }
 
-function VersionRow({ image, version, onUse }: { image: ImageDetail; version: ImageVersion; onUse?: () => void }) {
+/** The digest opens complete provenance details without a competing creation flow. */
+function VersionRow({ image, version }: { image: ImageDetail; version: ImageVersion }) {
+  const upstreamNote = version.upstreamMissingAt
+    ? `A pull ${timeAgo(version.upstreamMissingAt)} found this digest gone from ${image.name.split('/')[0]}. Runners that cached this version can still start it. Elsewhere, pin an available version under a new alias.`
+    : null
+
   return (
-    <div className={cn(VERSION_GRID, 'border-b border-border/60 py-[13px] text-body')}>
-      <span className="flex min-w-0 flex-col">
-        <span title={version.digest} className="truncate font-mono text-meta text-foreground">
-          {version.digest}
-        </span>
-        {/* Recorded once, when a pull found the registry without this digest;
-            nothing clears it, so it is past tense: the copy here still starts. */}
-        {version.upstreamMissingAt && (
-          <span
-            title={`A pull ${timeAgo(version.upstreamMissingAt)} found this digest gone from ${image.name.split('/')[0]}. BoxLite's copy still starts boxes.`}
-            className="font-mono text-label uppercase text-yellow-600 dark:text-yellow-400"
-          >
-            Gone upstream {timeAgo(version.upstreamMissingAt)}
-          </span>
+    <div className={cn(VERSION_GRID, 'resource-list-row')}>
+      <div className="flex min-w-0 items-center gap-3">
+        <Dialog>
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              aria-label={`View version ${version.digest}`}
+              title={version.digest}
+              className="min-w-0 truncate text-left font-mono text-meta text-foreground underline-offset-4 hover:underline"
+            >
+              {shortDigest(version.digest)}
+            </button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader className="shrink-0">
+              <DialogTitle>Version details</DialogTitle>
+              <DialogDescription>Recorded provenance for this image version.</DialogDescription>
+            </DialogHeader>
+            <dl className="min-h-0 space-y-4 overflow-y-auto py-4 text-meta">
+              <div>
+                <dt className="mb-1 text-muted-foreground">Digest</dt>
+                <dd className="flex items-start gap-2">
+                  <code className="min-w-0 flex-1 break-all">{version.digest}</code>
+                  <CopyButton value={version.digest} tooltipText="Copy digest" size="icon-xs" />
+                </dd>
+              </div>
+              <div>
+                <dt className="mb-1 text-muted-foreground">Pulled from</dt>
+                <dd className="break-all font-mono">{version.sourceRef || '—'}</dd>
+              </div>
+              <div>
+                <dt className="mb-1 text-muted-foreground">First seen</dt>
+                <dd title={version.createdAt}>{timeAgo(version.createdAt)}</dd>
+              </div>
+              <div>
+                <dt className="mb-1 text-muted-foreground">Upstream</dt>
+                <dd>{upstreamNote ?? 'No missing digest reported.'}</dd>
+              </div>
+            </dl>
+          </DialogContent>
+        </Dialog>
+        {upstreamNote && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                tabIndex={0}
+                title={upstreamNote}
+                className="shrink-0 whitespace-nowrap text-meta text-warning focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              >
+                Gone upstream
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-sm">{upstreamNote}</TooltipContent>
+          </Tooltip>
         )}
-      </span>
-      <span className="truncate font-mono text-meta text-muted-foreground">
+      </div>
+      <span className="truncate font-mono text-meta text-muted-foreground" title={version.aliases.join(', ')}>
         {version.aliases.length > 0 ? version.aliases.join(', ') : '—'}
       </span>
-      <span className="font-mono text-meta tabular-nums text-muted-foreground">{formatBytes(version.sizeBytes)}</span>
-      {/* What the caller typed, kept verbatim. Not where the bytes live now:
-          the tag it names may have moved upstream. */}
-      <span title={version.sourceRef} className="truncate font-mono text-meta text-muted-foreground">
-        {version.sourceRef}
+      <span className="font-mono text-meta tabular-nums text-muted-foreground">
+        <FormattedBytes bytes={version.sizeBytes} />
       </span>
-      {/* Null is a version recorded before last start was tracked: unknown,
-          which "never" would misstate. */}
+      {/* Older records have unknown last-start times, not a confirmed "never". */}
       <span className="font-mono text-meta text-muted-foreground">
         {version.lastUsedAt ? timeAgo(version.lastUsedAt) : '—'}
       </span>
-      <span className="font-mono text-meta text-muted-foreground">{timeAgo(version.createdAt)}</span>
-      <div className="flex justify-end">
-        {onUse && (
-          <button
-            type="button"
-            onClick={onUse}
-            title="New Box pinned to this digest"
-            className="inline-flex h-7 items-center border border-border px-2.5 font-mono text-meta text-foreground transition-colors hover:border-brand"
-          >
-            New Box
-          </button>
-        )}
-      </div>
     </div>
   )
 }
