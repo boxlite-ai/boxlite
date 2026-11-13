@@ -45,8 +45,11 @@ describe('runnerDiskConfig', () => {
     })
   })
 
-  it('keeps expansion off when explicitly disabled', () => {
-    expect(runnerDiskConfig({ RUNNER_DISK_EXPANSION_ENABLED: 'false' })).toMatchObject({
+  it('keeps expansion off when explicitly disabled, ignoring case and padding', () => {
+    expect(runnerDiskConfig({ RUNNER_DISK_EXPANSION_ENABLED: 'False' })).toMatchObject({
+      expansion: expect.objectContaining({ enabled: false }),
+    })
+    expect(runnerDiskConfig({ RUNNER_DISK_EXPANSION_ENABLED: ' false ' })).toMatchObject({
       expansion: expect.objectContaining({ enabled: false }),
     })
   })

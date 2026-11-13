@@ -456,9 +456,9 @@ export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
       'a percentage from 0 up to (not including) 100',
     ),
     expansion: {
-      // Master switch. Off means the controller,
-      // sampling and unschedulable marks all stay dormant.
-      enabled: env.RUNNER_DISK_EXPANSION_ENABLED !== 'false',
+      // Master switch. Off stops the controller and sampling.
+      // Existing disk_expand_exhausted marks are not lifted while off.
+      enabled: env.RUNNER_DISK_EXPANSION_ENABLED?.trim().toLowerCase() !== 'false',
       // Expansion ceiling. Unset resolves at evaluation time to the admission
       // expand limit, then to a per-runner default of twice the disk's
       // baseline size — the size at its first expansion attempt, fixed across
