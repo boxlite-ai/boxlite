@@ -1,10 +1,11 @@
 //! `boxlite ssh` against real VMs.
 //!
-//! Locally, a `russh` client logs in through the CLI's forwarder; across
-//! repeated `forward` runs, the guest listener keeps its generation, Ctrl-C frees the
-//! local port and leaves SSH enabled, and disable stops new logins. Against
-//! `boxlite serve`, which has SSH control but no tunnel route, the controls
-//! round-trip and a failed `forward` leaves the configuration unchanged.
+//! Default login runs system OpenSSH with piped shell input, preserves managed
+//! identities and healthy SSH generations, and propagates remote exit codes.
+//! Non-detached boxes stay alive through the session and stop afterward.
+//! Explicit tunnel/proxy and enable/disable controls retain their behavior.
+//! Against `boxlite serve`, controls work but its missing tunnel route fails
+//! without changing the SSH configuration.
 //!
 //! Argument relations, credential redaction, and request counts are covered
 //! without a VM in `src/cli/src/commands/ssh/tests/`.
@@ -13,6 +14,7 @@ mod common;
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::{SocketAddr, TcpListener};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
@@ -90,6 +92,23 @@ fn output_status(output: &std::process::Output, what: &str) -> SshStatus {
             String::from_utf8_lossy(&output.stdout)
         )
     })
+}
+
+/// Prove direct CLI login reaches a real guest shell and returns its exit status.
+fn assert_direct_login(ctx: &common::TestContext, id: &str) {
+    let output = ctx
+        .new_cmd()
+        .args(["ssh", id])
+        .write_stdin("printf 'direct-ssh-ok\\n'; exit 42\n")
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(42),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"direct-ssh-ok\n");
 }
 
 /// A foreground forwarder: the bound address it printed, and its process,
@@ -366,8 +385,12 @@ async fn ssh_local_configure_forward_and_disable() {
     ctx.cleanup_box(&id);
 }
 
+/// Reuse managed identity across login, disable/enable, restart and failed setup.
+///
+/// Real guest execution and unchanged status distinguish reuse from silently
+/// reconfiguring SSH; unsafe local files must fail without changing the guest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_local_setup_enable_and_restart() {
+async fn ssh_local_connect_enable_and_restart() {
     let mut ctx = common::boxlite();
     ctx.home = ctx.home.join("ssh ' % home");
     std::fs::create_dir(&ctx.home).unwrap();
@@ -385,10 +408,10 @@ async fn ssh_local_setup_enable_and_restart() {
     let id = String::from_utf8_lossy(&run.stdout).trim().to_string();
     let ssh = |operation: &str| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxlite"));
-        command.arg("--home").arg(&ctx.home).args(["ssh", &id]);
-        if operation != "setup" {
-            command.arg(operation);
-        }
+        command
+            .arg("--home")
+            .arg(&ctx.home)
+            .args(["ssh", &id, operation]);
         command
     };
     let key_dir = ctx.home.join("boxes").join(&id).join("ssh");
@@ -397,9 +420,10 @@ async fn ssh_local_setup_enable_and_restart() {
     let bin = tempfile::tempdir().unwrap();
     let keygen = bin.path().join("ssh-keygen");
     std::fs::write(&keygen, "#!/bin/sh\nfor arg do :; done\ncase \"$arg\" in */host_key) exit 1;; esac\nexec /usr/bin/ssh-keygen \"$@\"\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&keygen, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let failed = ssh("setup")
+    let failed = ctx
+        .new_cmd()
+        .args(["ssh", &id])
         .env(
             "PATH",
             format!(
@@ -413,61 +437,62 @@ async fn ssh_local_setup_enable_and_restart() {
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("failed to generate host_key"));
     assert!(!key_dir.exists());
-    let stopped_setup = ssh("setup").output().unwrap();
+    let stopped_connect = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
     assert!(
-        !stopped_setup.status.success(),
+        !stopped_connect.status.success(),
         "explicit main command requires start"
     );
+    assert!(
+        String::from_utf8_lossy(&stopped_connect.stderr).contains("start the box explicitly"),
+        "{}",
+        String::from_utf8_lossy(&stopped_connect.stderr)
+    );
+    let stopped = output_status(&ssh("--status").output().unwrap(), "failed configure");
+    assert!(!stopped.enabled);
+    assert_eq!(stopped.generation, 0);
     let retry_key = std::fs::read(&client_key).expect("failed configure retains credentials");
+    let retry_host_key = std::fs::read(key_dir.join("host_key")).unwrap();
     ctx.new_cmd().args(["start", &id]).assert().success();
     assert!(
         !ssh("--enable").output().unwrap().status.success(),
         "enable needs saved configuration"
     );
-    let setup = || {
-        let output = ssh("setup").output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix("  ssh ")
-                    .map(|args| format!("ssh {args}"))
-            })
-            .expect("setup prints a copyable SSH command")
-    };
-    let command = setup();
+    assert_direct_login(&ctx, &id);
     let private_key = std::fs::read(&client_key).unwrap();
+    let host_key = std::fs::read(key_dir.join("host_key")).unwrap();
     assert_eq!(private_key, retry_key);
-    let first = output_status(&ssh("--status").output().unwrap(), "setup status");
-    let host_file = tempfile::NamedTempFile::new().unwrap();
-    let known_hosts = host_file.path();
-    std::fs::write(
-        known_hosts,
-        format!("{} {}\n", id.to_ascii_lowercase(), first.host_public_key),
-    )
-    .unwrap();
-    let command = command.replacen("ssh ", &format!("ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='{}' ", known_hosts.display()), 1);
-    let login = assert_cmd::Command::new("/bin/sh")
-        .args(["-c", &format!("{command} 'printf setup-ok'")])
-        .timeout(Duration::from_secs(15))
-        .output()
-        .unwrap();
-    assert!(
-        login.status.success(),
-        "{}",
-        String::from_utf8_lossy(&login.stderr)
+    assert_eq!(host_key, retry_host_key);
+    assert_eq!(
+        std::fs::metadata(&key_dir).unwrap().permissions().mode() & 0o777,
+        0o700
     );
-    assert_eq!(login.stdout, b"setup-ok");
-    let payload: Vec<u8> = (0..512 * 1024).map(|value| value as u8).collect();
-    let echo = assert_cmd::Command::new("/bin/sh")
-        .args(["-c", &format!("{command} cat")])
-        .write_stdin(payload.clone())
-        .timeout(Duration::from_secs(15))
+    for name in ["client_key", "host_key", "known_hosts"] {
+        assert_eq!(
+            std::fs::metadata(key_dir.join(name))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "{name}"
+        );
+    }
+    let first = output_status(&ssh("--status").output().unwrap(), "first login status");
+    assert_direct_login(&ctx, &id);
+    assert_eq!(
+        output_status(&ssh("--status").output().unwrap(), "repeated login status"),
+        first
+    );
+    assert_eq!(std::fs::read(&client_key).unwrap(), private_key);
+    assert_eq!(std::fs::read(key_dir.join("host_key")).unwrap(), host_key);
+
+    let payload = format!("{}\n", "0123456789abcdef".repeat(32 * 1024));
+    let echo = ctx
+        .new_cmd()
+        .args(["ssh", &id])
+        .write_stdin(format!(
+            "cat <<'BOXLITE_SSH_PAYLOAD'\n{payload}BOXLITE_SSH_PAYLOAD\nexit 0\n"
+        ))
         .output()
         .unwrap();
     assert!(
@@ -475,7 +500,7 @@ async fn ssh_local_setup_enable_and_restart() {
         "{}",
         String::from_utf8_lossy(&echo.stderr)
     );
-    assert_eq!(echo.stdout, payload);
+    assert_eq!(echo.stdout, payload.as_bytes());
 
     // OpenSSH sends SIGHUP to its proxy; explicit termination must also release
     // the runtime even while the parent keeps stdin open.
@@ -532,12 +557,12 @@ async fn ssh_local_setup_enable_and_restart() {
             &first.host_key_fingerprint,
             &client_key,
             "box",
-            "echo setup-ok"
+            "echo tunnel-ok"
         )
         .await
         .unwrap()
         .trim(),
-        "setup-ok"
+        "tunnel-ok"
     );
     assert!(
         ssh_exec(
@@ -555,12 +580,19 @@ async fn ssh_local_setup_enable_and_restart() {
     let enabled = output_status(&ssh("--enable").output().unwrap(), "--enable");
     assert_eq!(enabled.host_key_fingerprint, first.host_key_fingerprint);
     assert_eq!(enabled.generation, first.generation + 1);
-    setup();
-    assert_eq!(std::fs::read(&client_key).unwrap(), private_key);
+    assert_direct_login(&ctx, &id);
     assert_eq!(
-        output_status(&ssh("--status").output().unwrap(), "repeated setup").host_public_key,
-        first.host_public_key
+        output_status(&ssh("--status").output().unwrap(), "login after enable"),
+        enabled
     );
+    assert!(!output_status(&ssh("--disable").output().unwrap(), "--disable").enabled);
+    assert_direct_login(&ctx, &id);
+    let resumed = output_status(&ssh("--status").output().unwrap(), "login enables SSH");
+    assert!(resumed.enabled);
+    assert_eq!(resumed.host_public_key, first.host_public_key);
+    assert_eq!(resumed.generation, enabled.generation + 1);
+    assert_eq!(std::fs::read(&client_key).unwrap(), private_key);
+    assert_eq!(std::fs::read(key_dir.join("host_key")).unwrap(), host_key);
 
     ctx.new_cmd().args(["stop", &id]).assert().success();
     for operation in ["--enable", "--disable", "--proxy"] {
@@ -573,17 +605,56 @@ async fn ssh_local_setup_enable_and_restart() {
     let restored = output_status(&ssh("--status").output().unwrap(), "restored status");
     assert!(restored.enabled);
     assert_eq!(restored.host_public_key, first.host_public_key);
-    setup();
+    assert_direct_login(&ctx, &id);
     assert_eq!(
-        output_status(&ssh("--status").output().unwrap(), "setup after restart")
-            .host_key_fingerprint,
-        first.host_key_fingerprint
+        output_status(&ssh("--status").output().unwrap(), "login after restart"),
+        restored
+    );
+    assert_eq!(std::fs::read(&client_key).unwrap(), private_key);
+    assert_eq!(std::fs::read(key_dir.join("host_key")).unwrap(), host_key);
+
+    // Existing credentials must fail closed instead of being silently replaced.
+    std::fs::set_permissions(&client_key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let unsafe_key = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
+    assert!(!unsafe_key.status.success());
+    assert!(unsafe_key.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&unsafe_key.stderr).contains("owner-private"));
+    std::fs::set_permissions(&client_key, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let host_key_file = key_dir.join("host_key");
+    std::fs::write(&host_key_file, b"not a host key\n").unwrap();
+    let corrupt_key = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
+    assert!(!corrupt_key.status.success());
+    assert!(corrupt_key.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&corrupt_key.stderr).contains("invalid or encrypted SSH key"));
+    std::fs::write(&host_key_file, &host_key).unwrap();
+
+    let known_hosts = key_dir.join("known_hosts");
+    std::fs::remove_file(&known_hosts).unwrap();
+    std::os::unix::fs::symlink(&host_key_file, &known_hosts).unwrap();
+    let unsafe_hosts = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
+    assert!(!unsafe_hosts.status.success());
+    assert!(unsafe_hosts.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&unsafe_hosts.stderr).contains("owner-private"));
+    std::fs::remove_file(&known_hosts).unwrap();
+    assert_eq!(
+        output_status(
+            &ssh("--status").output().unwrap(),
+            "status after refused login"
+        ),
+        restored
+    );
+    assert_direct_login(&ctx, &id);
+    assert_eq!(
+        output_status(&ssh("--status").output().unwrap(), "status after recovery"),
+        restored
     );
     ctx.cleanup_box(&id);
 }
 
+/// Non-detached boxes survive through the SSH shell, then stop on CLI teardown.
 #[tokio::test]
-async fn ssh_setup_warns_that_non_detached_boxes_stop_on_exit() {
+async fn ssh_local_non_detached_lifetime() {
     let ctx = common::boxlite();
     let runtime = boxlite::BoxliteRuntime::new(boxlite::BoxliteOptions {
         home_dir: ctx.home.clone(),
@@ -607,26 +678,73 @@ async fn ssh_setup_warns_that_non_detached_boxes_stop_on_exit() {
     drop(sandbox);
     drop(runtime);
 
-    let output = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
+    assert_direct_login(&ctx, &id);
+    let stopped = ctx
+        .new_cmd()
+        .args(["inspect", "-f", "{{.State.Status}}", &id])
+        .output()
+        .unwrap();
     assert!(
-        output.status.success(),
+        stopped.status.success(),
         "{}",
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&stopped.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let warning = stdout
-        .find("CLI exit stops non-detached boxes")
-        .expect("setup must warn that CLI exit stops non-detached boxes");
-    let command = stdout.find("  ssh ").expect("connection command");
+    assert_eq!(String::from_utf8_lossy(&stopped.stdout).trim(), "stopped");
+    ctx.cleanup_box(&id);
+}
+
+/// Refuse a changed guest identity without rotating local keys or restoring SSH.
+#[tokio::test]
+async fn ssh_local_connect_rejects_changed_host_identity() {
+    let ctx = common::boxlite();
+    let run = ctx
+        .new_cmd()
+        .args(["run", "-d", "alpine:latest", "sleep", "600"])
+        .output()
+        .unwrap();
     assert!(
-        warning < command,
-        "warn before presenting the connection command"
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
     );
-    assert!(!stdout.contains("SSH is ready"));
-    ctx.new_cmd()
-        .args(["ssh", "--proxy", &id])
-        .assert()
-        .failure();
+    let id = String::from_utf8_lossy(&run.stdout).trim().to_string();
+    assert_direct_login(&ctx, &id);
+    let status = || {
+        output_status(
+            &ctx.new_cmd()
+                .args(["ssh", "--status", &id])
+                .output()
+                .unwrap(),
+            "host identity status",
+        )
+    };
+    let first = status();
+    let key_file = ctx
+        .home
+        .join("boxes")
+        .join(&id)
+        .join("ssh")
+        .join("host_key");
+    let expected_key = std::fs::read(&key_file).unwrap();
+    let alternate_keys = Keys::new();
+    let mut configure = ctx.new_cmd();
+    configure
+        .args(["ssh", "--configure", &id, "--guest-listen", "0.0.0.0:22"])
+        .args(alternate_keys.flags("box"));
+    let changed = output_status(&configure.output().unwrap(), "alternate host configuration");
+    assert!(changed.enabled);
+    assert_ne!(changed.host_public_key, first.host_public_key);
+    assert_eq!(changed.generation, first.generation + 1);
+
+    let refused = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("SSH host key does not match the CLI-managed identity")
+    );
+    assert_eq!(status(), changed, "default login must not reconfigure SSH");
+    assert_eq!(std::fs::read(&key_file).unwrap(), expected_key);
     ctx.cleanup_box(&id);
 }
 

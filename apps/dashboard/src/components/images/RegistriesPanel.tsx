@@ -449,7 +449,7 @@ export function RegistriesPanel() {
                 </Select>
               </div>
 
-              <ol className="list-decimal space-y-1 pl-5 font-mono text-meta text-muted-foreground">
+              <ol className="list-decimal space-y-1 pl-5 font-sans text-meta text-muted-foreground">
                 {provider.steps.map((step, index) => (
                   <li key={index}>{step}</li>
                 ))}
@@ -478,7 +478,7 @@ export function RegistriesPanel() {
                   onChange={(event) => setForm({ ...form, password: event.target.value })}
                   required
                 />
-                <p id="registry-secret-help" className="font-mono text-meta text-muted-foreground">
+                <p id="registry-secret-help" className="font-sans text-meta text-muted-foreground">
                   Cannot be viewed after saving.
                 </p>
               </div>
@@ -494,7 +494,7 @@ export function RegistriesPanel() {
                   spellCheck={false}
                   className="font-mono"
                 />
-                <p id="registry-prefix-help" className="font-mono text-meta leading-relaxed text-muted-foreground">
+                <p id="registry-prefix-help" className="font-sans text-meta leading-relaxed text-muted-foreground">
                   Covers <span className="text-foreground">{scope}</span>. Leave empty for the whole registry. Longest
                   matching prefix takes precedence.
                 </p>
@@ -520,7 +520,7 @@ export function RegistriesPanel() {
               Remove the credential for {pendingDelete?.registryHost}/{pendingDelete?.repositoryPrefix}*?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 font-mono text-meta">
+              <div className="space-y-2 font-sans text-meta">
                 <p>
                   New boxes will no longer be able to pull private images it covers. It is refused while any box still
                   pulls through it.

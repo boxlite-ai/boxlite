@@ -20,10 +20,6 @@ describe('UserService registration events', () => {
     const eventEmitter = { emitAsync: jest.fn().mockResolvedValue(listenerResults) }
     if (eventFailure) eventEmitter.emitAsync.mockRejectedValue(eventFailure)
     const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
-    jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
-      privateKey: 'private-key',
-      publicKey: 'public-key',
-    } as never)
     return service
   }
 

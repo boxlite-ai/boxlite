@@ -55,11 +55,12 @@ on.
 
 The fragment also provides the [guest agent's PID 1 bootstrap](../../guest/README.md):
 tmpfs and PTYs, Unix and IP sockets, container namespaces, cgroup v2 controllers,
-seccomp, overlayfs, and built-in virtio-fs, virtio-net and virtio-vsock drivers.
+seccomp, overlayfs, script execution, and built-in virtio-fs, virtio-net,
+virtio-vsock and virtio-console drivers.
 Netlink and Unix sockets are needed even with external networking disabled, for
 loopback setup and zygote IPC respectively.
-Driver availability does not attach a VMM device; native Box readiness still
-depends on the remaining device integration.
+The native adapter attaches the requested devices and uses hvc0 for its default
+console; raw kernel boot tests can still select ttyS0.
 `make test:integration:vmm:native` verifies the actual agent with this kernel.
 
 ## Default: building inside a BoxLite box

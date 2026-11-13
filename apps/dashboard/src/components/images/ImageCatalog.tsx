@@ -167,7 +167,7 @@ export function ImageCatalog() {
                 Total image size {formatBytes(usage.knownBytes)}
               </span>
               {atLimit && (
-                <span className="font-mono text-meta text-muted-foreground">
+                <span className="font-sans text-meta text-muted-foreground">
                   At the limit. Remove an image, or contact us to raise it.
                 </span>
               )}
@@ -293,7 +293,7 @@ export function ImageCatalog() {
             {/* What a reader would otherwise get wrong: that this frees
                 storage, and that it is final. It is neither. */}
             <AlertDialogDescription asChild>
-              <div className="space-y-2 font-mono text-meta">
+              <div className="space-y-2 font-sans text-meta">
                 <p>This frees one of your {usage?.limit ?? ''} image slots. Nothing is deleted from any box.</p>
                 <p>
                   It is refused while any box, running or stopped, still references the image. Starting a box from it

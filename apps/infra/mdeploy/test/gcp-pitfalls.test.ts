@@ -1810,7 +1810,7 @@ test('the registry proxy is spoken to over HTTP/2', () => {
    * every layer past that size fails here and nowhere else — locally, in every
    * test, it streams fine.
    */
-  assert.match(sourceOf('registry-proxy'), /ports: \[\{ name: 'h2c', containerPort: REGISTRY_PROXY_PORT \}\]/)
+  assert.match(sourceOf('registry-proxy'), /ports: \{ name: 'h2c', containerPort: REGISTRY_PROXY_PORT \}/)
 })
 
 test('the registry proxy runs as its own account, not the control plane’s', () => {

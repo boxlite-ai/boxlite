@@ -453,8 +453,17 @@ worker slot synchronously.
   - A reclaim syscall may still block. Count bounds are not syscall-time,
     total CPU or throughput guarantees; stop timeout is Fatal and retains RAM.
   - Status=0 closes admission and waits for the old generation before reset.
-    VM exit and Drop stop/join before unmap. `WorkerRuntime` preserves the
-    future per-device seam without adding a second runtime in M2.
+    VM exit and Drop stop/join before unmap; after joining, the framework
+    quiesces every device while RAM remains registered. The default is a
+    successful no-op; console drains published TX before the host console worker
+    finishes, and block flushes/syncs its backend.
+  - Shutdown hook failures are cached separately from join failures, so later hooks
+    still run and a completed join still permits RAM unmapping.
+    `WorkerRuntime` preserves the future per-device seam without adding a
+    second runtime in M2; [shutdown details](../../../../src/vmm/README.md#virtio-workers)
+    live with the implementation. Other devices retain their existing reset/drop
+    cleanup; quiesce success does not imply snapshot support or delivery of
+    buffered network traffic.
 - **The `run()` thread.**
   - It waits on one poller for stop requests, vCPU outcomes and device
     failures.
@@ -539,14 +548,12 @@ logged.
 - **The native adapter** (`src/boxlite/src/vmm/native/`, Linux x86_64, feature
   `native`, registered through `inventory` like `krun/`) is strict like libkrun:
   a request it cannot serve fails `create` with `Unsupported` (no kernel, a
-  non-ELF kernel, a virtio-fs root, nested virtualization). Three transitional
-  requests log one warning and boot anyway until their devices land: virtio-fs
-  shares, the gvproxy endpoint for virtio-net, and the guest agent's vsock
-  bridge. It takes its kernel from `InstanceSpec.kernel` (the custom-kernel
-  channel) until the runtime bundles one, attaches the disks in attach order
-  (`vda` container disk, `vdb` guest root) and composes the command line of the
-  boot contract below. Until virtio-console is wired into `Vm`, that command
-  line names the 8250 (`console=ttyS0`) instead of `hvc0`.
+  non-ELF kernel, a virtio-fs root, nested virtualization). It converts filesystem
+  shares, the Linux gvproxy endpoint and host Unix RPC/ready sockets into device
+  configuration. It takes its kernel from `InstanceSpec.kernel`, preserves disk
+  attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
+  The single filesystem device exports logical shares below its aggregate root;
+  matching mount instructions are sent only for the native engine.
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).

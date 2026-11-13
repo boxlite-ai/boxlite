@@ -113,7 +113,7 @@ export default function WelcomeCreditsStep({
       <div className="border-t border-border pt-7 lg:border-l lg:border-t-0 lg:pl-14 lg:pt-1">
         {!ready && (
           <>
-            <p className="font-mono text-label text-muted-foreground">WELCOME CREDIT</p>
+            <p className="font-sans text-label text-muted-foreground">WELCOME CREDIT</p>
             <p className="mt-5 flex items-start tracking-[-0.06em]">
               <span className="sr-only">$100</span>
               <span aria-hidden className="mr-1.5 mt-2 text-[32px] font-normal leading-none sm:mt-3 sm:text-[40px]">

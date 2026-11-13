@@ -149,7 +149,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       className={cn(
-                        'flex items-center gap-[11px] border border-border bg-card h-10 px-3 font-mono text-body outline-none data-[state=open]:border-brand',
+                        'flex items-center gap-[11px] border border-border bg-card h-10 px-3 font-sans text-body outline-none data-[state=open]:border-brand',
                         expiryIdx === 0 ? 'text-muted-foreground' : 'text-foreground',
                       )}
                     >
@@ -158,7 +158,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent
                       align="start"
-                      className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-meta"
+                      className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-sans text-meta"
                     >
                       {EXPIRY_OPTS.map((opt, i) => (
                         <DropdownMenuItem

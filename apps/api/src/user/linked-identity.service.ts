@@ -118,7 +118,6 @@ export class LinkedIdentityService {
       name: secondary.name,
       email: secondary.email,
       emailVerified: secondary.emailVerified,
-      keyPair: secondary.keyPair,
       publicKeys: secondary.publicKeys,
       role: secondary.role,
     })

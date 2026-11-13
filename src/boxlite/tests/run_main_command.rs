@@ -29,7 +29,7 @@ fn main_command_opts(cmd: &[&str], tty: bool) -> BoxOptions {
 /// it.
 async fn attached_stdout(opts: BoxOptions) -> String {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -149,7 +149,7 @@ async fn empty_entrypoint_and_cmd_preserve_image_cmd_on_start_and_restart() {
 
 async fn assert_main_argv_on_start_and_restart(options: BoxOptions, expected: &[&str]) {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -202,7 +202,7 @@ async fn assert_main_argv_on_start_and_restart(options: BoxOptions, expected: &[
 #[tokio::test]
 async fn main_command_exits_after_large_output_without_attach() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -242,7 +242,7 @@ async fn main_command_exits_after_large_output_without_attach() {
 #[tokio::test]
 async fn late_attach_reports_output_gap() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -351,7 +351,7 @@ async fn main_command_gets_pipes_when_tty_is_unset() {
 #[tokio::test]
 async fn a_stopped_box_without_a_main_command_still_restarts_on_exec() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -405,7 +405,7 @@ async fn a_stopped_box_without_a_main_command_still_restarts_on_exec() {
 #[tokio::test]
 async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -497,7 +497,7 @@ async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
 #[tokio::test]
 async fn a_failed_attach_does_not_poison_the_next_start() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -582,7 +582,7 @@ async fn an_adopted_running_box_is_followed_to_its_exit() {
     // A first runtime starts a detached box, then goes away without stopping it.
     // `detach` is what lets the shim outlive its runtime.
     {
-        let first = boxlite::BoxliteRuntime::new(opts()).expect("create runtime");
+        let first = common::TestRuntime::new(opts()).expect("create runtime");
         let mut box_opts = main_command_opts(&["sh", "-c", "sleep 5; exit 9"], false);
         box_opts.detach = true;
         let handle = first
@@ -608,7 +608,7 @@ async fn an_adopted_running_box_is_followed_to_its_exit() {
 
     // A second runtime adopts it: `get()` hands out a handle, which is where the
     // watcher gets armed for a box we did not start.
-    let second = boxlite::BoxliteRuntime::new(opts()).expect("create second runtime");
+    let second = common::TestRuntime::new(opts()).expect("create second runtime");
     let adopted = second
         .get("adopted")
         .await
@@ -659,7 +659,7 @@ async fn an_adopted_running_box_is_followed_to_its_exit() {
 #[tokio::test]
 async fn a_self_stopped_box_refuses_to_restart_on_the_spent_handle() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -739,7 +739,7 @@ async fn a_self_stopped_box_refuses_to_restart_on_the_spent_handle() {
 #[tokio::test]
 async fn attach_refuses_a_stopped_box() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -809,7 +809,7 @@ async fn attach_refuses_a_stopped_box() {
 #[tokio::test]
 async fn attach_by_exec_id_on_a_configured_box_does_not_boot() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -851,7 +851,7 @@ async fn attach_by_exec_id_on_a_configured_box_does_not_boot() {
 #[tokio::test]
 async fn a_main_command_missing_from_the_image_is_an_invalid_argument() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()

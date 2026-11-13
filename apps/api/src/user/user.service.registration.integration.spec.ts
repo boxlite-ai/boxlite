@@ -91,10 +91,6 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
       events = module.get(EventEmitter2)
       service = module.get(UserService)
       createDefaultOrganization = jest.spyOn(module.get(OrganizationService), 'handleUserCreatedEvent')
-      jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
-        privateKey: 'private-key',
-        publicKey: 'public-key',
-      } as never)
     })
 
     afterEach(async () => {

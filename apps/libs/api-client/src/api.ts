@@ -23,7 +23,6 @@ export * from './api/config-api';
 export * from './api/health-api';
 export * from './api/images-api';
 export * from './api/jobs-api';
-export * from './api/object-storage-api';
 export * from './api/organizations-api';
 export * from './api/preview-api';
 export * from './api/regions-api';

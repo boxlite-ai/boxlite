@@ -174,7 +174,7 @@ export function BoxTerminal({ boxId, className }: { boxId: string; className?: s
 
   return (
     <div role="region" aria-label="Box terminal" className={cn('flex min-h-0 min-w-0 flex-col bg-black', className)}>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2 font-mono text-meta text-foreground">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2 font-sans text-meta text-foreground">
         <div role="status" className="flex min-w-0 grow items-center gap-2 whitespace-nowrap">
           <span
             aria-hidden="true"

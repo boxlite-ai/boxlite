@@ -69,7 +69,7 @@ const OrganizationGeneral: React.FC = () => {
   }
 
   const inputClass =
-    'w-full border border-border bg-card px-[14px] py-[11px] font-mono text-body text-foreground outline-none focus:border-brand disabled:opacity-60'
+    'w-full border border-border bg-card px-[14px] py-[11px] font-sans text-body text-foreground outline-none focus:border-brand disabled:opacity-60'
 
   return (
     <div className="border border-border">

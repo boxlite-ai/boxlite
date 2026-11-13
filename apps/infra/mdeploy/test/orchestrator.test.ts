@@ -8,8 +8,7 @@
  * had nothing to do. Both are asserted here as ordering rather than presence.
  *
  * The third thing it owns is which line a run is on. A commit rollout builds
- * for dev; a release rollout moves the bytes a version was cut from, and is the
- * only thing prod accepts.
+ * for dev/stage; prod accepts only the release line and retains promotion.
  */
 
 import assert from 'node:assert/strict'
@@ -214,12 +213,10 @@ test('the branch check is replaced for a pull request, not skipped', () => {
   assert.match(jobAt('resolve'), /sha: \$\{\{ steps\.tag\.outputs\.sha \}\}/, 'the job publishes a different commit')
 })
 
-test('a pull request reaches dev and no further', () => {
-  // prod's refusal is written on the absence of a version, so it catches a
-  // pull request for the same reason it catches a bare commit — one rule, not
-  // one per shape.
+test('a pull request reaches dev or stage but never prod', () => {
+  // Candidate stages accept PR merges; production still requires a release.
   const resolve = jobAt('resolve')
-  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ -z "\$version" \]; then/)
+  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
   assert.match(resolve, /rather than a commit or a pull request/)
 })
 
@@ -250,7 +247,7 @@ test('prod deploys released versions and refuses a bare commit', () => {
    * the choice list later has to say for itself that a commit may reach it.
    */
   const classify = jobAt('resolve')
-  assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ -z "\$version" \]; then/)
+  assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
   assert.doesNotMatch(classify, /"\$STAGE" = 'prod'/, 'a deny-list on prod admits the next stage silently')
   // And the plan routes dev to the cut and everything else to the move.
   assert.match(jobAt('plan'), /\[ "\$STAGE" = 'dev' \] && echo release-publish \|\| echo release-promote/)

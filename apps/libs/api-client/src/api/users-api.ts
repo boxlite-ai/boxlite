@@ -263,46 +263,6 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
-         * @summary Regenerate user key pair
-         * @param {string} id 
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        regenerateKeyPair: async (id: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'id' is not null or undefined
-            assertParamExists('regenerateKeyPair', 'id', id)
-            const localVarPath = `/users/{id}/regenerate-key-pair`
-                .replace('{id}', encodeURIComponent(String(id)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Unlink account
          * @param {string} provider 
          * @param {string} providerUserId 
@@ -430,20 +390,6 @@ export const UsersApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Regenerate user key pair
-         * @param {string} id 
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        async regenerateKeyPair(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateKeyPair(id, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['UsersApi.regenerateKeyPair']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Unlink account
          * @param {string} provider 
          * @param {string} providerUserId 
@@ -524,17 +470,6 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
-         * @summary Regenerate user key pair
-         * @param {string} id 
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        regenerateKeyPair(id: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.regenerateKeyPair(id, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Unlink account
          * @param {string} provider 
          * @param {string} providerUserId 
@@ -612,18 +547,6 @@ export class UsersApi extends BaseAPI {
      */
     public listUsers(options?: RawAxiosRequestConfig) {
         return UsersApiFp(this.configuration).listUsers(options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Regenerate user key pair
-     * @param {string} id 
-     * @param {*} [options] Override http request option.
-     * @deprecated
-     * @throws {RequiredError}
-     */
-    public regenerateKeyPair(id: string, options?: RawAxiosRequestConfig) {
-        return UsersApiFp(this.configuration).regenerateKeyPair(id, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

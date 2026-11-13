@@ -75,6 +75,7 @@ export const gcpCollectorProvider =
         name,
         project,
         location: region,
+        ...($app.stage === 'stage' ? { labels: { stage: 'stage' } } : {}),
         ingress: 'INGRESS_TRAFFIC_INTERNAL_ONLY',
         template: {
           serviceAccount: placement.serviceAccount,
@@ -98,7 +99,7 @@ export const gcpCollectorProvider =
                 '--set',
                 `service::pipelines::logs::exporters=${request.exporters}`,
               ],
-              ports: [{ name: 'http1', containerPort: OTLP_HTTP_PORT }],
+              ports: { name: 'http1', containerPort: OTLP_HTTP_PORT },
               envs: containerEnvironment({ values: request.environment, addresses }),
             },
           ],

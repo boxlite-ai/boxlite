@@ -19,12 +19,8 @@ function makeService() {
   const transaction = jest.fn(async (callback) => callback({ insert, findOneByOrFail }))
   const events = { emitAsync: jest.fn().mockResolvedValue([]) }
   const service = new UserService(repository as never, events as never, { transaction } as never)
-  const generateKey = jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
-    privateKey: 'private-key',
-    publicKey: 'public-key',
-  } as never)
 
-  return { service, repository, insert, save, transaction, events, generateKey }
+  return { service, repository, insert, save, transaction, events }
 }
 
 afterEach(() => jest.restoreAllMocks())
@@ -33,39 +29,33 @@ describe('UserService registration email policy', () => {
   it.each(['new@mailinator.com', 'NEW@MAILINATOR.COM', 'new@sub.mailinator.com', 'new@sub.drtall.com'])(
     'rejects %s before registration side effects',
     async (email) => {
-      const { service, generateKey, transaction, events } = makeService()
+      const { service, transaction, events } = makeService()
 
       await expect(service.create({ id: 'new-user', name: 'New User', email }, Context.user())).rejects.toMatchObject({
         status: 403,
         response: { code: 'disposable_email' },
       })
-
-      expect(generateKey).not.toHaveBeenCalled()
       expect(transaction).not.toHaveBeenCalled()
       expect(events.emitAsync).not.toHaveBeenCalled()
     },
   )
 
   it('applies the same domain policy to administrator-created users', async () => {
-    const { service, generateKey, transaction, events } = makeService()
+    const { service, transaction, events } = makeService()
 
     await expect(
       service.create({ id: 'admin-created', name: 'New User', email: 'new@mailinator.com' }, Context.admin()),
     ).rejects.toMatchObject({ status: 403, response: { code: 'disposable_email' } })
-
-    expect(generateKey).not.toHaveBeenCalled()
     expect(transaction).not.toHaveBeenCalled()
     expect(events.emitAsync).not.toHaveBeenCalled()
   })
 
   it('rejects malformed email before applying the disposable domain policy', async () => {
-    const { service, generateKey, transaction } = makeService()
+    const { service, transaction } = makeService()
 
     await expect(
       service.create({ id: 'new-user', name: 'New User', email: 'invalid local@mailinator.com' }, Context.user()),
     ).rejects.toMatchObject({ status: 400, response: { code: 'invalid_email' } })
-
-    expect(generateKey).not.toHaveBeenCalled()
     expect(transaction).not.toHaveBeenCalled()
   })
 

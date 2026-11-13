@@ -8,6 +8,7 @@ import type { NestFactory } from '@nestjs/core'
 
 jest.mock('./tracing', () => ({ otelSdk: { start: jest.fn() } }))
 jest.mock('./app.module', () => ({ AppModule: class {} }))
+jest.mock('./ci/ci-listener.service', () => ({ CiListenerService: class {} }))
 jest.mock('@nestjs/core', () => ({ NestFactory: { create: jest.fn() } }))
 jest.mock('@nestjs/common', () => ({
   Logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -68,6 +69,7 @@ describe('API bootstrap listener', () => {
     const service = {
       get: (key: string) => (key === 'port' ? 3300 : undefined),
       register: jest.fn(),
+      start: jest.fn().mockResolvedValue(undefined),
       matchAttachPath: jest.fn(() => false),
     }
     const app = {
@@ -95,6 +97,7 @@ describe('API bootstrap listener', () => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(listen).toHaveBeenCalledWith(3300, host || '0.0.0.0')
     expect(httpServer.requestTimeout).toBe(0)
+    expect(service.start).toHaveBeenCalledTimes(1)
     const { readFileSync } = require('node:fs')
     expect(readFileSync).toHaveBeenCalledWith(expect.stringContaining('/openapi/box.openapi.yaml'), 'utf8')
     if (specs) {

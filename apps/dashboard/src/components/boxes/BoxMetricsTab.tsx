@@ -16,7 +16,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { RefreshCw, BarChart3 } from '@/components/ui/icon'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { format, subHours } from 'date-fns'
-import { MetricSeries } from '@boxlite-ai/api-client'
+import type { MetricSeries } from '@/types/telemetry'
 import { getMetricDisplayName } from '@/constants/metrics'
 import { timeRangeSearchParams } from './SearchParams'
 

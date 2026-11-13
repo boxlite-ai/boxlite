@@ -127,7 +127,7 @@ const themeOptions: { value: Theme; label: string; icon: React.ReactElement }[] 
 function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: Theme) => void }) {
   return (
     <div className="px-2 py-2">
-      <div className="px-1 pb-2 font-mono text-meta uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
+      <div className="px-1 pb-2 font-sans text-meta uppercase tracking-[0.18em] text-muted-foreground">Theme</div>
       <ToggleGroup
         type="single"
         value={theme}
@@ -315,7 +315,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
       <aside
         aria-label="Feature navigation"
         style={{ '--navigation-width': expanded ? '224px' : '64px' } as CSSProperties}
-        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-mono text-body md:block"
+        className="sticky top-[var(--app-banner-height,0px)] z-[45] hidden h-[calc(100svh_-_var(--app-banner-height,0px))] w-[var(--navigation-width)] shrink-0 font-sans text-body md:block"
       >
         <div
           ref={panelRef}
@@ -575,7 +575,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
         <header
           aria-label="Application navigation"
           className={cn(
-            'sticky z-40 flex h-[var(--app-header-height,60px)] w-full shrink-0 items-center border-b border-border bg-background font-mono text-body',
+            'sticky z-40 flex h-[var(--app-header-height,60px)] w-full shrink-0 items-center border-b border-border bg-background font-sans text-body',
             isBannerVisible ? 'top-16 md:top-12' : 'top-0',
           )}
         >
@@ -641,7 +641,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               {/* The selection persists in localStorage, so the chosen organization opens on the next login. */}
               {organizations.length > 1 && (
                 <>
-                  <DropdownMenuLabel className="font-mono text-meta font-normal uppercase tracking-[0.18em] text-muted-foreground">
+                  <DropdownMenuLabel className="font-sans text-meta font-normal uppercase tracking-[0.18em] text-muted-foreground">
                     Organizations
                   </DropdownMenuLabel>
                   {organizations.map((organization) => {

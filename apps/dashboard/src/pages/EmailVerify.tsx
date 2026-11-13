@@ -64,7 +64,7 @@ export default function EmailVerify() {
   }, [organizationId, email, token, billingApi, navigate, onSelectOrganization])
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-6 font-mono text-body">
+    <div className="flex min-h-screen items-center justify-center bg-background px-6 font-sans text-body">
       <div className="w-full max-w-[420px] border border-border bg-card p-8 text-center">
         <div className="mb-5 flex justify-center">
           <Logo />

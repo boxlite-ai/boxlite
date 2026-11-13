@@ -114,7 +114,7 @@ export function ConnectsPanel() {
         </p>
       )}
       {message && (
-        <p role="status" className="mb-3 font-mono text-meta text-muted-foreground">
+        <p role="status" className="mb-3 font-sans text-meta text-muted-foreground">
           {message}
         </p>
       )}
@@ -233,7 +233,7 @@ export function ConnectsPanel() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
-              <p className="font-mono text-meta text-muted-foreground">
+              <p className="font-sans text-meta text-muted-foreground">
                 {editing?.github_account} · {editing?.account_type === 'Organization' ? 'Organization' : 'Personal'}
               </p>
               <label className="flex items-center gap-2 text-body">

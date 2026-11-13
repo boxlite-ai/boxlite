@@ -4,8 +4,8 @@
 //! One output-only virtio console port, sharing the serial console's queue.
 //!
 //! TX completion waits only for a copy into the bounded host queue, never for
-//! its sink. The VM wiring that owns this device's lifecycle and final TX scan
-//! follows separately.
+//! its sink. The VM stops vCPUs and device callbacks before the final TX scan,
+//! then finishes the shared host console worker.
 
 use std::io::Write;
 
@@ -39,7 +39,7 @@ pub(crate) struct VirtioConsole {
     activation: Option<ActivationContext>,
     /// A failed ring or uncertain completion must not be retried before reset.
     broken: bool,
-    /// Set by [`VirtioDevice::quiesce`]: new kicks are ignored until activation.
+    /// Set by [`VirtioDevice::quiesce`]: kicks wait for resume or activation.
     stopped: bool,
 }
 
@@ -52,17 +52,6 @@ impl VirtioConsole {
             broken: false,
             stopped: false,
         }
-    }
-
-    /// Scans pending TX once, then releases queue and RAM references, even on
-    /// error. The caller must first stop all vCPUs and device dispatch; scanning
-    /// from Drop or racing the executor could replay output or touch retired RAM.
-    /// The shared host console worker is finished separately, after this call.
-    pub(crate) fn finish_tx(&mut self) -> Result<(), DeviceError> {
-        let result = if self.broken { Ok(()) } else { self.transmit() };
-        self.activation = None;
-        self.stopped = false;
-        result
     }
 
     /// Validates and copies every available TX chain, then publishes the used
@@ -157,7 +146,7 @@ impl VirtioDevice for VirtioConsole {
         Ok(())
     }
 
-    /// Processes a TX kick unless the device is quiesced or finished.
+    /// Processes a TX kick unless the device is quiesced.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError> {
         if event == DeviceEvent::QueueKick(TX as u16) && !self.stopped {
             self.transmit()?;
@@ -165,9 +154,18 @@ impl VirtioDevice for VirtioConsole {
         Ok(())
     }
 
-    /// Stops accepting kicks; [`Self::finish_tx`] still scans pending TX.
+    /// Stops kicks and scans published TX once, including heads without a
+    /// final kick. A broken ring is never retried; activation stays for resume.
     fn quiesce(&mut self) -> Result<(), DeviceError> {
+        if self.stopped {
+            return Ok(());
+        }
         self.stopped = true;
+        if self.broken { Ok(()) } else { self.transmit() }
+    }
+
+    fn resume(&mut self) -> Result<(), DeviceError> {
+        self.stopped = false;
         Ok(())
     }
 }

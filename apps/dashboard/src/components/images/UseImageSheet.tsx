@@ -84,7 +84,7 @@ export function UseImageSheet({ imageRef, onClose }: UseImageSheetProps) {
 
         <CodeBlock code={renderImageSnippet(language, ref)} language={active.codeLanguage} />
 
-        <p className="font-mono text-meta text-muted-foreground">
+        <p className="font-sans text-meta text-muted-foreground">
           <code className="text-foreground">rt</code> is the runtime from the{' '}
           <Link to={RoutePath.ONBOARDING} className="text-foreground underline-offset-4 hover:underline">
             Quickstart

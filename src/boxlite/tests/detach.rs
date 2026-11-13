@@ -5,11 +5,11 @@
 
 mod common;
 
-use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
 use boxlite::util::{PidFileReader, is_process_alive};
+use common::TestRuntime as BoxliteRuntime;
 use std::path::{Path, PathBuf};
 
 // ============================================================================

@@ -107,7 +107,7 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
       {data.map((invoice) => {
         const status = statusMark(invoiceStatus(invoice))
         return (
-          <div key={invoice.id} className={`${ROW} resource-list-row font-mono`}>
+          <div key={invoice.id} className={`${ROW} resource-list-row font-sans`}>
             <span data-invoice-date className="text-foreground">
               {invoiceDate(invoice)}
             </span>

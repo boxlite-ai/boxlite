@@ -649,7 +649,7 @@ function OnboardingGuideContent({
         />
       </section>
     ) : (
-      <section className="min-w-0 font-mono">
+      <section className="min-w-0 font-sans">
         <div className="quickstart-sequence min-w-0">
           <section className="quickstart-step min-w-0">
             <QuickstartStepHeading title="1. Get an API key" />
@@ -705,7 +705,7 @@ function OnboardingGuideContent({
             </p>
             <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
               <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
-                <span className="font-mono text-meta tracking-normal text-muted-foreground">Local terminal</span>
+                <span className="font-sans text-meta tracking-normal text-muted-foreground">Local terminal</span>
                 <QuickstartCopyButton
                   quiet
                   copied={copiedTarget === 'install'}
@@ -1095,7 +1095,7 @@ function OnboardingGuideContent({
       <DialogContent
         overlay={<DialogOverlay className="bg-background/70 backdrop-blur-md" />}
         className={cn(
-          'flex max-h-[92vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[720px]',
+          'flex max-h-[92vh] flex-col gap-0 overflow-hidden p-0 font-sans sm:max-w-[720px]',
           activeScenario === 'untrusted-code' && step === 2 && 'h-[92vh]',
         )}
       >

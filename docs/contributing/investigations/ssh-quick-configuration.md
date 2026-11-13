@@ -2,6 +2,12 @@
 
 Design: https://github.com/boxlite-ai/boxlite/issues/2303
 
+Historical implementation record. The printed-command contract below is superseded
+by [direct OpenSSH login](https://github.com/boxlite-ai/boxlite/issues/2539).
+Current `boxlite ssh BOX` connects immediately, preserves healthy managed SSH
+without reconfiguration, and retains the runtime until the session ends.
+See the [current CLI workflow](../../guides/ssh.md#cli).
+
 ## Contract
 
 `boxlite ssh setup BOX` takes no key arguments. It generates Ed25519 client and

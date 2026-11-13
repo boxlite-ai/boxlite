@@ -10,7 +10,7 @@
 #
 #   a commit SHA      the development path. Images are built for this stage
 #                     under `<sha>`, the runner binary is compiled and staged in
-#                     this stage's artifacts bucket. dev only.
+#                     this stage's artifacts bucket. dev or stage.
 #
 #   #<number>         the same path, for a pull request that has not merged.
 #                     It resolves to the commit the request would merge to
@@ -18,9 +18,10 @@
 #                     that would land — the head is the same work missing
 #                     whatever its base gained since it was branched, and
 #                     shaking that out tells you about a tree nobody will
-#                     merge. dev only.
+#                     merge. dev or stage.
 #
-#   a release tag     the release path. Images are the `v<X.Y.Z>-<sha>` bytes
+#   a stable tag      stage resolves it to a commit and follows the commit path.
+#                     dev/prod use the release path: `v<X.Y.Z>-<sha>` images
 #                     mbuild-release publishes into dev and promotes to prod;
 #                     the runner is the tarball already attached to the GitHub
 #                     Release, not a rebuild of it. prod takes nothing else.
@@ -68,6 +69,7 @@ on:
         type: choice
         options:
           - dev
+          - stage
           - prod
       components:
         description: Which artifacts this ref needs before it is deployed
@@ -80,8 +82,8 @@ on:
           - runner
       ref:
         description: >-
-          A release tag (v<X.Y.Z>); or, for dev, a commit SHA or a pull request
-          (#<number>). Empty uses this dispatch's own commit, a dev rollout.
+          A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>)
+          for dev/stage. Stage builds the commit named by a tag. Empty uses this dispatch's own commit.
         required: false
       apply:
         description: Apply the change. Off previews it and stops.
@@ -122,11 +124,9 @@ jobs:
   # a typo.
   resolve:
     name: resolve ${{ inputs.ref || github.sha }}
-    # dev is shaken out from the branch that is changing it; every other stage
-    # reaches a protected Environment and the cloud role behind it, and runs
-    # from main. An allow-list naming dev, so a stage added to the choice list
-    # later is main-only until an edit says otherwise.
-    if: ${{ github.ref == 'refs/heads/main' || inputs.stage == 'dev' }}
+    # Dev and stage can exercise candidate workflow branches. Other stages
+    # retain the main-only guard; release refs are checked separately below.
+    if: ${{ github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
     # A job-level block replaces the workflow-level one rather than merging with
     # it, so `contents: read` is restated. `pull-requests: read` is what lets a
     # request's merge resolve below, and it is granted here rather than at
@@ -163,6 +163,10 @@ jobs:
           candidate="${REF:-$FALLBACK}"
           version=''
           pr=''
+          case "$STAGE" in
+            dev|stage|prod) ;;
+            *) echo "::error title=stage::unknown deployment stage '$STAGE'"; exit 1 ;;
+          esac
           # Three shapes, told apart here and nowhere else, so every job below
           # reads a decision rather than re-parsing the input.
           #
@@ -173,17 +177,17 @@ jobs:
           # one, and the sigil keeps the operator's intent explicit rather than
           # letting the shape guess it.
           if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            version="$candidate"
+            # Stage uses the tag only to identify a commit, not release artifacts.
+            if [ "$STAGE" != 'stage' ]; then version="$candidate"; fi
           elif [[ "$candidate" =~ ^#[1-9][0-9]*$ ]]; then
             pr="${candidate#\#}"
           elif [[ ! "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error title=ref::'$candidate' is none of a release tag (v<X.Y.Z>), a pull request (#<number>), or a full lowercase commit SHA"
             exit 1
           fi
-          # prod takes released bytes and nothing else. Written as a refusal on
-          # the absence of a version rather than as a test on the stage list, so
-          # a stage added later has to say for itself that a commit may reach it.
-          if [ "$STAGE" != 'dev' ] && [ -z "$version" ]; then
+          # Explicit commit destinations keep prod release-only and fail closed
+          # if another stage is added without its own admission decision.
+          if [ "$STAGE" != 'dev' ] && [ "$STAGE" != 'stage' ] && [ -z "$version" ]; then
             echo "::error title=ref::$STAGE deploys released versions only; give a release tag (v<X.Y.Z>) rather than a commit or a pull request"
             exit 1
           fi
@@ -379,7 +383,7 @@ jobs:
   plan:
     name: plan ${{ inputs.stage }}
     needs: [resolve]
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     outputs:
@@ -457,8 +461,7 @@ jobs:
                 echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
                 exit 1
               elif [ -n "$VERSION" ]; then
-                # The release line. dev cuts it; every other stage receives the
-                # bytes dev already serves.
+                # The release line publishes into dev and promotes into prod.
                 api=$([ "$STAGE" = 'dev' ] && echo release-publish || echo release-promote)
               else
                 api=build
@@ -504,7 +507,7 @@ jobs:
             echo "| components | \`$COMPONENTS\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The release line: cut into dev, received by everything else. Both call the
+  # The release line: publish into dev, or promote into prod. Both call the
   # workflow that owns the refusals a release needs — a version already in the
   # target registry is an operator mistake, not something to skip over.
   release-publish:
@@ -529,7 +532,7 @@ jobs:
       sha: ${{ needs.resolve.outputs.sha }}
     secrets: inherit
 
-  # The commit line, which only dev reaches. `mbuild.yml` is callee-only for
+  # The commit line, which dev and stage reach. `mbuild.yml` is callee-only for
   # exactly this: it is the development path's publish and nobody's release.
   build-images:
     name: build images
@@ -552,7 +555,7 @@ jobs:
     # guard every Environment-binding job here does.
     if: >-
       ${{ !cancelled() && !failure() && needs.plan.outputs.runner == 'build'
-      && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
+      && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     steps:
@@ -629,7 +632,7 @@ jobs:
     # Every artifact job is skipped when the stage already holds what it needs,
     # and a skipped dependency skips its dependents unless this says otherwise.
     # `!failure()` is what still stops a deploy whose artifacts did not arrive.
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev') }}
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     steps:

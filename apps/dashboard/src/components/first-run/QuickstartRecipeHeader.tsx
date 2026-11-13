@@ -37,7 +37,7 @@ export function QuickstartRecipeHeader({
     ) : null
   return (
     <div className="shrink-0 px-6 pt-6 sm:px-8">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-2 pr-6 font-mono text-label text-muted-foreground">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-2 pr-6 font-sans text-label text-muted-foreground">
         <span className="uppercase tracking-[1.5px]">Quickstart</span>
       </div>
       <div

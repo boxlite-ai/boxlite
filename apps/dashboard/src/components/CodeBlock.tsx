@@ -122,12 +122,12 @@ const CodeBlock: React.FC<CodeBlockProps> = ({
         {({ style, tokens, getLineProps, getTokenProps }: HighlightProps) => (
           <pre
             className={cn(
-              'scrollbar-elevated overflow-x-auto rounded-none p-4 text-body leading-6',
+              'scroll-edge code-scroll-edge scrollbar-elevated overflow-x-auto rounded-none p-4 text-body leading-6',
               // The copy button sits in this gutter, outside the scroller, so a long line never runs under it.
               showCopy && 'mr-11',
               codeAreaClassName,
             )}
-            style={{ ...style, background: 'transparent' }}
+            style={{ ...style, backgroundColor: 'transparent' }}
           >
             {tokens.map((line, i) => {
               const props = getLineProps({ line, key: i })
