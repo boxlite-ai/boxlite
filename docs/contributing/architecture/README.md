@@ -442,6 +442,11 @@ host runtime, the shim, and the guest agent.
   what was written: one outside `X/`, anything after a file that became the destination, or a hard
   link leading the archive. An empty archive lands nothing.
 
+  After upload, the guest transfers ownership of copied files and newly created paths to the
+  container user. A new destination symlink is handed over as the link itself, without selecting
+  children through its target. An existing directory symlink remains a valid copy destination;
+  only the copied children are handed over.
+
 ## Concurrency model
 
 ### Thread safety

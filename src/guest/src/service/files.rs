@@ -221,7 +221,13 @@ impl DestBefore {
     /// to the box user is a permission change nobody asked for. Files are
     /// always ours, existing or not: extraction just overwrote them.
     fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
-        let dest_is_dir = dest_root.is_dir();
+        let dest_is_dir = if self.dest_existed {
+            dest_root.is_dir()
+        } else {
+            dest_root
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir())
+        };
         let mut targets = self.created_dirs.clone();
         if !dest_is_dir || !self.dest_existed {
             targets.push(dest_root.to_path_buf());
@@ -874,6 +880,7 @@ impl GuestServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite_shared::tar;
 
     /// `/etc` holds the `/etc/hosts` bind but is not itself a mount, so naming
     /// it is fine — only paths at or below a mount are unreachable.
@@ -1082,6 +1089,120 @@ mod tests {
         let created = before.created(&dest, &entries);
         assert!(!created.is_empty());
         assert!(created.iter().all(|target| target == &dest), "{created:?}");
+    }
+
+    async fn unpack_ownership_targets(
+        tar_path: &Path,
+        dest: &Path,
+        streamed: bool,
+    ) -> Vec<PathBuf> {
+        let opts = tar::UnpackContext {
+            overwrite: true,
+            mkdir_parents: true,
+            force_directory: false,
+        };
+        let (before, entries) = if streamed {
+            let dest_existed = dest.exists();
+            let created_dirs = missing_ancestors(dest);
+            let bytes = std::fs::read(tar_path).unwrap();
+            let report = tar::unpack_stream(
+                Box::pin(tokio_stream::iter([Ok(bytes)])),
+                dest.to_path_buf(),
+                opts,
+            )
+            .await
+            .unwrap();
+            let before = DestBefore::recorded(
+                created_dirs,
+                dest_existed,
+                report
+                    .preexisting_dirs
+                    .iter()
+                    .map(|rel| dest.join(rel))
+                    .collect(),
+            );
+            (before, report.entry_paths)
+        } else {
+            let entries = tar::entry_paths(tar_path.to_path_buf(), dest.to_path_buf(), false)
+                .await
+                .unwrap();
+            let before = DestBefore::sample_blocking(dest, &entries);
+            tar::unpack(tar_path.to_path_buf(), dest.to_path_buf(), opts)
+                .await
+                .unwrap();
+            (before, entries)
+        };
+        before.created(dest, &entries)
+    }
+
+    async fn assert_new_symlink_ownership(streamed: bool) {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir_all(rootfs.join("etc")).unwrap();
+        std::fs::write(rootfs.join("etc/passwd"), b"image-owned file").unwrap();
+        let source = tmp.path().join("passwd");
+        std::os::unix::fs::symlink("etc", &source).unwrap();
+        let archive = tmp.path().join("input.tar");
+        tar::pack(
+            source,
+            archive.clone(),
+            tar::PackContext {
+                follow_symlinks: false,
+                include_parent: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let dest = rootfs.join("link");
+        let targets = unpack_ownership_targets(&archive, &dest, streamed).await;
+        assert_eq!(std::fs::read_link(&dest).unwrap(), Path::new("etc"));
+        assert!(!targets.is_empty());
+        assert!(
+            targets.iter().all(|target| target == &dest),
+            "only the copied link may change owner, not link/passwd: {targets:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn staged_copy_owns_new_symlink_not_its_target() {
+        assert_new_symlink_ownership(false).await;
+    }
+
+    #[tokio::test]
+    async fn streamed_copy_owns_new_symlink_not_its_target() {
+        assert_new_symlink_ownership(true).await;
+    }
+
+    #[tokio::test]
+    async fn copy_into_existing_directory_symlink_owns_the_child() {
+        for streamed in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let rootfs = tmp.path().join("rootfs");
+            std::fs::create_dir_all(rootfs.join("usr/lib")).unwrap();
+            let dest = rootfs.join("lib");
+            std::os::unix::fs::symlink("usr/lib", &dest).unwrap();
+            let source = tmp.path().join("tool");
+            std::fs::write(&source, b"copied payload").unwrap();
+            let archive = tmp.path().join("input.tar");
+            tar::pack(
+                source,
+                archive.clone(),
+                tar::PackContext {
+                    follow_symlinks: false,
+                    include_parent: true,
+                },
+            )
+            .await
+            .unwrap();
+
+            let targets = unpack_ownership_targets(&archive, &dest, streamed).await;
+            assert_eq!(
+                std::fs::read(rootfs.join("usr/lib/tool")).unwrap(),
+                b"copied payload"
+            );
+            assert_eq!(targets, vec![dest.join("tool")]);
+        }
     }
 
     /// A symlinked directory the *image* shipped must still get the hand-off.
