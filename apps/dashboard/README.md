@@ -1113,3 +1113,11 @@ Image details presents Tags, Versions, referencing Boxes, and pin history as sin
 Select a version digest to inspect and copy its complete digest, original pull reference, first-seen timestamp, and recorded upstream status. A missing upstream digest remains a past observation: only runners that cached the version can still start it; other runners need an available version pinned under a new alias. The Versions table scrolls horizontally in narrow containers, reserving space for the digest and upstream marker. Full provenance remains available in the dialog.
 
 Pinning guidance belongs in the Pin a tag dialog. Pin/unpin permissions, OCI tag validation, API error feedback, and running Box behavior are unchanged. Referencing Boxes retain their detail links and status indicators. The page scrolls naturally instead of placing its tables in a second vertical scrolling region.
+
+### Checkpoint controls and recovery
+
+Checkpoint creation and Box restoration use the shared form dialog, field styles and footer actions. Source Box is a themed selector; eligibility filtering, fixed-source rechecks, permissions and organization-switch guards remain unchanged. Invalid names explain their accepted format without discarding the draft. Deletion requires the exact checkpoint name and retains the confirmation after a refusal.
+
+The inventory uses the shared single-line row layout with source links, explicit status markers and a disk-and-clock glyph. A failed source lookup leaves the source identifier visible; only a successful lookup can identify a deleted source. Empty filtered results offer Clear filter.
+
+Initial capability and inventory failures share one recovery region and Retry retries failed requests. Refresh failures retain cached inventory, including a previously empty result. Recovery buttons are disabled during their own requests. Capability-disabled feedback remains distinct from a request failure, and retains Retry capabilities if refreshing that cached result fails. The inventory scrolls locally below its minimum width so names and actions remain readable. Creating-state motion respects reduced motion; failed-status details remain available to keyboard users.
