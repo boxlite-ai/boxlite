@@ -5,10 +5,6 @@
  */
 
 import { AsciiButton } from '@/components/ascii'
-import goIcon from '@/assets/go.svg'
-import pythonIcon from '@/assets/python.svg'
-import { RustIcon } from '@/assets/RustIcon'
-import typescriptIcon from '@/assets/typescript.svg'
 import { QuickstartAgentHandoff } from '@/components/QuickstartAgentHandoff'
 import { QuickstartRecipeHeader, type QuickstartPreview } from '@/components/first-run/QuickstartRecipeHeader'
 import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
@@ -21,8 +17,9 @@ import {
   DialogOverlay,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { FileText, KeyRound, Server, Terminal } from '@/components/ui/icon'
+import { Tabs, TabsList, TabsTrigger, SEGMENTED_TRIGGER } from '@/components/ui/tabs'
+import { KeyRound } from '@/components/ui/icon'
+import { QuickstartInterfaceIcon } from '@/components/first-run/QuickstartInterfaceIcon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { getRestApiUrl } from '@/lib/environment'
@@ -37,7 +34,7 @@ import {
   renderOnboardingCodeSteps,
   type OnboardingInterface,
 } from '@/lib/onboarding-code-examples'
-import type { QuickstartGroup, QuickstartIconName, QuickstartInterfaceDefinition } from '@/lib/quickstart/types'
+import type { QuickstartGroup } from '@/lib/quickstart/types'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
 import {
@@ -246,14 +243,12 @@ function ScenarioHeader({
         {scenario === 'publish'
           ? CODING_AGENT_MARKS.map(({ label, Mark }) => <Mark key={label} className="size-[22px]" />)
           : QUICKSTART_INTERFACES.map((item) => (
-              <QuickstartInterfaceIcon key={item.id} item={item} className="size-[22px] grayscale" />
+              <QuickstartInterfaceIcon key={item.id} icon={item.icon} className="size-[22px] grayscale" />
             ))}
       </div>
 
       <Tabs value={scenario} onValueChange={(v) => onSelect(v as ScenarioId)} className="mt-6">
-        {/* The segmented variant's strip is a container the active segment shows
-            through; these are free-standing cards with a gutter between them,
-            so the strip itself carries neither ground nor border. */}
+        {/* Standalone scenario cards retain their gutters and individual frames. */}
         <TabsList variant="segmented" className="grid h-auto w-full grid-cols-2 gap-4 border-0 bg-transparent">
           {SCENARIOS.map((sc) => {
             const Art = SCENARIO_ART[sc.id]
@@ -263,14 +258,9 @@ function ScenarioHeader({
                 value={sc.id}
                 className={cn(
                   'relative h-auto flex-col items-stretch gap-0 border border-border p-0 text-left hover:bg-transparent',
-                  // One rule across the console: the chosen thing is the
-                  // surface that differs from its container, and the ones not
-                  // chosen recede into it. Here the container is the dialog,
-                  // so the chosen card lifts onto `card` and the others sit
-                  // flat on the dialog's own ground.
-                  sc.id === scenario
-                    ? 'border-border-selected bg-card opacity-100'
-                    : 'bg-transparent text-muted-foreground',
+                  // Large illustrated cards keep a quiet surface and their own selected frame.
+                  'data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=active]:hover:bg-accent data-[state=active]:hover:text-foreground',
+                  sc.id === scenario ? 'border-border-selected' : 'bg-transparent text-muted-foreground',
                 )}
               >
                 {/* Corner marks, the way a terminal draws a selected frame. The
@@ -317,39 +307,10 @@ const EXAMPLE_FILES: Record<string, string> = {
   cli: 'quickstart.sh',
   rest: 'quickstart-rest.sh',
 }
-// Multi-color brand marks ship as assets; single-color marks render inline so they
-// inherit `currentColor` and stay visible in both themes.
-const ICON_ASSETS: Partial<Record<QuickstartIconName, string>> = {
-  go: goIcon,
-  python: pythonIcon,
-  typescript: typescriptIcon,
-}
-const ICON_COMPONENTS: Partial<Record<QuickstartIconName, React.ComponentType<{ className?: string }>>> = {
-  file: FileText,
-  rust: RustIcon,
-  server: Server,
-  terminal: Terminal,
-}
-
 const GROUPS: ReadonlyArray<{ id: QuickstartGroup; label: string }> = [
   { id: 'sdk', label: 'SDK' },
   { id: 'direct', label: 'Direct' },
 ]
-
-function QuickstartInterfaceIcon({
-  item,
-  className = 'size-3.5',
-}: {
-  item: QuickstartInterfaceDefinition
-  className?: string
-}) {
-  const iconSrc = ICON_ASSETS[item.icon]
-  if (iconSrc) {
-    return <img src={iconSrc} alt="" className={className} />
-  }
-  const Icon = ICON_COMPONENTS[item.icon]
-  return Icon ? <Icon className={className} /> : null
-}
 
 /**
  * Interface picker. Rendered once for the whole flow — the choice spans steps 2 and 3,
@@ -368,14 +329,16 @@ function InterfacePicker({
   if (quiet) {
     return (
       <Tabs value={selected} onValueChange={onSelect} className="min-w-0 max-w-full">
-        <TabsList variant="segmented" aria-label="SDK or CLI" className="h-auto flex-wrap">
-          {QUICKSTART_INTERFACES.map((item) => (
-            <TabsTrigger key={item.id} value={item.id} className="h-9 gap-1.5 px-3">
-              <QuickstartInterfaceIcon item={item} />
-              {item.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="-mx-1 -my-1 overflow-x-auto p-1">
+          <TabsList variant="underline" aria-label="SDK or CLI" className="w-max min-w-full">
+            {QUICKSTART_INTERFACES.map((item) => (
+              <TabsTrigger key={item.id} value={item.id}>
+                <QuickstartInterfaceIcon icon={item.icon} />
+                {item.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
       </Tabs>
     )
   }
@@ -396,19 +359,10 @@ function InterfacePicker({
                     type="button"
                     aria-pressed={on}
                     onClick={() => onSelect(item.id)}
-                    className={cn(
-                      'flex min-h-[34px] items-center justify-center gap-2 px-[12px] py-[7px] text-meta transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand',
-                      quiet
-                        ? on
-                          ? 'rounded-none bg-foreground/[0.07] font-semibold text-foreground'
-                          : 'rounded-none text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground'
-                        : on
-                          ? 'border-border-selected bg-card font-semibold text-foreground'
-                          : 'border-border text-muted-foreground hover:text-foreground',
-                      !quiet && 'border',
-                    )}
+                    data-state={on ? 'active' : 'inactive'}
+                    className={cn(SEGMENTED_TRIGGER, 'ml-0 h-9 px-3')}
                   >
-                    <QuickstartInterfaceIcon item={item} />
+                    <QuickstartInterfaceIcon icon={item.icon} />
                     {item.label}
                   </button>
                 )
@@ -673,7 +627,7 @@ function OnboardingGuideContent({
                   value={keyName}
                   onChange={(event) => setKeyName(event.target.value)}
                   placeholder="Key name (optional)"
-                  className="min-w-0 flex-1 rounded-none border border-border/60 bg-transparent px-3 py-2 font-display text-meta outline-none focus:border-brand"
+                  className="min-w-0 flex-1 rounded-none border border-border/60 bg-transparent px-3 py-2 font-mono text-meta outline-none focus:border-brand"
                 />
                 <button
                   type="button"

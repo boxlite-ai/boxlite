@@ -81,6 +81,11 @@ module.exports = {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
         },
+        'control-hover': 'hsl(var(--control-hover))',
+        selection: {
+          DEFAULT: 'hsl(var(--selection))',
+          foreground: 'hsl(var(--selection-foreground))',
+        },
         brand: {
           DEFAULT: 'hsl(var(--brand))',
           foreground: 'hsl(var(--brand-foreground))',

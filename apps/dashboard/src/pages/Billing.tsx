@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
@@ -102,10 +103,19 @@ function Billing() {
           <div className="mt-4 w-full empty:hidden">
             <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
           </div>
-          <TabsList variant="segmented" className="mt-5">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="usage">Usage</TabsTrigger>
-            <TabsTrigger value="wallet">Wallet</TabsTrigger>
+          <TabsList variant="underline" aria-label="Billing views" className="mt-5">
+            <TabsTrigger value="overview">
+              <TabIcon name="overview" />
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="usage">
+              <TabIcon name="chart" />
+              Usage
+            </TabsTrigger>
+            <TabsTrigger value="wallet">
+              <TabIcon name="wallet" />
+              Wallet
+            </TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="overview">
