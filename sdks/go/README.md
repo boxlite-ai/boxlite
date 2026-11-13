@@ -486,6 +486,8 @@ invalid IDs, deletion results, and the remaining cache through the public SDK.
 Hosted Go unit jobs exclude this package through the `boxlite_integration` tag.
 The Linux native-binding job runs it after enabling KVM access; initialization
 or deletion failures fail that job rather than skipping the test.
+Building the native Go bridge on Linux also requires `llvm-objcopy` from the
+`llvm` package, which that job installs before running the tests.
 
 ## License
 

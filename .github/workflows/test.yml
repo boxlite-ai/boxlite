@@ -385,7 +385,7 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler util-linux
+        run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev llvm protobuf-compiler util-linux
 
       # SSH guest tests need user/mount namespaces; Ubuntu's AppArmor blocks
       # them by default. This setting lasts only for the disposable runner.
@@ -437,6 +437,12 @@ jobs:
       - name: Enable KVM access for native hypervisor tests
         if: matrix.platform.target == 'linux-x64-gnu'
         run: sudo chmod a+rw /dev/kvm
+
+      - name: Test local image removal through the CLI
+        if: matrix.platform.target == 'linux-x64-gnu'
+        env:
+          BOXLITE_DEPS_STUB: '1'
+        run: make coverage:cli NEXTEST_PROFILE=ci NEXTEST_FILTER='--test rmi -E "binary(rmi)"'
 
       - name: Run KVM hardware tests with coverage
         if: matrix.platform.target == 'linux-x64-gnu'
