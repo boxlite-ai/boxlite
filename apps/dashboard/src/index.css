@@ -70,6 +70,7 @@ body {
     /* brand accent (the design's --accent blue) — kept distinct from shadcn's neutral
        hover "accent" so hovers stay neutral and the blue stays intentional. */
     --brand: 196 100% 47%;
+    --link: #0077a3;
     --brand-foreground: 218 17% 9%;
 
     --border: 218 16% 90%;
@@ -153,6 +154,7 @@ body {
     --accent-foreground: 0 0% 100%;
 
     --brand: 196 100% 47%;
+    --link: #49bde8;
     --brand-foreground: 218 17% 9%;
 
     --border: 0 0% 16%;
@@ -568,16 +570,40 @@ body {
     @apply flex h-9 w-full min-w-0 items-center gap-3 border border-border bg-card px-3 transition-colors focus-within:border-foreground sm:w-[380px] sm:flex-none;
   }
   .resource-empty {
-    @apply flex min-h-[280px] flex-col items-center justify-start gap-3 px-6 py-12 text-center;
+    @apply flex min-h-[280px] flex-1 flex-col items-center justify-center gap-3 px-6 py-12 text-center;
+  }
+  .resource-content {
+    @apply flex min-h-0 flex-1 flex-col overflow-auto;
   }
   .resource-empty-icon {
-    @apply mb-2 flex size-12 items-center justify-center border border-border bg-card text-muted-foreground;
+    @apply mb-2 flex size-12 items-center justify-center text-muted-foreground [&>svg]:size-9 [&>svg]:stroke-1;
   }
   .resource-list-head {
     @apply min-h-11 border-b border-border px-4 py-3 font-sans text-meta font-medium normal-case tracking-normal text-muted-foreground;
   }
   .resource-list-row {
-    @apply min-h-14 border-b border-border/60 px-4 py-3 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+    @apply min-h-12 border-b border-border/60 px-4 py-2 text-body transition-colors hover:bg-accent/40 focus-within:bg-accent/40;
+  }
+  .resource-object-icon {
+    @apply flex size-5 shrink-0 items-center justify-center text-muted-foreground [&>svg]:size-5;
+  }
+  .resource-table th {
+    @apply h-11 whitespace-nowrap px-4 text-meta font-medium text-muted-foreground;
+  }
+  .resource-table tbody tr {
+    @apply h-12 border-border/60;
+  }
+  .resource-table tbody tr:last-child {
+    @apply border-b;
+  }
+  .resource-table td {
+    @apply px-4 py-2 text-meta;
+  }
+  .resource-table tbody tr:has(.resource-empty) {
+    @apply border-0;
+  }
+  .resource-table td:has(.resource-empty) {
+    @apply p-0;
   }
   .resource-name {
     @apply truncate font-mono text-body font-semibold text-foreground;
@@ -606,7 +632,13 @@ body {
 }
 
 .resource-guide-link {
-  @apply text-body text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand;
+  @apply underline underline-offset-4 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
+  color: var(--link);
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.resource-guide-link:hover {
+  text-decoration-color: currentColor;
 }
 
 /* Code boundaries use the same quiet structural border as the rest of the console. */
@@ -627,12 +659,35 @@ body {
   }
 }
 
+/* Surface roles stay neutral; input shadows compose with Tailwind's focus rings. */
 :root {
+  --field-surface: 0 0% 99%;
+  --field-inset: inset 0 1px 2px rgb(16 24 40 / 0.035);
+  --shadow-floating: 0 2px 4px rgb(16 24 40 / 0.04), 0 8px 24px -8px rgb(16 24 40 / 0.14);
+  --shadow-dialog: 0 4px 8px rgb(16 24 40 / 0.05), 0 24px 64px -20px rgb(16 24 40 / 0.25);
   --scroll-edge-color: 0 0% 0% / 0.09;
 }
 .dark {
+  --field-surface: 0 0% 5%;
+  --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-floating: 0 2px 4px rgb(0 0 0 / 0.2), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.24), 0 24px 64px -20px rgb(0 0 0 / 0.65);
   --scroll-edge-color: 0 0% 100% / 0.065;
 }
+.console-input-surface:not([data-slot="input-group-control"]),
+.form-field-input {
+  background-color: hsl(var(--field-surface));
+  --tw-shadow: var(--field-inset);
+  --tw-shadow-colored: var(--field-inset);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.console-floating-surface {
+  box-shadow: var(--shadow-floating);
+}
+.console-dialog-surface {
+  box-shadow: var(--shadow-dialog);
+}
+
 /* Local covers disappear with the scroll; shallow edge backgrounds never cover content.
    Use only on solid native scroll surfaces, not on masked Radix viewports. */
 .scroll-edge {
@@ -663,4 +718,68 @@ body {
 }
 .dark .quickstart-code-surface .code-scroll-edge {
   --scroll-surface: 0 0% 7%;
+}
+
+.quota-ticks {
+  display: inline-grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  width: 64px;
+  height: 8px;
+  flex: none;
+  vertical-align: middle;
+}
+.quota-tick {
+  position: relative;
+  background: hsl(var(--border));
+}
+.quota-tick > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+/* Resource icon animations affect their accents only; existing row feedback is independent. */
+.resource-state-accent,
+.resource-state-trace {
+  stroke: var(--resource-state-color);
+}
+.resource-state-face,
+.resource-state-light {
+  fill: var(--resource-state-color);
+  stroke: none;
+}
+.resource-state-face {
+  opacity: 0.07;
+}
+.resource-state-trace {
+  stroke-dasharray: 8 44;
+  animation: resource-state-trace 2.8s linear infinite;
+}
+.resource-state-breathe {
+  animation: resource-state-breathe 2.6s ease-in-out infinite;
+}
+@keyframes resource-state-trace {
+  to {
+    stroke-dashoffset: -52;
+  }
+}
+@keyframes resource-state-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .resource-state-trace,
+  .resource-state-breathe {
+    animation: none;
+  }
+  .resource-state-trace {
+    stroke-dashoffset: -7;
+  }
 }

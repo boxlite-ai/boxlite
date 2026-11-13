@@ -81,6 +81,24 @@ describe('Domains page', () => {
     )
     await settle()
   }
+  it('keeps domains visible after a refresh fails and retries in place', async () => {
+    await render()
+    const hostname = list.domains[0].hostname
+    state.list.mockRejectedValueOnce(new Error('Network unavailable'))
+    await act(async () => {
+      await client.refetchQueries()
+    })
+    await settle()
+    expect(document.body.textContent).toContain(hostname)
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
+    expect(retry).toBeDefined()
+    state.list.mockResolvedValue(list)
+    await act(async () => retry?.click())
+    await settle()
+    expect(document.body.textContent).not.toContain('Could not refresh domains')
+    expect(document.body.textContent).toContain(hostname)
+  })
+
   async function openForm() {
     await act(async () => document.querySelector<HTMLButtonElement>('button')!.click())
     const input = document.querySelector<HTMLInputElement>('#domain-short-name')!
@@ -166,7 +184,8 @@ describe('Domains page', () => {
     state.organizationId = 'org-error'
     state.list.mockRejectedValue(new Error('Network unavailable'))
     await render()
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Network unavailable')
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe('Could not load domains')
+    expect(document.body.textContent).not.toContain('Network unavailable')
   })
 
   it('isolates lists and late claim results when switching organizations', async () => {

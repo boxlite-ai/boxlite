@@ -1,19 +1,13 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { QuotaTicks } from '@/components/QuotaTicks'
 import { useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import type { CiCapacity } from '@/api/ci-types'
-import { AsciiButton } from '@/components/ascii'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
@@ -29,12 +23,13 @@ export function CapacitySummary({ capacity }: { capacity: CiCapacity }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('')
   const submitting = useRef(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   if (!capacity.available) return null
   const limit = capacity.effective_limit
   const atLimit = limit !== null && limit > 0 && capacity.used >= limit
   const nearLimit = limit !== null && limit > 0 && capacity.used >= limit * 0.8
   const save = async () => {
-    if (submitting.current) return
+    if (!owner || submitting.current) return
     const parsed = maximum === '' ? null : Number(maximum)
     if (
       maximum !== '' &&
@@ -42,7 +37,7 @@ export function CapacitySummary({ capacity }: { capacity: CiCapacity }) {
         !Number.isSafeInteger(parsed) ||
         (capacity.commerce_limit !== null && parsed! > capacity.commerce_limit))
     ) {
-      setError('Enter a whole number within your account allowance, or leave blank to inherit it.')
+      setError('Enter a whole number within your account allowance, or use the account limit.')
       return
     }
     submitting.current = true
@@ -61,83 +56,122 @@ export function CapacitySummary({ capacity }: { capacity: CiCapacity }) {
     }
   }
   return (
-    <>
-      <div className="flex flex-wrap items-center gap-4">
-        <span
-          className={cn(
-            'whitespace-nowrap font-mono text-meta tabular-nums',
-            atLimit ? 'text-destructive' : nearLimit ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground',
-          )}
-        >
-          {limit === null
-            ? `CI slots ${capacity.used} / Unlimited`
-            : limit === 0
-              ? `CI slots ${capacity.used} / 0 · Paused`
-              : `CI slots ${capacity.used} / ${limit}`}
-        </span>
-        {owner && (
-          <button
-            type="button"
-            className="font-mono text-meta text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-            onClick={() => {
+    <div className="flex flex-wrap items-center gap-2">
+      <span
+        className={cn(
+          'inline-flex items-center gap-2 whitespace-nowrap font-mono text-meta tabular-nums',
+          atLimit ? 'text-destructive' : nearLimit ? 'text-warning' : 'text-muted-foreground',
+        )}
+      >
+        {limit === null
+          ? `CI slots ${capacity.used} / Unlimited`
+          : limit === 0
+            ? `CI slots ${capacity.used} / 0 · Paused`
+            : `CI slots ${capacity.used} / ${limit}`}
+        <QuotaTicks used={capacity.used} limit={limit} />
+      </span>
+      {owner && (
+        <Dialog
+          open={open}
+          onOpenChange={(value) => {
+            if (busy) return
+            if (value) {
               setMaximum(capacity.max_concurrent_jobs?.toString() ?? '')
               setError('')
-              setOpen(true)
-            }}
-          >
-            Edit
-          </button>
-        )}
-      </div>
-      <Dialog open={open} onOpenChange={(value) => !busy && setOpen(value)}>
-        <DialogContent>
-          <form
-            onSubmit={(event) => {
+            }
+            setOpen(value)
+          }}
+        >
+          <DialogTrigger asChild>
+            <Button type="button" variant="quiet" size="sm" disabled={busy}>
+              Edit limit
+            </Button>
+          </DialogTrigger>
+          <DialogContent
+            aria-modal="true"
+            aria-describedby="ci-capacity-help"
+            className="sm:max-w-[440px] overflow-y-auto"
+            showCloseButton={!busy}
+            onOpenAutoFocus={(event) => {
               event.preventDefault()
-              void save()
+              inputRef.current?.focus()
+              inputRef.current?.select()
+            }}
+            onEscapeKeyDown={(event) => {
+              if (busy) event.preventDefault()
+            }}
+            onInteractOutside={(event) => {
+              if (busy) event.preventDefault()
             }}
           >
-            <DialogHeader>
-              <DialogTitle>CI capacity</DialogTitle>
-              <DialogDescription>
-                One total across all connected GitHub accounts and repositories. Existing jobs continue when you lower
-                it.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 py-4">
-              <Label htmlFor="ci-maximum">Maximum concurrent CI jobs</Label>
-              <Input
-                id="ci-maximum"
-                type="number"
-                min="0"
-                max={capacity.commerce_limit ?? undefined}
-                step="1"
-                value={maximum}
-                placeholder="Inherit account allowance"
-                disabled={busy}
-                onChange={(event) => setMaximum(event.target.value)}
-              />
-              <p className="text-body text-muted-foreground">
-                Leave blank to inherit; 0 pauses new workers. Account allowance:{' '}
-                {capacity.commerce_limit ?? 'Unlimited'}. Other Boxes also use this allowance.
+            <form
+              className="space-y-4"
+              noValidate
+              aria-busy={busy}
+              onSubmit={(event) => {
+                event.preventDefault()
+                void save()
+              }}
+            >
+              <DialogTitle>Concurrency limit</DialogTitle>
+              <div>
+                <Label htmlFor="ci-maximum" className="form-field-label">
+                  Maximum concurrent CI jobs
+                </Label>
+                <Input
+                  id="ci-maximum"
+                  ref={inputRef}
+                  type="text"
+                  inputMode="numeric"
+                  className="form-field-input h-9 font-mono tabular-nums"
+                  value={maximum}
+                  placeholder={`Account limit (${capacity.commerce_limit ?? 'Unlimited'})`}
+                  aria-describedby={error ? 'ci-capacity-help ci-capacity-error' : 'ci-capacity-help'}
+                  aria-invalid={!!error}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setMaximum(event.target.value)
+                    setError('')
+                  }}
+                />
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="text-meta text-muted-foreground">
+                    Account limit: {capacity.commerce_limit ?? 'Unlimited'}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="quiet"
+                    size="sm"
+                    disabled={busy || maximum === ''}
+                    onClick={() => {
+                      setMaximum('')
+                      setError('')
+                    }}
+                  >
+                    {maximum === '' ? 'Using account limit' : 'Use account limit'}
+                  </Button>
+                </div>
+              </div>
+              <p id="ci-capacity-help" className="text-meta leading-relaxed text-muted-foreground">
+                Other Boxes share the account limit. Set 0 to pause new CI jobs; running jobs continue.
               </p>
               {error && (
-                <p role="alert" className="text-body text-muted-foreground">
+                <p id="ci-capacity-error" role="alert" className="text-meta text-destructive">
                   {error}
                 </p>
               )}
-            </div>
-            <DialogFooter>
-              <AsciiButton type="button" onClick={() => setOpen(false)} disabled={busy}>
-                Cancel
-              </AsciiButton>
-              <AsciiButton variant="primary" type="submit" disabled={busy}>
-                Save capacity
-              </AsciiButton>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </>
+              <div className="flex justify-end gap-2">
+                <Button variant="quiet" size="sm" type="button" onClick={() => setOpen(false)} disabled={busy}>
+                  Cancel
+                </Button>
+                <Button size="sm" type="submit" disabled={busy}>
+                  {busy ? 'Saving…' : 'Save'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
   )
 }

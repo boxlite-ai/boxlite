@@ -60,9 +60,6 @@ const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const UserOrganizationInvitations = React.lazy(() => import('@/pages/UserOrganizationInvitations'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
-const BoxTerminalFullscreen = React.lazy(() =>
-  import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
-)
 
 const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.ROLES,
@@ -233,7 +230,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BILLING_WALLET)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.LIMITS)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
-        {/* Keep box-scoped activation state across Overview and Terminal.
+        {/* Keep the same BoxDetails component and box-scoped activation state across both views.
             Shell lifetime belongs to the Terminal page and ends when it unmounts. */}
         <Route
           element={
@@ -242,7 +239,7 @@ function App() {
             </BoxSessionProvider>
           }
         >
-          <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxDetails page="terminal" />} />
           <Route path={getRouteSubPath(RoutePath.BOX_DETAILS)} element={<BoxDetails />} />
         </Route>
         {HIDDEN_DASHBOARD_ROUTES.map((path) => (

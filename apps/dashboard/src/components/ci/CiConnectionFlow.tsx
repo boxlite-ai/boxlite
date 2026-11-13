@@ -6,14 +6,13 @@ import { toast } from 'sonner'
 import type { CiConnectConfiguration, CiConnectResult } from '@/api/ci-types'
 import { AsciiButton } from '@/components/ascii'
 import { CiAccountPicker, CiOrganizationRecovery } from '@/components/CiAccountPicker'
+import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogBody,
+  FormDialogFooter as DialogFooter,
+} from '@/components/ui/form-dialog'
 import { ArrowLeft, Loader2 } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import {
@@ -231,7 +230,7 @@ export function CiConnectionFlow({
   )
   return (
     <>
-      <div className="flex flex-col items-end gap-2">
+      <div className="ml-auto flex min-w-0 max-w-md flex-col items-end gap-2 text-right">
         <div className="flex items-center gap-2">
           <AsciiButton
             variant="primary"
@@ -245,7 +244,7 @@ export function CiConnectionFlow({
           <p className="text-meta text-muted-foreground">Browser connect is not configured on this deployment.</p>
         )}
         {!id && message && (
-          <p role="alert" className="text-meta text-muted-foreground">
+          <p role="alert" className="text-meta text-destructive">
             {message}
           </p>
         )}
@@ -257,42 +256,41 @@ export function CiConnectionFlow({
           if (!open) close()
         }}
       >
-        <DialogContent className="overflow-y-auto sm:max-w-[560px]">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Connect GitHub</DialogTitle>
             <DialogDescription>Choose your personal account or an organization you own.</DialogDescription>
           </DialogHeader>
-          {loading || result?.status === 'pending' ? (
-            <p role="status" className="text-body text-muted-foreground">
-              {result?.status === 'pending' ? 'Finishing GitHub connection…' : 'Loading GitHub accounts…'}
-            </p>
-          ) : result?.accounts && result.authenticated_account ? (
-            <CiAccountPicker
-              api={api}
-              organization={organization}
-              result={result}
-              onResult={changed}
-              onSwitch={(select) => void start(select)}
-            />
-          ) : (
-            <CiOrganizationRecovery settingsUrl={settingsUrl} reconnect={() => void start()} />
-          )}
-          {message && (
-            <p role="alert" className="text-body text-muted-foreground">
-              {message}
-            </p>
-          )}
-          {message && getCiConnectSession() && (
-            <AsciiButton onClick={() => setResume((value) => value + 1)}>Retry authorization status</AsciiButton>
-          )}
-          {discard}
+          <FormDialogBody>
+            {loading || result?.status === 'pending' ? (
+              <p role="status" className="text-body text-muted-foreground">
+                {result?.status === 'pending' ? 'Finishing GitHub connection…' : 'Loading GitHub accounts…'}
+              </p>
+            ) : result?.accounts && result.authenticated_account ? (
+              <CiAccountPicker
+                api={api}
+                organization={organization}
+                result={result}
+                onResult={changed}
+                onSwitch={(select) => void start(select)}
+              />
+            ) : (
+              <CiOrganizationRecovery settingsUrl={settingsUrl} reconnect={() => void start()} />
+            )}
+            {message && (
+              <p role="alert" className="text-body text-destructive">
+                {message}
+              </p>
+            )}
+            {message && getCiConnectSession() && (
+              <AsciiButton onClick={() => setResume((value) => value + 1)}>Retry authorization status</AsciiButton>
+            )}
+            {discard}
+          </FormDialogBody>
           <DialogFooter>
             <AsciiButton onClick={close}>
               <ArrowLeft className="size-4" />
               Back to Connects
-            </AsciiButton>
-            <AsciiButton variant="primary" onClick={close}>
-              Done
             </AsciiButton>
           </DialogFooter>
         </DialogContent>

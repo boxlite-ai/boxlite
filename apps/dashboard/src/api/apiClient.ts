@@ -41,6 +41,7 @@ import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
 import type { DomainList, HeldDomain } from './domain-types'
 import type { Checkpoint, CheckpointPage } from './checkpoint-types'
+import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
 
 // A burst of in-flight requests can all 401 at once when the access token goes
 // invalid; this in-page guard ensures at most one re-login redirect per page
@@ -491,22 +492,62 @@ export class ApiClient {
   }
 
   /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */
-  public async setBoxInboundMode(organizationId: string, boxId: string, mode: NetworkMode): Promise<void> {
-    await this.http.put(this.v1BoxPath(organizationId, boxId, '/network/inbound'), { mode }, this.v1Config())
+  public async setBoxInboundMode(
+    organizationId: string,
+    boxId: string,
+    mode: NetworkMode,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.http.put(
+      this.v1BoxPath(organizationId, boxId, '/network/inbound'),
+      { mode },
+      { ...this.v1Config(), timeout: 30_000, signal },
+    )
   }
 
-  /**
-   * A public URL for one port of the box, through the route `box.network.tunnel()`
-   * uses. It needs inbound access, declares the port public, and resumes a
-   * stopped box that has auto-resume.
-   */
-  public async getTunnelUrl(organizationId: string, boxId: string, port: number): Promise<string> {
-    const response = await this.http.post<{ uri: string }>(
-      this.v1BoxPath(organizationId, boxId, '/network/tunnel'),
-      undefined,
-      { ...this.v1Config(), params: { port } },
-    )
-    return response.data.uri
+  /** The Console creates public tunnels only; private requests never reach the server. */
+  public async prepareBoxTunnel(
+    organizationId: string,
+    boxId: string,
+    port: number,
+    isPublic: boolean,
+    signal?: AbortSignal,
+  ): Promise<TunnelDescriptor> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new TunnelRequestError('Enter a port from 1 to 65535.')
+    if (!isPublic) throw new TunnelRequestError('Private tunnel creation is not available in the Console.')
+    signal?.throwIfAborted()
+    try {
+      const response = await this.http.post<unknown>(
+        this.v1BoxPath(organizationId, boxId, '/network/tunnel'),
+        { isPublic },
+        { ...this.v1Config(), params: { port }, signal, timeout: 30_000 },
+      )
+      return readTunnelDescriptor(response.data)
+    } catch (error) {
+      throw tunnelOperationError(error, 'create')
+    }
+  }
+
+  /** Revocation remains available when the Box is stopped or inbound is disabled. */
+  public async revokeBoxTunnel(
+    organizationId: string,
+    boxId: string,
+    port: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new TunnelRequestError('Enter a port from 1 to 65535.')
+    try {
+      await this.http.delete(this.v1BoxPath(organizationId, boxId, '/network/tunnel'), {
+        ...this.v1Config(),
+        params: { port },
+        signal,
+        timeout: 30_000,
+      })
+    } catch (error) {
+      throw tunnelOperationError(error, 'revoke')
+    }
   }
 
   /** Starts a login shell on a pseudo-terminal; returns its execution id. */

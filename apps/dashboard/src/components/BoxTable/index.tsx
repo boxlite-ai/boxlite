@@ -3,18 +3,18 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
+import { TechnicalText } from '@/components/TechnicalText'
+import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 
-import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceFilterEmptyState, ResourceEmptyState, ResourceIdentity } from '@/components/ResourceLayout'
 import { isCheckpointBoxIdle } from '@/lib/checkpoints'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel, getBoxRouteId } from '@/lib/box-identity'
-import { copyToClipboard } from '@/lib/copy-text'
-import { toast } from 'sonner'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
-import { OrganizationRolePermissionsEnum, Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
+import { OrganizationRolePermissionsEnum, Box } from '@boxlite-ai/api-client'
 import {
   Check,
   Container,
@@ -27,53 +27,13 @@ import {
   RotateCcw,
   Trash2,
 } from '@/components/ui/icon'
-import { useState } from 'react'
+import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
+import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
 import { BoxTableProps } from './types'
 import { ResourcePagination } from '@/components/ResourcePagination'
 
-// Business states choose semantic colors; shared presentation owns geometry.
-const STATUS = {
-  running: 'hsl(var(--success))',
-  stopped: 'hsl(var(--muted-foreground))',
-  error: 'hsl(var(--destructive))',
-  idle: 'hsl(var(--warning))',
-  dim: 'hsl(var(--muted-foreground))',
-} as const
-
-function statusOf(box: Box): { label: string; color: string } {
-  switch (box.state) {
-    case BoxState.STARTED:
-      return { label: 'RUNNING', color: STATUS.running }
-    case BoxState.STOPPED:
-      return { label: 'STOPPED', color: STATUS.stopped }
-    case BoxState.ERROR:
-      return { label: 'ERROR', color: STATUS.error }
-    case BoxState.CREATING:
-      // A first pull is the one slow step the API reports; name it, so a box
-      // that sits in CREATING for a minute is not mistaken for a stuck one.
-      if (box.progress?.phase === BoxProgressPhase.PREPARING_IMAGE) {
-        return { label: 'PULLING IMAGE', color: STATUS.idle }
-      }
-      return { label: 'STARTING', color: STATUS.idle }
-    case BoxState.STARTING:
-    case BoxState.RESTORING:
-      return { label: 'STARTING', color: STATUS.idle }
-    case BoxState.STOPPING:
-      return { label: 'STOPPING', color: STATUS.idle }
-    case BoxState.DESTROYING:
-      return { label: 'DELETING', color: STATUS.idle }
-    case BoxState.RESIZING:
-      return { label: 'RESIZING', color: STATUS.idle }
-    case BoxState.DESTROYED:
-      return { label: 'DELETED', color: STATUS.dim }
-    default:
-      return { label: (box.state ?? 'UNKNOWN').toUpperCase(), color: STATUS.dim }
-  }
-}
-
-// Proportional columns so the gaps stay even as the table widens, instead of
-// dumping all the slack into the Name column.
-const GRID = 'grid-cols-[2fr_1.3fr_1fr_120px] gap-x-4'
+// Data stays in separate columns; status and actions keep a fixed footprint.
+const GRID = 'min-w-[760px] grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.5fr)_56px_64px_112px_72px] gap-x-4'
 
 // Releasing a drag-selection (e.g. selecting a box name to copy it) fires a
 // click on the row; navigating away then would discard the selection mid-copy.
@@ -82,30 +42,22 @@ function isSelectingText(): boolean {
   return selection != null && !selection.isCollapsed
 }
 
-// One-click name copy that must not trigger the row's navigation click.
 /** Copies a box name without triggering navigation from its parent row. */
 function CopyNameButton({ name, className }: { name: string; className?: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, copy] = useCopyToClipboard({ timeout: 1300 })
 
   return (
     <button
       type="button"
       title="Copy name"
-      aria-label="Copy name"
+      aria-label={copied === name ? 'Copied name' : 'Copy name'}
       onClick={(e) => {
         e.stopPropagation()
-        void copyToClipboard(name).then((ok) => {
-          if (!ok) {
-            toast.error('Could not copy to clipboard')
-            return
-          }
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1300)
-        })
+        void copy(name)
       }}
       className={`inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${className ?? ''}`}
     >
-      {copied ? <Check className="size-[13px]" style={{ color: STATUS.running }} /> : <Copy className="size-[13px]" />}
+      {copied === name ? <Check className="size-[13px] text-success" /> : <Copy className="size-[13px]" />}
     </button>
   )
 }
@@ -177,6 +129,7 @@ export function BoxTable({
       <>
         {writePermitted && recoverable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Recover"
             aria-label="Recover"
@@ -188,28 +141,31 @@ export function BoxTable({
         )}
         {writePermitted && startable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Start"
             aria-label="Start"
             onClick={() => handleStart(box.id)}
             className={buttonClassName}
           >
-            <Play className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+            <Play className={iconClassName} strokeWidth={1.3} />
           </AsciiButton>
         )}
         {writePermitted && stoppable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Stop"
             aria-label="Stop"
             onClick={() => handleStop(box.id)}
             className={buttonClassName}
           >
-            <Square className={iconClassName} strokeWidth={1.3} fill="currentColor" />
+            <Square className={iconClassName} strokeWidth={1.3} />
           </AsciiButton>
         )}
         {writePermitted && transitioning && !startable && !stoppable && !recoverable && (
           <AsciiButton
+            variant="quiet"
             size="icon"
             title="Working…"
             aria-label="Working…"
@@ -223,7 +179,14 @@ export function BoxTable({
         {(deletePermitted || canCheckpoint) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <AsciiButton size="icon" aria-label="More" className={buttonClassName} type="button" title="More">
+              <AsciiButton
+                variant="quiet"
+                size="icon"
+                aria-label="More"
+                className={buttonClassName}
+                type="button"
+                title="More"
+              >
                 <MoreHorizontal className={iconClassName} strokeWidth={1.3} />
               </AsciiButton>
             </DropdownMenuTrigger>
@@ -249,22 +212,18 @@ export function BoxTable({
     )
   }
 
-  const emptyState = (
+  const emptyState = hasFilter ? (
+    <ResourceFilterEmptyState
+      title="No matching Boxes"
+      onClear={() => onFiltersChange({ ...filters, idOrName: undefined })}
+    />
+  ) : (
     <ResourceEmptyState
-      title={hasFilter ? 'No matching Boxes' : 'No Boxes yet.'}
+      title="No Boxes yet."
       icon={<Container className="size-6" />}
-      description={
-        hasFilter
-          ? 'Try another name or clear your filter.'
-          : 'Your agent creates them through the SDK, or you can make one by hand.'
-      }
+      description="Your agent creates them through the SDK, or you can make one by hand."
     >
-      {hasFilter && (
-        <AsciiButton size="sm" onClick={() => onFiltersChange({ ...filters, idOrName: undefined })}>
-          Clear filter
-        </AsciiButton>
-      )}
-      {!hasFilter && onOpenQuickstart && (
+      {onOpenQuickstart && (
         <button type="button" onClick={onOpenQuickstart} className="resource-guide-link">
           Open Quickstart →
         </button>
@@ -274,87 +233,108 @@ export function BoxTable({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* header */}
+      <div className="scroll-edge hidden min-h-0 flex-1 overflow-auto md:block" aria-busy={loading || isPageFetching}>
+        {/* header */}
+        <div
+          className={cn(
+            `hidden ${GRID} resource-list-head sticky top-0 z-10 flex-none items-center bg-background`,
+            (loading || data.length > 0) && 'md:grid',
+          )}
+        >
+          <span>Name</span>
+          <span>Box ID</span>
+          <span>Image</span>
+          <span>CPU</span>
+          <span>Memory</span>
+          <span>Status</span>
+          <span className="text-right">Actions</span>
+        </div>
+
+        {/* rows */}
+        <div
+          className={cn('flex flex-col', isPageFetching && 'opacity-60 transition-opacity')}
+          aria-busy={loading || isPageFetching}
+        >
+          {loading
+            ? Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
+                  <div className="h-4 w-40 animate-pulse bg-card" />
+                </div>
+              ))
+            : data.length === 0
+              ? emptyState
+              : data.map((box) => {
+                  const name = getBoxDisplayName(box)
+                  const image = box.image ?? '—'
+                  const busy = boxIsLoading[box.id]
+
+                  return (
+                    <div
+                      key={box.id}
+                      onClick={() => {
+                        if (isSelectingText()) return
+                        onRowClick?.(box)
+                      }}
+                      className={`group grid ${GRID} resource-list-row items-center ${
+                        onRowClick ? 'cursor-pointer' : ''
+                      } ${busy ? 'pointer-events-none' : ''}`}
+                    >
+                      <ResourceIdentity icon={<BoxResourceIcon box={box} />}>
+                        <a
+                          className="resource-link"
+                          title={name}
+                          href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+                            if (onRowClick) {
+                              event.preventDefault()
+                              if (!isSelectingText()) onRowClick(box)
+                            }
+                          }}
+                        >
+                          {name}
+                        </a>
+                        <CopyNameButton
+                          name={name}
+                          className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        />
+                      </ResourceIdentity>
+
+                      <span
+                        className="truncate font-mono text-meta text-muted-foreground"
+                        title={getBoxPublicIdLabel(box)}
+                      >
+                        {getBoxPublicIdLabel(box)}
+                      </span>
+                      <span className="truncate font-mono text-meta" title={box.image ?? undefined}>
+                        <TechnicalText value={image} />
+                      </span>
+                      <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
+                        {box.cpu ?? '—'} vCPU
+                      </span>
+                      <span className="whitespace-nowrap font-mono text-meta text-muted-foreground">
+                        {box.memory ?? '—'} GiB
+                      </span>
+
+                      {/* status */}
+                      <BoxStatusIndicator box={box} />
+
+                      {/* actions */}
+                      <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
+                        {renderActions(box)}
+                      </div>
+                    </div>
+                  )
+                })}
+        </div>
+      </div>
+
       <div
         className={cn(
-          `hidden ${GRID} resource-list-head flex-none items-center`,
-          (loading || totalItems > 0 || hasFilter) && 'md:grid',
+          'min-h-0 flex-1 space-y-3 overflow-y-auto md:hidden',
+          isPageFetching && 'opacity-60 transition-opacity',
         )}
-      >
-        <span>Name</span>
-        <span>Box ID</span>
-        <span>Status</span>
-        <span className="text-right">Actions</span>
-      </div>
-
-      {/* rows */}
-      <div
-        className={cn('hidden min-h-0 overflow-y-auto md:block', isPageFetching && 'opacity-60 transition-opacity')}
-        aria-busy={loading || isPageFetching}
-      >
-        {loading
-          ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
-                <div className="h-4 w-40 animate-pulse bg-card" />
-              </div>
-            ))
-          : data.length === 0
-            ? emptyState
-            : data.map((box) => {
-                const st = statusOf(box)
-                const name = getBoxDisplayName(box)
-                const busy = boxIsLoading[box.id]
-
-                return (
-                  <div
-                    key={box.id}
-                    onClick={() => {
-                      if (isSelectingText()) return
-                      onRowClick?.(box)
-                    }}
-                    className={`group grid ${GRID} resource-list-row items-center ${
-                      onRowClick ? 'cursor-pointer' : ''
-                    } ${busy ? 'pointer-events-none' : ''}`}
-                  >
-                    {/* the box: its shape drawn, then its name */}
-                    <span className="inline-flex min-w-0 items-center gap-3 font-semibold">
-                      <Container className="size-6 shrink-0 text-muted-foreground" />
-                      <a
-                        className="resource-link"
-                        href={`/dashboard/boxes/${encodeURIComponent(getBoxRouteId(box))}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-                          if (onRowClick) {
-                            event.preventDefault()
-                            if (!isSelectingText()) onRowClick(box)
-                          }
-                        }}
-                      >
-                        {name}
-                      </a>
-                      <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />
-                    </span>
-
-                    {/* box id */}
-                    <span className="truncate font-mono text-meta text-muted-foreground">
-                      {getBoxPublicIdLabel(box)}
-                    </span>
-
-                    {/* status */}
-                    <StatusIndicator label={st.label} color={st.color} />
-
-                    {/* actions */}
-                    <div className="flex justify-end gap-[6px]" onClick={(e) => e.stopPropagation()}>
-                      {renderActions(box)}
-                    </div>
-                  </div>
-                )
-              })}
-      </div>
-
-      <div
-        className={cn('min-h-0 space-y-3 overflow-y-auto md:hidden', isPageFetching && 'opacity-60 transition-opacity')}
         role="region"
         aria-label="Box cards"
         aria-busy={loading || isPageFetching}
@@ -369,7 +349,6 @@ export function BoxTable({
           : data.length === 0
             ? emptyState
             : data.map((box) => {
-                const st = statusOf(box)
                 const name = getBoxDisplayName(box)
                 const created = getRelativeTimeString(box.createdAt).relativeTimeString
                 const busy = boxIsLoading[box.id]
@@ -395,17 +374,15 @@ export function BoxTable({
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <span className="min-w-0">
                         <span className="flex min-w-0 items-center gap-2 font-semibold">
-                          <span style={{ color: 'hsl(var(--brand))' }} className="text-meta">
-                            ▸
-                          </span>
-                          <span className="truncate">{name}</span>
+                          <BoxResourceIcon box={box} />
+                          <span className="truncate font-mono">{name}</span>
                           <CopyNameButton name={name} />
                         </span>
                         <span className="mt-1 block truncate font-mono text-meta text-muted-foreground">
                           {getBoxPublicIdLabel(box)}
                         </span>
                       </span>
-                      <StatusIndicator label={st.label} color={st.color} />
+                      <BoxStatusIndicator box={box} />
                     </div>
 
                     <div className="mt-4 grid grid-cols-3 gap-2 border-y border-dashed border-border py-3">

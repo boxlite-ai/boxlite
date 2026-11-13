@@ -4,7 +4,8 @@
  */
 
 import { Button } from '@/components/ui/button'
-import { ArrowDown, RefreshCw, Trash2 } from '@/components/ui/icon'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ArrowDown, Maximize2, Minimize2, RefreshCw, Trash2 } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
@@ -33,10 +34,13 @@ const FONT_SIZES = [12, 13, 14, 16]
  * to the runner, which ends it once it has had no client for 5 minutes.
  * Connecting again starts a fresh shell.
  */
-export function BoxTerminal({ boxId, className }: { boxId: string; className?: string }) {
+export function BoxTerminal({ boxId, boxName, className }: { boxId: string; boxName?: string; className?: string }) {
   const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
   const organizationId = selectedOrganization?.id
+  const regionRef = useRef<HTMLDivElement>(null)
+  const [maximized, setMaximized] = useState(false)
+  const viewportButtonRef = useRef<HTMLButtonElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const refitRef = useRef<(() => void) | null>(null)
@@ -63,7 +67,7 @@ export function BoxTerminal({ boxId, className }: { boxId: string; className?: s
       cursorBlink: true,
       disableStdin: true,
       fontSize: fontSizeRef.current,
-      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+      fontFamily: 'ui-monospace, monospace',
       theme: { background: '#000000' },
     })
     terminalRef.current = terminal
@@ -100,6 +104,19 @@ export function BoxTerminal({ boxId, className }: { boxId: string; className?: s
     refitRef.current = scheduleFit
     scheduleFit()
     void document.fonts?.ready.then(scheduleFit)
+    const fontFamily = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()
+    if (fontFamily) {
+      void document.fonts
+        ?.load?.(`${fontSizeRef.current}px ${fontFamily}`)
+        .then((faces) => {
+          if (disposed || faces.length === 0) return
+          terminal.options.fontFamily = fontFamily
+          scheduleFit()
+        })
+        .catch(() => {
+          // Keep the usable monospace fallback and active shell if the font is unavailable.
+        })
+    }
     const resizeObserver = new ResizeObserver(scheduleFit)
     resizeObserver.observe(container)
     const onResize = terminal.onResize(sendResize)
@@ -172,15 +189,62 @@ export function BoxTerminal({ boxId, className }: { boxId: string; className?: s
     }
   }, [api, boxId, organizationId, attempt])
 
+  // Keep xterm in place: only its viewport changes. Covered app controls must not receive focus.
+  useEffect(() => {
+    refitRef.current?.()
+    if (!maximized || !regionRef.current) return
+    const background = new Map<HTMLElement, boolean>()
+    let branch: HTMLElement | null = regionRef.current
+    while (branch?.parentElement && branch !== document.body) {
+      for (const sibling of Array.from(branch.parentElement.children)) {
+        if (sibling !== branch && sibling instanceof HTMLElement) {
+          background.set(sibling, sibling.hasAttribute('inert'))
+          sibling.setAttribute('inert', '')
+        }
+      }
+      branch = branch.parentElement
+    }
+    const previousOverflow = document.body.style.overflow
+    const previousGutter = document.documentElement.style.scrollbarGutter
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.scrollbarGutter = 'auto'
+    return () => {
+      for (const [element, wasInert] of background) {
+        if (!wasInert) element.removeAttribute('inert')
+      }
+      document.body.style.overflow = previousOverflow
+      document.documentElement.style.scrollbarGutter = previousGutter
+    }
+  }, [maximized])
+
   return (
-    <div role="region" aria-label="Box terminal" className={cn('flex min-h-0 min-w-0 flex-col bg-black', className)}>
+    <div
+      ref={regionRef}
+      role="region"
+      aria-label="Box terminal"
+      onKeyDownCapture={(event) => {
+        if (event.key !== 'F6' || !event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return
+        if (!(event.target instanceof Node) || !containerRef.current?.contains(event.target)) return
+        event.preventDefault()
+        event.stopPropagation()
+        viewportButtonRef.current?.focus()
+      }}
+      data-maximized={maximized || undefined}
+      className={cn('flex min-h-0 min-w-0 flex-col bg-black', className, maximized && 'fixed inset-0 z-50')}
+    >
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2 font-sans text-meta text-foreground">
         <div role="status" className="flex min-w-0 grow items-center gap-2 whitespace-nowrap">
+          {maximized && (
+            <span className="mr-3 min-w-0 max-w-[40vw] truncate font-mono text-foreground" title={boxName ?? boxId}>
+              {boxName ?? boxId}
+            </span>
+          )}
           <span
             aria-hidden="true"
             className={cn('size-1.5 shrink-0', status === 'open' ? 'bg-success' : 'bg-muted-foreground')}
           />
           <span>{STATUS_LINE[status]}</span>
+          {maximized && <span className="ml-2 text-muted-foreground">Ctrl+Shift+F6: toolbar</span>}
         </div>
         <div role="group" aria-label="Terminal controls" className="flex flex-wrap items-center gap-1">
           {status !== 'connecting' && status !== 'open' && (
@@ -194,28 +258,41 @@ export function BoxTerminal({ boxId, className }: { boxId: string; className?: s
               Reconnect
             </Button>
           )}
-          <select
-            aria-label="Terminal text size"
-            title="Terminal text size"
-            defaultValue={13}
-            className="h-7 border border-border bg-card px-1 text-meta focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
-            onChange={(event) => {
-              const size = Number(event.target.value)
+          <Select
+            defaultValue="13"
+            onValueChange={(value) => {
+              const size = Number(value)
               if (!FONT_SIZES.includes(size)) return
               fontSizeRef.current = size
               const terminal = terminalRef.current
               if (!terminal) return
               terminal.options.fontSize = size
               refitRef.current?.()
-              terminal.focus()
             }}
           >
-            {FONT_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size} px
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              aria-label="Terminal text size"
+              title="Terminal text size"
+              size="xs"
+              className="w-20 gap-2 px-2 text-meta"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              align="end"
+              className="z-[60] min-w-20"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault()
+                terminalRef.current?.focus()
+              }}
+            >
+              {FONT_SIZES.map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size} px
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -239,6 +316,21 @@ export function BoxTerminal({ boxId, className }: { boxId: string; className?: s
             }}
           >
             <ArrowDown className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            ref={viewportButtonRef}
+            aria-keyshortcuts="Control+Shift+F6"
+            aria-label={maximized ? 'Restore terminal' : 'Maximize terminal'}
+            title={`${maximized ? 'Restore terminal' : 'Maximize terminal'} (Ctrl+Shift+F6 to focus)`}
+            aria-pressed={maximized}
+            onClick={() => {
+              setMaximized((value) => !value)
+              terminalRef.current?.focus()
+            }}
+          >
+            {maximized ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
           </Button>
         </div>
       </div>
