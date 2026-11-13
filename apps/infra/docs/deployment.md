@@ -55,7 +55,7 @@ Stage candidate dispatches may use a workflow branch and accept its full SHAs or
 Stage also accepts stable tags as commit references: it resolves the tag once, then builds or reuses artifacts for that SHA.
 It does not require a GitHub Release or use its published Runner assets.
 Dev/prod published stable releases still run from `main`; RC inputs remain refused.
-Production promotion continues to read release images from dev; stage is an independent deployment target.
+Dev/prod import existing release images from GHCR; stage is an independent deployment target.
 Production still requires a stable release on main, its published Runner assets and protected apply confirmation.
 Example stage preview after its prerequisites and artifacts are prepared:
 
