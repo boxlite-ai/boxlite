@@ -322,6 +322,52 @@ describe('CI shared worker lifecycle', () => {
       expect(await journal.hasCapacity(lease, key, limits)).toBe(true)
     },
   )
+  it('retries a durable idle retirement after restart without replacing its original intent', async () => {
+    supplyInventory()
+    const retire = idleRetirement(false)
+    await pool.balance(lease, limits, countedDemand(), undefined, true)
+    await ageRunners()
+    await pool.balance(lease, limits, [], undefined, true)
+    const pending = (await allocation()).value.effect
+    expect(pending?.kind).toBe('runner-retire')
+    await pool.close()
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    retire.mockImplementationOnce(async (identity, guard) => {
+      await guard({ kind: 'remove', ...identity })
+      expect((await byName(identity.name)).value.effect).toEqual(pending)
+      runners.delete(identity.name)
+      return true
+    })
+    await pool.balance(lease, limits, [], undefined, true)
+    expect(retire).toHaveBeenCalledTimes(2)
+    expect(backend.workers.stop).toHaveBeenCalledTimes(1)
+    expect((await allocation()).value).toMatchObject({ closing: true, runner: { phase: 'absent' } })
+    expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
+  })
+  it('rejects a resumed idle retirement when its original allocation version changes', async () => {
+    supplyInventory()
+    const retire = idleRetirement(false)
+    await pool.balance(lease, limits, countedDemand(), undefined, true)
+    await ageRunners()
+    await pool.balance(lease, limits, [], undefined, true)
+    await pool.close()
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    retire.mockImplementationOnce(async (identity, guard) => {
+      const current = await byName(identity.name)
+      await journal.advance(lease, current.record.key, current.record.version, {
+        effect: { ...current.value.effect!, id: randomUUID() },
+      })
+      await guard({ kind: 'remove', ...identity })
+      runners.delete(identity.name)
+      return true
+    })
+    await pool.balance(lease, limits, [], undefined, true)
+    expect(retire).toHaveBeenCalledTimes(2)
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+    expect((await allocation()).value.closing).toBe(false)
+    expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({ errorType: 'StateConflict' }))
+  })
   it('does not stop a Box when persisting successful idle retirement loses its confirmation', async () => {
     supplyInventory()
     idleRetirement()
