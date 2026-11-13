@@ -40,6 +40,10 @@ the normal lease duration, so CI scheduling cannot expire it before the tested b
 `make test:apps:api TEST_FILES=main.spec.ts` exercises the real bootstrap entry
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
+The CI Listener service is mocked at the service boundary, so bootstrap tests do
+not load its runtime and archive dependencies through the partial filesystem mock.
+They also check that Listener startup occurs once, after HTTP starts listening;
+the Listener's own suites exercise its implementation.
 
 ### Hosted CI lease storage
 
