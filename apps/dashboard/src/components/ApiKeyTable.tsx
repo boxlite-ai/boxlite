@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { ResourceFilterEmptyState, ResourceEmptyState, ResourceIdentity } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { getRelativeTimeString } from '@/lib/utils'
@@ -30,58 +30,49 @@ interface DataTableProps {
   loading: boolean
   isLoadingKey: (key: ApiKeyList) => boolean
   onRevoke: (key: ApiKeyList) => void
+  onClearFilter?: () => void
 }
 
-// Mirrors the Boxes (BoxTable) layout: borderless full-height column, header with a
-// bottom rule, hover-highlighted rows, and a plain "Showing N" footer.
-const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
+const GRID = 'grid-cols-[minmax(0,1.4fr)_minmax(0,1.6fr)_84px_repeat(3,82px)_28px] gap-x-4'
 
 /**
  * Lists API keys with a confirmation step before calling the owner's revoke handler.
  * Per-key loading state disables revocation while its request is in flight.
  */
-export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
-  const hasRows = loading || data.length > 0
+export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilter }: DataTableProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* One scroll box for header and rows: on a phone the table scrolls sideways inside it
-          and the page itself stays put. An empty list has no columns to keep, so it does not widen. */}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className={hasRows ? 'min-w-[720px]' : undefined}>
+      <div className="resource-content scroll-edge">
+        <div className={loading || data.length > 0 ? 'min-w-[720px]' : 'flex flex-1 flex-col'}>
           {/* header */}
-          <div className={`grid ${GRID} resource-list-head flex-none items-center ${hasRows ? '' : 'hidden'}`}>
+          <div
+            className={`${!loading && data.length === 0 ? 'hidden' : 'grid'} ${GRID} resource-list-head flex-none items-center`}
+          >
             <span>Name</span>
             <span>Key</span>
             <span>Permissions</span>
             <span>Created</span>
-            <span>Last used</span>
+            <span>Last Used</span>
             <span>Expires</span>
             <span />
           </div>
 
           {/* rows */}
-          <div>
+          <div className="flex flex-1 flex-col">
             {loading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className={`grid ${GRID} items-center border-b border-border px-[18px] py-3`}>
                   <div className="h-4 w-3/4 animate-pulse bg-card" />
                 </div>
               ))
+            ) : data.length === 0 && onClearFilter ? (
+              <ResourceFilterEmptyState title="No API keys match your search" onClear={onClearFilter} />
             ) : data.length === 0 ? (
               <ResourceEmptyState
-                title="No API keys yet."
+                title="No API Keys yet."
                 icon={<KeyRound className="size-6" />}
                 description="Create a key to get started."
-              >
-                <a
-                  href="https://docs.boxlite.ai"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="resource-guide-link"
-                >
-                  Setup guide →
-                </a>
-              </ResourceEmptyState>
+              />
             ) : (
               data.map((key) => {
                 const busy = isLoadingKey(key)
@@ -92,8 +83,14 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
                       busy ? 'pointer-events-none opacity-50' : ''
                     }`}
                   >
-                    <span className="truncate font-semibold">{key.name}</span>
-                    <span className="truncate font-mono text-meta text-muted-foreground">{key.value}</span>
+                    <ResourceIdentity icon={<KeyRound />}>
+                      <span className="resource-name" title={key.name}>
+                        {key.name}
+                      </span>
+                    </ResourceIdentity>
+                    <span className="truncate font-mono text-meta text-muted-foreground" title={key.value}>
+                      {key.value}
+                    </span>
                     <span>
                       <PermissionsTooltip permissions={key.permissions} />
                     </span>
@@ -110,7 +107,7 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
                       <Dialog>
                         <DialogTrigger asChild>
                           <AsciiButton
-                            variant="danger"
+                            variant="quiet-danger"
                             size="icon"
                             aria-label="Revoke key"
                             type="button"
@@ -152,11 +149,13 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
       </div>
 
       {/* footer */}
-      <div className="flex flex-none items-center justify-between px-0 py-4 font-mono text-meta text-muted-foreground">
-        <span>
-          Showing {data.length} key{data.length === 1 ? '' : 's'}
-        </span>
-      </div>
+      {(loading || data.length > 0 || onClearFilter) && (
+        <div className="resource-footer shrink-0">
+          <span>
+            Showing {data.length} key{data.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -180,10 +179,8 @@ function PermissionsTooltip({ permissions }: { permissions: ApiKeyListPermission
 
   return (
     <Popover>
-      <PopoverTrigger>
-        <span className="inline-flex items-center border border-brand/30 px-[9px] py-[3px] font-mono text-meta tracking-[0.5px] text-brand">
-          {badgeText}
-        </span>
+      <PopoverTrigger className="border-b border-dotted border-border-selected text-meta text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground">
+        {badgeText}
       </PopoverTrigger>
       <PopoverContent className="p-0">
         <p className="border-b border-border p-2 text-meta font-medium text-muted-foreground">Permissions</p>

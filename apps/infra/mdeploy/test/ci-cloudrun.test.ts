@@ -24,6 +24,10 @@ function capture(configured: boolean) {
   const namespace = (path: string): any =>
     new Proxy(function () {}, {
       get: (_target, key) => namespace(path + '.' + String(key)),
+      apply: () => {
+        if (path === 'gcp.organizations.getProjectOutput') return { number: value('123456789012') }
+        throw new Error(`Unexpected provider lookup: ${path}`)
+      },
       construct: (_target, [name, args]) => {
         records.push({ type: path, name, args })
         return new Proxy(
@@ -64,7 +68,11 @@ function capture(configured: boolean) {
       }
     : {}
   const channels = apiEnvironmentFrom({
-    environment: { STACK_DOMAIN: 'example.test', OIDC_ISSUER_BASE_URL: 'https://auth.example.test', ...ci },
+    environment: {
+      STACK_DOMAIN: 'example.test',
+      OIDC_ISSUER_BASE_URL: 'https://auth.example.test',
+      ...ci,
+    },
     declaration: {
       groups: { deploy: [], api: Object.keys(ci), secret: configured ? secrets : [] },
       where: '/test/mstage.config.json',
@@ -123,14 +131,14 @@ function capture(configured: boolean) {
   return { service: unwrap(service.args), records }
 }
 
-test('the actual Cloud Run API resource retains background CPU and a service-level minimum only with CI', () => {
+test('the Cloud Run API retains background CPU and adds a service-level minimum only with CI', () => {
   const on = capture(true).service
   assert.deepEqual(on.scaling, { minInstanceCount: 1 })
   assert.equal(on.template.containers[0].resources.cpuIdle, false)
   assert.equal(on.ingress, 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER')
   const off = capture(false).service
   assert.equal(off.scaling, undefined)
-  assert.equal(off.template.containers[0].resources, undefined)
+  assert.equal(off.template.containers[0].resources.cpuIdle, false)
 })
 
 test('CI refs reach actual Cloud Run envs and per-secret grants, without plaintext payloads', () => {

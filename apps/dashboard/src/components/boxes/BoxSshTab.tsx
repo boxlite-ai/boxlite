@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 
+import { BoxDetailField } from './BoxDetailFields'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Box, BoxState, NetworkMode, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { createPortal } from 'react-dom'
@@ -7,6 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { copyToClipboard } from '@/lib/copy-text'
 import { Button } from '@/components/ui/button'
+import { BOXLITE_SSH_DOCS_URL } from '@/constants/ExternalLinks'
 import {
   Dialog,
   DialogContent,
@@ -363,39 +365,40 @@ function SshControls({
   const needsInbound = box.network?.inbound.mode === NetworkMode.DISABLED
   const statusRow = (
     <div>
-      <div className="grid grid-cols-[80px_minmax(0,1fr)] gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
-        <span className="text-meta text-muted-foreground">SSH</span>
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            title="Refresh SSH status"
-            disabled={loading || !!pending}
-            onClick={() => setStatusRefresh((value) => value + 1)}
-            className="whitespace-nowrap text-muted-foreground hover:text-foreground"
-          >
-            {pending
-              ? 'updating…'
-              : loading
-                ? 'loading…'
-                : !running
-                  ? 'not running'
-                  : status
-                    ? status.enabled
-                      ? 'enabled'
-                      : 'disabled'
-                    : 'unavailable · retry'}
-          </button>
-          {canManage && (
-            <Switch
-              aria-label="SSH access"
-              checked={status?.enabled ?? false}
-              disabled={disabled || !status}
-              className="shrink-0"
-              onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
-            />
-          )}
-        </div>
-      </div>
+      <dl>
+        <BoxDetailField label="SSH" className="font-sans">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+            <button
+              type="button"
+              title="Refresh SSH status"
+              disabled={loading || !!pending}
+              onClick={() => setStatusRefresh((value) => value + 1)}
+              className="justify-self-start whitespace-nowrap text-muted-foreground hover:text-foreground"
+            >
+              {pending
+                ? 'updating…'
+                : loading
+                  ? 'loading…'
+                  : !running
+                    ? 'not running'
+                    : status
+                      ? status.enabled
+                        ? 'enabled'
+                        : 'disabled'
+                      : 'unavailable · retry'}
+            </button>
+            {canManage && (
+              <Switch
+                aria-label="SSH access"
+                checked={status?.enabled ?? false}
+                disabled={disabled || !status}
+                className="shrink-0"
+                onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
+              />
+            )}
+          </div>
+        </BoxDetailField>
+      </dl>
       {error && !open && (
         <p role="alert" className="mt-2 text-meta text-destructive">
           {error}
@@ -612,7 +615,7 @@ function SshControls({
                   )}
                 </ol>
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-muted-foreground">
-                  <a href="https://docs.boxlite.ai/cloud/ssh" target="_blank" rel="noreferrer">
+                  <a href={BOXLITE_SSH_DOCS_URL} target="_blank" rel="noreferrer" className="resource-guide-link">
                     SSH guide ↗
                   </a>
                   {(status?.enabled || credentials) && (

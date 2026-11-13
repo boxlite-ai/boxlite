@@ -5,9 +5,50 @@
 package config
 
 import (
+	"encoding/json"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
+
+func TestProxyStartupResolvesNamespace(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apiclient.NewBoxliteConfiguration(
+			"test", *apiclient.NewOidcConfig("https://issuer.example/", "test", "boxlite"),
+			false, map[string]apiclient.Announcement{}, "https://{{PORT}}-{{boxId}}.proxy.boxlite.test", "", false, "test",
+		))
+	}))
+	defer api.Close()
+	for _, tc := range []struct {
+		name, namespace, want string
+	}{
+		{"cloud", "proxy.boxlite.test", "proxy.boxlite.test"},
+		{"local", "localhost:4000", "localhost:4000"},
+		{"missing namespace", "", "proxy.boxlite.test"},
+		{"blank namespace", " \t", "proxy.boxlite.test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config = nil
+			t.Cleanup(func() { config = nil })
+			t.Setenv("PROXY_PORT", "4000")
+			t.Setenv("PROXY_PROTOCOL", "http")
+			t.Setenv("PROXY_API_KEY", "test-proxy-key")
+			t.Setenv("BOXLITE_API_URL", api.URL)
+			t.Setenv("PROXY_DOMAIN", tc.namespace)
+			got, err := GetConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ProxyDomain != tc.want {
+				t.Fatalf("startup namespace=%q; want %q", got.ProxyDomain, tc.want)
+			}
+		})
+	}
+}
 
 func TestGetOtelHeaders(t *testing.T) {
 	cases := []struct {

@@ -39,8 +39,8 @@ type Domain struct {
 	Target *DomainTarget
 }
 
-// DomainList is every domain the organization holds, with the allowance
-// they count against. MinLength is the shortest name a new claim may use.
+// DomainList is every held domain, with the platform-only allowance.
+// MinLength is the shortest platform name a new claim may use.
 type DomainList struct {
 	Domains   []Domain
 	Limit     uint32

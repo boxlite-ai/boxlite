@@ -59,7 +59,7 @@ describe('InvoicesTable', () => {
       'Status',
     ])
     expect(target.querySelector('[data-invoice-date]')?.textContent).toBe('2026-09-04')
-    expect(target.querySelector('[data-invoice-type]')?.textContent).toBe('upgrade')
+    expect(target.querySelector('[data-invoice-type]')?.textContent).toBe('Upgrade')
     expect(target.querySelector('[data-invoice-number]')?.textContent).toBe('BOX-2026-0001')
     expect(target.querySelector('[data-invoice-status]')?.textContent).toBe('Paid')
   })

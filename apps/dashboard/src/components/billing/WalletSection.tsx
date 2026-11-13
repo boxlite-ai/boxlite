@@ -1,4 +1,5 @@
 import { TabIcon } from '@/components/ui/TabIcon'
+import { ResourceErrorState, ResourceErrorNotice } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -186,42 +187,49 @@ function MoneyHistorySection() {
         </TabsList>
 
         <TabsContent value="invoices" className="mt-5">
-          {invoicesQuery.isError ? (
-            <div
-              role="alert"
-              className="flex items-center justify-between gap-4 border border-border px-4 py-6 text-body"
-            >
-              <p>Could not load billing history. Try again.</p>
-              <AsciiButton onClick={() => void invoicesQuery.refetch()} disabled={invoicesQuery.isFetching}>
-                Retry
-              </AsciiButton>
-            </div>
-          ) : (
-            <InvoicesTable
-              data={invoicesQuery.data?.items ?? []}
-              loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
+          {invoicesQuery.isError && invoicesQuery.data === undefined ? (
+            <ResourceErrorState
+              title="Could not load billing history"
+              retrying={invoicesQuery.isFetching}
+              onRetry={() => void invoicesQuery.refetch()}
             />
+          ) : (
+            <>
+              {invoicesQuery.isError && (
+                <ResourceErrorNotice
+                  title="Could not refresh billing history. Showing previously loaded data."
+                  retrying={invoicesQuery.isFetching}
+                  onRetry={() => void invoicesQuery.refetch()}
+                />
+              )}
+              <InvoicesTable data={invoicesQuery.data?.items ?? []} loading={invoicesQuery.isLoading} />
+            </>
           )}
           <Pager page={invoicePage} totalPages={invoiceTotalPages} onPage={setInvoicePage} />
           <PanelNote>Amounts charged to your payment method.</PanelNote>
         </TabsContent>
 
         <TabsContent value="credits" className="mt-5">
-          {transactionsQuery.isError ? (
-            <div
-              role="alert"
-              className="flex items-center justify-between gap-4 border border-border px-4 py-6 text-body"
-            >
-              <p>Could not load credit activity. Try again.</p>
-              <AsciiButton onClick={() => void transactionsQuery.refetch()} disabled={transactionsQuery.isFetching}>
-                Retry
-              </AsciiButton>
-            </div>
-          ) : (
-            <WalletTransactionsTable
-              data={transactionsQuery.data?.items ?? []}
-              loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+          {transactionsQuery.isError && transactionsQuery.data === undefined ? (
+            <ResourceErrorState
+              title="Could not load credit activity"
+              retrying={transactionsQuery.isFetching}
+              onRetry={() => void transactionsQuery.refetch()}
             />
+          ) : (
+            <>
+              {transactionsQuery.isError && (
+                <ResourceErrorNotice
+                  title="Could not refresh credit activity. Showing previously loaded data."
+                  retrying={transactionsQuery.isFetching}
+                  onRetry={() => void transactionsQuery.refetch()}
+                />
+              )}
+              <WalletTransactionsTable
+                data={transactionsQuery.data?.items ?? []}
+                loading={transactionsQuery.isLoading}
+              />
+            </>
           )}
           <Pager page={creditPage} totalPages={creditTotalPages} onPage={setCreditPage} />
           {/* Says what these are, which is the job the fold used to do badly:
@@ -437,7 +445,7 @@ export function WalletSection() {
                   <>
                     <div className="mb-1.5 flex items-center justify-between font-sans text-label uppercase tracking-[1px] text-muted-foreground">
                       <span>Promotional credit remaining</span>
-                      <span className="tabular-nums">
+                      <span className="font-mono tabular-nums">
                         {formatAmount(wallet.creditRemainingCents ?? 0)} /{' '}
                         {formatAmount(wallet.creditGrantedCents ?? 0)}
                       </span>
@@ -577,7 +585,7 @@ export function WalletSection() {
                   <div id="auto-reload-settings" className="mt-3 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-col gap-1.5">
                       <div className="flex flex-wrap items-center gap-2 font-mono text-body text-foreground">
-                        <span>when balance &lt;</span>
+                        <span className="font-sans">when balance &lt;</span>
                         <span className="inline-flex items-center border border-border px-2 py-1 transition-colors focus-within:border-brand">
                           <span className="text-muted-foreground">$</span>
                           <NumericFormat
@@ -604,7 +612,7 @@ export function WalletSection() {
                             className="w-[72px] bg-transparent pl-1 text-right tabular-nums text-foreground outline-none"
                           />
                         </span>
-                        <span className="text-muted-foreground">→ bring to</span>
+                        <span className="font-sans text-muted-foreground">→ bring to</span>
                         <span className="inline-flex items-center border border-border px-2 py-1 transition-colors focus-within:border-brand">
                           <span className="text-muted-foreground">$</span>
                           <NumericFormat

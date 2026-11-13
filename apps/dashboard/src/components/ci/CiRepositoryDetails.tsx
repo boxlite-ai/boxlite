@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ApiClient } from '@/api/apiClient'
 import type { CiRepositoryContext } from '@/api/ci-types'
 import { AsciiButton } from '@/components/ascii'
-import { ExternalLink } from '@/components/ui/icon'
+import { ChevronLeft, ChevronRight, ExternalLink } from '@/components/ui/icon'
 
 const refreshed = 'ci-repository-access-returned'
 
@@ -95,7 +95,7 @@ export function CiRepositoryDetails({
   return (
     <div
       role="region"
-      className="space-y-3 border-l border-border py-3 pl-4 font-mono text-meta"
+      className="min-w-0 space-y-3 py-2 font-sans text-meta"
       aria-label={`Installed repositories for ${account}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -112,7 +112,7 @@ export function CiRepositoryDetails({
             onClick={() => {
               pendingReturn.current = true
             }}
-            className="inline-flex items-center gap-1.5 underline underline-offset-4 hover:text-foreground"
+            className="inline-flex items-center gap-1.5 underline underline-offset-4 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
           >
             Install app for repos <ExternalLink className="size-3.5" />
           </a>
@@ -121,39 +121,47 @@ export function CiRepositoryDetails({
       {query.isPending ? (
         <p role="status">Loading repositories…</p>
       ) : query.isError ? (
-        <div>
+        <div className="flex flex-wrap items-center gap-3 text-muted-foreground">
           <p role="alert">Unable to load repositories.</p>
           <AsciiButton size="sm" onClick={() => void query.refetch()}>
             Retry
           </AsciiButton>
         </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-border/60 border-y border-border/60">
           {query.data.repositories.map((repo) => (
-            <li key={repo.id} className="flex items-center justify-between gap-3">
-              <span className="break-all">
+            <li key={repo.id} className="flex min-w-0 items-center justify-between gap-3 py-2.5">
+              <span className="min-w-0 truncate font-mono" title={`${repo.owner.login}/${repo.name}`}>
                 {repo.owner.login}/{repo.name}
               </span>
               <span className="shrink-0 text-muted-foreground">{repo.private ? 'Private' : 'Public'}</span>
             </li>
           ))}
           {!query.data.repositories.length && (
-            <li className="text-muted-foreground">No repositories authorized for this App.</li>
+            <li className="py-4 text-muted-foreground">No repositories authorized for this App.</li>
           )}
         </ul>
       )}
       {(page > 1 || query.data?.next_page) && (
         <div className="flex items-center justify-end gap-3">
-          <AsciiButton size="sm" disabled={page === 1 || query.isFetching} onClick={() => setPage(page - 1)}>
-            Previous
-          </AsciiButton>
-          <span>Page {page}</span>
+          <span className="text-muted-foreground">Page {page}</span>
           <AsciiButton
-            size="sm"
+            size="icon"
+            aria-label="Previous"
+            title="Previous"
+            disabled={page === 1 || query.isFetching}
+            onClick={() => setPage(page - 1)}
+          >
+            <ChevronLeft className="size-3.5" />
+          </AsciiButton>
+          <AsciiButton
+            size="icon"
+            aria-label="Next"
+            title="Next"
             disabled={!query.data?.next_page || query.isFetching}
             onClick={() => setPage(query.data!.next_page!)}
           >
-            Next
+            <ChevronRight className="size-3.5" />
           </AsciiButton>
         </div>
       )}

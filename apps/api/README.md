@@ -664,6 +664,15 @@ remain denied. Confirmed Box absence makes its physical capacity available; the
 allocation remains recorded until the original runner cleanup also finishes.
 A successful CI job alone does not prove that cleanup finished.
 
+## Custom domain tests
+
+Run `make test:apps:api TEST_FILES='custom-domain|domain.service'` for domain setup,
+ownership transfer, cleanup, subscription and routing checks. Use disposable
+PostgreSQL through `DB_*` and Redis through `REDIS_*`; these tests may destroy test data.
+Set `BOXLITE_TEST_REDIS_URL` explicitly to enable the subscription integration suite.
+DNS, Commerce and certificate-provider responses are controlled in these tests;
+real issuance and renewal require [deployment acceptance](../infra/docs/gcp/deployment.md#customer-domain-https).
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored
@@ -1443,9 +1452,8 @@ for reference syntax and deployment behavior.
 
 Run Node 24 and use `make build:apps:api`. On GCP Cloud Run, background scheduling
 requires CPU allocation while idle and at least one minimum instance. mdeploy adds
-`cpuIdle: false` and a service-level minimum of one instance when hosted CI is configured;
-unconfigured API deployments retain their existing defaults. This incurs idle instance
-costs. The database lease handles restarts and overlapping replicas; minimum instances
+`cpuIdle: false` for custom domains and a service-level minimum of one instance when hosted CI is configured.
+This incurs idle instance costs. The database lease handles restarts and overlapping replicas; minimum instances
 do not guarantee that a process never restarts. These settings and formal hosted-App CI
 still require dev deployment acceptance.
 

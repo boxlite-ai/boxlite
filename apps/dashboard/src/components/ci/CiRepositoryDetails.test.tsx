@@ -50,7 +50,9 @@ describe('CI installed repository details', () => {
     })
   }
   const button = (label: string) =>
-    [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent === label)!
+    [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (node) => (node.getAttribute('aria-label') || node.textContent) === label,
+    )!
   it('shows authorized visibility and the original installation settings, then fetches the next bounded page', async () => {
     await render()
     expect(document.body.textContent).toContain('Public')

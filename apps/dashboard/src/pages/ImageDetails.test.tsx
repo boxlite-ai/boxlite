@@ -24,7 +24,7 @@ const state = vi.hoisted(() => ({
   error: null as Error | null,
   byImage: new Map<string, unknown[]>(),
   deniedPermissions: [] as string[],
-  newBoxImage: undefined as string | undefined,
+  codeRef: null as string | null,
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -52,13 +52,12 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
     authenticatedUserHasPermission: (permission: string) => !state.deniedPermissions.includes(permission),
   }),
 }))
-vi.mock('@/components/Box/CreateBoxDialog', () => ({
-  CreateBoxDialog: ({ prefillImage }: { prefillImage?: string }) => {
-    state.newBoxImage = prefillImage
+vi.mock('@/components/images/UseImageSheet', () => ({
+  UseImageSheet: ({ imageRef }: { imageRef: string | null }) => {
+    state.codeRef = imageRef
     return null
   },
 }))
-vi.mock('@/components/images/UseImageSheet', () => ({ UseImageSheet: () => null }))
 vi.mock('react-router-dom', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mocks.navigate,
@@ -145,7 +144,7 @@ beforeEach(() => {
   state.error = null
   state.byImage = new Map()
   state.deniedPermissions = []
-  state.newBoxImage = undefined
+  state.codeRef = null
   vi.resetAllMocks()
   mocks.pin.mockResolvedValue(undefined)
   mocks.unpin.mockResolvedValue(undefined)
@@ -180,19 +179,24 @@ describe('an organization image', () => {
 
     expect(text()).toContain('quay.io/acme/app')
     expect(text()).toContain('2 pinned')
-    expect(text()).toContain(DIGEST_NEW)
-    expect(text()).toContain(DIGEST_OLD)
-    expect(text()).toContain('quay.io/acme/app:v1')
+    expect(document.querySelector(`button[aria-label="View version ${DIGEST_NEW}"]`)).not.toBeNull()
+    expect(document.querySelector(`button[aria-label="View version ${DIGEST_OLD}"]`)).not.toBeNull()
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>(`button[aria-label="View version ${DIGEST_OLD}"]`)?.click(),
+    )
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('quay.io/acme/app:v1')
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(DIGEST_OLD)
   })
 
   // Recorded once and never cleared, so it is a past event, not a live state;
-  // the copy BoxLite holds still starts boxes.
+  // only runners with a cached copy can keep starting this version.
   it('marks a version a pull found gone upstream, in the past tense', async () => {
     await renderPage()
 
     expect(text()).toContain('Gone upstream')
-    const mark = [...document.querySelectorAll('span')].find((s) => s.textContent?.startsWith('Gone upstream'))
-    expect(mark?.getAttribute('title')).toContain("BoxLite's copy still starts boxes")
+    const mark = [...document.querySelectorAll('span[tabindex="0"]')].find((s) => s.textContent === 'Gone upstream')
+    expect(mark?.getAttribute('title')).toContain('Runners that cached this version can still start it')
+    expect(mark?.getAttribute('title')).toContain('pin an available version under a new alias')
   })
 
   it('names who pinned each tag: a member by name, or the first pull', async () => {
@@ -229,7 +233,7 @@ describe('an organization image', () => {
     const links = [...document.querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])
     expect(links).toContainEqual(['agile-otter', '/dashboard/boxes/b1'])
     expect(links).toContainEqual(['quiet-heron', '/dashboard/boxes/b2'])
-    expect(text()).toContain('all must be destroyed before removal')
+    expect(text()).not.toContain('all must be destroyed before removal')
   })
 
   it('says it can be removed when no box references it', async () => {
@@ -239,31 +243,22 @@ describe('an organization image', () => {
   })
 })
 
-describe('starting a box', () => {
-  it('starts a box at the image’s first tag', async () => {
+describe('image usage guidance', () => {
+  it('offers SDK guidance without duplicate Box creation controls', async () => {
     await renderPage()
-
-    await act(async () => button('New Box')?.click())
-
-    expect(state.newBoxImage).toBe('quay.io/acme/app:latest')
+    expect(button('Create Box')).toBeUndefined()
+    expect(button('New Box')).toBeUndefined()
+    expect(button('Use version')).toBeUndefined()
+    await act(async () => button('View SDK example')?.click())
+    expect(state.codeRef).toBe('quay.io/acme/app:latest')
   })
 
-  // Pinned to the digest, so a tag moved later cannot change what it runs.
-  it('starts a box pinned to one version’s digest', async () => {
-    await renderPage()
-
-    const versionButton = document.querySelector<HTMLButtonElement>('button[title="New Box pinned to this digest"]')
-    await act(async () => versionButton?.click())
-
-    expect(state.newBoxImage).toBe(`quay.io/acme/app@${DIGEST_NEW}`)
-  })
-
-  it('offers no box start to a member who may not create boxes', async () => {
+  it('keeps SDK guidance available without box creation permission', async () => {
     state.deniedPermissions = [OrganizationRolePermissionsEnum.WRITE_BOXES]
     await renderPage()
-
-    expect(button('New Box')).toBeUndefined()
-    expect(document.querySelector('button[title="New Box pinned to this digest"]')).toBeNull()
+    await act(async () => button('View SDK example')?.click())
+    expect(state.codeRef).toBe('quay.io/acme/app:latest')
+    expect(button('Create Box')).toBeUndefined()
   })
 })
 
@@ -348,13 +343,13 @@ describe('a built-in image', () => {
     expect(text()).not.toContain('Pin history')
   })
 
-  it('starts a box under its short name', async () => {
+  it('opens SDK guidance with its short name', async () => {
     state.image = BUILT_IN_IMAGE
     await renderPage()
 
-    await act(async () => button('New Box')?.click())
+    await act(async () => button('View SDK example')?.click())
 
-    expect(state.newBoxImage).toBe('python')
+    expect(state.codeRef).toBe('python')
   })
 })
 

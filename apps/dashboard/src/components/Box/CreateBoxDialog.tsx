@@ -852,7 +852,7 @@ export const CreateBoxDialog = ({
                 placeholder="my-new-box"
                 aria-invalid={!nameValid}
                 aria-describedby="create-box-name-hint"
-                className="form-field-input"
+                className="form-field-input font-mono"
               />
               {/* Submitting an empty name is a real, supported path — the API then assigns
                   an adjective-animal name of its own. Say so here, or the placeholder reads
@@ -941,7 +941,7 @@ export const CreateBoxDialog = ({
                   selected={sizePreset === p.id}
                   aria-pressed={sizePreset === p.id}
                   onClick={() => applySizePreset(p.id)}
-                  className="px-2 py-[7px] text-meta"
+                  className="px-2 py-[7px] font-sans text-meta"
                 >
                   {p.label}
                 </AsciiChip>

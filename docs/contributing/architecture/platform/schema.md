@@ -965,7 +965,7 @@ name the port independently of its tunnel, and several hostnames can share a por
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
 | `hostname` | `character varying(253)` | the full lowercase hostname, such as `demo.apps.example` |
-| `kind` | `character varying` | `platform` (a subdomain of the app domain) or `custom` (reserved for owned domains) |
+| `kind` | `character varying` | persisted `platform` or `custom`; only platform rows consume the domain allowance |
 | `organization_id` | `uuid` | holder; no FK, like `box.organization_id` |
 | `target_type` | `character varying` | `box` (default) or `app`; selects which reference is meaningful |
 | `app_id` | `character varying(255)` | reserved App reference; nullable, nonblank when set; no App table/FK exists yet |
@@ -978,9 +978,9 @@ name the port independently of its tunnel, and several hostnames can share a por
 targets have no `app_id`, and a non-null `box_id` requires a valid port. App targets
 have no `box_id` or `port`. Unsupported target types and blank App references fail.
 
-Binding runs under `SELECT … FOR UPDATE` on the organization row, which is how
-the count of held names is held against `organization.domain_count_limit`; it
-does not touch `tunnel`. Binding a name held for another of the organization's
+Claim and binding run under `SELECT … FOR UPDATE` on the organization row; claim
+counts only platform names against `organization.domain_count_limit`. Neither
+operation touches `tunnel`. Binding a name held for another of the organization's
 ports sets the Box type/reference/port, clears `app_id`, and leaves other names on
 that port alone. Unbinding (by full hostname, `DELETE /api/v1/domains/{hostname}/target`)
 clears both target references and port, retaining the target type and the row.
@@ -990,7 +990,12 @@ unbind or rebind. The REST binding endpoint validates the live Box and its
 organization; no foreign key ties the domain's lifetime to Box cleanup.
 Revoking the tunnel also preserves the target: the name answers 404 until the port
 is declared again. Held names, including unbound names and bindings to deleted
-Boxes, still count against the limit and can be rebound only by their organization.
+Boxes, count against the limit only when their persisted kind is platform, and
+can be rebound only by their organization. Custom rows require a matching ready
+configuration with completed setup; bind/resolve independently enforce the current subscription grant.
+The latest verified application may transfer custom ownership, clearing the old target and invalidating older applications.
+Legacy custom rows without a configuration fail closed. New custom ownership is
+inserted only after configuration-specific DNS proof; historical kinds are not reclassified.
 
 `DomainService.resolve` reads the stored target independently of port publication.
 `PreviewController.resolveDomain` accepts only Box targets and then applies
@@ -1007,6 +1012,33 @@ resources. App binding returns `400 app_target_not_supported` before any Box loo
 or write. Persisted App references can be listed and unbound, but cannot forward
 traffic. App integration must add existence/organization checks, routing and the
 App deletion policy before enabling writes.
+
+### `custom_domain_config`
+
+Durable custom-domain setup, ownership evidence, provider progress and cleanup tombstones; organization subscription grants live separately in Redis.
+
+| Fields | Contract |
+| --- | --- |
+| `organization_id`, `hostname`, `domain_id` | Draft organization and, after verification, the unique held domain |
+| `challenge`, `generation`, `provider_state` | Stable TXT challenge and exact cloud resource/operation identities |
+| `phase`, `confirmed_at`, `submission_status` | Setup completion and distinct not-submitted/unknown/accepted submission outcomes |
+| `dns_checks`, `dns_checked_at`, `tls_checked_at` | Per-record results and actual observation times |
+| `certificate_expires_at`, `certificate_observed_at` | Observed certificate lifetime; never a permanent route deadline |
+| `lease_owner`, `lease_until`, `next_check_at` | Hostname-wide execution exclusion, fenced publication and retry timing |
+| `superseded_by`, `deleted_at`, `cleaned_at`, `last_action_at` | Invalidation, recoverable cleanup and abandoned draft age |
+
+Database phases remain `pending_verification`, `pending_certificate_dns`, `provisioning`, `ready` and `deleting`.
+The response presents a superseded tombstone as `superseded`; `provider_state.progress` describes the finer issuance/map/TLS stage.
+A winner transaction clears other configs' unique `domain_id`, supersedes them and transfers the held domain while clearing its binding.
+Every execution claim considers all configurations for the hostname, including tombstones; a stale lease cannot publish Ready.
+
+Legacy `dns_valid_until`, `certificate_valid_until` and `challenge_expires_at` remain for migration compatibility but no longer authorize routing.
+Capped legacy certificate deadlines are not actual expiration times; unfinished legacy setups require explicit verification.
+The migration refuses automatic downgrade after ownership transfers; see [deployment cutover](../../../../apps/infra/docs/gcp/deployment.md#customer-domain-https).
+
+Unbind retains resources. Delete and supersession revoke routing before cloud cleanup, preserving deterministic resource IDs without organization foreign keys.
+Explicit deletion clears the supersession marker so a replaced configuration no longer appears in the organization's list.
+The API task uses saved retry times and hostname leases to resume setup and cleanup; see the [API contract](api.md).
 
 ### `box_last_activity`
 
