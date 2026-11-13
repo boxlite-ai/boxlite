@@ -10,9 +10,9 @@ Future schema changes should use the expand-and-contract workflow below.
 
 ### Deprecated objects no entity maps
 
-These objects are still in the database, but no entity maps them any more. They are inert —
-nothing reads or writes them — and a post-deploy `DROP` migration should retire them once every
-deployed environment runs code that no longer maps them.
+These database objects have no mapping in the current API. Schedule their removal in a
+later release after all older instances that use them have stopped and the rollback window
+has closed.
 
 | Object                                               | Present in                                       | Left behind by                                                                 |
 | ---------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------ |
@@ -20,11 +20,14 @@ deployed environment runs code that no longer maps them.
 | `region.sshGatewayUrl`                               | same                                             | same                                                                           |
 | `region.sshGatewayApiKeyHash` (+ its unique index)   | same                                             | same                                                                           |
 | `organization.template_deactivation_timeout_minutes` | every database                                   | the image catalog, which unmapped it and deferred the drop                     |
+| `organization.referralCode` (and its unique constraint) | databases with migration `1789500000000`       | removal of the organization referral-code endpoint                             |
 
-The SSH objects are absent from fresh databases, so their drop needs `IF EXISTS`. The
-organization column is still created by the baseline, so a plain `DROP COLUMN` retires it
-everywhere; it is `NOT NULL DEFAULT 20160`, which is why inserts that omit it keep working until
-then.
+The SSH objects are absent from fresh databases, so their drop needs `IF EXISTS`.
+The baseline creates the template timeout column with `NOT NULL DEFAULT 20160`,
+so inserts can omit it until a later release drops it.
+
+Older API instances can still read and assign organization referral codes during rollout
+or after an image rollback. New API instances omit the nullable column on reads and writes.
 
 ## Overview
 
