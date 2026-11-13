@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use crate::disk::constants::ext4::EXT4_BUILDER_FORMAT_VERSION;
 use crate::disk::{
     BaseDisk, BaseDiskKind, BaseDiskManager, Disk, DiskFormat, create_ext4_from_dir,
     inject_file_into_ext4,
@@ -556,9 +557,10 @@ impl GuestRootfsManager {
 
     /// Garbage-collect stale guest rootfs entries.
     ///
-    /// Keeps the current minimal rootfs (keyed by the combined artifact id) and
-    /// any base an existing box overlay still backs onto. Deletes everything else
-    /// — including OCI Debian rootfs bases, which the boot path no longer produces.
+    /// Keeps the current minimal rootfs (keyed by the ext4 builder version and
+    /// combined artifact id) and any base an existing box overlay still backs
+    /// onto. Deletes everything else — including OCI Debian rootfs bases, which
+    /// the boot path no longer produces.
     ///
     /// Returns the number of entries removed.
     pub fn gc(&self, boxes_dir: &Path) -> BoxliteResult<usize> {
@@ -567,9 +569,8 @@ impl GuestRootfsManager {
         // Propagate resolution failure: a transient error must not turn the
         // current key into `None`, which would make gc_inner delete every cached
         // rootfs as non-current.
-        let current_minimal_key = GuestArtifacts::get()?.id().to_string();
-
-        let result = self.gc_inner(boxes_dir, Some(&current_minimal_key));
+        let artifacts = GuestArtifacts::get()?;
+        let result = self.gc_for_artifact_id(boxes_dir, artifacts.id());
 
         tracing::info!(
             elapsed_ms = gc_start.elapsed().as_millis() as u64,
@@ -577,6 +578,16 @@ impl GuestRootfsManager {
         );
 
         result
+    }
+
+    /// GC with the artifact id already resolved.
+    ///
+    /// Separated from `gc` so tests can pin the current key to the ext4 builder
+    /// format version without resolving the real guest artifacts.
+    fn gc_for_artifact_id(&self, boxes_dir: &Path, artifact_id: &str) -> BoxliteResult<usize> {
+        let current_minimal_key =
+            Self::minimal_version_key_for_builder_version(artifact_id, EXT4_BUILDER_FORMAT_VERSION);
+        self.gc_inner(boxes_dir, Some(&current_minimal_key))
     }
 
     /// Inner GC logic, separated for testability.
@@ -664,16 +675,40 @@ impl GuestRootfsManager {
     }
 
     /// Compute the version key from image digest and guest binary id.
+    ///
+    /// The ext4 builder format version is part of the key so a builder change
+    /// cannot reuse a guest rootfs copied from a stale image disk. The image
+    /// disk's `reserve_bytes` is deliberately not part of the key: it only
+    /// sizes that disk so the guest binary can be injected, so a reserve change
+    /// rebuilds the image disk without changing the guest rootfs's contents.
     fn version_key(digest: &str, guest_hash: &str) -> String {
+        Self::version_key_for_builder_version(digest, guest_hash, EXT4_BUILDER_FORMAT_VERSION)
+    }
+
+    /// Version key under an explicit ext4 builder format version.
+    ///
+    /// Split out so tests can prove two versions cannot collide; production
+    /// always passes `EXT4_BUILDER_FORMAT_VERSION`.
+    fn version_key_for_builder_version(
+        digest: &str,
+        guest_hash: &str,
+        builder_version: u32,
+    ) -> String {
         let d = digest.strip_prefix("sha256:").unwrap_or(digest);
         let d = &d[..12.min(d.len())];
         let g = &guest_hash[..12.min(guest_hash.len())];
-        format!("{}-{}", d, g)
+        format!("{}-b{}-{}", d, builder_version, g)
     }
 
-    /// Version key for the minimal rootfs: the combined artifact content id.
+    /// Version key for the minimal rootfs: the ext4 builder version plus the
+    /// combined artifact content id.
     fn minimal_version_key(artifacts: &GuestArtifacts) -> String {
-        artifacts.id().to_string()
+        Self::minimal_version_key_for_builder_version(artifacts.id(), EXT4_BUILDER_FORMAT_VERSION)
+    }
+
+    /// Minimal-rootfs key under an explicit ext4 builder format version.
+    fn minimal_version_key_for_builder_version(artifact_id: &str, builder_version: u32) -> String {
+        format!("b{}-{}", builder_version, artifact_id)
     }
 }
 
@@ -777,19 +812,53 @@ mod tests {
             "sha256:abcdef123456789012345678",
             "fedcba987654321012345678",
         );
-        assert_eq!(key, "abcdef123456-fedcba987654");
+        assert_eq!(key, "abcdef123456-b1-fedcba987654");
     }
 
     #[test]
     fn test_version_key_no_prefix() {
         let key = GuestRootfsManager::version_key("abcdef123456789012", "111222333444555666");
-        assert_eq!(key, "abcdef123456-111222333444");
+        assert_eq!(key, "abcdef123456-b1-111222333444");
     }
 
     #[test]
     fn test_version_key_short_inputs() {
         let key = GuestRootfsManager::version_key("abc", "def");
-        assert_eq!(key, "abc-def");
+        assert_eq!(key, "abc-b1-def");
+    }
+
+    /// A builder format change must move both guest keys, so no guest rootfs
+    /// copied from a stale image disk is reused.
+    #[test]
+    fn test_version_key_varies_with_builder_version() {
+        assert_eq!(
+            GuestRootfsManager::version_key_for_builder_version(
+                "sha256:abcdef123456",
+                "fedcba987654",
+                1
+            ),
+            "abcdef123456-b1-fedcba987654"
+        );
+        assert_eq!(
+            GuestRootfsManager::version_key_for_builder_version(
+                "sha256:abcdef123456",
+                "fedcba987654",
+                2
+            ),
+            "abcdef123456-b2-fedcba987654"
+        );
+    }
+
+    #[test]
+    fn test_minimal_version_key_varies_with_builder_version() {
+        assert_eq!(
+            GuestRootfsManager::minimal_version_key_for_builder_version("abc123", 1),
+            "b1-abc123"
+        );
+        assert_eq!(
+            GuestRootfsManager::minimal_version_key_for_builder_version("abc123", 2),
+            "b2-abc123"
+        );
     }
 
     /// Rebuilding the guest must move the cache key, so an existing entry is not
@@ -1045,6 +1114,41 @@ mod tests {
             "Current minimal entry should be kept"
         );
         assert!(!stale_file.exists(), "Stale entry should be removed");
+    }
+
+    /// GC must keep the rootfs the current builder version caches. The record
+    /// name is the literal on-disk key, not a value derived from the helper
+    /// under test.
+    #[test]
+    fn test_gc_keeps_the_current_builder_version_key() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bases_dir = dir.path().join("bases");
+        let boxes_dir = dir.path().join("boxes");
+        std::fs::create_dir_all(&bases_dir).unwrap();
+        std::fs::create_dir_all(&boxes_dir).unwrap();
+
+        let store = test_store();
+
+        // What `get_or_create_minimal` caches for artifact id `abc123` under
+        // ext4 builder version 1.
+        let current_file = bases_dir.join("ccc33333.ext4");
+        std::fs::write(&current_file, "current").unwrap();
+        insert_rootfs_record(
+            &store,
+            "ccc33333",
+            "b1-abc123",
+            current_file.to_str().unwrap(),
+        );
+
+        let base_disk_mgr = BaseDiskManager::new(bases_dir, store);
+        let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
+
+        let removed = mgr.gc_for_artifact_id(&boxes_dir, "abc123").unwrap();
+        assert_eq!(removed, 0);
+        assert!(
+            current_file.exists(),
+            "GC must keep the rootfs cached under the current builder version"
+        );
     }
 
     #[test]

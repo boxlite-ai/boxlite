@@ -70,10 +70,11 @@ qemu-img info ~/.boxlite/boxes/{box-id}/disks/disk.qcow2
 
 A box's disks are copy-on-write overlays on read-only ext4 images:
 
-- `~/.boxlite/images/disk-images/*.ext4`: an image's root filesystem, built once from its
-  layers, behind container disks
-- `~/.boxlite/bases/{id}.ext4`: the guest root filesystem cache, behind guest root filesystem
-  disks, tracked in the `base_disk` table
+- `~/.boxlite/images/disk-images/*.ext4`: an image's root filesystem, built once per image
+  digest, headroom budget, and ext4 builder version, behind container disks
+- `~/.boxlite/bases/{id}.ext4`: the guest root filesystem cache, keyed by the ext4 builder
+  version and guest artifacts, behind guest root filesystem disks, tracked in the
+  `base_disk` table
 
 Deleting these files while boxes exist breaks those boxes.
 

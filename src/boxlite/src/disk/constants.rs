@@ -65,4 +65,16 @@ pub mod ext4 {
 
     /// Default fallback directory size if calculation fails (in bytes)
     pub const DEFAULT_DIR_SIZE_BYTES: u64 = 64 * 1024 * 1024;
+
+    /// Version of the ext4 builder's output format.
+    ///
+    /// Bump whenever a change to `create_ext4_from_dir` alters the bytes or
+    /// metadata written for identical inputs: ownership or mode stamping,
+    /// sizing, injected file layout, or `mke2fs` arguments. Do not bump for
+    /// refactors, comments, or logging that leave the output identical.
+    ///
+    /// This version is folded into every ext4-derived cache key (image disks,
+    /// OCI guest rootfs, minimal guest rootfs). The image-disk cache has no GC,
+    /// so a bump leaves the previous files behind until they are removed.
+    pub const EXT4_BUILDER_FORMAT_VERSION: u32 = 1;
 }
