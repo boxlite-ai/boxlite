@@ -36,7 +36,7 @@ use std::{
 
 use mio::{Events, Interest, Poll, Registry, Token};
 
-use super::{SlotId, Timeouts, WorkerRuntime};
+use super::{ShutdownError, SlotId, Timeouts, WorkerRuntime};
 use crate::{
     error::Error,
     events::{Event, EventSender, RECHECK},
@@ -140,6 +140,19 @@ struct Slot {
 impl Slot {
     fn lock(&self) -> MutexGuard<'_, SlotState> {
         lock(&self.state)
+    }
+
+    /// Called only after joining dispatch, without holding the slot state.
+    fn quiesce(&self) -> Result<(), DeviceError> {
+        // Keep the guard inside catch_unwind so a panic poisons this device,
+        // but cannot stop cleanup of the other slots or poison the thread lock.
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            self.device
+                .lock()
+                .map_err(|_| DeviceError::Fatal("device lock is poisoned"))?
+                .quiesce()
+        }))
+        .unwrap_or(Err(DeviceError::Fatal("quiesce panicked")))
     }
 
     /// Ends the open generation: drops its kicks, deregisters and drops its
@@ -247,8 +260,8 @@ enum Thread {
         handle: JoinHandle<()>,
         exited: mpsc::Receiver<()>,
     },
-    /// The runtime is shut down and the thread, if any, joined.
-    Joined,
+    /// Joined and quiesced; caches the first failed device and reason.
+    Joined(Option<(&'static str, &'static str)>),
 }
 
 /// One poller and one thread for every device.
@@ -292,7 +305,7 @@ impl SharedRuntime {
         let mut thread = lock(&self.thread);
         match *thread {
             Thread::Running { .. } => return Ok(()),
-            Thread::Joined => return Err(SHUT_DOWN),
+            Thread::Joined(_) => return Err(SHUT_DOWN),
             Thread::Idle => {}
         }
         let shared = Arc::clone(&self.shared);
@@ -319,6 +332,21 @@ impl SharedRuntime {
                 Err(DeviceError::Fatal("virtio workers start"))
             }
         }
+    }
+
+    /// Attempts every device once; failures do not prevent later cleanup.
+    fn quiesce_devices(&self) -> Option<(&'static str, &'static str)> {
+        let mut first_failure = None;
+        for slot in self.shared.slots() {
+            if let Err(error) = slot.quiesce() {
+                tracing::warn!(device = slot.name, %error, "virtio shutdown quiesce failed");
+                let (DeviceError::Unsupported(reason)
+                | DeviceError::NeedsReset(reason)
+                | DeviceError::Fatal(reason)) = error;
+                first_failure.get_or_insert((slot.name, reason));
+            }
+        }
+        first_failure
     }
 }
 
@@ -443,7 +471,7 @@ impl WorkerRuntime for SharedRuntime {
         }
     }
 
-    fn shutdown(&self) -> io::Result<()> {
+    fn shutdown(&self) -> Result<(), ShutdownError> {
         let mut thread = lock(&self.thread);
         self.shared.closed.store(true, Ordering::SeqCst);
         for slot in self.shared.slots() {
@@ -452,25 +480,32 @@ impl WorkerRuntime for SharedRuntime {
                 slot.close(&mut state, &self.shared.registry, Phase::Stopped);
             }
         }
-        match std::mem::replace(&mut *thread, Thread::Joined) {
-            Thread::Idle | Thread::Joined => Ok(()),
-            Thread::Running { handle, exited } => {
-                wake(&self.shared.waker);
-                match exited.recv_timeout(self.shared.timeouts.shutdown) {
-                    Err(RecvTimeoutError::Timeout) => {
-                        *thread = Thread::Running { handle, exited };
-                        Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "the virtio worker thread did not stop in time",
-                        ))
-                    }
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => {
-                        // A thread that panicked reported it before it ended.
-                        let _ = handle.join();
-                        Ok(())
+        let failure = match std::mem::replace(&mut *thread, Thread::Joined(None)) {
+            Thread::Joined(failure) => failure,
+            pending => {
+                if let Thread::Running { handle, exited } = pending {
+                    wake(&self.shared.waker);
+                    match exited.recv_timeout(self.shared.timeouts.shutdown) {
+                        Err(RecvTimeoutError::Timeout) => {
+                            *thread = Thread::Running { handle, exited };
+                            return Err(ShutdownError::Join(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "the virtio worker thread did not stop in time",
+                            )));
+                        }
+                        Ok(()) | Err(RecvTimeoutError::Disconnected) => {
+                            // A thread that panicked reported it before it ended.
+                            let _ = handle.join();
+                        }
                     }
                 }
+                self.quiesce_devices()
             }
+        };
+        *thread = Thread::Joined(failure);
+        match failure {
+            Some((device, reason)) => Err(ShutdownError::Quiesce { device, reason }),
+            None => Ok(()),
         }
     }
 }

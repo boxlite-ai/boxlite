@@ -6,9 +6,9 @@
 mod common;
 
 use boxlite::BoxCommand;
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite_shared::BoxliteError;
+use common::TestRuntime as BoxliteRuntime;
 use std::time::Duration;
 
 // ============================================================================

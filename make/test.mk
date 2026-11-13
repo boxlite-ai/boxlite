@@ -347,7 +347,7 @@ test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-
 
 # Boot the real kernel through the native engine inside boxlite-shim: the M1 initramfs to its marker,
 # a typed Unsupported failure into the exit file, and an alpine box through the runtime up to
-# boxlite-guest as PID 1 on the ext4 root (the first-box progress test).
+# PID 1 on the ext4 root, readiness, shebang exec, stop and removal.
 VMM_GUEST ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/boxlite-guest
 VMM_GUEST_PROBE ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/examples/guest-boot-probe
 export VMM_GUEST VMM_GUEST_PROBE
@@ -876,3 +876,25 @@ plugin-boxlite-force:
 
 test\:unit\:plugins: plugin-boxlite-force
 	@PYTHONDONTWRITEBYTECODE=1 $(PLUGIN_PYTHON) -m unittest discover -s tests/plugins -p 'test_*.py'
+
+# Explicit-engine milestone matrices. The facade configures every new Box, including
+# literal BoxOptions and recovery subprocesses; normal test runs remain krun.
+PHONY_TARGETS += test\:integration\:vmm\:m2 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m2\:list
+PHONY_TARGETS += test\:integration\:vmm\:m3 test\:integration\:vmm\:m3\:run test\:integration\:vmm\:m3\:list
+M2_TEST_SUITES := lifecycle shutdown detach recovery exec_options exec_user run_main_command resize_tty zygote_integration copy snapshot clone_export_import network gvproxy_backend network_spec copy_ownership execution_shutdown
+M3_TEST_SUITES := copy_ownership mount_security secret_substitution security_enforcement network_spec volume_matrix
+ENGINE ?= native
+test\:integration\:vmm\:m2: MATRIX = m2
+test\:integration\:vmm\:m3: MATRIX = m3
+test\:integration\:vmm\:m2 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m2\:list: MATRIX_TEST_SUITES = $(M2_TEST_SUITES)
+test\:integration\:vmm\:m3 test\:integration\:vmm\:m3\:run test\:integration\:vmm\:m3\:list: MATRIX_TEST_SUITES = $(M3_TEST_SUITES)
+MATRIX_TEST_ARGS = -p boxlite --features krun,gvproxy,native $(foreach suite,$(MATRIX_TEST_SUITES),--test $(suite)) --run-ignored all --profile vm $(NEXTEST_FILTER)
+
+test\:integration\:vmm\:m2 test\:integration\:vmm\:m3: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+	@ENGINE='$(ENGINE)' MATRIX_MAKE='$(MAKE)' bash "$(SCRIPT_DIR)/test/vmm-matrix.sh" '$(MATRIX)' $(MATRIX_TEST_SUITES)
+
+test\:integration\:vmm\:m2\:list test\:integration\:vmm\:m3\:list:
+	@cargo nextest list $(MATRIX_TEST_ARGS) --message-format json
+
+test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m3\:run:
+	@cargo nextest run $(MATRIX_TEST_ARGS) --no-fail-fast --retries 0 --success-output final

@@ -1051,10 +1051,10 @@ fn backend_events_use_registrar_ids_and_idle_polling_does_not_spin() {
 }
 
 #[test]
-fn snapshots_are_explicitly_unsupported() {
+fn quiesce_succeeds_and_snapshots_are_explicitly_unsupported() {
     let (mut h, _peer) = Harness::connected();
     assert_eq!(h.net.spec().snapshot, SnapshotSupport::Unsupported);
-    assert_eq!(h.net.quiesce(), Err(DeviceError::Unsupported("quiesce")));
+    assert_eq!(h.net.quiesce(), Ok(()));
     assert_eq!(h.net.save_state(), Err(SnapshotError::Unsupported));
     assert_eq!(
         h.net.restore_state(
