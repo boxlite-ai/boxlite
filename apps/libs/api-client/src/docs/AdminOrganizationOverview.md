@@ -13,6 +13,7 @@ Name | Type | Description | Notes
 **memberCount** | **number** |  | [default to undefined]
 **boxCount** | **number** |  | [default to undefined]
 **impactState** | **string** |  | [default to undefined]
+**memberEmails** | **Array&lt;string&gt;** | Up to 200 non-empty member emails ordered by user ID; present only with include&#x3D;memberEmails. | [optional] [default to undefined]
 **observedAt** | **Date** |  | [default to undefined]
 
 ## Example
@@ -29,6 +30,7 @@ const instance: AdminOrganizationOverview = {
     memberCount,
     boxCount,
     impactState,
+    memberEmails,
     observedAt,
 };
 ```

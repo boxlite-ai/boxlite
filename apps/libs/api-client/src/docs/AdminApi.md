@@ -623,6 +623,7 @@ let createdTo: string; //Exclusive RFC 3339 instant, at most milliseconds. (opti
 let createdFrom: string; //Inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
 let boxCountScope: 'all'; //Count every retained Box state; omit to keep the existing active-state count. (optional) (default to undefined)
 let organizationId: string; //Exact organization UUID; avoids name search and cannot be combined with q. (optional) (default to undefined)
+let include: 'memberEmails'; //Add up to 200 member emails to each organization; omit to keep the existing fields. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListOrganizationsOverview(
     q,
@@ -631,7 +632,8 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
     createdTo,
     createdFrom,
     boxCountScope,
-    organizationId
+    organizationId,
+    include
 );
 ```
 
@@ -646,6 +648,7 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
 | **createdFrom** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
 | **boxCountScope** | [**&#39;all&#39;**] | Count every retained Box state; omit to keep the existing active-state count. | (optional) defaults to undefined|
 | **organizationId** | [**string**] | Exact organization UUID; avoids name search and cannot be combined with q. | (optional) defaults to undefined|
+| **include** | [**&#39;memberEmails&#39;**] | Add up to 200 member emails to each organization; omit to keep the existing fields. | (optional) defaults to undefined|
 
 
 ### Return type

@@ -152,7 +152,7 @@ enabling consumers of this contract.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads. |
+| `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads; `include=memberEmails` adds up to 200 emails per organization. |
 | `GET` | `/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
 
 The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operations) list retired operations and their remaining alternatives.
