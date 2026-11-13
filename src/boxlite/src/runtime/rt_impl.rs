@@ -1097,8 +1097,10 @@ impl RuntimeImpl {
             // The facade owns its config and state; update_box still refreshes state
             // under lifecycle admission, so resolving it needs no persistence reads.
             return match box_impl.apply_observation(run, event).await {
-                // A deleted row dropped the event before cache-first resolution too.
-                Err(BoxliteError::NotFound(_)) => Ok(None),
+                // A missing lock is retryable; only a missing row drops the event.
+                Err(BoxliteError::NotFound(_)) if self.box_manager.box_by_id(id)?.is_none() => {
+                    Ok(None)
+                }
                 result => result,
             };
         }

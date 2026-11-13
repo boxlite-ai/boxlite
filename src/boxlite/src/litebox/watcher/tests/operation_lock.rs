@@ -72,6 +72,60 @@ async fn cached_health_observation_reads_only_admission_state() {
 }
 
 #[tokio::test]
+async fn cached_health_observation_retries_missing_lock() {
+    let (_home, bx, watcher) = watched_box().await;
+    let lock_id = bx.state.read().lock_id.unwrap();
+    bx.runtime.lock_manager.free(lock_id).unwrap();
+
+    let result = bx
+        .runtime
+        .apply_box_observation(
+            bx.id(),
+            watcher.observed_run(),
+            BoxEvent::Health {
+                healthy: true,
+                retries: 3,
+            },
+        )
+        .await;
+    let row_still_exists = bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_some();
+    bx.runtime
+        .lock_manager
+        .allocate_and_retrieve(lock_id)
+        .unwrap();
+
+    assert!(row_still_exists);
+    assert!(
+        matches!(&result, Err(BoxliteError::NotFound(message)) if message == &format!("lock {lock_id}")),
+        "missing lock must remain retryable: {result:?}"
+    );
+
+    let health = bx
+        .runtime
+        .apply_box_observation(
+            bx.id(),
+            watcher.observed_run(),
+            BoxEvent::Health {
+                healthy: true,
+                retries: 3,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(health.state, HealthState::Healthy);
+    assert_eq!(
+        bx.runtime
+            .box_manager
+            .update_box(bx.id())
+            .unwrap()
+            .health_status
+            .state,
+        HealthState::Healthy
+    );
+}
+
+#[tokio::test]
 async fn uncached_health_observation_loads_facade_and_admission_state() {
     let (_home, bx, watcher) = watched_box().await;
     bx.runtime
@@ -118,9 +172,8 @@ async fn cached_health_observation_drops_deleted_box() {
         .unwrap();
 
     assert!(health.is_none());
-    // Cache-first resolution proves itself here: only the admission refresh read state,
-    // and no config load happened for a facade the cache already held.
-    assert_eq!(store.read_counts(), (0, 1));
+    // After admission fails, confirm the row is gone before dropping the event.
+    assert_eq!(store.read_counts(), (1, 2));
 }
 
 #[tokio::test]
