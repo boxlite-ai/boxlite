@@ -1,6 +1,6 @@
-//go:build boxlite_dev
+//go:build boxlite_dev && boxlite_integration
 
-package boxlite
+package images_test
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
 // A real OCI pull feeds the native cache; no public registry or VM is needed.
@@ -60,7 +62,7 @@ func TestImageDelete(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 	registry := removalRegistry(t)
 	host := strings.TrimPrefix(registry.URL, "http://")
-	rt, err := NewRuntime(WithHomeDir(t.TempDir()), WithImageRegistries(ImageRegistry{Host: host, Transport: RegistryTransportHTTP}))
+	rt, err := boxlite.NewRuntime(boxlite.WithHomeDir(t.TempDir()), boxlite.WithImageRegistries(boxlite.ImageRegistry{Host: host, Transport: boxlite.RegistryTransportHTTP}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +82,8 @@ func TestImageDelete(t *testing.T) {
 	}
 	id := listed[0].ID
 	_, err = images.Delete(ctx, id)
-	var failure *Error
-	if !errors.As(err, &failure) || failure.Code != ErrImageHasTags || !strings.Contains(err.Error(), ":latest") {
+	var failure *boxlite.Error
+	if !errors.As(err, &failure) || failure.Code != boxlite.ErrImageHasTags || !strings.Contains(err.Error(), ":latest") {
 		t.Fatalf("tag refusal: %v", err)
 	}
 	// The existing name operation still removes references and keeps the cache.
@@ -94,7 +96,7 @@ func TestImageDelete(t *testing.T) {
 		}
 	}
 	_, err = images.Delete(ctx, id+"\x00garbage")
-	if !errors.As(err, &failure) || failure.Code != ErrInvalidArgument {
+	if !errors.As(err, &failure) || failure.Code != boxlite.ErrInvalidArgument {
 		t.Fatalf("embedded NUL must be rejected without deleting the image: %v", err)
 	}
 	listed, err = images.List(ctx)
@@ -113,7 +115,7 @@ func TestImageDelete(t *testing.T) {
 		t.Fatalf("remaining images: %v, %v", listed, err)
 	}
 	_, err = images.Delete(ctx, id)
-	if !IsNotFound(err) {
+	if !boxlite.IsNotFound(err) {
 		t.Fatalf("missing image: %v", err)
 	}
 }

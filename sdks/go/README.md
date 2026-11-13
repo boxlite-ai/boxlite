@@ -468,15 +468,24 @@ make dev:go
 # Run hosted unit and REST tests
 make test:unit:go
 
-# Run native archive import/export tests on a VM-capable host
+# Run native archive and image cache tests on a VM-capable host
 make test:integration:go
+
+# Run only image cache tests, including their coverage report
+make coverage:go:images
 ```
 
-Native archive import/export tests use the production runtime constructor and
+Native archive and image cache tests use the production runtime constructor and
 require a VM-capable host, even when the test does not start a VM.
 The Linux native-binding coverage job runs the no-VM import/export cases through
 `make coverage:go:checkpoint` and flushes the instrumented native counters before
 Go exits. Full VM archive round-trips remain in the integration suite.
+
+`integration/images` pulls from a loopback OCI registry and checks tag refusal,
+invalid IDs, deletion results, and the remaining cache through the public SDK.
+Hosted Go unit jobs exclude this package through the `boxlite_integration` tag.
+The Linux native-binding job runs it after enabling KVM access; initialization
+or deletion failures fail that job rather than skipping the test.
 
 ## License
 

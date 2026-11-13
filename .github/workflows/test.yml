@@ -471,6 +471,13 @@ jobs:
           BOXLITE_DEPS_STUB: '1'
         run: make coverage:bindings:external
 
+      - name: Test native Go image cache operations
+        if: matrix.platform.target == 'linux-x64-gnu'
+        env:
+          BOXLITE_DEPS_STUB: '1'
+          SETUP_DONE: '1'
+        run: make coverage:go:images
+
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
         # filter), so a new variant must add its row there before the reference
@@ -494,7 +501,7 @@ jobs:
         if: matrix.platform.target == 'linux-x64-gnu'
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/native-sdk/lcov.info,target/coverage/native-sdk/go-lcov.info,target/coverage/python/coverage.xml,target/coverage/go-checkpoint-native.out
+          files: target/coverage/native-sdk/lcov.info,target/coverage/native-sdk/go-lcov.info,target/coverage/python/coverage.xml,target/coverage/go-checkpoint-native.out,target/coverage/go-images-native.out
           flags: rust-unit
           use_oidc: true
           disable_search: true
