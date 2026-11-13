@@ -10,9 +10,8 @@ import (
 // GCPIITName is the gcp_iit attestor's mode name.
 const GCPIITName = "gcp_iit"
 
-// GCPIITHeader carries the runner VM's instance identity token, requested from
-// the metadata server with audience=<Secret Server URL>&format=full. Cloud Run
-// consumes Authorization, so the attestor never reads it.
+// GCPIITHeader carries the VM's instance identity token (audience=<Secret Server
+// URL>&format=full). Cloud Run consumes Authorization, so it is never read here.
 const GCPIITHeader = "X-Boxlite-Runner-Identity"
 
 // maxIssuedAtSkew tolerates clock drift between Google and this server.
@@ -25,8 +24,7 @@ type GCPIITConfig struct {
 	ServiceAccount string // expected email: the runner VMs' service account
 }
 
-// GCPIIT verifies a Compute Engine instance identity token and maps its
-// instance to a runner through the registry.
+// GCPIIT verifies an instance identity token and maps the VM to a runner.
 type GCPIIT struct {
 	cfg       GCPIITConfig
 	tokens    TokenVerifier
@@ -34,8 +32,7 @@ type GCPIIT struct {
 	now       func() time.Time
 }
 
-// NewGCPIIT builds the gcp_iit attestor. Only the registry's gcp_iit section
-// is consulted, so instances registered under another mode are unknown here.
+// NewGCPIIT builds the attestor; it reads only the registry's gcp_iit section.
 func NewGCPIIT(cfg GCPIITConfig, tokens TokenVerifier, reg Registry) (*GCPIIT, error) {
 	if cfg.Audience == "" || cfg.Project == "" || cfg.ServiceAccount == "" {
 		return nil, errors.New("attest: gcp_iit needs an audience, a project, and a runner service account")

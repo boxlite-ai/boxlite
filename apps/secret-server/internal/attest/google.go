@@ -10,12 +10,9 @@ import (
 	"google.golang.org/api/option"
 )
 
-// TokenVerifier checks a Google-signed token's signature, audience, and
-// expiry, and returns its claims. Everything else is checked by the caller.
-//
-// A rejected token is reported as ErrInvalidProof. Any other error means the
-// verifier could not decide, for example because Google's keys were
-// unreachable.
+// TokenVerifier checks a Google token's signature, audience, and expiry and
+// returns its claims. A rejected token is ErrInvalidProof; any other error means
+// the verifier could not decide, for example because Google's keys were unreachable.
 type TokenVerifier interface {
 	Verify(ctx context.Context, token, audience string) (*idtoken.Payload, error)
 }

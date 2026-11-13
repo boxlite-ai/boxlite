@@ -10,9 +10,8 @@ import (
 // from its own configuration; the API has no write path to it.
 type Registry map[string]map[string]RunnerID
 
-// ParseRegistry decodes and validates the registry JSON. Every mode must name
-// a known attestor, and no machine or runner ID may be empty. An empty string
-// is an empty registry, which a dev-only local run needs.
+// ParseRegistry rejects unknown modes and empty IDs. An empty string is an
+// empty registry, which a dev-only local run needs.
 func ParseRegistry(raw string) (Registry, error) {
 	if raw == "" {
 		return Registry{}, nil

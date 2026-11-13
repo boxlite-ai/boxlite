@@ -1,8 +1,5 @@
-// Package attest decides which runner a Secret Server request came from.
-//
-// A runner proves its identity with a header that only that runner can
-// produce, such as a Google-signed instance identity token. The request body
-// is never consulted: Verify receives headers only.
+// Package attest decides which runner a Secret Server request came from, using
+// a proof header only that runner can produce. Verify never sees the body.
 package attest
 
 import (
@@ -35,8 +32,7 @@ type Attestor interface {
 	Header() string
 }
 
-// Selector routes a request to the one enabled attestor whose proof header
-// is present.
+// Selector calls the one enabled attestor whose proof header is present.
 type Selector struct {
 	attestors []Attestor
 }
@@ -46,8 +42,7 @@ func NewSelector(attestors ...Attestor) *Selector {
 	return &Selector{attestors: attestors}
 }
 
-// Verify rejects a request with no proof header, or with proof headers for
-// more than one enabled attestor. Headers of disabled attestors are ignored.
+// Verify rejects no proof header or several; disabled attestors are ignored.
 func (s *Selector) Verify(ctx context.Context, h http.Header) (RunnerID, error) {
 	var chosen Attestor
 	for _, a := range s.attestors {
