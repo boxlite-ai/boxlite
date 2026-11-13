@@ -8,6 +8,7 @@ import {
 import { DataSource, IsNull } from 'typeorm'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Box } from '../box/entities/box.entity'
+import { memoryMibOf } from '../box/utils/memory-allocation'
 import { Job } from '../box/entities/job.entity'
 import { JobStatus, JobType, ResourceType } from '../box/dto/job.dto'
 import { BoxState } from '../box/enums/box-state.enum'
@@ -54,8 +55,8 @@ export class BoxResizeService {
     if (!this.config.get('cloudResizeEnabled'))
       throw new ServiceUnavailableException('Cloud resize admission is disabled')
     this.assertRunning(box)
-    const target = resizeTarget(request, { cpus: box.cpu, memory_mib: box.mem * 1024 })
-    const targetMemoryGiB = Math.ceil(target.memory_mib / 1024)
+    const target = resizeTarget(request, { cpus: box.cpu, memory_mib: memoryMibOf(box) })
+    const targetMemoryGiB = target.memory_mib / 1024
     assertWithinPerBoxLimits(target.cpus, targetMemoryGiB, box.disk, organization)
     const runner = await this.runners.findAvailableRunner(box.runnerId)
     if (!runner || runner.apiVersion !== '2')
@@ -70,9 +71,14 @@ export class BoxResizeService {
         })
         if (locked.resizeJobId) return this.sameRequest(locked.resizeJobId, request)
         this.assertRunning(locked)
-        if (locked.pending || locked.runnerId !== box.runnerId || locked.cpu !== box.cpu || locked.mem !== box.mem)
+        if (
+          locked.pending ||
+          locked.runnerId !== box.runnerId ||
+          locked.cpu !== box.cpu ||
+          memoryMibOf(locked) !== memoryMibOf(box)
+        )
           throw new ConflictException('Box changed; retry resize')
-        if (target.cpus < locked.cpu || targetMemoryGiB < locked.mem)
+        if (target.cpus < locked.cpu || target.memory_mib < memoryMibOf(locked))
           throw new ConflictException('Resize cannot shrink the committed Box size')
         const existing = await manager.findOneBy(Job, {
           resourceId: box.id,
@@ -88,7 +94,7 @@ export class BoxResizeService {
         const payload: ResizePayload = {
           version: 1,
           ...target,
-          previous: { cpus: locked.cpu, memory_mib: locked.mem * 1024 },
+          previous: { cpus: locked.cpu, memory_mib: memoryMibOf(locked) },
         }
         const created = new Job({
           type: JobType.RESIZE_BOX,
@@ -154,7 +160,8 @@ export class BoxResizeService {
       !target ||
       target.version !== 1 ||
       (request.cpus !== undefined && request.cpus !== target.cpus) ||
-      (request.memory_mib !== undefined && Math.ceil(request.memory_mib / 1024) * 1024 !== target.memory_mib)
+      (request.memory_mib !== undefined &&
+        resizeTarget({ memory_mib: request.memory_mib }, target.previous).memory_mib !== target.memory_mib)
     ) {
       throw new ConflictException('A different resize target is already pending')
     }

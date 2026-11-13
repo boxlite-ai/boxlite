@@ -158,12 +158,13 @@ export class ResizeJobService implements OnApplicationBootstrap {
         }
 
         signal.throwIfAborted()
-        const memoryGiB = Math.ceil(target.memory_mib / 1024)
+        const legacyMemoryGiB = Math.ceil(target.memory_mib / 1024)
         // Keep the in-memory entity in step so the period shape reads the target.
-        Object.assign(box, { cpu: target.cpus, mem: memoryGiB })
+        Object.assign(box, { cpu: target.cpus, mem: legacyMemoryGiB, memoryMib: target.memory_mib })
         await manager.update(Box, box.id, {
           cpu: target.cpus,
-          mem: memoryGiB,
+          mem: legacyMemoryGiB,
+          memoryMib: target.memory_mib,
           resizeJobId: null,
           pending: String(box.state) === String(box.desiredState) ? false : box.pending,
           updatedAt: now,

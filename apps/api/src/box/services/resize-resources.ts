@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common'
+import { requestedMemoryMib } from '../utils/memory-allocation'
 
 export interface BoxResources {
   cpus: number
@@ -43,10 +44,13 @@ export function validResources(value: unknown): value is BoxResources {
 export function resizeTarget(request: Partial<ResizeTarget>, current: ResizeTarget): ResizeTarget {
   const target = {
     cpus: request.cpus ?? current.cpus,
-    memory_mib: request.memory_mib === undefined ? current.memory_mib : Math.ceil(request.memory_mib / 1024) * 1024,
+    memory_mib: request.memory_mib ?? current.memory_mib,
   }
   if (target.cpus < current.cpus || target.memory_mib < current.memory_mib) {
-    throw new BadRequestException('Resize must grow from the committed Box size after cloud memory rounding')
+    throw new BadRequestException('Resize must grow from the committed Box size')
   }
+  // Native hotplug aligns the growth delta, including Boxes booted at non-aligned MiB sizes.
+  const memoryMib = current.memory_mib + Math.ceil((target.memory_mib - current.memory_mib) / 128) * 128
+  target.memory_mib = requestedMemoryMib(memoryMib / 1024)
   return target
 }

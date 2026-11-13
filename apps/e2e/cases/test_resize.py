@@ -65,17 +65,17 @@ async def test_resize_preserves_guest_and_rejects_shrinking(rt, image, cli, e2e_
         assert cpus_before == 1
         current = await box.resize()
         assert (current.cpus, current.memory_mib) == (1, 1024)
-        assert current.max_cpus >= 2 and current.max_memory_mib >= 2048
+        assert current.max_cpus >= 2 and current.max_memory_mib >= 1664
 
-        # Cloud requests round memory upward to whole GiB before dispatch.
+        # Cloud rounds growth upward in 128 MiB increments from the current allocation.
         grown = await box.resize(cpus=2, memory_mib=1537)
-        assert (grown.cpus, grown.memory_mib) == (2, 2048)
+        assert (grown.cpus, grown.memory_mib) == (2, 1664)
         after, cpus_after, memory_after = await guest_resources(box)
         assert after == before
         assert cpus_after == 2 and memory_after > memory_before
 
-        repeated = await cli_resize(cli, e2e_auth, box.id, "--cpus", "2", "--memory", "2048")
-        assert (repeated["cpus"], repeated["memory_mib"]) == (2, 2048)
+        repeated = await cli_resize(cli, e2e_auth, box.id, "--cpus", "2", "--memory", "1664")
+        assert (repeated["cpus"], repeated["memory_mib"]) == (2, 1664)
         queried = await cli_resize(cli, e2e_auth, box.id)
         assert queried == repeated
 
@@ -83,7 +83,7 @@ async def test_resize_preserves_guest_and_rejects_shrinking(rt, image, cli, e2e_
             with pytest.raises(boxlite.BoxliteError):
                 await box.resize(**request)
         unchanged = await box.resize()
-        assert (unchanged.cpus, unchanged.memory_mib) == (2, 2048)
+        assert (unchanged.cpus, unchanged.memory_mib) == (2, 1664)
         assert (await guest_resources(box))[0] == before
     finally:
         await rt.remove(box.id, force=True)

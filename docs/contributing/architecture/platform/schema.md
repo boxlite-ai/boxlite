@@ -902,13 +902,15 @@ Job types: `CREATE_BOX`, `START_BOX`, `STOP_BOX`, `DESTROY_BOX`, `EXPORT_BOX`,
 `IMPORT_BOX`, `ROLLBACK_EXPORT_BOX`, `ROLLBACK_IMPORT_BOX`,
 `DISCARD_EXPORTED_BOX`, `RESIZE_BOX`.
 
-Resize payload version 1 holds the immutable absolute target and prior allocation.
+Resize payload version 1 holds the immutable absolute target and prior allocation
+as CPU counts and integer MiB. Retry rounding uses this prior MiB allocation.
 Admission saves the target with `APPLY`, a due time and `resizeDeadlineAt`, while
 the Box keeps its old CPU/RAM and usage period. Failed apply attempts return to
 `PENDING` with a future due time and keep `completedAt` null. Claims carry a
 120-second lease, renewed every 30 seconds; stale claim tokens cannot extend, fail
 or complete a newer claim. Completion must match both targets and atomically
-updates Box CPU/RAM, clears the fence, closes the old usage period, opens the target
+updates Box `cpu`, authoritative `memory_mib` and legacy `mem` (the ceiling in GiB),
+clears the fence, closes the old usage period, opens the exact fractional-GiB target
 period and marks the job `COMPLETED`. A job at the attempt or deadline bound becomes
 terminal `FAILED` and releases the fence without changing Box or billing.
 `box.resizeJobId` is a nullable UUID application reference to the job. It preserves

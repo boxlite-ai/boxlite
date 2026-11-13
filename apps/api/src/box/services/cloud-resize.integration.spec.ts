@@ -6,6 +6,9 @@ import { DataSource, IsNull } from 'typeorm'
 import { Redis } from 'ioredis'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { Box } from '../entities/box.entity'
+import { BoxDto } from '../dto/box.dto'
+import { RunnerAdapterV0 } from '../runner-adapter/runnerAdapter.v0'
+import { boxToBoxResponse } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
@@ -145,6 +148,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       state: BoxState.STARTED,
       cpu: 1,
       mem: 1,
+      memoryMib: 1024,
     })
     await db.getRepository(Box).save(box)
     await db.getRepository(BoxUsagePeriod).save({
@@ -177,7 +181,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
   const open = () => db.getRepository(BoxUsagePeriod).find({ where: { boxId: box.id, endAt: IsNull() } })
   const freshAdmission = async () => {
     await db.getRepository(Job).delete(job.id)
-    await db.getRepository(Box).update(box.id, { cpu: 1, mem: 1, pending: false, resizeJobId: null })
+    await db.getRepository(Box).update(box.id, { cpu: 1, mem: 1, memoryMib: 1024, pending: false, resizeJobId: null })
   }
   const untilJob = async (phase: string) => {
     for (let i = 0; i < 100; i++) {
@@ -190,6 +194,116 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     throw new Error(`resize did not reach ${phase}`)
   }
   const stopJob = () => jobs.createJob(null, JobType.STOP_BOX, runnerId, ResourceType.BOX, box.id)
+
+  it.each([300, null])('preserves exact MiB in CPU-only resize and recovery from %s', async (memoryMib) => {
+    await freshAdmission()
+    const expectedMemory = memoryMib ?? 1024
+    await db.getRepository(Box).update(box.id, { memoryMib })
+    await db.getRepository(BoxUsagePeriod).update({ boxId: box.id }, { mem: expectedMemory / 1024 })
+    const request = coordinator.resize(box.id, organization, { cpus: 2 })
+    const accepted = await untilJob('APPLY')
+    const payload = accepted.getPayload<{ cpus: number; memory_mib: number }>()
+    const observed = { ...target, cpus: payload.cpus, memory_mib: payload.memory_mib }
+    const [claimed] = await claim()
+    await leases.report(
+      accepted.id,
+      runnerId,
+      claimed.claimToken,
+      JobStatus.COMPLETED,
+      undefined,
+      JSON.stringify(observed),
+    )
+    const result = await request
+    const stored = await db.getRepository(Box).findOneByOrFail({ id: box.id })
+    expect(result).toMatchObject({ cpus: 2, memory_mib: expectedMemory })
+    expect(accepted.getPayload()).toMatchObject({ previous: { cpus: 1, memory_mib: expectedMemory } })
+    expect(stored).toMatchObject({ cpu: 2, mem: 1, memoryMib: expectedMemory, resizeJobId: null, pending: false })
+    expect(boxToBoxResponse(BoxDto.fromBox(stored)).memory_mib).toBe(expectedMemory)
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 2, mem: expectedMemory / 1024 })])
+    const recover = jest.fn().mockResolvedValue(undefined)
+    const adapter = new RunnerAdapterV0()
+    Object.assign(adapter, { boxApiClient: { recover } })
+    await adapter.recoverBox(stored)
+    expect(recover).toHaveBeenCalledWith(stored.id, expect.objectContaining({ memoryQuota: expectedMemory / 1024 }))
+  })
+
+  it('commits exact MiB and fractional billing once after memory growth', async () => {
+    await db.getRepository(Box).update(box.id, { memoryMib: 300 })
+    await db.getRepository(BoxUsagePeriod).update({ boxId: box.id }, { mem: 300 / 1024 })
+    await db.getRepository(Job).update(job.id, {
+      payload: JSON.stringify({ version: 1, cpus: 4, memory_mib: 556, previous: { cpus: 1, memory_mib: 300 } }),
+    })
+    const observed = { ...target, memory_mib: 556 }
+    const [claimed] = await claim()
+    await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(observed))
+    await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(observed))
+    const stored = await db.getRepository(Box).findOneByOrFail({ id: box.id })
+    expect(stored).toMatchObject({ cpu: 4, mem: 1, memoryMib: 556, resizeJobId: null, pending: false })
+    expect(boxToBoxResponse(BoxDto.fromBox(stored)).memory_mib).toBe(556)
+    const periods = await db.getRepository(BoxUsagePeriod).find({ order: { startAt: 'ASC' } })
+    expect(periods).toHaveLength(2)
+    expect(periods[0]).toMatchObject({ mem: 300 / 1024 })
+    expect(periods[1]).toMatchObject({ cpu: 4, mem: 556 / 1024, endAt: null })
+    expect(periods[0].endAt).toEqual(periods[1].startAt)
+  })
+
+  it.each([500, 556])(
+    'joins an exact MiB resize retry requesting %s from the immutable previous allocation',
+    async (memory_mib) => {
+      await db.getRepository(Box).update(box.id, { memoryMib: 300 })
+      await db.getRepository(Job).update(job.id, {
+        payload: JSON.stringify({ version: 1, cpus: 4, memory_mib: 556, previous: { cpus: 1, memory_mib: 300 } }),
+      })
+      enabled = false
+      const observed = { ...target, memory_mib: 556 }
+      const retry = coordinator.resize(box.id, organization, { memory_mib }).then(
+        (resources) => ({ resources }),
+        (error) => ({ error }),
+      )
+      const [claimed] = await claim()
+      await leases.report(
+        job.id,
+        runnerId,
+        claimed.claimToken,
+        JobStatus.COMPLETED,
+        undefined,
+        JSON.stringify(observed),
+      )
+      expect(await retry).toEqual({ resources: observed })
+      expect(availableRunner).not.toHaveBeenCalled()
+      expect(await db.getRepository(Job).count()).toBe(1)
+    },
+  )
+
+  it('rejects a concurrent exact MiB change even when legacy GiB stays equal', async () => {
+    await freshAdmission()
+    await db.getRepository(Box).update(box.id, { memoryMib: 300 })
+    availableRunner.mockImplementation(async () => {
+      await db.getRepository(Box).update(box.id, { memoryMib: 428 })
+      return { apiVersion: '2' }
+    })
+    const wait = jest.spyOn(coordinator as any, 'waitFor').mockResolvedValue(target)
+    try {
+      await expect(coordinator.resize(box.id, organization, { cpus: 2 })).rejects.toThrow('Box changed')
+      expect(await db.getRepository(Job).count()).toBe(0)
+    } finally {
+      wait.mockRestore()
+    }
+  })
+
+  it('admits an exact MiB growth under a fractional GiB quota', async () => {
+    await freshAdmission()
+    await db.getRepository(Box).update(box.id, { memoryMib: 300 })
+    organization.maxMemoryPerBox = 0.5
+    const wait = jest.spyOn(coordinator as any, 'waitFor').mockResolvedValue(target)
+    try {
+      await expect(coordinator.resize(box.id, organization, { memory_mib: 428 })).resolves.toEqual(target)
+      const accepted = await untilJob('APPLY')
+      expect(accepted.getPayload()).toMatchObject({ cpus: 1, memory_mib: 428, previous: { cpus: 1, memory_mib: 300 } })
+    } finally {
+      wait.mockRestore()
+    }
+  })
 
   it.each([JobStatus.COMPLETED, JobStatus.IN_PROGRESS])(
     'rejects %s after the operation deadline even with a live lease',
@@ -308,11 +422,12 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
 
   it('admits a rounded immutable target without changing Box or billing, then commits both on completion', async () => {
     await freshAdmission()
+    const observed = { ...target, memory_mib: 1664 }
     const request = coordinator.resize(box.id, organization, { cpus: 4, memory_mib: 1537 })
     const accepted = await untilJob('APPLY')
     expect(resourceQueries).toBe(0)
     expect(availableRunner).toHaveBeenCalledWith(runnerId)
-    expect(accepted.getPayload()).toMatchObject({ version: 1, cpus: 4, memory_mib: 2048 })
+    expect(accepted.getPayload()).toMatchObject({ version: 1, cpus: 4, memory_mib: 1664 })
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
       cpu: 1,
       mem: 1,
@@ -328,19 +443,20 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       claimed.claimToken,
       JobStatus.COMPLETED,
       undefined,
-      JSON.stringify(target),
+      JSON.stringify(observed),
     )
-    expect(await request).toEqual(target)
+    expect(await request).toEqual(observed)
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
       cpu: 4,
       mem: 2,
+      memoryMib: 1664,
       pending: false,
       resizeJobId: null,
     })
     const periods = await db.getRepository(BoxUsagePeriod).find({ order: { startAt: 'ASC' } })
     expect(periods).toHaveLength(2)
     expect(periods[0]).toMatchObject({ cpu: 1, mem: 1 })
-    expect(periods[1]).toMatchObject({ cpu: 4, mem: 2, endAt: null })
+    expect(periods[1]).toMatchObject({ cpu: 4, mem: 1664 / 1024, endAt: null })
     expect(periods[0].endAt).toEqual(periods[1].startAt)
     const idKey = boxLookupCacheKeyById({ id: box.id, organizationId: box.organizationId, returnDestroyed: false })
     expect(removeCache.mock.calls.filter(([keys]) => keys.includes(idKey))).toHaveLength(2)
@@ -483,6 +599,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
         cpu: 1,
         mem: 1,
+        memoryMib: 1024,
         pending: true,
         resizeJobId: job.id,
       })
@@ -498,6 +615,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
       cpu: 4,
       mem: 2,
+      memoryMib: 2048,
       pending: false,
       resizeJobId: null,
     })

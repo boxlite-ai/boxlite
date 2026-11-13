@@ -7,9 +7,10 @@ Admission and fractional targets: [shared creation policy](https://github.com/bo
 
 ## Scope
 
-Existing SDK/CLI resize calls grow a running Linux/KVM Box. Cloud keeps whole-GiB
-memory rounding. The target is durable in the Job payload; the Box keeps its old
-size until the Runner confirms the resize. A failed resize leaves the old size and
+Existing SDK/CLI resize calls grow a running Linux/KVM Box. Cloud rounds memory
+growth upward in 128 MiB increments relative to the committed MiB allocation.
+The target is durable in the Job payload; the Box keeps its old size until the
+Runner confirms the resize. A failed resize leaves the old size and
 billing unchanged and releases the lifecycle fence after a bounded retry. No shrink,
 replacement VM, new task queue, or automatic Guest restart is added.
 
@@ -61,8 +62,9 @@ suspension, running state, per-box limits and Runner API version. Admission shar
 creation's READY, scheduling flags and availability-score filter for the current
 Runner, without ranking or reassignment. Targets derive from committed Box sizes;
 there is no resource HTTP preflight. CPU uses creation's fractional validator and
-memory rounds up to GiB once. Runtime execution checks boot ceilings. `{}` reads
-actual allocation without creating a job or changing Box or billing.
+memory growth rounds up in 128 MiB increments from the committed allocation.
+Runtime execution checks boot ceilings. `{}` reads actual allocation without
+creating a job or changing Box or billing.
 
 | Phase | Atomic write | Failure behavior |
 | --- | --- | --- |
@@ -70,7 +72,7 @@ actual allocation without creating a job or changing Box or billing.
 | Claim | Lock due APPLY jobs with `SKIP LOCKED`; issue token, increment attempt, grant a 120-second lease | Other claims skip the locked rows |
 | Apply | Confirm lease, query runtime, apply explicit target; heartbeat every 30 seconds | Requeue with jittered 1–60 second backoff; Box and billing stay old |
 | Recover | Every 15 seconds: requeue expired leases below the bound; terminalize at the attempt/deadline bound, including unclaimed PENDING jobs past the deadline | Terminal failure clears `pending/resizeJobId` and leaves Box and billing unchanged |
-| Complete | Validate owner, token, unexpired lease and exact target. In one transaction: update Box `cpu/mem`, clear the fence, close the old period, open the target period, mark the Job `COMPLETED` | Old tokens cannot finish a reclaimed or terminal job |
+| Complete | Validate owner, token, unexpired lease and exact target. In one transaction: update Box `cpu`, exact `memory_mib` and legacy GiB `mem`, clear the fence, close the old period, open the target period, mark the Job `COMPLETED` | Old tokens cannot finish a reclaimed or terminal job |
 
 Lock order for admission and completion: usage Redis lease → Box row `FOR UPDATE` →
 Job row `FOR UPDATE` → usage-period writes. Completion uses the passed `EntityManager`
@@ -115,7 +117,7 @@ resize reports include it.
 
 `BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize` uses the existing REST E2E
 fixtures with a resize-enabled API and Linux/KVM Runner. The Python SDK grows
-1 CPU/1 GiB to 2 CPUs/2 GiB, including cloud memory rounding; the CLI repeats and
+1 CPU/1024 MiB to 2 CPUs/1664 MiB from a 1537 MiB request; the CLI repeats and
 queries that target. Boot id and PID 1 start time stay unchanged, the guest sees
 more RAM and CPUs, and shrinking is rejected without changing the allocation.
 The fixture removes its Box in teardown.
@@ -135,9 +137,10 @@ Queries and same-target joins still work with admission disabled.
 
 If the branch was deployed before this change, the pre-deploy backfill must cover
 every open `RESIZE_BOX` job: set `APPLY`, due time and deadline; restore Box
-`cpu/mem` from `payload.previous` when the old admission already wrote the target;
-and close/reopen the usage period to the previous shape. If unreleased, fold the
-deadline column into the existing additive migration and skip the backfill.
+`cpu` and `memory_mib` from `payload.previous` when the old admission already wrote
+the target; set legacy `mem` to the ceiling in GiB; and close/reopen the usage period
+to the previous exact shape. If unreleased, fold the deadline column into the
+existing additive migration and skip the backfill.
 
 Retry requires the original Runner and Box to return. For a stopped Guest, an
 operator may start that same Box through its owning Runner; lost storage needs

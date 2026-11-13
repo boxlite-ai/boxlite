@@ -107,9 +107,9 @@ creating a box; those checks are not counted as product E2E evidence.
 
 Online resize is opt-in while the API rollout flag defaults off. With
 `CLOUD_RESIZE_ENABLED=true` on the API, a Linux/KVM Runner built from this tree,
-and capacity and organization limits for at least 2 CPUs/2 GiB, run
+and capacity and organization limits for at least 2 CPUs/1664 MiB, run
 `BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize` from the repository root.
-`cases/test_resize.py` checks SDK growth, cloud GiB rounding, CLI retries and
+`cases/test_resize.py` checks SDK growth with relative 128 MiB rounding, CLI retries and
 queries, unchanged guest boot/process identity, and rejection of shrinking.
 It uses the normal REST fixtures and removes its Box even after an assertion fails.
 Billing transaction and lease recovery checks live in the API and Runner component

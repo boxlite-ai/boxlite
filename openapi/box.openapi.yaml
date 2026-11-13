@@ -481,8 +481,12 @@ paths:
         Absolute targets, never deltas. Omitted fields retain their current
         allocation; an empty object reads allocations and boot ceilings.
         The execution host rejects shrinking or exceeding a boot ceiling.
-        Local memory growth must be a multiple of 128 MiB. Cloud rounds a
-        supplied memory target up to whole GiB and uses committed Box sizes.
+        Local memory growth must be a multiple of 128 MiB. Cloud rounds growth
+        up in 128 MiB increments relative to committed memory, preserving exact
+        MiB when memory is omitted. From 1024 MiB, a 1537 MiB target becomes
+        1664 MiB; from 300 MiB, a 500 MiB target becomes 556 MiB. Cloud rejects
+        shrinking before rounding and uses the original allocation for in-flight
+        retries. After completion, repeat the returned target or query resources.
         Cloud admission uses the current Runner's creation score policy without
         querying live resources; boot ceilings are checked during job execution.
         CPU targets accept 0.001-core increments, with cloud applying the same

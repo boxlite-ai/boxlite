@@ -276,15 +276,21 @@ REST clients use `POST /v1/boxes/{box_id}/resize` with
 In `boxlite serve`, empty and all-null requests leave the AutoStop idle clock
 unchanged. Parsed explicit targets count as activity, including rejected attempts.
 
-Cloud uses the same SDK and CLI calls, rounding memory targets up to whole GiB:
-`await box.resize(memory_mib=1537)` requests 2048 MiB. The control plane saves
-the target in a durable job, but the Box keeps its old CPU/RAM and usage period
-while the Runner applies the resize. Completion updates the Box and switches the
-usage period in one transaction. Retries are bounded; a job that reaches 10
+Cloud uses the same SDK and CLI calls, rounding memory growth upward in 128 MiB
+increments relative to the committed allocation. From 1024 MiB,
+`await box.resize(memory_mib=1537)` requests 1664 MiB; from 300 MiB, requesting
+500 MiB produces 556 MiB. Omitting memory preserves its exact allocation.
+
+The control plane saves the target in a durable job, but the Box keeps its old
+CPU/RAM and usage period while the Runner applies the resize. Completion updates
+the exact MiB allocation and switches the usage period in one transaction;
+1664 MiB is recorded as 1.625 GiB for usage accounting. Retries are bounded; a job that reaches 10
 attempts or 30 minutes becomes terminal, releases the lifecycle fence, and leaves
 the old size and billing unchanged. A 30-second wait can return `504
-resize_in_progress`; retrying the same target joins that job. A different target
-conflicts until completion. Box info shows the committed (old until completion)
+resize_in_progress`; retrying the same target joins that job using its original
+allocation for rounding. A different target conflicts until completion.
+After completion, repeat the returned target or query resources; a smaller
+request is rejected as shrinking before rounding. Box info shows the committed (old until completion)
 size; `resize()` with no options queries the Runner's allocation. Stop, delete and
 other conflicting lifecycle operations are rejected while resize is active; retry
 them after completion or terminal failure. If the Guest exits, resize waits for the

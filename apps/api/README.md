@@ -636,17 +636,23 @@ accept this field before rolling out the added response property.
 
 Admission reuses creation's Runner score threshold, READY state and scheduling
 flags for the Box's current Runner. It does not rank or migrate that Runner,
-query its resources, or reserve capacity. Targets use committed Box CPU/memory;
-CPU accepts 0.125–16 in 0.001 steps, and memory rounds up to GiB. Organization
-limits still apply. Boot ceilings are enforced during execution, so an accepted
+query its resources, or reserve capacity. Targets use committed Box CPU and exact
+MiB allocation; legacy rows fall back to `mem * 1024`. CPU accepts 0.125–16 in
+0.001 steps, and memory growth rounds upward in 128 MiB increments from the current
+allocation. For example, 300 MiB requested as 500 MiB becomes 556 MiB; a CPU-only
+resize keeps 300 MiB. Organization limits use the exact target divided by 1024. Boot ceilings are enforced during execution, so an accepted
 job can fail without changing the committed size or billing.
 
 Explicit same-size requests also create idempotent jobs. Matching in-flight
 requests join their job even if the Runner's score falls after admission.
+Memory retries use the job's immutable previous allocation for the same rounding;
+requests for 500 or 556 MiB both join a pending 300→556 MiB resize.
+Explicit shrink requests are rejected before rounding. After completion, repeat
+the returned target or query resources instead of resending a smaller rounded request.
 Empty requests remain live resource queries and do not use the score gate.
 
 `BoxResizeService` accepts the existing SDK/CLI resize request. Under a usage
-lease and Box row lock, it stores the target CPU/GiB in a `RESIZE_BOX` payload,
+lease and Box row lock, it stores the target CPU/MiB in a `RESIZE_BOX` payload,
 sets `resizePhase=APPLY`, and writes only `pending`/`resizeJobId` to the Box.
 The Box keeps its old size and the old usage period stays open while the Runner
 applies the target. `GET box` reports the committed size; the empty resize query
@@ -661,8 +667,10 @@ Lost hints fall back to the poll timeout, capped at 60 seconds.
 Lease requeue skips rows locked by another
 transaction, and each terminalization bounds its row-lock wait, so one contended
 Box cannot stall unrelated cleanup. Completion validates the exact observed target and,
-in one transaction, updates Box `cpu/mem`, clears the fence, calls the existing
-`closeUsagePeriod` and `openUsagePeriodFor`, and marks the job `COMPLETED`. A
+in one transaction, updates Box `cpu` and `memory_mib`, retains legacy
+`mem = ceil(memory_mib / 1024)`, and clears the fence. It updates the locked Box
+snapshot before calling `closeUsagePeriod` and `openUsagePeriodFor`, then marks
+the job `COMPLETED`; the new period therefore uses exact fractional GiB. A
 resize that reaches 10 attempts or its 30-minute deadline, including an unclaimed
 PENDING job past the deadline, becomes terminal `FAILED`: the fence is released,
 the old Box size and usage period stay unchanged, and stop/suspension proceeds.
@@ -698,8 +706,9 @@ Deleting the key, or setting it to anything but `true`, disables admission
 without a code change.
 
 If the branch was already deployed, the pre-deploy backfill must cover every open
-`RESIZE_BOX` job, restore Box `cpu/mem` from `payload.previous` when the old
-admission wrote the target, and reconcile the usage period to the previous shape.
+`RESIZE_BOX` job, restore Box `cpu` and `memory_mib` from `payload.previous` when
+the old admission wrote the target, and set legacy `mem` to the ceiling in GiB.
+Reconcile the usage period to the previous exact shape.
 
 If the Guest stops, the job retains its target and retries after the same Box
 restarts, up to the bounded attempt/deadline limit. Resize never creates a
