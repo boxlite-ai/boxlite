@@ -58,6 +58,22 @@ native stub checks do not satisfy this real VM/storage acceptance case.
 
 ### Existing coverage
 
+CLI cases invoke detached workloads as `boxlite run -d IMAGE sleep 300`.
+The image begins the CLI's trailing argument vector, so an extra `--` after
+IMAGE becomes the guest executable; it is not a command separator. Keep
+`boxlite exec BOX -- COMMAND` for exec, which uses a separate command argument.
+
+The CLI cases share `lib/cli_process.py` to include stdout, stderr and exit
+status in checked-command failures. Exit-code tests use `check=False` and
+inspect the returned result. Named-box creation failures fail the test; a
+unique suite name allows cleanup even when creation returns no Box ID.
+
+`tests/scripts/test_e2e_cli.py` drives these callers through the actual CLI and
+a loopback HTTP endpoint. Run it via `make test:unit:scripts` with the E2E
+Python dependencies installed and `BOXLITE_E2E_CLI` pointing to the built CLI.
+These checks verify request arguments and diagnostics; real cloud E2E remains
+necessary to verify the API, Runner and VM path together.
+
 Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
 creating a box; those checks are not counted as product E2E evidence.

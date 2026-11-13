@@ -133,6 +133,7 @@ help:
 	@echo "    make codecov               - Collect Rust coverage for Codecov's 90% patch gate"
 	@echo "    make coverage              - Generate HTML coverage report (unit tests)"
 	@echo "    make coverage:lcov         - Generate LCOV output for CI upload"
+	@echo "    make coverage:cli          - Add CLI unit and no-VM subprocess coverage"
 	@echo "    make coverage:report       - Render collected Rust profiles as LCOV and HTML"
 	@echo "    make coverage:bindings:external - Measure native SDK calls from C, Python and Node"
 	@echo "    make coverage:go           - Collect Go SDK, bridge, runner, image-service coverage"

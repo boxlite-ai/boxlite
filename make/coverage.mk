@@ -1,4 +1,4 @@
-PHONY_TARGETS += coverage codecov coverage\:go\:checkpoint
+PHONY_TARGETS += coverage\:cli coverage codecov coverage\:go\:checkpoint
 
 # Match Codecov's exclusions locally: production guest and SDK code must not
 # disappear from the denominator just because their tests run separately.
@@ -17,7 +17,7 @@ define run_unit_coverage
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_VMM_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov test --no-report $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:runtime || rc=$$?; \
-	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc --test checkpoint $(NEXTEST_FILTER) -- --skip ::vm_install:: || rc=$$?; \
+	$(MAKE) coverage:cli || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
 	if [ "$$(uname)" = Linux ]; then \
 		cargo llvm-cov nextest $(GUEST_RUNNER_CONFIG) --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
@@ -39,6 +39,10 @@ coverage\:lcov:
 	@mkdir -p target/coverage
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 	@echo "✅ LCOV output: target/coverage/lcov.info"
+
+coverage\:cli:
+	@bash "$(SCRIPT_DIR)/test/with-cli-binary.sh" --coverage \
+		cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc --test checkpoint $(NEXTEST_FILTER) -- --skip ::vm_install::
 
 coverage\:runtime:
 	@cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) \
