@@ -19,6 +19,7 @@ export const platformServices = (stage: string) =>
     gcpApiProvider({
       project: 'boxlite-dev-project',
       region: 'us-east5',
+      zone: 'us-east5-a',
       domain: 'stage.boxlite.ai',
       dashboardDomain: null,
       callers: [],
