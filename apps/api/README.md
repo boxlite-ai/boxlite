@@ -1296,6 +1296,15 @@ quota but no longer exclusively cover their trigger jobs. Actual job observation
 support recovery, while new reservations use independent allocation identities.
 Hosted PostgreSQL and standalone SQLite use this shared implementation.
 
+Fresh webhook counts cannot authorize more Boxes: potential capacity changes
+first rebuild the complete current GitHub queue for the original runner scope.
+Incomplete refreshes defer changes while known stopped resources still clean up.
+Surplus online idle workers follow the shared
+[retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement), including
+the registration grace, exact unregister acknowledgement and original-Box absence
+checks. Pending `runner-retire` effects survive takeover and make older state
+readers fail closed; consult that section before deployment or rollback.
+
 The controller recovers historical allocations alongside new capacity demand.
 Transient journal initialization failures retry through the existing session
 loop. An unexpectedly stopped hosted scheduler rejects new webhook ingress

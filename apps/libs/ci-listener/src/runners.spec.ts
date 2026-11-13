@@ -64,6 +64,119 @@ describe('CI shared GitHub JIT runners', () => {
       ['self-hosted', 'linux', 'x64', 'boxlite'],
       journal,
     )
+  const onlineIdle = () => {
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/actions/runners')
+        ? {
+            total_count: exists ? 1 : 0,
+            runners: exists ? [{ id: 91, name, busy: false, status: 'online', labels: [{ name: 'boxlite' }] }] : [],
+          }
+        : previous(url, method)
+  }
+  it.each([repoScope, orgScope])(
+    'retires an original idle runner only after exact 204 and complete absence: %j',
+    async (scope) => {
+      onlineIdle()
+      expect(await registry(scope).retireIdle({ id: 91, name })).toBe(true)
+      expect(journal).toHaveBeenCalledWith({ kind: 'remove', id: 91, name })
+      const route = scope.kind === 'repository' ? '/repos/owner/repo' : '/orgs/owner'
+      expect(calls.filter((call) => call.method === 'DELETE')).toEqual([
+        { route: `${route}/actions/runners/91`, method: 'DELETE', json: undefined },
+      ])
+      expect(calls.at(-1)?.method).toBe('GET')
+    },
+  )
+  it.each([200, 201, 202, 404, 403, 500])('rejects HTTP %i as idle retirement acknowledgement', async (status) => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) => (method === 'DELETE' ? new Response(null, { status }) : previous(url, method))
+    await expect(registry().retireIdle({ id: 91, name })).rejects.toMatchObject({ status })
+    expect(journal).toHaveBeenCalledTimes(1)
+  })
+  it('keeps the Box decision pending when a busy assignment races the idle read', async () => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) => (method === 'DELETE' ? new Response(null, { status: 422 }) : previous(url, method))
+    expect(await registry().retireIdle({ id: 91, name })).toBe(false)
+    expect(journal).toHaveBeenCalledTimes(1)
+  })
+  it.each(['absent', 'offline', 'busy'])('does not unregister a runner observed %s', async (condition) => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/actions/runners')
+        ? {
+            total_count: condition === 'absent' ? 0 : 1,
+            runners:
+              condition === 'absent'
+                ? []
+                : [
+                    {
+                      id: 91,
+                      name,
+                      busy: condition === 'busy',
+                      status: condition === 'offline' ? 'offline' : 'online',
+                      labels: [{ name: 'boxlite' }],
+                    },
+                  ],
+          }
+        : previous(url, method)
+    expect(await registry().retireIdle({ id: 91, name })).toBe(false)
+    expect(journal).not.toHaveBeenCalled()
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+  it('does not treat a lost unregister response as safe idle retirement', async () => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) => {
+      if (method === 'DELETE') {
+        exists = false
+        throw new Error('response lost')
+      }
+      return previous(url, method)
+    }
+    await expect(registry().retireIdle({ id: 91, name })).rejects.toMatchObject({ uncertain: true })
+    expect(exists).toBe(false)
+  })
+  it('retains uncertainty when post-delete enumeration is incomplete', async () => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) =>
+      !exists && url.pathname.endsWith('/actions/runners') ? { total_count: 1, runners: [] } : previous(url, method)
+    await expect(registry().retireIdle({ id: 91, name })).rejects.toThrow()
+    expect(exists).toBe(false)
+    expect(journal).toHaveBeenCalledTimes(1)
+  })
+  it('rejects idle retirement before deletion if original authority changed', async () => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) => (url.pathname === '/repositories/21' ? { ...repository, id: 22 } : previous(url, method))
+    await expect(registry().retireIdle({ id: 91, name })).rejects.toThrow()
+    expect(journal).not.toHaveBeenCalled()
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+  it('rejects a renamed original runner before idle deletion', async () => {
+    onlineIdle()
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/actions/runners')
+        ? {
+            total_count: 1,
+            runners: [{ id: 91, name: other, busy: false, status: 'online', labels: [{ name: 'boxlite' }] }],
+          }
+        : previous(url, method)
+    await expect(registry().retireIdle({ id: 91, name })).rejects.toThrow('identity changed')
+    expect(journal).not.toHaveBeenCalled()
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+  it('does not dispatch idle deletion when its durable mutation guard fails', async () => {
+    onlineIdle()
+    journal.mockRejectedValue(new Error('lease lost'))
+    await expect(registry().retireIdle({ id: 91, name })).rejects.toThrow('lease lost')
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+    expect(exists).toBe(true)
+  })
   it('reads busy, idle and offline supply without invoking the mutation guard', async () => {
     const previous = reply
     reply = (url, method) =>

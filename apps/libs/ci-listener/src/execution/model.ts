@@ -15,7 +15,14 @@ export interface ExecutionScope {
   runners: RunnerScope
 }
 export type ResourcePhase = 'none' | 'requested' | 'known' | 'absent'
-export type EffectKind = 'box-create' | 'box-stop' | 'box-remove' | 'runner-register' | 'runner-remove' | 'jit-deliver'
+export type EffectKind =
+  | 'box-create'
+  | 'box-stop'
+  | 'box-remove'
+  | 'runner-register'
+  | 'runner-remove'
+  | 'runner-retire'
+  | 'jit-deliver'
 export interface Allocation {
   scope: string
   name: string
@@ -180,9 +187,15 @@ export function decodeAllocation(value: unknown): Allocation {
     (!object(value.effect) ||
       typeof value.effect.id !== 'string' ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value.effect.id) ||
-      !['box-create', 'box-stop', 'box-remove', 'runner-register', 'runner-remove', 'jit-deliver'].includes(
-        value.effect.kind as string,
-      ))
+      ![
+        'box-create',
+        'box-stop',
+        'box-remove',
+        'runner-register',
+        'runner-remove',
+        'runner-retire',
+        'jit-deliver',
+      ].includes(value.effect.kind as string))
   )
     throw new StateCorrupt()
   if (

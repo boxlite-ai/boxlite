@@ -208,6 +208,61 @@ describe('CI shared Listener orchestration', () => {
       secret,
     )!
   }
+  it('ignores a freshly replayed queued notification when the authoritative queue is empty', async () => {
+    const settled = deferred()
+    const commit = state.commit.bind(state)
+    jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
+      const result = await commit(...args)
+      if (args[1].some((write) => write.key === 'notice/1/55' && write.payload === undefined)) settled.resolve()
+      return result
+    })
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    await listener.receive(notification())
+    await runUntil(settled.promise)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
+    expect(backend.queued).toHaveBeenCalledWith(21, expect.any(AbortSignal))
+  })
+  it('does not expand from a fresh notification when the authoritative queue cannot be read', async () => {
+    const failed = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+    jest.mocked(host.report).mockImplementation((error, operation) => {
+      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'label-capacity-balance')
+        failed.resolve()
+    })
+    await listener.receive(notification())
+    await runUntil(failed.promise)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect(await state.read(['notice/1/55'])).toHaveLength(1)
+  })
+  it('continues original stopped Box cleanup when a dirty queue refresh fails', async () => {
+    const failed = deferred()
+    Object.assign(backend, { inventory: jest.fn(async () => []) })
+    jest.mocked(host.scan).mockResolvedValue({ queued: async () => [], publish: async () => {}, close: async () => {} })
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
+    jest.mocked(backend.workers.deliverJit).mockImplementation(async () => {
+      const box = await jest.mocked(backend.workers.create).mock.results[0].value
+      jest.mocked(backend.workers.get).mockResolvedValue({ ...box, status: 'stopped' })
+      const [counter] = await state.recover(lease, 1000, ['demand/'])
+      await state.commit(lease, [
+        { key: counter.key, expected: counter.version, payload: { ...(counter.payload as object), dirty: true } },
+      ])
+      jest.mocked(backend.queued).mockRejectedValue(new Error('queue unavailable'))
+    })
+    jest.mocked(host.report).mockImplementation((error, operation) => {
+      if (error instanceof Error && error.message === 'queue unavailable' && operation === 'label-capacity-balance')
+        failed.resolve()
+    })
+    await listener.receive(notification())
+    await runUntil(failed.promise)
+    expect(backend.workers.remove).toHaveBeenCalledTimes(1)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+  })
   it('refreshes aged positive counts before reserving from the current queue', async () => {
     Object.assign(backend, { inventory: jest.fn(async () => []) })
     jest
@@ -282,7 +337,14 @@ describe('CI shared Listener orchestration', () => {
     expect(host.report).not.toHaveBeenCalledWith(expect.any(StateConflict), 'label-capacity-balance')
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
-  it('defers a repeatedly conflicting repository without reserving its stale counts or blocking another repository', async () => {
+  it('defers capacity changes when an organization queue snapshot remains incomplete', async () => {
+    const settled = deferred()
+    const commit = state.commit.bind(state)
+    jest.spyOn(state, 'commit').mockImplementation(async (...args) => {
+      const result = await commit(...args)
+      if (args[1].some((write) => write.key === 'notice/1/56' && write.payload === undefined)) settled.resolve()
+      return result
+    })
     scope.installation.account.type = 'Organization'
     scope.runners = {
       kind: 'organization',
@@ -314,11 +376,11 @@ describe('CI shared Listener orchestration', () => {
         { repository, run: 33, job: repository === 21 ? 55 : 56, status: 'queued', runner: null, labels: ['boxlite'] },
       ]
     })
-    await runUntil(delivered.promise)
-    expect(conflictingReads).toBe(2)
+    await runUntil(settled.promise)
     const allocations = [...(await inspectJournal(state, lease)).allocations.values()]
-    expect(allocations).toHaveLength(1)
-    expect(allocations[0].value.job.repository).toBe(22)
+    expect(allocations).toHaveLength(0)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+    expect(conflictingReads).toBe(4)
     expect(await state.read(['notice/1/55'])).toHaveLength(1)
     expect((await state.recover(lease, 1000, ['demand/1/21/']))[0].payload).toMatchObject({ queued: 99, dirty: true })
   })
@@ -393,9 +455,13 @@ describe('CI shared Listener orchestration', () => {
   })
   it('fences a reservation when a completion changes demand during inventory lookup', async () => {
     const rejected = deferred()
+    let reads = 0
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
     Object.assign(backend, {
       inventory: jest.fn(async () => {
-        await listener.receive(observePhase('completed', 55))
+        if (++reads === 2) await listener.receive(observePhase('completed', 55))
         return []
       }),
     })
@@ -418,6 +484,9 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('replenishes label capacity when a triggering job runner claims another job', async () => {
+    jest
+      .mocked(backend.queued)
+      .mockResolvedValue([{ repository: 21, run: 33, job: 55, status: 'queued', runner: null, labels: ['boxlite'] }])
     const inventory = new Map<number, { id: number; name: string; busy: boolean; status: 'online'; labels: string[] }>()
     let nextId = 100
     const second = deferred()
@@ -485,6 +554,16 @@ describe('CI shared Listener orchestration', () => {
     expect((await inspectJournal(state, lease)).workers).toHaveLength(2)
   })
   it('creates all missing label capacity concurrently within the organization quota', async () => {
+    jest.mocked(backend.queued).mockResolvedValue(
+      Array.from({ length: 17 }, (_, index) => ({
+        repository: 21,
+        run: 33,
+        job: index + 100,
+        status: 'queued' as const,
+        runner: null,
+        labels: ['boxlite'],
+      })),
+    )
     const release = deferred(),
       entered = deferred()
     let inFlight = 0,

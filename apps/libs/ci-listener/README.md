@@ -349,9 +349,9 @@ unknown create cannot be reset, retried or settled through a missing-resource re
 capabilities. It keeps JIT configuration in memory and never republishes an uncertain
 delivery. A triggering job supplies demand rather than an exclusive assignment:
 the Box may execute another authorized matching job. A completed notification alone
-does not stop it. An elapsed timeout or a successful runner DELETE is not proof
-that its Box is idle. Delivered workers remain running until actual Box exit;
-automatic idle retirement requires separate verification. Physical Box capacity
+does not stop it. An elapsed timeout or runner absence alone does not prove
+that its Box is idle. Delivered workers remain until actual exit or confirmed
+[idle retirement](#surplus-idle-retirement). Physical Box capacity
 returns after its original Box is confirmed absent. The allocation stays indexed
 until both original resources are absent, preserving original-resource cleanup.
 The host must enforce authority and execution epoch
@@ -364,7 +364,9 @@ Hosted API and standalone Listener Boxes use the same label-count scheduler.
 Signed `queued`, `in_progress` and `completed` observations update aggregate demand
 and minimal job facts atomically. Repository-scoped ingress transactions serialize
 the counter and wake, including their initial insertion. Duplicate or out-of-order
-transitions cannot increment demand twice or resurrect completed jobs.
+transitions cannot increment demand twice or resurrect locally known completed
+jobs. A first-seen historical queued replay can still look new, so these counters
+are wake hints rather than permission to add capacity.
 `job-fact.runner` records GitHub's actual assignment; it does not lock the job to a
 runner provisioned because of that job.
 
@@ -394,17 +396,23 @@ organization/host limits. All started operations settle before the next pool
 round. Credentials are isolated by allocation; each runner preserves its own
 effect ordering and lease checks.
 
+Before a possible expansion, cancellation of an undispatched reservation, or idle
+retirement, the controller rebuilds the current GitHub queue for every repository
+in the original runner scope. Fresh webhook counters cannot bypass this check.
 Dirty/missing counts, compensation notices and positive counts older than 30
-seconds trigger an authoritative queue rebuild. Newer webhook versions prevent
-an older rebuild from overwriting them. A busy runner without a matching claim
-also requires a rebuild before replenishment, covering PAT hosts and missed
-running events. Job queries support recovery instead of ordinary per-allocation
-admission. Custom backends without supply inventory retain job-driven fallback.
+seconds also request repair. Newer webhook versions fence reservations and prevent
+an older rebuild from overwriting them. If any repository refresh fails or repeatedly
+races ingress, the incomplete scope snapshot cannot authorize capacity changes.
+For example, a replay says one job queued but GitHub returns no queued jobs:
+the controller creates no Box and cancels any still-undispatched reservation.
+Job queries support recovery instead of ordinary per-allocation admission.
+Custom backends without supply inventory retain job-driven fallback.
 
 Reused runner IDs do not reject job observations. Ambiguous assignment observations
 force an authoritative queue rebuild. A repository whose refresh repeatedly races
-new webhooks defers admission while other repositories and resource cleanup proceed.
-Inventory failures block new reservations while allowing existing cleanup. A known
+new webhooks defers capacity changes for that runner scope; other scopes continue.
+Queue and inventory failures still allow known stopped/absent resource cleanup,
+but cannot dispatch an existing unsent reservation. A known
 runner missing from inventory or offline retains starting supply during the existing
 300-second bootstrap budget from its persisted `runner.registeredAt`; older records
 fall back to allocation creation time. A delayed registration therefore receives
@@ -420,6 +428,47 @@ compatible idle runners cover every individual window, even when total queued
 demand is larger. Rotation admits later repositories as that supply becomes busy;
 it does not guarantee filling the entire queue across windows. The window does
 not cap runners represented by one counter or replace organization quota.
+
+### Surplus idle retirement
+
+Retirement uses the complete authoritative label aggregate, including counters
+outside the rotating reservation window. It cancels undispatched surplus first.
+An online, nonbusy runner with confirmed JIT delivery becomes a candidate only
+after 300 seconds from registration. This is a startup grace, not evidence of
+continuous idle time. Busy workers and capacity still needed by the queue remain.
+
+Before unregistering, the scheduler persists a distinct `runner-retire` intent
+under the original allocation, identity and execution lease. `retireIdle()` reads
+the original runner again and uses the classic repository/organization REST DELETE.
+Only exact HTTP 204 followed by complete original-runner absence permits recording
+retirement and stopping its original Box. Existing cleanup then deletes that Box;
+physical quota returns only after confirmed Box absence.
+
+| Result | Recovery |
+| --- | --- |
+| Runner busy, offline or already missing | Keep the Box; absence alone cannot authorize idle retirement. |
+| Busy refusal (422), 404, unexpected 2xx or lost acknowledgement | Preserve the intent and quota; retry eligible online-idle runners at most once per minute in that process. |
+| Confirmation write fails after unregistering | Keep the durable unconfirmed intent, including after restart; do not infer that stopping is safe. |
+| Original Box actually stops or disappears | Continue ordinary original-resource cleanup regardless of pending retirement. |
+
+Pending retirement suppresses the older missing/offline bootstrap forced-stop
+path. A lost acknowledgement can therefore need operator investigation instead
+of automatic Box stop. Restart resets local retry timing, not the durable intent.
+This deliberately favors preserving a possibly assigned job over reclaiming quota.
+
+The busy-refusal fence follows
+[legacy ARC's classic REST protocol](https://github.com/actions/actions-runner-controller/blob/89f34c4f782d4b488e6aecb66146407fee8eb3af/controllers/actions.summerwind.net/runner_graceful_stop.go#L403).
+[GitHub's endpoint documentation](https://docs.github.com/en/rest/actions/self-hosted-runners#delete-a-self-hosted-runner-from-a-repository)
+does not formally guarantee atomic rejection against concurrent assignment.
+Disposable classic-runner boundary validation remains necessary before deployment;
+unit checks do not establish that remote guarantee. ScaleSet runner APIs are a
+different protocol and are not used here.
+
+`runner-retire` extends the persisted effect discriminator without changing SQL
+tables. Older decoders fail closed on these records, including API state readers.
+Upgrade all readers sharing a namespace. Before rolling back, drain or explicitly
+recover pending retirement records; do not erase the journal or rewrite an
+uncertain retirement as ordinary cleanup.
 
 Only current counted scopes settle their repository notices. Retired scopes may
 recover existing resources but leave notices pending, so a replacement scope can
