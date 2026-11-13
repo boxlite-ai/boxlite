@@ -89,9 +89,27 @@ test('GCP supplies its certificate resources and IAM without stored custom-domai
   assert.equal(role.args.project, 'boxlite-dev-project')
   assert.equal(role.args.roleId, 'boxlite_app_stage_custom_domains')
   assert.ok(role.args.permissions.includes('certificatemanager.certs.create'))
-  assert.ok(role.args.permissions.includes('resourcemanager.projects.get'))
+  assert.equal(role.args.permissions.includes('resourcemanager.projects.get'), false)
+  assert.equal(role.args.permissions.includes('certificatemanager.operations.get'), false)
   assert.equal(role.args.permissions.includes('certificatemanager.certmaps.update'), false)
   assert.equal(grant.args.project, 'boxlite-dev-project')
   assert.equal(String(grant.args.member), 'serviceAccount:api@example.com')
   assert.equal(String(grant.args.role), 'CustomDomainRuntimeRole')
+  assert.deepEqual(
+    String(grant.args.condition.expression).split(' || '),
+    ['boxlite-dev-project', '123456789012'].flatMap((project) =>
+      [
+        'certificates/byo-',
+        'dnsAuthorizations/byo-',
+        'certificateMaps/boxlite-app-stage-proxy/certificateMapEntries/byo-',
+      ].map((path) => `resource.name.startsWith("projects/${project}/locations/global/${path}")`),
+    ),
+  )
+  const queryRole = resources.find((resource) => resource.logical === 'CustomDomainQueryRole')!
+  const queryGrant = resources.find((resource) => resource.logical === 'CustomDomainQueryGrant')!
+  assert.deepEqual(queryRole.args.permissions, ['resourcemanager.projects.get', 'certificatemanager.operations.get'])
+  assert.equal(queryGrant.args.project, 'boxlite-dev-project')
+  assert.equal(String(queryGrant.args.member), 'serviceAccount:api@example.com')
+  assert.equal(String(queryGrant.args.role), 'CustomDomainQueryRole')
+  assert.equal(queryGrant.args.condition, undefined)
 })

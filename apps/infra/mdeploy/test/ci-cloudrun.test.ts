@@ -24,6 +24,10 @@ function capture(configured: boolean) {
   const namespace = (path: string): any =>
     new Proxy(function () {}, {
       get: (_target, key) => namespace(path + '.' + String(key)),
+      apply: () => {
+        if (path === 'gcp.organizations.getProjectOutput') return { number: value('123456789012') }
+        throw new Error(`Unexpected provider lookup: ${path}`)
+      },
       construct: (_target, [name, args]) => {
         records.push({ type: path, name, args })
         return new Proxy(

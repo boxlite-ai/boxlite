@@ -60,6 +60,7 @@ for (const checkpointAccess of [false, true]) {
         Object.fromEntries(names.map((name) => [name, constructor(`${namespace}.${name}`)])),
       ]),
     )
+    ;(target.gcp as any).organizations = { getProjectOutput: () => ({ number: out('123456789012') }) }
     const storage: ApiDependencies['storage'] = {
       name: out('control-plane-storage'),
       binding: {

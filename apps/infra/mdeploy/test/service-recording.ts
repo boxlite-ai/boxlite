@@ -14,6 +14,7 @@ export const recordServices = (app: string, stage: string, build: () => void) =>
     new Proxy(function () {}, {
       get: (_target, key: string) => recorder(`${kind}.${key}`),
       apply: () => {
+        if (kind === 'gcp.organizations.getProjectOutput') return { number: output('123456789012') }
         if (kind === 'cloudflare.getZoneOutput') return { zoneId: 'zone' }
         throw new Error(`Unexpected provider lookup: ${kind}`)
       },

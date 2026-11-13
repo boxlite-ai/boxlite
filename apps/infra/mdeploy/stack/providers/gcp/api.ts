@@ -346,12 +346,13 @@ export const gcpApiProvider =
     const hosts = publicHostsFor({ domain, dashboardDomain })
     const apiHost = hosts.api
     const continuousCi = Boolean(request.environment.CI_GITHUB_APP_CLIENT_ID)
+    const certificateMap = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })
+    const { number: projectNumber } = gcp.organizations.getProjectOutput({ projectId: project })
     const role = new gcp.projects.IAMCustomRole('CustomDomainRuntimeRole', {
       project,
       roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domains' }).replaceAll('-', '_'),
       title: 'Reconcile customer domain certificates',
       permissions: [
-        'resourcemanager.projects.get',
         'certificatemanager.dnsauthorizations.create',
         'certificatemanager.dnsauthorizations.get',
         'certificatemanager.dnsauthorizations.delete',
@@ -363,12 +364,40 @@ export const gcpApiProvider =
         'certificatemanager.certmapentries.create',
         'certificatemanager.certmapentries.get',
         'certificatemanager.certmapentries.delete',
-        'certificatemanager.operations.get',
       ],
     })
     const customDomainGrant = new gcp.projects.IAMMember('CustomDomainRuntimeGrant', {
       project,
       role: role.name,
+      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      condition: {
+        title: 'customer-domain-resources-only',
+        // Certificate Manager also evaluates create against the new resource's name.
+        expression: projectNumber.apply((number: string) =>
+          [project, number]
+            .flatMap((id) =>
+              [
+                'certificates/byo-',
+                'dnsAuthorizations/byo-',
+                `certificateMaps/${certificateMap}/certificateMapEntries/byo-`,
+              ].map((path) => `resource.name.startsWith(${JSON.stringify(`projects/${id}/locations/global/${path}`)})`),
+            )
+            .join(' || '),
+        ),
+      },
+    })
+    const queryRole = new gcp.projects.IAMCustomRole('CustomDomainQueryRole', {
+      project,
+      roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domain_queries' }).replaceAll(
+        '-',
+        '_',
+      ),
+      title: 'Read customer domain project and operations',
+      permissions: ['resourcemanager.projects.get', 'certificatemanager.operations.get'],
+    })
+    const customDomainQueryGrant = new gcp.projects.IAMMember('CustomDomainQueryGrant', {
+      project,
+      role: queryRole.name,
       member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
     })
 
@@ -507,11 +536,7 @@ export const gcpApiProvider =
                   ...request.environment,
                   CUSTOM_DOMAIN_GCP_PROJECT: project,
                   // The edge creates and attaches the map with this same resource name.
-                  CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: instanceFor({
-                    app: $app.name,
-                    stage: $app.stage,
-                    artifact: 'proxy',
-                  }),
+                  CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: certificateMap,
                 },
                 addresses,
               }),
@@ -525,7 +550,7 @@ export const gcpApiProvider =
          * while creating the revision, so a binding that lands a moment later is
          * a binding that lands after the refusal.
          */
-        dependsOn: [...dependencies.waitFor, customDomainGrant, ...readable],
+        dependsOn: [...dependencies.waitFor, customDomainGrant, customDomainQueryGrant, ...readable],
       },
     )
 
@@ -988,6 +1013,7 @@ export const gcpApiProvider =
         ...readable,
         ...granted,
         customDomainGrant,
+        customDomainQueryGrant,
         vendingCeiling,
         forwarding,
         record,

@@ -87,9 +87,11 @@ and connect with the customer hostname as SNI, requiring certificate validation;
 The existing edge address, forwarding rule and DNS records retain their resource identities.
 
 The GCP bootstrap enables Certificate Manager and Resource Manager, and the edge attaches its certificate map to the proxy.
-The API service account's custom role is deployed before the API revision.
-The provider grants DNS authorization, certificate and map-entry operations plus `resourcemanager.projects.get`;
-it does not grant certificate-map mutation. The API also requires its existing Commerce connection for subscription eligibility.
+The API service account's custom roles are deployed before the API revision.
+Resource-name conditions restrict certificate and DNS authorization operations, including creation, to `byo-*` resources;
+map-entry operations are restricted to `byo-*` entries in the deployed proxy certificate map.
+A separate role grants only project and operation queries; neither role grants certificate-map mutation.
+The API also requires its existing Commerce connection for subscription eligibility.
 Customer CNAME records must use DNS-only mode; see the [DNS guide](../../../../docs/concepts/networking.md#bring-your-own-domain).
 
 Custom domains set Cloud Run `cpuIdle: false`, incurring CPU costs while an instance exists, without adding a minimum instance count.
