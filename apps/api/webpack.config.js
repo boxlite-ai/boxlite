@@ -36,7 +36,6 @@ module.exports = composePlugins(
       config.entry[`migrations/${key}`] = migrationEntries[key]
     }
     config.entry['bootstrap-check'] = path.join(__dirname, 'src/bootstrap-check.ts')
-    config.mode = process.env.NODE_ENV
 
     config.watchOptions = {
       ignored: /node_modules/,

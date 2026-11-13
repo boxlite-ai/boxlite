@@ -397,6 +397,8 @@ module, initializes Express routes, loads the PostgreSQL WASM parser, and export
 isolated temporary directory. It replaces the existing PostgreSQL seed and Redis subscription
 hooks for this check; it does not exercise live database or cache connections. The API image
 runs the same route and parser check against its production dependencies while building.
+The Node bundle reads `NODE_ENV` at startup so a production container emits JSON logs even
+when the build process used development settings. `pino-pretty` is a development dependency.
 
 ## Account deletion tests
 
