@@ -103,6 +103,24 @@ After out-of-band resizing, refresh deployment state before previewing or applyi
 [`ignoreChanges`](https://www.pulumi.com/docs/iac/concepts/resources/options/ignorechanges/#how-ignorechanges-works)
 uses recorded state, not an automatic live read.
 
+## Runner disk alarms
+
+`deploy.alarms` in every stage declaration requires `runnersDiskExpansionFailing` and
+`runnersDiskPressureCritical`. These alarms are not defaulted: a deploy that silently lacked
+notice of a failing disk expansion or critical disk pressure would be harder to recover from
+than one that stops before creating resources.
+
+```json
+{
+  "runnersDiskExpansionFailing": { "threshold": 3, "periods": 1 },
+  "runnersDiskPressureCritical": { "threshold": 1, "periods": 2 }
+}
+```
+
+If deployment reports that a stage must set either alarm, add both to `deploy.alarms` in
+`.mstage.config.json`, run `npm run mstage config put -- --stage STAGE_NAME`, and verify the
+GitHub Environment copy with `npm run --silent mstage config get -- --stage STAGE_NAME`.
+
 ## Set application values
 
 Run commands from `apps/infra` after [bootstrap](deployment.md#bootstrap-a-stage).
