@@ -125,6 +125,78 @@ async fn cached_health_observation_retries_missing_lock() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn watcher_health_ticks_resume_after_missing_lock() {
+    let (_home, bx, mut watcher) = watched_box().await;
+    // Keep the real process monitor alive while exercising the health arm.
+    watcher.shim_pid = std::process::id();
+    let lock_id = {
+        let mut state = bx.state.write();
+        state.pid = Some(watcher.shim_pid);
+        state.init_health_status();
+        bx.runtime.box_manager.save_box(bx.id(), &state).unwrap();
+        state.lock_id.unwrap()
+    };
+    // A listening socket with no server cannot answer Ping; the production
+    // probe's timeout supplies a failed check without a VM or a fake report.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let channel = tonic::transport::Endpoint::from_shared(format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap()
+    .connect_lazy();
+    let interval = Duration::from_secs(1);
+    let check_timeout = Duration::from_millis(10);
+    watcher.health = Some(HealthProbe::new(
+        GuestInterface::new(channel),
+        HealthCheckOptions {
+            interval,
+            timeout: check_timeout,
+            retries: 1,
+            start_period: Duration::ZERO,
+        },
+    ));
+    let shutdown = watcher.shutdown.clone();
+    bx.runtime.lock_manager.free(lock_id).unwrap();
+    let store = bx.runtime.box_manager.store();
+    store.reset_read_counts();
+
+    // Poll the actual run loop at its timer boundaries, not a test-owned
+    // reporting loop. Virtual time makes both health ticks deterministic.
+    let mut watching = Box::pin(watcher.run());
+    assert!(futures::poll!(&mut watching).is_pending());
+    tokio::time::advance(interval).await;
+    assert!(futures::poll!(&mut watching).is_pending());
+    tokio::time::advance(check_timeout).await;
+    assert!(futures::poll!(&mut watching).is_pending());
+    let missing_lock_reads = store.read_counts();
+    let unchanged = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    assert_eq!(unchanged.health_status.state, HealthState::Starting);
+    assert_eq!(unchanged.health_status.failures, 0);
+
+    bx.runtime
+        .lock_manager
+        .allocate_and_retrieve(lock_id)
+        .unwrap();
+    tokio::time::advance(interval).await;
+    assert!(futures::poll!(&mut watching).is_pending());
+    tokio::time::advance(check_timeout).await;
+    assert!(futures::poll!(&mut watching).is_pending());
+    let reported = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    assert_eq!(reported.health_status.state, HealthState::Unhealthy);
+    assert_eq!(reported.health_status.failures, 1);
+    assert_eq!(reported.status, BoxStatus::Running);
+    assert_eq!(
+        missing_lock_reads,
+        (1, 1),
+        "missing lock must check the row"
+    );
+
+    shutdown.cancel();
+    watching.await;
+}
+
 #[tokio::test]
 async fn uncached_health_observation_loads_facade_and_admission_state() {
     let (_home, bx, watcher) = watched_box().await;

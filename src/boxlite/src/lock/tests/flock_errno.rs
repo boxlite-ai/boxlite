@@ -43,15 +43,17 @@ fn unsupported_lock(read: bool) -> (FileLock, String) {
     let lock = FileLock {
         id: LockId(0),
         file: file_without_flock_support(),
+        gate: Arc::new(tokio::sync::RwLock::new(())),
     };
     // The descriptor remains valid and owned; the kernel rejects flock on it.
-    let reference = catch_unwind(|| {
+    // These manual methods never touch the gate's non-UnwindSafe queue state.
+    let reference = catch_unwind(AssertUnwindSafe(|| {
         if read {
             lock.read_lock();
         } else {
             lock.lock();
         }
-    })
+    }))
     .expect_err("fixture must produce a real kernel flock error");
     let message = panic_message(reference);
     let (_, detail) = message.split_once("failed: ").unwrap();
@@ -62,13 +64,13 @@ fn unsupported_lock(read: bool) -> (FileLock, String) {
 
 fn check_try_lock_error(read: bool) {
     let (lock, detail) = unsupported_lock(read);
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         if read {
             lock.try_read_lock()
         } else {
             lock.try_lock()
         }
-    });
+    }));
     let message = panic_message(result.expect_err("fatal flock error was returned as contention"));
     assert!(message.contains("flock("), "wrong panic: {message}");
     assert!(message.ends_with(&detail), "lost OS error: {message}");
