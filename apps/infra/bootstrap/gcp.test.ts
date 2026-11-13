@@ -200,6 +200,10 @@ test('a fresh project gets every prerequisite mdeploy and mbuild cannot create f
     enabled.some((argument) => argument === 'container.googleapis.com'),
     'the GKE API was not enabled',
   )
+  assert.ok(
+    enabled.some((argument) => argument === 'file.googleapis.com'),
+    'the Filestore API was not enabled',
+  )
   assert.equal(gcloud.applied('storage buckets create').length, 2, 'the state and artifacts buckets')
   /*
    * The runner's staging bucket, named by the rule `mdeploy/stack/runner-binary

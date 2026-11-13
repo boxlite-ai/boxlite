@@ -5,6 +5,7 @@
  */
 
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { BoxliteError } from '@/api/errors'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +45,7 @@ const state = vi.hoisted(() => ({
   capabilities: { object_storage_enabled: true, filestore_enabled: false },
   capabilitiesLoading: false,
   createdVolume: undefined as Record<string, unknown> | undefined,
+  createError: undefined as Error | undefined,
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
@@ -77,6 +79,7 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
 vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
   useCreateVolumeMutation: () => ({
     mutateAsync: vi.fn(async (variables: { volume: Record<string, unknown> }) => {
+      if (state.createError) throw state.createError
       state.createdVolume = variables.volume
     }),
     isPending: false,
@@ -141,6 +144,7 @@ describe('Volumes row action "New Box"', () => {
     state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
     state.capabilitiesLoading = false
     state.createdVolume = undefined
+    state.createError = undefined
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES, OrganizationRolePermissionsEnum.WRITE_BOXES]
   })
 
@@ -372,6 +376,7 @@ describe('Volumes storage selection', () => {
     state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
     state.capabilitiesLoading = false
     state.createdVolume = undefined
+    state.createError = undefined
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES]
   })
 
@@ -423,6 +428,23 @@ describe('Volumes storage selection', () => {
     expect(Object.hasOwn(state.createdVolume!, 'instance')).toBe(false)
     expect(toast.success).toHaveBeenCalledWith('Created volume nfs-data')
     expect(document.body.textContent).not.toContain('It takes a few seconds to become ready.')
+  })
+
+  it('shows the detailed Filestore lookup error returned by the API', async () => {
+    state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
+    state.createError = new BoxliteError(
+      "Could not look up Filestore instance 'projects/boxlite-dev-project/locations/us-east5-a/instances/boxlite-dev-shared': GCP PERMISSION_DENIED: file.instances.get denied",
+    )
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    selectStorage('filestore')
+    inputText('Volume name', 'nfs-data')
+    await act(async () => rowAction('Create')!.click())
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to create volume', {
+      description: state.createError.message,
+      action: undefined,
+    })
   })
 
   it('starts with the only configured backend and disables creation without one', async () => {

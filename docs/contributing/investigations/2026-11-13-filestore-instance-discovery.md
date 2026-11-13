@@ -69,6 +69,7 @@ Revisit this only when there is concrete evidence or a new product requirement: 
 hot spots, instances with materially different capacity or tier, saturation alerts, usage
 telemetry that supports a placement policy, or a need to move volumes without operator-run
 data copies.
+
 ## Runtime flow
 
 `apps/api/src/config/filestore-instances.ts` parses `FILESTORE_INSTANCES` as instance objects.
@@ -188,7 +189,9 @@ Public Box responses expose only the logical instance name. The resolved server 
 export stay inside dispatch payloads and persisted volume metadata; generated public
 clients therefore expose `instance` without those connection details. This corrects the
 implementation to match the spec-first contract rather than adding fields to that
-contract.
+contract. Lookup failures retain the same public status but include the configured
+instance name, full resource path, GCP status name, and original error message, which the
+Dashboard shows when volume creation fails.
 
 The resolver keeps successful responses in memory for 60 seconds, keyed by the full GCP
 resource name. This removes duplicate reads while one box create resolves multiple
@@ -238,9 +241,10 @@ instance was provisioned.
 
 ## Operational rollout
 
-Deploy the API with the JSON instance-object configuration after provisioning the named
-instances and granting its service account read access. Verify one explicit-instance
-create and one automatic-selection create before opening the endpoint more broadly.
+Provision the named instances, then run the infrastructure bootstrap and mdeploy so the
+Filestore API is enabled and the API service account receives read access. Verify one
+explicit-instance create and one automatic-selection create before opening the endpoint
+more broadly. Deploying only the API image does not reconcile these prerequisites.
 [Filestore lookup prerequisites](2026-11-13-filestore-lookup-prerequisites.md) specifies
 how deployment reconciles that read access and the Filestore API, and how lookup failures
 retain their GCP cause.
@@ -281,4 +285,6 @@ The complete `pkg/boxlite` package passed afterward. The full runner suite also 
 unrelated `TestIntegrationExecutionInventoryRecoveryHTTP` case, which failed in
 `pkg/api/controllers`; that execution-inventory failure is outside this design.
 
-`make build:apps:api` passed. No live Filestore instance was mutated for these checks.
+`make build:apps:api` passed. The detailed lookup-error path has 11/11 resolver tests and
+a Dashboard toast regression test proving the GCP status and original message are visible.
+No live Filestore instance was mutated for these checks.

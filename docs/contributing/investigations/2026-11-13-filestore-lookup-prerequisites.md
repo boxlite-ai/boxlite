@@ -1,4 +1,4 @@
-**Status:** Proposed
+**Status:** Implemented
 
 ## TL;DR
 
@@ -7,9 +7,9 @@ Reconcile Filestore discovery prerequisites during deployment, grant the API
 the stage project, and retain sanitized GCP failure details in API logs without
 changing the client error contract.
 
-The resolver diagnostic slice is implemented. The effective-configuration, IAM,
-and service-enablement slices remain proposed. The default `FILESTORE_INSTANCES`
-entry remains `boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`.
+The resolver diagnostics, effective-configuration, IAM, and service-enablement
+slices are implemented. The default `FILESTORE_INSTANCES` entry remains
+`boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`.
 
 ## Context and evidence
 
@@ -64,8 +64,8 @@ and makes any remaining failure identifiable.
   empty disables Filestore. Entries may name different projects.
 
 The implementation must not create, modify, or delete Filestore instances,
-change NFS permissions, widen runner IAM, expose raw GCP errors to dashboard
-users, or add a second application-level retry loop.
+change NFS permissions, widen runner IAM, expose credentials or request contexts
+to dashboard users, or add a second application-level retry loop.
 
 ## Design
 
@@ -84,9 +84,9 @@ value and a sorted, deduplicated `filestoreProjects` list.
   configuration error rather than a later request failure.
 - `StackEnvironment` and `StackInputs` carry `filestoreProjects` through both
   the SST and Pulumi composition paths.
-- A non-empty Filestore configuration on AWS is rejected as unsupported instead
-  of deploying an API that cannot use it. An unset AWS configuration does not
-  acquire the GCP default.
+- AWS preserves its existing environment behavior but derives no Filestore
+  projects or capability. An unset AWS configuration does not acquire the GCP
+  default.
 
 The deployment parser should be a small shared deployment function beside
 `apiEnvironmentFrom`, not an import from `apps/api/src/config`: infrastructure
@@ -149,13 +149,15 @@ disablement and instance lifecycle remain request-time concerns.
 
 In `FilestoreInstanceResolver`:
 
-- Keep the existing public statuses and messages, including `400` for an
-  explicitly requested missing instance and `503` for configured lookup,
-  authentication, permission, and transport failures.
+- Keep the existing public statuses, including `400` for an explicitly requested
+  missing instance and `503` for configured lookup, authentication, permission,
+  and transport failures. The public message includes the configured `instanceName`,
+  full GCP resource path, GCP status name, and original error message so the dashboard
+  can show the actual cause.
 - Attach the caught error as `cause` to each new lookup exception.
 - On non-`NOT_FOUND` lookup failures, emit one structured error log with event
-  name `filestore_lookup_failed`, `resourceName`, lookup source, and the GCP
-  error's `code` and `message`.
+  name `filestore_lookup_failed`, configured `instanceName`, `resourceName`, lookup
+  source, and the GCP error's `code` and `message`.
 - Log only these explicit fields rather than serializing request options,
   credentials, headers, or the whole GCP client context.
 - Preserve failed-lookup retry behavior: failures are not cached, and the Google
@@ -176,7 +178,7 @@ accepts an optional Nest exception-options object so the explicit-instance
 | Grant `roles/file.editor` or project Viewer | Reject: both are broader than discovery requires. `roles/file.viewer` is the predefined read-only Filestore role.                                        |
 | Grant only in the stage project             | Reject: configured entries can name other projects. Derive grants from the effective project list.                                                       |
 | Import the API parser into infrastructure   | Reject: it couples deployment to the API application's internal configuration module. Use deployment-local parsing with shared contract fixtures.        |
-| Return the raw GCP error to the dashboard   | Reject: it leaks provider details and changes the public error contract. Preserve detail in logs and `cause`.                                            |
+| Return the full GCP client context          | Reject: it risks credentials and request metadata. Return only the status and original message, with full detail in logs and `cause`.                  |
 | Add resolver retries or a startup probe     | Reject for this change: retries already belong to the Google client, and a startup probe would make unrelated API availability depend on instance state. |
 
 ## Implementation outline
@@ -217,6 +219,13 @@ the tests produced two failures: the generic lookup exception and the
 `NOT_FOUND` exception had no `cause`. Restoring the implementation produced 9/9
 passing resolver tests, and `make build:apps:api` passed. No live GCP request
 was run for this slice.
+
+For the deployment-prerequisite slice, reverting all infrastructure production
+changes while retaining the tests produced seven failures: Filestore service
+enablement, default and configured project derivation, viewer grants, and final
+capability wiring. Restoring the implementation produced 105/105 focused tests,
+23/23 bootstrap tests, and 614/614 mdeploy tests, plus a clean mdeploy typecheck.
+No live GCP request was run for this slice either.
 
 Roll out infrastructure before or with the API image, then verify against the
 real stage:

@@ -30,6 +30,13 @@ export interface FilestoreInstanceLookup {
 const IPV4_PATTERN = /^(?:\d{1,3}\.){3}\d{1,3}$/
 const READY_FILESTORE_STATE = 2
 const CACHE_TTL_MS = 60_000
+const GCP_ERROR_NAMES: Record<number, string> = {
+  4: 'DEADLINE_EXCEEDED',
+  7: 'PERMISSION_DENIED',
+  9: 'FAILED_PRECONDITION',
+  14: 'UNAVAILABLE',
+  16: 'UNAUTHENTICATED',
+}
 
 @Injectable()
 export class FilestoreInstanceResolver {
@@ -66,12 +73,16 @@ export class FilestoreInstanceResolver {
       return cached.value
     }
 
-    const value = await this.lookup(resourceName, source)
+    const value = await this.lookup(resourceName, source, instanceName)
     this.cache.set(resourceName, { value, expiresAt: Date.now() + CACHE_TTL_MS })
     return value
   }
 
-  private async lookup(resourceName: string, source: FilestoreLookupSource): Promise<ResolvedFilestoreInstance> {
+  private async lookup(
+    resourceName: string,
+    source: FilestoreLookupSource,
+    instanceName: string,
+  ): Promise<ResolvedFilestoreInstance> {
     let instance: FilestoreApiInstance
     try {
       ;[instance] = await this.lookupClient().getInstance({ name: resourceName })
@@ -85,12 +96,18 @@ export class FilestoreInstanceResolver {
       }
       this.logger.error({
         event: 'filestore_lookup_failed',
+        instanceName,
         resourceName,
         source,
         code: (error as { code?: number | string } | null)?.code,
         message: error instanceof Error ? error.message : String(error),
       })
-      throw new ServiceUnavailableException(`Could not look up Filestore instance '${resourceName}'`, { cause: error })
+      throw new ServiceUnavailableException(
+        `Could not look up Filestore instance '${instanceName}' (${resourceName}): ${this.gcpErrorDetail(error)}`,
+        {
+          cause: error,
+        },
+      )
     }
     return this.mountTarget(instance, source, resourceName)
   }
@@ -135,6 +152,13 @@ export class FilestoreInstanceResolver {
   // Accept both shapes; a present-but-unready state stays unusable.
   private isReadyState(state: unknown): boolean {
     return state === READY_FILESTORE_STATE || state === 'READY'
+  }
+
+  private gcpErrorDetail(error: unknown): string {
+    const code = (error as { code?: number | string } | null)?.code
+    const status = GCP_ERROR_NAMES[Number(code)]
+    const message = error instanceof Error ? error.message : String(error)
+    return status ? `GCP ${status}: ${message.replace(/^\d+\s+[A-Z_]+:\s*/, '')}` : message
   }
 
   private isNotFound(error: unknown): boolean {

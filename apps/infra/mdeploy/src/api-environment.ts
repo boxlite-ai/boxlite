@@ -321,6 +321,41 @@ const runnerDiskExpansionFrom = (environment: Environment): Record<string, strin
   }
 }
 
+const DEFAULT_FILESTORE_INSTANCES = JSON.stringify([
+  { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+])
+
+function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
+  if (home !== 'gcp') return []
+
+  const effective = raw ?? DEFAULT_FILESTORE_INSTANCES
+  if (!effective) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(effective)
+  } catch {
+    throw new ApiEnvironmentError('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
+  }
+  if (!Array.isArray(parsed)) {
+    throw new ApiEnvironmentError('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
+  }
+
+  const projects = parsed.map((entry) => {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      typeof entry.project_id !== 'string' ||
+      !entry.project_id.trim()
+    ) {
+      throw new ApiEnvironmentError(
+        'FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects with a project_id',
+      )
+    }
+    return entry.project_id.trim()
+  })
+  return [...new Set(projects)].sort()
+}
+
 /**
  * The two channels the API reads, assembled from one stage's configuration.
  *
@@ -341,7 +376,7 @@ export const apiEnvironmentFrom = ({
   region: string
   stage: string
   home: Cloud
-}): { environment: Record<string, string>; secrets: Record<string, string> } => {
+}): { environment: Record<string, string>; secrets: Record<string, string>; filestoreProjects: string[] } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')
   const hosts = publicHostsFor({ domain, dashboardDomain: optional(environment, 'DASHBOARD_DOMAIN') })
@@ -362,8 +397,10 @@ export const apiEnvironmentFrom = ({
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
   validateCiChannels(values, addresses)
   const filestoreInstances = environment.FILESTORE_INSTANCES?.trim()
+  const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
 
   return {
+    filestoreProjects,
     environment: {
       // Constant on every deployed stage. The per-stage identity is the stage
       // name, which is what the status sync's dedup prefix uses.
@@ -405,11 +442,11 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
-      ...(filestoreInstances !== undefined
-        ? {
-            FILESTORE_INSTANCES: filestoreInstances,
-          }
-        : {}),
+      ...(home === 'gcp' && filestoreInstances === undefined
+        ? { FILESTORE_INSTANCES: DEFAULT_FILESTORE_INSTANCES }
+        : filestoreInstances !== undefined
+          ? { FILESTORE_INSTANCES: filestoreInstances }
+          : {}),
       // On unless the stage says otherwise, and it says so through the api
       // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
       // no second switch: an inverted one read here would come from whatever

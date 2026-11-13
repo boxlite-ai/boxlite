@@ -112,6 +112,7 @@ export type StackInputs = {
   runnerBinary: import('./runners.ts').RunnerBinary
   /** The hosts to create, and the names the control plane registers them under. */
   runnerFleet: readonly RunnerSlot[]
+  filestoreProjects: readonly string[]
   /** Each workload's own environment and addresses, split by the store's groups. */
   apiEnvironment: Record<string, $util.Input<string>>
   apiSecrets: Record<string, $util.Input<string>>
@@ -511,7 +512,13 @@ export const deployStack = ({
     domain: inputs.domain,
     environment: apiEnvironment,
     secrets: inputs.apiSecrets,
-    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials, resizeRunnerDisks: providers.resizeRunnerDisks() }),
+    capabilities: capabilitiesFor({
+      storage,
+      clickhouse,
+      registryCredentials,
+      resizeRunnerDisks: providers.resizeRunnerDisks(),
+      filestoreProjects: inputs.filestoreProjects,
+    }),
   })
 
   const proxyEnvironment = {
@@ -643,12 +650,14 @@ export const capabilitiesFor = ({
   clickhouse,
   registryCredentials,
   resizeRunnerDisks,
+  filestoreProjects,
 }: {
   storage: Storage
   clickhouse: ClickHouse
   registryCredentials: RegistryCredentialStore
   /** Whether this cloud's runners carry a data disk, asked of the provider bundle. */
   resizeRunnerDisks: boolean
+  filestoreProjects: readonly string[]
 }): ApiCapability[] => [
   { kind: 'list-own-bucket', storage },
   { kind: 'manage-volume-buckets', storage },
@@ -661,4 +670,7 @@ export const capabilitiesFor = ({
     ? ([{ kind: 'manage-checkpoint-archives', checkpoints: storage.checkpoints }] as ApiCapability[])
     : []),
   ...(resizeRunnerDisks ? ([{ kind: 'resize-runner-disks' }] as ApiCapability[]) : []),
+  ...(filestoreProjects.length
+    ? ([{ kind: 'read-filestore-instances', projects: filestoreProjects }] as ApiCapability[])
+    : []),
 ]

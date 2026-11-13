@@ -135,11 +135,12 @@ describe('FilestoreInstanceResolver', () => {
     try {
       await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toMatchObject({
         message:
-          "Could not look up Filestore instance 'projects/boxlite-dev/locations/asia-southeast1-b/instances/ml-scratch'",
+          "Could not look up Filestore instance 'ml-scratch' (projects/boxlite-dev/locations/asia-southeast1-b/instances/ml-scratch): GCP PERMISSION_DENIED: file.instances.get denied",
         cause: gcpError,
       })
       expect(logError).toHaveBeenCalledWith({
         event: 'filestore_lookup_failed',
+        instanceName: 'ml-scratch',
         resourceName: 'projects/boxlite-dev/locations/asia-southeast1-b/instances/ml-scratch',
         source: 'configured',
         code: 7,

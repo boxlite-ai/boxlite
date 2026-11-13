@@ -61,7 +61,9 @@ for (const home of ['aws', 'gcp'] as const) {
         .api!.filter((name) => !declared.envOptional.api!.includes(name))
         .map((name) => [name, 'fixture']),
     )
-    const instances = JSON.stringify([{ name: 'boxlite-dev-shared', server: '10.0.0.7', export: '/vol1' }])
+    const instances = JSON.stringify([
+      { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+    ])
     const selected = valuesOfGroup({
       group: 'api',
       groups: declared.envSelectGroup,
@@ -80,7 +82,7 @@ for (const home of ['aws', 'gcp'] as const) {
     assert.equal(Object.hasOwn(secrets, 'FILESTORE_INSTANCES'), false)
   })
 
-  test(`${home} omits FILESTORE_INSTANCES when the stage does not set it`, () => {
+  test(`${home} handles an unset FILESTORE_INSTANCES`, () => {
     const path = new URL('../../mstage.env.json', import.meta.url)
     const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
     const required = Object.fromEntries(
@@ -102,10 +104,14 @@ for (const home of ['aws', 'gcp'] as const) {
       stage: 'dev',
       home,
     })
-    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), false)
+    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
+    if (home === 'gcp') {
+      assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [
+        { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+      ])
+    }
   })
 }
-
 
 for (const home of ['aws', 'gcp'] as const) {
   for (const minimum of [undefined, '1', '3', '63']) {
@@ -114,8 +120,8 @@ for (const home of ['aws', 'gcp'] as const) {
       const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
       const key = 'PLATFORM_SUBDOMAIN_MIN_LENGTH'
       const required = Object.fromEntries(
-        declared.envSelectGroup.api!
-          .filter((name) => name !== key && !declared.envOptional.api!.includes(name))
+        declared.envSelectGroup
+          .api!.filter((name) => name !== key && !declared.envOptional.api!.includes(name))
           .map((name) => [name, 'fixture']),
       )
       const selected = valuesOfGroup({
@@ -142,7 +148,11 @@ for (const home of ['aws', 'gcp'] as const) {
 test('PostHog events use the deployed stage on both clouds', () => {
   for (const home of ['aws', 'gcp'] as const) {
     const { environment } = apiEnvironmentFrom({
-      environment: base, declaration: groups([]), region: 'us-east1', stage: 'dev', home,
+      environment: base,
+      declaration: groups([]),
+      region: 'us-east1',
+      stage: 'dev',
+      home,
     })
     assert.equal(environment.POSTHOG_ENVIRONMENT, 'dev', home)
   }
@@ -320,6 +330,61 @@ test('Filestore instance configuration distinguishes unset from explicit empty',
 
   const disabled = assemble({ ...base, FILESTORE_INSTANCES: '   ' })
   assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
+})
+
+test('GCP materializes the default Filestore placement and derives its project', () => {
+  const unset = apiEnvironmentFrom({
+    environment: { ...base, FILESTORE_INSTANCES: undefined },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+
+  assert.deepEqual(unset.filestoreProjects, ['boxlite-dev-project'])
+  assert.deepEqual(JSON.parse(unset.environment.FILESTORE_INSTANCES), [
+    { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+  ])
+
+  const disabled = apiEnvironmentFrom({
+    environment: { ...base, FILESTORE_INSTANCES: '   ' },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.deepEqual(disabled.filestoreProjects, [])
+  assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
+})
+
+test('GCP deduplicates Filestore projects and rejects malformed placement', () => {
+  const configured = apiEnvironmentFrom({
+    environment: {
+      ...base,
+      FILESTORE_INSTANCES: JSON.stringify([
+        { instance: 'zeta', project_id: 'zeta-project', zone: 'us-east5-a' },
+        { instance: 'alpha', project_id: 'alpha-project', zone: 'us-east5-b' },
+        { instance: 'backup', project_id: 'zeta-project', zone: 'us-east5-c' },
+      ]),
+    },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.deepEqual(configured.filestoreProjects, ['alpha-project', 'zeta-project'])
+
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: { ...base, FILESTORE_INSTANCES: 'not-json' },
+        declaration: groups([]),
+        region: 'us-east5',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    /FILESTORE_INSTANCES/,
+  )
 })
 
 test('the two dashboard origins are different on purpose, and both have a default', () => {

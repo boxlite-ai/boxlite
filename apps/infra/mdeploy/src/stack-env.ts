@@ -250,6 +250,7 @@ export type StackEnvironment = {
    */
   mailRelayHost: string | null
   apiEnvironment: Record<string, string>
+  filestoreProjects: string[]
   /** Addresses rather than values, for the keys `env.selectGroup.secret` marks. */
   apiSecrets: Record<string, string>
   proxyEnvironment: Record<string, string>
@@ -305,6 +306,7 @@ const channels = ({
   ])
   return {
     apiEnvironment: api.environment,
+    filestoreProjects: api.filestoreProjects,
     apiSecrets: api.secrets,
     proxyEnvironment: proxy.values,
     proxySecrets: proxy.addresses,
