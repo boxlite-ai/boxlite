@@ -32,6 +32,11 @@ function context(event: string, draft = false, selected = true) {
   return { github, needs: { changes: { result: 'success', outputs } } }
 }
 
+test('joining a native stack starts the required Test workflow', () => {
+  const types = workflow().on.pull_request.types ?? ['opened', 'synchronize', 'reopened']
+  assert.ok(types.includes('stacked'), 'stacked must start Test when an existing PR joins a native stack')
+})
+
 test('PR lifecycle triggers include becoming ready and returning to draft', () => {
   const types = workflow().on.pull_request.types ?? ['opened', 'synchronize', 'reopened']
   for (const action of ['opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft']) {
