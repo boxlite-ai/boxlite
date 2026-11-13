@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-The SSH dialog is static guidance for direct CLI login: install, authenticate, then run `boxlite ssh BOX` to enter a shell. The browser neither prepares SSH nor constructs a second OpenSSH command.
+The SSH dialog is static guidance for direct CLI login: install, run `boxlite auth login`, then `boxlite ssh <box-id>` to enter a shell. Keep these commands short: the CLI defaults already target the hosted API, and successful login caches the organization's routing prefix. The browser neither prepares SSH nor constructs a second OpenSSH command.
 
 ## Scope and interaction
 
@@ -13,8 +13,8 @@ The dialog uses the shared constrained layout, divided fixed header, compact mon
 ## Connection contract
 
 1. Install or update the CLI.
-2. Log in using an API key for the selected organization. Entry is interactive; secrets never appear in copied commands.
-3. Start the Box, enable **Inbound access** in Network and run `boxlite … --path-prefix=ORGANIZATION ssh -- BOX`. This opens a shell directly as `box`; it does not merely print a command to run later. Box-write permission and local `ssh` and `ssh-keygen` are required.
+2. Run `boxlite auth login`, select the API-key method and enter a key for the selected organization. Entry is interactive; secrets never appear in copied commands.
+3. Start the Box, enable **Inbound access** in Network and run `boxlite ssh <box-id>`. This opens a shell directly as `box`; it does not merely print a command to run later. Box-write permission and local `ssh` and `ssh-keygen` are required.
 
 The CLI owns local Ed25519 credentials, remote credential scoping, tunnel lifetime and system OpenSSH. It uses its own known-hosts file and strict host checking. No manual fingerprint acceptance or separate Dashboard-generated `ssh` command is needed. Default login does not edit user OpenSSH configuration. Explicit `--install-ssh-config` is a separate CLI operation, not a prerequisite for direct login.
 
@@ -29,9 +29,13 @@ A mismatching observed host identity fails instead of reconfiguring healthy SSH.
 
 Direct cloud login requires SSH control, tunnel support and inbound access. Exiting closes local forwarding but leaves the public tunnel declaration open, protected by SSH authentication. Revoke it with `boxlite network tunnel BOX PORT --revoke`, using the same context and prefix.
 
-## Selection and existing controls
+## Decision and accepted tradeoff
 
-Login and connection explicitly select `dashboard:<normalized API endpoint>`. Login supplies the endpoint; connection pins the organization with `--path-prefix`. Both remove inherited `BOXLITE_REST_URL` and `BOXLITE_API_KEY` from their child environments without changing the parent shell or saved current context. Arguments are validated and shell-quoted. The CLI retains the resolved selection throughout the direct session.
+The guide deliberately shows bare login and direct SSH, without endpoint or organization pinning, a dedicated context, shell quoting or environment cleanup. Only the Box ID is interpolated, and it must match `/^[A-Za-z0-9_][A-Za-z0-9_-]*$/`.
+
+Bare login targets the CLI default endpoint (`https://api.boxlite.ai`) in a fresh setup, does not prompt for an endpoint and writes the selected context. Successful API-key login saves the organization's routing prefix, so the connect command needs no explicit prefix. The tradeoff is intentional: an unrelated selected context, exported `BOXLITE_*` variables or a non-production/self-hosted deployment can change the effective destination or credentials. The guide does not detect or handle these minority cases. One muted line directs users with self-hosted endpoints, other organizations or an existing CLI setup to the existing [SSH guide](https://docs.boxlite.ai/cloud/ssh).
+
+## Existing controls
 
 The Network SSH switch only enables/disables saved configuration. It never creates keys or changes inbound. Missing configuration opens the static guide; authentication and permission failures remain errors. Mutations require a running Box and `WRITE_BOXES`; unknown status cannot be toggled.
 
@@ -50,7 +54,7 @@ Keeping the older printed-command instructions would require an extra step that 
 
 ## Validation boundary
 
-Focused SSH checks cover shell arguments and ambient credential isolation, clipboard failure/retry, no-write guide actions, saved-state switches, permission/lifecycle guards and stale responses. Mock browser inspection covers the actual three-step guide, command copying and desktop/mobile layout. Neither a mock preview nor these Dashboard checks prove a live cloud SSH handshake or availability of the target CLI in the public installer.
+Focused SSH checks cover the exact short commands, Box-ID validation, API-key instructions and the docs caveat, clipboard failure/retry, no-write guide actions, saved-state switches, permission/lifecycle guards and stale responses. Mock browser inspection covers the actual three-step guide, command copying and desktop/mobile layout. Neither a mock preview nor these Dashboard checks prove a live cloud SSH handshake or availability of the target CLI in the public installer.
 
 ## Compact layout
 
@@ -68,8 +72,9 @@ checks passed; no live SSH handshake was run.
 ## Screenshots
 
 Both screenshots use mock data. The earlier screenshot records the browser-key
-workflow and predates the current navigation; the new screenshot shows the static
-guide at 1280×720. Neither demonstrates a live SSH connection.
+workflow and predates the current navigation; the new screenshot shows the current
+static three-step guide at 1280×720 with the short commands. Neither demonstrates
+a live SSH connection.
 
 ### Previous browser-key guide
 
