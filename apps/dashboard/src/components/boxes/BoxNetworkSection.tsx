@@ -6,7 +6,7 @@
 import { useBoxPreviewUrlMutation } from '@/hooks/mutations/useBoxPreviewUrlMutation'
 import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInboundMutation'
 import { Box, NetworkMode } from '@boxlite-ai/api-client'
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { BoxNetworkPanel } from './BoxNetworkPanel'
 import { BoxPreviewUrlDialog } from './BoxPreviewUrlDialog'
@@ -18,7 +18,15 @@ import { BoxPreviewUrlDialog } from './BoxPreviewUrlDialog'
  * (which also owns cache invalidation) and `useBoxPreviewUrlMutation` — so this
  * component issues no HTTP of its own and only orchestrates.
  */
-export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boolean }) {
+export function BoxNetworkSection({
+  box,
+  canManage,
+  children,
+}: {
+  box: Box
+  canManage: boolean
+  children?: ReactNode
+}) {
   const toggleInbound = useUpdateBoxInboundMutation()
   const previewUrl = useBoxPreviewUrlMutation()
 
@@ -65,6 +73,7 @@ export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boo
         onToggleInbound={setInbound}
         onGetUrl={openDialog}
       />
+      {children}
       <BoxPreviewUrlDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}

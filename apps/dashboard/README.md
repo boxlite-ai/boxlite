@@ -1143,3 +1143,9 @@ Desktop rows retain aligned columns. Expanded repository details span both layou
 Terminal text size uses the shared themed selector. Changing size refits the existing xterm instance without reconnecting or replacing its buffer. The terminal loads the configured monospace font before applying it; a failed font request keeps a usable fallback and the active shell.
 
 Maximize expands the current terminal in place; Restore returns to its prior layout. Both actions return keyboard focus to the existing terminal so typing continues without an extra click. Covered application controls become inert, and page scrolling is restored when leaving maximized mode or unmounting. Press Ctrl+Shift+F6 inside the terminal to focus the Maximize/Restore button, then Enter to activate it. This shortcut is displayed while maximized; ordinary Escape, Tab and F6 remain available to terminal applications. These viewport controls do not change shell authentication, permission checks, reconnection, or runner lifecycle.
+
+### Stable Box detail views
+
+Overview and Terminal share one Box header, lifecycle actions, SSH controls and tab position. The route selects the content pane; entering Terminal does not request the Overview image or volume catalogs. Leaving Terminal still unmounts its shell, while maximizing inside Terminal preserves it. Changing Box or organization resets Box-scoped UI state.
+
+Overview presents provisioned CPU, memory and disk without implying measured usage. Configuration and activity share a compact panel; mounted volumes remain conditional. Long references wrap inside their fields. The status label reuses the list's presentation, including Pulling image. Existing lifecycle permissions and mutation behavior remain intact.

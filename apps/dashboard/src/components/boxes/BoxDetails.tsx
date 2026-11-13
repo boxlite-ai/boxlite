@@ -17,18 +17,15 @@ import {
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { RoutePath } from '@/enums/RoutePath'
-import { useImagesQuery } from '@/hooks/queries/useImagesQuery'
-import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useStopBoxMutation } from '@/hooks/mutations/useStopBoxMutation'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
 import { useConfig } from '@/hooks/useConfig'
-import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getBoxDisplayName, getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
+import { getBoxDisplayName } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import {
   mergeOnboardingProgress,
@@ -36,57 +33,43 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
-import { catalogNameOf, registryHostOf } from '@/lib/image-ref'
-import { getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
-import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Check, Container, Copy, MoreVertical, Play, RefreshCw, RotateCcw, Square, Trash2 } from '@/components/ui/icon'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  ArrowLeft,
+  Check,
+  Container,
+  Copy,
+  MoreVertical,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Square,
+  Trash2,
+} from '@/components/ui/icon'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { generatePath, Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { copyToClipboard } from '@/lib/copy-text'
 import { toast } from 'sonner'
-import { BoxNetworkSection } from './BoxNetworkSection'
+import { BoxOverview } from './BoxOverview'
+import { BoxTerminalSession } from './BoxTerminalSession'
+import { cn } from '@/lib/utils'
 import { BoxPageNavigation } from './BoxPageNavigation'
 import { BoxSshTab } from './BoxSshTab'
-import { BoxSectionHeader } from './BoxSectionHeader'
+import { BoxStatusIndicator } from './box-presentation'
+import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 
-const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
-
-function statusOf(box: Box): { label: string; color: string } {
-  switch (box.state) {
-    case BoxState.STARTED:
-      return { label: 'Running', color: STATUS.running }
-    case BoxState.STOPPED:
-      return { label: 'Stopped', color: STATUS.dim }
-    case BoxState.ERROR:
-      return { label: 'Error', color: STATUS.error }
-    case BoxState.CREATING:
-    case BoxState.STARTING:
-    case BoxState.RESTORING:
-      return { label: 'Starting', color: STATUS.idle }
-    case BoxState.STOPPING:
-      return { label: 'Stopping', color: STATUS.idle }
-    case BoxState.DESTROYING:
-      return { label: 'Deleting', color: STATUS.idle }
-    default:
-      return { label: (box.state ?? 'Unknown').replace(/^\w/, (c) => c.toUpperCase()), color: STATUS.dim }
-  }
+/** Keep one Box's header and SSH controls mounted across its two views. */
+export default function BoxDetails({ page = 'overview' }: { page?: 'overview' | 'terminal' }) {
+  const { boxId } = useParams<{ boxId: string }>()
+  const { selectedOrganization } = useSelectedOrganization()
+  return <BoxDetailsPage key={`${selectedOrganization?.id}:${boxId}`} page={page} />
 }
 
-function SpecRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid grid-cols-[80px_minmax(0,1fr)] items-start gap-3 sm:grid-cols-[100px_minmax(0,1fr)]">
-      <dt className="text-meta text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 [overflow-wrap:anywhere]">{children}</dd>
-    </div>
-  )
-}
-
-/** Box overview and management; the terminal has its own route and shell lifetime. */
-export default function BoxDetails() {
+function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
   const { boxId } = useParams<{ boxId: string }>()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -95,11 +78,9 @@ export default function BoxDetails() {
   const userId = user?.profile.sub
   const { authenticatedUserOrganizationMember, selectedOrganization, authenticatedUserHasPermission } =
     useSelectedOrganization()
-  const { getRegionName } = useRegions()
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
-  const [copied, setCopied] = useState(false)
   const [copiedName, setCopiedName] = useState(false)
   const [sshRefreshSignal, setSshRefreshSignal] = useState(0)
   const [sshStatusContainer, setSshStatusContainer] = useState<HTMLDivElement | null>(null)
@@ -131,27 +112,9 @@ export default function BoxDetails() {
   }, [navigate, searchParams, selectedOrganization, user?.profile.sub])
 
   const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
-  usePageTitle(box ? getBoxDisplayName(box) : 'Box')
+  usePageTitle(box ? `${getBoxDisplayName(box)}${page === 'terminal' ? ' · Terminal' : ''}` : 'Box')
 
-  // Volumes this box mounts, with the stored handle resolved back to a name.
-  const { data: allVolumes = [] } = useVolumesQuery()
-  // The image the box names is linked once it is in the catalog, which a
-  // first start puts it in; a built-in one is matched on its full reference.
-  const { data: images = [] } = useImagesQuery()
-  const catalogImage = box?.image
-    ? images.find((image) =>
-        image.curated ? image.curatedRef === box.image : image.name === catalogNameOf(box.image ?? ''),
-      )
-    : undefined
-  const mountedVolumes = useMemo(() => {
-    const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
-    return mounts.map((mount) => {
-      const match = allVolumes.find((v) => v.id === mount.volumeId || v.name === mount.volumeId)
-      return { ...mount, displayName: match?.name ?? mount.volumeId }
-    })
-  }, [box?.volumes, allVolumes])
-
-  const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
+  const isNotFound = isError && isAxiosError(error?.cause) && error.cause?.status === 404
   useBoxWsSync({ boxId })
 
   useEffect(() => {
@@ -234,17 +197,6 @@ export default function BoxDetails() {
     }
   }
 
-  const copyId = async () => {
-    const id = box ? getBoxPublicId(box) : null
-    if (!id) return
-    if (!(await copyToClipboard(id))) {
-      toast.error('Could not copy to clipboard')
-      return
-    }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1300)
-  }
-
   const copyName = async () => {
     if (!box) return
     if (!(await copyToClipboard(getBoxDisplayName(box)))) {
@@ -256,21 +208,21 @@ export default function BoxDetails() {
   }
 
   return (
-    <div className="page-container flex min-h-[var(--app-content-height,calc(100svh_-_60px))] min-w-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-body">
-      {/* breadcrumb */}
-      <div className="flex flex-none items-center gap-[9px] text-meta text-muted-foreground">
-        <button
-          type="button"
-          onClick={() => navigate(RoutePath.BOXES)}
-          className="inline-flex min-h-6 items-center hover:text-foreground"
-        >
-          Boxes
-        </button>
-        <span aria-hidden="true" className="text-muted-foreground">
-          /
-        </span>
-        <span className="text-foreground">{box ? getBoxDisplayName(box) : boxId?.toLowerCase()}</span>
-      </div>
+    <div
+      className={cn(
+        'page-container flex max-w-[1232px] min-w-0 flex-col gap-3 pb-6 pt-4 font-sans text-body',
+        page === 'terminal'
+          ? 'h-[var(--app-content-height,calc(100svh_-_60px))] min-h-[640px]'
+          : 'min-h-[var(--app-content-height,calc(100svh_-_60px))]',
+      )}
+    >
+      <Link
+        to={RoutePath.BOXES}
+        className="inline-flex min-h-6 w-fit flex-none items-center gap-2 text-meta text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" aria-hidden="true" />
+        Boxes
+      </Link>
 
       {isNotFound ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
@@ -306,14 +258,11 @@ export default function BoxDetails() {
           {/* identity strip */}
           <div className="flex flex-none flex-col gap-4 lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
-              <span className="flex min-w-0 items-center gap-[12px]">
-                <Container className="size-6 shrink-0 text-muted-foreground" />
-                <span
-                  className="max-w-full truncate font-display text-section font-semibold sm:max-w-[360px]"
-                  title={getBoxDisplayName(box)}
-                >
+              <div className="flex min-w-0 items-center gap-3">
+                <BoxResourceIcon box={box} className="size-7 shrink-0" />
+                <h1 className="min-w-0 break-all font-mono text-page font-semibold" title={getBoxDisplayName(box)}>
                   {getBoxDisplayName(box)}
-                </span>
+                </h1>
                 <button
                   type="button"
                   onClick={copyName}
@@ -321,19 +270,11 @@ export default function BoxDetails() {
                   aria-label="Copy name"
                   className="inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
                 >
-                  {copiedName ? (
-                    <Check className="size-[15px]" style={{ color: STATUS.running }} />
-                  ) : (
-                    <Copy className="size-[15px]" />
-                  )}
+                  {copiedName ? <Check className="size-[15px] text-success" /> : <Copy className="size-[15px]" />}
                 </button>
-              </span>
-              <span className="flex flex-none items-center gap-2 text-body">
-                <span
-                  className="size-[8px] rounded-[2px]"
-                  style={{ background: statusOf(box).color, boxShadow: `0 0 6px ${statusOf(box).color}` }}
-                />
-                <span className="font-medium">{statusOf(box).label}</span>
+              </div>
+              <span className="shrink-0">
+                <BoxStatusIndicator box={box} />
               </span>
             </div>
 
@@ -341,55 +282,35 @@ export default function BoxDetails() {
               {/* SSH comes first in every state, then the state action, then the menu and refresh. */}
               <BoxSshTab box={box} refreshSignal={sshRefreshSignal} statusContainer={sshStatusContainer} />
               {writePermitted && isRecoverable(box) && (
-                <button
-                  type="button"
-                  onClick={handleRecover}
-                  disabled={actionsDisabled}
-                  className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
-                >
+                <Button variant="outline" type="button" onClick={handleRecover} disabled={actionsDisabled}>
                   <RotateCcw className="size-[14px]" /> Recover
-                </button>
+                </Button>
               )}
               {writePermitted && isStartable(box) && (
-                <button
-                  type="button"
-                  onClick={handleStart}
-                  disabled={actionsDisabled}
-                  className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
-                >
-                  <Play className="size-[14px]" fill="currentColor" /> Start
-                </button>
+                <Button variant="outline" type="button" onClick={handleStart} disabled={actionsDisabled}>
+                  <Play className="size-[14px]" /> Start
+                </Button>
               )}
               {writePermitted && isStoppable(box) && (
-                <button
-                  type="button"
-                  onClick={handleStop}
-                  disabled={actionsDisabled}
-                  className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
-                >
-                  <Square className="size-[12px]" fill="currentColor" /> Stop
-                </button>
+                <Button variant="outline" type="button" onClick={handleStop} disabled={actionsDisabled}>
+                  <Square className="size-[12px]" /> Stop
+                </Button>
               )}
               {writePermitted &&
                 isTransitioning(box) &&
                 !isRecoverable(box) &&
                 !isStartable(box) &&
                 !isStoppable(box) && (
-                  <button
-                    type="button"
-                    disabled
-                    className="flex h-9 items-center gap-2 border border-border px-[15px] text-body font-medium text-muted-foreground"
-                  >
+                  <Button variant="outline" disabled>
                     <RefreshCw className="size-[14px] animate-spin" /> Working…
-                  </button>
+                  </Button>
                 )}
               {deletePermitted && (
                 <DropdownMenu>
-                  <DropdownMenuTrigger
-                    aria-label="Open box actions"
-                    className="flex size-9 items-center justify-center border border-border outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:bg-background sm:size-[34px]"
-                  >
-                    <MoreVertical className="size-[18px]" />
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="quiet" size="icon" aria-label="Open box actions">
+                      <MoreVertical className="size-4" />
+                    </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[12rem]">
                     <DropdownMenuItem
@@ -401,159 +322,30 @@ export default function BoxDetails() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
-              <button
+              <Button
+                variant="quiet"
+                size="icon"
                 type="button"
                 onClick={handleRefresh}
                 title="Refresh"
                 aria-label="Refresh"
-                className="flex size-9 items-center justify-center border border-border transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:size-[34px]"
               >
                 <span ref={refreshRef} className="inline-flex">
                   <RefreshCw className="size-4" />
                 </span>
-              </button>
+              </Button>
             </div>
           </div>
 
-          <BoxPageNavigation boxId={boxId ?? box.id} current="overview" />
+          <BoxPageNavigation boxId={boxId ?? box.id} current={page} />
 
-          <div className="min-w-0 pb-2">
-            <div className="w-full max-w-6xl space-y-5">
-              <section aria-label="Box resources" className="border border-border bg-card/40">
-                <dl className="grid grid-cols-3 divide-x divide-border">
-                  {[
-                    { label: 'CPU', value: box.cpu, unit: 'vCPU' },
-                    { label: 'Memory', value: box.memory, unit: 'GiB' },
-                    { label: 'Disk', value: box.disk, unit: 'GiB' },
-                  ].map(({ label, value, unit }) => (
-                    <div key={label} className="min-w-0 px-3 py-4 sm:px-5">
-                      <dt className="text-meta text-muted-foreground">{label}</dt>
-                      <dd className="mt-1.5 flex flex-wrap items-baseline gap-x-2">
-                        <span className="font-display text-section font-semibold">{value ?? '—'}</span>
-                        <span className="text-meta text-muted-foreground">{unit}</span>
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-              <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-                <section aria-label="Box configuration" className="min-w-0 border border-border p-4 sm:p-5">
-                  <BoxSectionHeader title="Configuration" />
-                  <dl className="space-y-4">
-                    <SpecRow label="Box ID">
-                      <span className="flex min-w-0 items-start gap-2">
-                        <span className="min-w-0 break-all">{getBoxPublicIdLabel(box)}</span>
-                        <button
-                          type="button"
-                          onClick={copyId}
-                          title="Copy Box ID"
-                          aria-label="Copy Box ID"
-                          className="inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
-                        >
-                          {copied ? (
-                            <Check className="size-[14px]" style={{ color: STATUS.running }} />
-                          ) : (
-                            <Copy className="size-[14px]" />
-                          )}
-                        </button>
-                      </span>
-                    </SpecRow>
-                    <SpecRow label="Image">
-                      {box.image ? (
-                        catalogImage ? (
-                          <Link
-                            to={generatePath(RoutePath.IMAGE_DETAILS, {
-                              idOrRef: catalogImage.id ?? catalogImage.name,
-                            })}
-                            className="underline-offset-4 hover:underline"
-                          >
-                            {box.image}
-                          </Link>
-                        ) : (
-                          box.image
-                        )
-                      ) : (
-                        '—'
-                      )}
-                    </SpecRow>
-                    <SpecRow label="Region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
-                  </dl>
-
-                  {/* Read-only by construction: mounts are fixed when the box is
-                  created and there is no attach/detach endpoint, so this
-                  answers "where is my data" and nothing more. Stored volumeId
-                  may be a name or an id — the API accepts either — so resolve
-                  it back to the readable name when we know it. */}
-                  {mountedVolumes.length > 0 && (
-                    <div className="mt-5 border-t border-border pt-5">
-                      <BoxSectionHeader title="Volumes" />
-                      <table className="w-full table-fixed text-left text-meta">
-                        <caption className="sr-only">Mounted volumes</caption>
-                        <thead>
-                          <tr className="border-b border-border text-muted-foreground">
-                            <th scope="col" className="pb-2 pr-4 font-normal">
-                              Volume
-                            </th>
-                            <th scope="col" className="pb-2 font-normal">
-                              Mount path
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {mountedVolumes.map((mount) => (
-                            <tr key={`${mount.volumeId}:${mount.mountPath}`}>
-                              <td className="py-3 pr-4 align-top [overflow-wrap:anywhere]">
-                                <Link
-                                  to={RoutePath.VOLUMES}
-                                  className="underline-offset-4 hover:text-brand hover:underline"
-                                >
-                                  {mount.displayName}
-                                </Link>
-                              </td>
-                              <td className="py-3 align-top [overflow-wrap:anywhere]">
-                                <code>
-                                  {mount.mountPath}
-                                  {mount.subpath ? ` (${mount.subpath})` : ''}
-                                </code>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {box.errorReason && (
-                    <div className="mt-5 border-t border-border pt-5">
-                      <BoxSectionHeader title="Error" />
-                      <p className="text-meta leading-relaxed text-destructive-foreground">{box.errorReason}</p>
-                      {/* The API's wording for a private pull with no credential.
-                      The fix is on the registries page, so the error carries the way there. */}
-                      {box.image && /no registry login/.test(box.errorReason) && (
-                        <Link
-                          to={`${RoutePath.IMAGE_REGISTRIES}?connect=${encodeURIComponent(registryHostOf(box.image))}`}
-                          className="mt-2 inline-block border border-border px-3 py-[6px] text-label uppercase text-foreground transition-colors hover:border-brand"
-                        >
-                          Connect a registry for {registryHostOf(box.image)} →
-                        </Link>
-                      )}
-                    </div>
-                  )}
-                </section>
-                <section aria-label="Box network and activity" className="min-w-0 border border-border p-4 sm:p-5">
-                  <BoxNetworkSection box={box} canManage={writePermitted} />
-                  <div ref={setSshStatusContainer} />
-                  <div className="mt-5 border-t border-border pt-5">
-                    <BoxSectionHeader title="Activity" />
-                    <dl className="space-y-4">
-                      <SpecRow label="Created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
-                      <SpecRow label="Last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
-                    </dl>
-                  </div>
-                </section>
-              </div>
+          {page === 'terminal' ? (
+            <div className="flex min-h-[360px] min-w-0 flex-1 flex-col overflow-hidden border border-border/60">
+              <BoxTerminalSession box={box} />
             </div>
-          </div>
+          ) : (
+            <BoxOverview box={box} canManage={writePermitted} sshStatusRef={setSshStatusContainer} />
+          )}
         </>
       )}
 
