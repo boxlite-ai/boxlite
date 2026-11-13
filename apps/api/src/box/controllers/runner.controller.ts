@@ -341,6 +341,7 @@ export class RunnerController {
       {
         nestedVirtualizationEnabled: healthcheck.nestedVirtualizationEnabled,
       },
+      healthcheck.dataDiskRef,
     )
   }
 }

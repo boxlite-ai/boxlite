@@ -678,6 +678,34 @@ Requests time out after ten seconds; network errors, 429, and 5xx retry after
 overflow are logged and dropped. Missed ticks are not replayed, and process
 restart loses queued reports. Deploy the migration and API before Runners.
 
+### Data disk resize
+
+[`internal/diskresize/ticker.go`](internal/diskresize/ticker.go). The
+control plane can grow a GCP runner's Hyperdisk data disk online
+(disks.update); the filesystem must still be resized to use the extra
+capacity, and that is this runner's job. Every 10 seconds the ticker
+reads the block device's size from sysfs via the stable
+`/dev/disk/by-id/google-boxlite-data` symlink and compares it with the
+last observed size:
+
+- unchanged: nothing happens (steady state costs one sysfs read);
+- larger: runs `resize2fs` on the device, which grows the mounted ext4
+  filesystem online; the baseline moves only on success, so a failed
+  resize retries next round;
+- smaller: not skipped — a smaller device still runs resize2fs, which fails and retries each round (disks cannot shrink via GCP; a disk swap is caught by the API-side stale-ref alert);
+- missing (AWS, local, or non-Linux hosts): skip, logged once at debug;
+  disk resize is a GCP-only behavior.
+
+The first round always runs resize2fs once: the nil baseline forces an
+idempotent no-op that also repairs an earlier failed resize after a
+runner restart. Failures log `event=runner.disk.resize` at warn and
+increment an in-process failure counter; successes log the same event
+at info. The disk trigger is the device size, deliberately not statfs:
+the ext4 metadata overhead makes statfs total permanently smaller than
+the device, so statfs comparison would fire resize2fs every round.
+`RUNNER_DATA_DISK_DEVICE` overrides the device path for tests and local
+runs; infra never injects that key.
+
 ### v2 job poller + executor
 
 Only spawned when `BOXLITE_API_VERSION=2`. The poller
@@ -809,6 +837,19 @@ Periodic `POST RunnerHealthcheck` to the API with runner version,
 domain, API + proxy URLs, BoxLite ping result, and the current metrics
 snapshot. Failures are logged but never crash the runner — this is the
 control plane's view of the runner's liveness, not a self-test.
+
+GCP runners also carry the data disk identity: when infra injects all
+three `GCP_PROJECT_ID`, `GCP_ZONE` and `RUNNER_DATA_DISK_NAME` env
+keys, every healthcheck includes `dataDiskRef` with provider, project,
+zone and disk name; any missing key omits the whole field, so AWS and
+local runners never send a partial identity. The API's disk-expansion
+controller uses this ref to address the right disk. Infra also injects
+`RUNNER_DATA_DISK_TYPE` (derived from the provisioned disk type, e.g.
+`hyperdisk_balanced`); the ref carries it as `diskType` so the API can
+tell expandable block disks from backends with a different resize path
+(e.g. Filestore). The key is optional — binaries predating it, and
+hosts whose infra predates it, are treated as `hyperdisk_balanced` by
+the API, which matches everything infra provisions today.
 
 ---
 
