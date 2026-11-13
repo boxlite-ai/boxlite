@@ -16,24 +16,24 @@ function fakeDisks(result: () => Promise<{ name: string }[]>) {
 
 describe('GcpDiskClient', () => {
   describe('resizeDisk', () => {
-    it('sends paths=["sizeGb"] and the numeric size, and returns the operation name', async () => {
+    it('sends updateMask="sizeGb" and the numeric size, and returns the operation name', async () => {
       const disks = fakeDisks(async () => [{ name: 'operation-123' }])
       const client = new GcpDiskClient({ disks: disks.client })
 
       const result = await client.resizeDisk(ref, 4096)
 
       expect(result).toEqual({ operation: 'operation-123' })
-      // paths must be exactly ["sizeGb"]: the v1 client ignores updateMask,
-      // and a request without paths is a full PATCH that would reset
-      // provisioned IOPS/throughput to defaults. The body must also carry
-      // the disk name: disks.update requires resource.name even though the
-      // mask only names sizeGb.
+      // The mask must be exactly "sizeGb": a mask that omits a carried field
+      // would reset that field to the cloud default, and a request with no
+      // mask at all is a full PATCH. The body must also carry the disk name:
+      // disks.update requires resource.name even though the mask only names
+      // sizeGb.
       expect(disks.update).toHaveBeenCalledWith({
         project: 'proj',
         zone: 'z1',
         disk: 'disk-1',
         diskResource: { name: 'disk-1', sizeGb: '4096' },
-        paths: ['sizeGb'],
+        updateMask: 'sizeGb',
       })
     })
 
@@ -75,37 +75,37 @@ describe('GcpDiskClient', () => {
       [
         'size only',
         undefined,
-        ['sizeGb'],
+        'sizeGb',
         { name: 'disk-1', sizeGb: '4096' },
       ],
       [
         'size + both performance fields',
         { iops: '5400', throughput: '360' },
-        ['sizeGb', 'provisionedIops', 'provisionedThroughput'],
+        'sizeGb,provisionedIops,provisionedThroughput',
         { name: 'disk-1', sizeGb: '4096', provisionedIops: '5400', provisionedThroughput: '360' },
       ],
       [
         'size + IOPS only',
         { iops: '7200' },
-        ['sizeGb', 'provisionedIops'],
+        'sizeGb,provisionedIops',
         { name: 'disk-1', sizeGb: '4096', provisionedIops: '7200' },
       ],
       [
         'size + throughput only',
         { throughput: '480' },
-        ['sizeGb', 'provisionedThroughput'],
+        'sizeGb,provisionedThroughput',
         { name: 'disk-1', sizeGb: '4096', provisionedThroughput: '480' },
       ],
-    ])('sends $0', async (_label, performance, expectedPaths, expectedResource) => {
+    ])('sends $0', async (_label, performance, expectedMask, expectedResource) => {
       const update = jest.fn(async () => [{ name: 'operation-1' }])
       const client = new GcpDiskClient({ disks: { update, get: jest.fn(async () => []) } })
 
       await client.resizeDisk(ref, 4096, performance)
 
-      // objectContaining keeps other keys loose, but the paths array inside
+      // objectContaining keeps other keys loose, but the mask string inside
       // it matches exactly, pinning the mask per shape.
       expect(update).toHaveBeenCalledWith(
-        expect.objectContaining({ diskResource: expectedResource, paths: expectedPaths }),
+        expect.objectContaining({ diskResource: expectedResource, updateMask: expectedMask }),
       )
     })
 

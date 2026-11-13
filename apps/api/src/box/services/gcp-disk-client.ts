@@ -58,7 +58,7 @@ interface DisksLike {
     zone: string
     disk: string
     diskResource: { name: string; sizeGb: string; provisionedIops?: string; provisionedThroughput?: string }
-    paths: string[]
+    updateMask: string
   }): Promise<{ name: string }[]>
   get(request: { project: string; zone: string; disk: string }): Promise<
     {
@@ -81,13 +81,14 @@ interface ZoneOperationsLike {
  * plus the read that grounds the proportional performance targets (`disks.get`).
  *
  * Three invariants live here and are pinned by tests:
- * - `paths` is always an explicit non-empty subset of the fields the body
- *   carries: `['sizeGb']`, or `['sizeGb', 'provisionedIops']`,
- *   `['sizeGb', 'provisionedThroughput']`, or all three. The v1 client also
- *   accepts `updateMask`, but it is silently ignored there — the request then
- *   goes out without `paths` as a full PATCH, which would reset
- *   provisionedIops/Throughput to defaults. Only `paths` reaches GCP as the
- *   field mask.
+ * - the field mask is always an explicit comma-joined subset of the fields
+ *   the body carries: `sizeGb`, or `sizeGb,provisionedIops`,
+ *   `sizeGb,provisionedThroughput`, or all three, sent as `updateMask`. The
+ *   legacy `paths` array is rejected by GCP for multi-field masks ("Updating
+ *   sizeGb,provisionedIops,provisionedThroughput is not supported",
+ *   observed on the live API 2026-11-13), and a probe the same day confirmed
+ *   `updateMask` is honored: a mask naming sizeGb with no body value drew
+ *   "Cannot update disk size without setting a value to it".
  * - the resource body carries the disk name. `disks.update` requires
  *   `resource.name` even though the mask only names `sizeGb`; without it GCP
  *   rejects the request outright (`Invalid value for field 'resource.name': ''`).
@@ -137,7 +138,7 @@ export class GcpDiskClient implements GcpDiskClientLike {
         zone: ref.zone,
         disk: ref.diskName,
         diskResource,
-        paths,
+        updateMask: paths.join(','),
       })
     } catch (e) {
       // Map here so callers only ever see this module's error classes: a
