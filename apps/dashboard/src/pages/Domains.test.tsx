@@ -8,11 +8,19 @@ import Domains from './Domains'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
 import { MemoryRouter } from 'react-router-dom'
 
-const state = vi.hoisted(() => ({ organizationId: 'org-1', canManage: true, list: vi.fn(), claim: vi.fn() }))
+const state = vi.hoisted(() => ({
+  organizationId: 'org-1',
+  canManage: true,
+  list: vi.fn(),
+  claim: vi.fn(),
+  custom: vi.fn(),
+}))
 const feedback = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), copy: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { success: feedback.success, error: feedback.error } }))
 vi.mock('@/lib/copy-text', () => ({ copyToClipboard: feedback.copy }))
-vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ listDomains: state.list, claimDomain: state.claim }) }))
+vi.mock('@/hooks/useApi', () => ({
+  useApi: () => ({ listDomains: state.list, claimDomain: state.claim, listCustomDomains: state.custom }),
+}))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: state.organizationId },
@@ -50,6 +58,7 @@ describe('Domains page', () => {
     state.organizationId = 'org-1'
     state.canManage = true
     state.list.mockReset().mockResolvedValue(list)
+    state.custom.mockReset().mockResolvedValue({ enabled: false, subscription: 'required', domains: [] })
     state.claim
       .mockReset()
       .mockResolvedValue({ hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null })
@@ -99,8 +108,13 @@ describe('Domains page', () => {
     expect(document.body.textContent).toContain(hostname)
   })
 
+  function requestButton() {
+    return [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Request domain'),
+    )!
+  }
   async function openForm() {
-    await act(async () => document.querySelector<HTMLButtonElement>('button')!.click())
+    await act(async () => requestButton().click())
     const input = document.querySelector<HTMLInputElement>('#domain-short-name')!
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'My-App')
@@ -124,6 +138,19 @@ describe('Domains page', () => {
     },
   )
 
+  it('uses one page title and switches custom setup without starting a mutation', async () => {
+    await render()
+    expect(document.querySelectorAll('h1')).toHaveLength(1)
+    expect(state.custom).not.toHaveBeenCalled()
+    const custom = document.querySelector<HTMLButtonElement>('[role="tab"][data-state="inactive"]')!
+    await act(async () => custom.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
+    await settle()
+    expect(custom.getAttribute('aria-selected')).toBe('true')
+    expect(state.custom).toHaveBeenCalledWith('org-1')
+    expect(document.querySelector('[role="tabpanel"][data-state="active"]')?.textContent).toContain('Add custom domain')
+    expect(state.claim).not.toHaveBeenCalled()
+  })
+
   it('lists full names with Box/port, App, and unbound targets', async () => {
     await render()
     expect(state.list).toHaveBeenCalledWith('org-1')
@@ -133,7 +160,7 @@ describe('Domains page', () => {
       'shop-one.apps.testAppshop-app—',
       'spare.apps.testUnbound——',
     ])
-    expect(document.body.textContent).toContain('3 / 5 domains held')
+    expect(document.body.textContent).toContain('3 / 5 platform domains held')
     const links = document.querySelectorAll('tbody a')
     expect(links).toHaveLength(1)
     expect(links[0].textContent).toBe('box-123')
@@ -166,7 +193,7 @@ describe('Domains page', () => {
   ])('disables requests when quota or platform configuration disallows them', async (response) => {
     state.list.mockResolvedValue(response)
     await render()
-    expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+    expect(requestButton().disabled).toBe(true)
   })
 
   it('requires permission before fetching or requesting domains', async () => {
@@ -174,7 +201,7 @@ describe('Domains page', () => {
     await render()
     expect(state.list).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('Box write permission')
-    expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+    expect(requestButton().disabled).toBe(true)
   })
 
   it('renders empty and fetch-error states', async () => {

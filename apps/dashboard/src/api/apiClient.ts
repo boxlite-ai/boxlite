@@ -39,7 +39,7 @@ import {
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
-import type { DomainList, HeldDomain } from './domain-types'
+import type { DomainList, HeldDomain, CustomDomain, CustomDomainList } from './domain-types'
 import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
 
@@ -489,6 +489,70 @@ export class ApiClient {
 
   public async claimDomain(organizationId: string, name: string): Promise<HeldDomain> {
     return (await this.http.post(`/v1/${encodeURIComponent(organizationId)}/domains`, { name }, this.v1Config())).data
+  }
+
+  public async listCustomDomains(org: string): Promise<CustomDomainList> {
+    return (await this.http.get(`/organizations/${encodeURIComponent(org)}/custom-domains`, this.v1Config())).data
+  }
+
+  public async createCustomDomain(org: string, hostname: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(`/organizations/${encodeURIComponent(org)}/custom-domains`, { hostname }, this.v1Config())
+    ).data
+  }
+
+  public async verifyCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/verify`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async prepareCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/prepare`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async advanceCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/advance`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async deleteCustomDomain(org: string, id: string): Promise<void> {
+    await this.http.delete(
+      `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}`,
+      this.v1Config(),
+    )
+  }
+
+  public async bindDomain(org: string, hostname: string, box: string, port: number): Promise<HeldDomain> {
+    return (
+      await this.http.put(
+        `/v1/${encodeURIComponent(org)}/domains/${encodeURIComponent(hostname)}/target`,
+        { type: 'box', box, port },
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async unbindDomain(org: string, hostname: string): Promise<void> {
+    await this.http.delete(
+      `/v1/${encodeURIComponent(org)}/domains/${encodeURIComponent(hostname)}/target`,
+      this.v1Config(),
+    )
   }
 
   /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */

@@ -652,6 +652,19 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
+The **All domains** tab lists held platform and customer hostnames; **Custom domains**
+shows setup progress and the separate one-domain allowance, including drafts but excluding replaced configurations.
+**Get DNS configuration** creates or resumes a draft and automatically continues preparation until all three records are available.
+Preparation errors require explicit retry; reopening an incomplete draft does not resume preparation automatically.
+**Configured, verify** checks DNS explicitly; successful confirmation closes the dialog, while failed checks retain records and errors.
+
+The API task continues confirmed HTTPS setup. The page reads incomplete setup status every minute while visible;
+DNS dialogs and pending actions pause these reads. Opening confirmed details reads status without advancing setup.
+An incomplete confirmed setup with an error offers **Retry**, which sends one advance request and respects server backoff.
+**Ready** means setup is complete with an active subscription; **Setup completed** indicates completion without confirmed active eligibility.
+Neither label implies a bound Box port. Viewing, unbinding and confirmed deletion remain available after subscription expiry.
+See the [customer-domain guide](../../docs/concepts/networking.md#bring-your-own-domain) for DNS configuration and ownership transfer.
+
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
 

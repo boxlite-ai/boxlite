@@ -157,7 +157,7 @@ async fn ls(args: LsArgs, global: &GlobalFlags) -> Result<()> {
             writeln!(writer, "{table}")?;
             writeln!(
                 writer,
-                "{} of {} names held ({} remaining); new names need at least {} characters",
+                "{} of {} platform names held ({} remaining); new platform names need at least {} characters",
                 held.used, held.limit, held.remaining, held.min_length
             )?;
             Ok(())

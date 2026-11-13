@@ -21,6 +21,7 @@ import { AsciiButton } from '@/components/ascii'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Copy, Globe, Plus } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
@@ -33,6 +34,7 @@ import React, { useState } from 'react'
 import { generatePath, Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import CustomDomains from './CustomDomains'
 
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
@@ -77,160 +79,180 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </p>
       </div>
 
-      <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">
-        <ResourceFilter
-          label="Filter domains"
-          value={filter}
-          onChange={(value) => setFilter(value)}
-          count={data ? rows.length : '—'}
-          disabled={!canManage || data === undefined}
-        />
-        <AsciiButton
-          variant="primary"
-          className="h-11 shrink-0 justify-self-start sm:h-9 sm:justify-self-end"
-          disabled={!canClaim}
-          onClick={openForm}
-        >
-          <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
-        </AsciiButton>
-        {canManage && query.isSuccess && data && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground sm:col-span-2">
-            <span className="inline-flex items-center gap-2 font-mono tabular-nums">
-              <span>
-                {data.used} / {data.limit} domains held · {data.remaining} available
-              </span>
-              <QuotaTicks used={data.used} limit={data.limit} />
-            </span>
-            {!data.domain_suffix ? (
-              <span>Domain requests are unavailable on this deployment.</span>
-            ) : data.remaining === 0 ? (
-              <span className="text-warning">Domain limit reached. Reuse a held domain or request a higher limit.</span>
-            ) : null}
-          </div>
-        )}
-      </div>
-
-      <div className="resource-content scroll-edge mt-[14px]">
-        {!canManage ? (
-          <ResourceEmptyState
-            title="Permission required"
-            icon={<Globe />}
-            description="You need Box write permission to manage domains."
-          />
-        ) : data === undefined ? (
-          query.isError ? (
-            <ResourceErrorState
-              title="Could not load domains"
-              retrying={query.isFetching}
-              onRetry={() => void query.refetch()}
+      <Tabs defaultValue="all" className="min-h-0 flex-1 gap-5">
+        <TabsList variant="segmented" aria-label="Domain views">
+          <TabsTrigger value="all">All domains</TabsTrigger>
+          <TabsTrigger value="custom">Custom domains</TabsTrigger>
+        </TabsList>
+        <TabsContent value="all" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
+          <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">
+            <ResourceFilter
+              label="Filter domains"
+              value={filter}
+              onChange={(value) => setFilter(value)}
+              count={data ? rows.length : '—'}
+              disabled={!canManage || data === undefined}
             />
-          ) : (
-            <ResourceLoadingState title="Loading domains…" />
-          )
-        ) : (
-          <>
-            {query.isError && (
-              <ResourceErrorNotice
-                title="Could not refresh domains. Showing previously loaded data."
-                retrying={query.isFetching}
-                onRetry={() => void query.refetch()}
-              />
-            )}
-            {data.domains.length === 0 ? (
-              <ResourceEmptyState
-                title="No Domains yet."
-                icon={<Globe className="size-6" />}
-                description="Request a name, then connect it to your Box using the CLI or SDK."
-              />
-            ) : (
-              <div className="resource-content">
-                <table
-                  className={cn(
-                    'resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body',
-                    rows.length === 0 && 'hidden',
-                  )}
-                >
-                  <colgroup>
-                    <col className="w-[36%]" />
-                    <col className="w-[16%]" />
-                    <col className="w-[26%]" />
-                    <col className="w-[10%]" />
-                    <col className="w-[12%]" />
-                  </colgroup>
-                  <thead className="border-b border-border text-meta text-muted-foreground">
-                    <tr>
-                      {['Domain', 'Target type', 'Associated with', 'Port', 'Actions'].map((column) => (
-                        <th
-                          key={column}
-                          scope="col"
-                          className={`h-11 px-4 py-3 font-medium ${column === 'Actions' ? 'text-right' : ''}`}
-                        >
-                          {column}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((domain) => (
-                      <tr
-                        key={domain.hostname}
-                        className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
-                      >
-                        <td className="px-4 py-3 font-semibold text-foreground">
-                          <ResourceIdentity icon={<DomainResourceIcon bound={Boolean(domain.target)} />}>
-                            <span className="resource-name" title={domain.hostname}>
-                              <TechnicalText value={domain.hostname} kind="hostname" />
-                            </span>
-                          </ResourceIdentity>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">
-                          {domain.target ? (domain.target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
-                        </td>
-                        <td className="truncate px-4 py-3 font-mono text-muted-foreground">
-                          {domain.target?.type === 'box' ? (
-                            <Link
-                              to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(domain.target.box) })}
-                              className="text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-                            >
-                              {domain.target.box}
-                            </Link>
-                          ) : (
-                            (domain.target?.app ?? '—')
-                          )}
-                        </td>
-                        <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
-                          {domain.target?.type === 'box' ? domain.target.port : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <AsciiButton
-                            variant="quiet"
-                            size="icon"
-                            aria-label={`Copy ${domain.hostname}`}
-                            title="Copy domain"
-                            onClick={async () => {
-                              if (await copyToClipboard(domain.hostname)) toast.success('Domain copied')
-                              else toast.error('Could not copy domain. Select the hostname and copy it manually.')
-                            }}
-                          >
-                            <Copy className="size-3.5" />
-                          </AsciiButton>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {rows.length === 0 && (
-                  <ResourceFilterEmptyState
-                    title={`No domain matches “${filter.trim()}”`}
-                    onClear={() => setFilter('')}
-                  />
-                )}
+            <AsciiButton
+              variant="primary"
+              className="h-11 shrink-0 justify-self-start sm:h-9 sm:justify-self-end"
+              disabled={!canClaim}
+              onClick={openForm}
+            >
+              <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
+            </AsciiButton>
+            {canManage && query.isSuccess && data && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground sm:col-span-2">
+                <span className="inline-flex items-center gap-2 font-mono tabular-nums">
+                  <span>
+                    {data.used} / {data.limit} platform domains held · {data.remaining} available
+                  </span>
+                  <QuotaTicks used={data.used} limit={data.limit} />
+                </span>
+                {!data.domain_suffix ? (
+                  <span>Domain requests are unavailable on this deployment.</span>
+                ) : data.remaining === 0 ? (
+                  <span className="text-warning">
+                    Platform domain limit reached. Reuse a held domain or request a higher limit.
+                  </span>
+                ) : null}
               </div>
             )}
-          </>
-        )}
-      </div>
+          </div>
 
+          <div className="resource-content scroll-edge mt-[14px]">
+            {!canManage ? (
+              <ResourceEmptyState
+                title="Permission required"
+                icon={<Globe />}
+                description="You need Box write permission to manage domains."
+              />
+            ) : data === undefined ? (
+              query.isError ? (
+                <ResourceErrorState
+                  title="Could not load domains"
+                  retrying={query.isFetching}
+                  onRetry={() => void query.refetch()}
+                />
+              ) : (
+                <ResourceLoadingState title="Loading domains…" />
+              )
+            ) : (
+              <>
+                {query.isError && (
+                  <ResourceErrorNotice
+                    title="Could not refresh domains. Showing previously loaded data."
+                    retrying={query.isFetching}
+                    onRetry={() => void query.refetch()}
+                  />
+                )}
+                {data.domains.length === 0 ? (
+                  <ResourceEmptyState
+                    title="No Domains yet."
+                    icon={<Globe className="size-6" />}
+                    description="Request a name, then connect it to your Box using the CLI or SDK."
+                  />
+                ) : (
+                  <div className="resource-content">
+                    <table
+                      className={cn(
+                        'resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body',
+                        rows.length === 0 && 'hidden',
+                      )}
+                    >
+                      <colgroup>
+                        <col className="w-[36%]" />
+                        <col className="w-[16%]" />
+                        <col className="w-[26%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[12%]" />
+                      </colgroup>
+                      <thead className="border-b border-border text-meta text-muted-foreground">
+                        <tr>
+                          {['Domain', 'Target type', 'Associated with', 'Port', 'Actions'].map((column) => (
+                            <th
+                              key={column}
+                              scope="col"
+                              className={`h-11 px-4 py-3 font-medium ${column === 'Actions' ? 'text-right' : ''}`}
+                            >
+                              {column}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((domain) => (
+                          <tr
+                            key={domain.hostname}
+                            className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
+                          >
+                            <td className="px-4 py-3 font-semibold text-foreground">
+                              <ResourceIdentity icon={<DomainResourceIcon bound={Boolean(domain.target)} />}>
+                                <span className="resource-name" title={domain.hostname}>
+                                  <TechnicalText value={domain.hostname} kind="hostname" />
+                                </span>
+                              </ResourceIdentity>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {domain.target ? (domain.target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
+                            </td>
+                            <td className="truncate px-4 py-3 font-mono text-muted-foreground">
+                              {domain.target?.type === 'box' ? (
+                                <Link
+                                  to={generatePath(RoutePath.BOX_DETAILS, {
+                                    boxId: encodeURIComponent(domain.target.box),
+                                  })}
+                                  className="text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                                >
+                                  {domain.target.box}
+                                </Link>
+                              ) : (
+                                (domain.target?.app ?? '—')
+                              )}
+                            </td>
+                            <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
+                              {domain.target?.type === 'box' ? domain.target.port : '—'}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <AsciiButton
+                                variant="quiet"
+                                size="icon"
+                                aria-label={`Copy ${domain.hostname}`}
+                                title="Copy domain"
+                                onClick={async () => {
+                                  if (await copyToClipboard(domain.hostname)) toast.success('Domain copied')
+                                  else toast.error('Could not copy domain. Select the hostname and copy it manually.')
+                                }}
+                              >
+                                <Copy className="size-3.5" />
+                              </AsciiButton>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {rows.length === 0 && (
+                      <ResourceFilterEmptyState
+                        title={`No domain matches “${filter.trim()}”`}
+                        onClear={() => setFilter('')}
+                      />
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </TabsContent>
+        <TabsContent value="custom" className="min-h-0 overflow-y-auto">
+          {canManage ? (
+            <CustomDomains organizationId={organizationId} canManage={canManage} held={data?.domains ?? []} />
+          ) : (
+            <p role="alert" className="py-10 text-body text-muted-foreground">
+              You need Box write permission to manage domains.
+            </p>
+          )}
+        </TabsContent>
+      </Tabs>
       <Dialog
         open={open}
         onOpenChange={(next) => {

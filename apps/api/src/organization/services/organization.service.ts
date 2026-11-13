@@ -530,6 +530,14 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
           throw new ForbiddenException("Cannot delete an organization while it is a user's default organization")
         }
       }
+      // Keep exact cloud resource ownership after the organization disappears;
+      // explicit domain maintenance completes cleanup without needing a live subscription.
+      await manager.query(
+        `UPDATE custom_domain_config SET deleted_at = now(), phase = 'deleting',
+        dns_valid_until = '-infinity', next_check_at = now(), updated_at = now()
+        WHERE organization_id = $1 AND deleted_at IS NULL`,
+        [organization.id],
+      )
       await manager.delete(Domain, { organizationId: organization.id })
       await manager.remove(current)
     })
