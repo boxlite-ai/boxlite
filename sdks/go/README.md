@@ -481,6 +481,9 @@ The Linux native-binding coverage job runs the no-VM import/export cases through
 `make coverage:go:checkpoint` and flushes the instrumented native counters before
 Go exits. Full VM archive round-trips remain in the integration suite.
 
+Hosted deletion tests check REST refusal, closed handles and callback receiver ownership,
+including missing, abandoned, and incompatible receivers.
+
 `integration/images` pulls from a loopback OCI registry and checks tag refusal,
 invalid IDs, deletion results, and the remaining cache through the public SDK.
 Hosted Go unit jobs exclude this package through the `boxlite_integration` tag.

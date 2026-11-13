@@ -672,6 +672,38 @@ func TestRestImagesCallsOnAClosedHandleFailWithoutARequest(t *testing.T) {
 	}
 }
 
+func TestImageDeleteRejectsNilAndClosedHandlesWithoutARequest(t *testing.T) {
+	catalog := newImageCatalog(t)
+	closed := catalog.images(t)
+	if err := closed.Close(); err != nil {
+		t.Fatalf("Close image handle: %v", err)
+	}
+	for name, images := range map[string]*Images{"nil": nil, "closed": closed} {
+		t.Run(name, func(t *testing.T) {
+			result, err := images.Delete(context.Background(), "123")
+			requireErrorCode(t, err, ErrInvalidState, "image handle is closed")
+			if result != nil {
+				t.Fatalf("invalid image handle returned a deletion result: %#v", result)
+			}
+		})
+	}
+	if got := catalog.received(); len(got) != 0 {
+		t.Errorf("requests: got %q, want none", got)
+	}
+}
+
+func TestRestImageDeleteReturnsUnsupportedWithoutARequest(t *testing.T) {
+	catalog := newImageCatalog(t)
+	result, err := catalog.images(t).Delete(context.Background(), "123")
+	requireErrorCode(t, err, ErrUnsupported, "requires an embedded runtime")
+	if result != nil {
+		t.Fatalf("REST runtime returned a local image deletion result: %#v", result)
+	}
+	if got := catalog.received(); len(got) != 0 {
+		t.Errorf("requests: got %q, want none", got)
+	}
+}
+
 func TestRestImagesCreateAliasPostsTheAliasAndReadsTheImage(t *testing.T) {
 	catalog := newImageCatalog(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
