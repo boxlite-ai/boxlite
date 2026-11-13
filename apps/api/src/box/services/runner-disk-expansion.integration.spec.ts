@@ -45,6 +45,7 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
   let lockProvider: RedisLockProvider
   let service: RunnerDiskExpansionService
   let resizeDisk: jest.Mock
+  let getDisk: jest.Mock
   let runnerService: RunnerService
   let ownsDatabase = false
 
@@ -102,6 +103,7 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
   function makeService(expansion: Record<string, unknown> = {}) {
     const gcpDiskClient: GcpDiskClientLike = {
       resizeDisk: resizeDisk,
+      getDisk: getDisk,
       getZoneOperation: jest.fn(async () => ({ status: 'PENDING' as const })),
     }
     return new RunnerDiskExpansionService(
@@ -183,6 +185,7 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
     })
     lockProvider = new RedisLockProvider(redis)
     resizeDisk = jest.fn(async () => ({ operation: 'op-integration' }))
+    getDisk = jest.fn(async () => ({}))
 
     service = makeService()
     runnerService = new RunnerService(
@@ -410,6 +413,71 @@ describeIfDatabase('RunnerDiskExpansionService (integration, real Postgres)', ()
       resizeDisk.mockClear()
       await service.evaluateAndConfirm()
       expect(resizeDisk).not.toHaveBeenCalled()
+    })
+
+    it('carries provisioned performance on the same PATCH and marks the row', async () => {
+      getDisk.mockResolvedValue({ sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' })
+      const runner = await thirstyRunner()
+
+      await service.evaluateAndConfirm()
+
+      expect(resizeDisk).toHaveBeenCalledWith(runner.dataDiskRef, 250, { iops: '4500', throughput: '300' })
+      const row = await expansions.findOne({ where: { runnerId: runner.id, accepted: true } })
+      expect(row).toMatchObject({ performanceUpdated: true, toGiB: 250 })
+    })
+
+    it('goes size-only within the performance cooldown after a perf-carrying attempt', async () => {
+      getDisk.mockResolvedValue({ sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' })
+      const runner = await thirstyRunner()
+
+      await service.evaluateAndConfirm()
+      await expansions.update(
+        { runnerId: runner.id },
+        { status: RunnerDiskExpansionStatus.CONFIRMED, confirmedAt: new Date() },
+      )
+      resizeDisk.mockClear()
+
+      await service.evaluateAndConfirm()
+
+      expect(resizeDisk).toHaveBeenCalledTimes(1)
+      expect(resizeDisk).toHaveBeenCalledWith(runner.dataDiskRef, 250)
+      const row = await expansions.findOne({
+        where: { runnerId: runner.id, accepted: true, performanceUpdated: false },
+        order: { requestedAt: 'DESC' },
+      })
+      expect(row).toMatchObject({ performanceUpdated: false, toGiB: 250 })
+    })
+
+    it('converges to size-only after a rejected performance-carrying attempt', async () => {
+      getDisk.mockResolvedValue({ sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' })
+      resizeDisk.mockRejectedValueOnce(
+        GoogleError.parseHttpError({ error: { code: 400, message: 'New size must be larger' } }),
+      )
+      const runner = await thirstyRunner()
+
+      await service.evaluateAndConfirm()
+
+      const rejected = await expansions.findOne({
+        where: { runnerId: runner.id, error: EXPANSION_ERROR.NOT_ACCEPTED },
+      })
+      expect(rejected).toMatchObject({ status: RunnerDiskExpansionStatus.FAILED, performanceUpdated: true })
+
+      resizeDisk.mockClear()
+      await service.evaluateAndConfirm()
+
+      expect(resizeDisk).toHaveBeenCalledTimes(1)
+      expect(resizeDisk).toHaveBeenCalledWith(runner.dataDiskRef, 250)
+    })
+
+    it('degrades to size-only when the baseline read fails', async () => {
+      getDisk.mockRejectedValue(new Error('read boom'))
+      const runner = await thirstyRunner()
+
+      await service.evaluateAndConfirm()
+
+      expect(resizeDisk).toHaveBeenCalledWith(runner.dataDiskRef, 250)
+      const row = await expansions.findOne({ where: { runnerId: runner.id, accepted: true } })
+      expect(row).toMatchObject({ performanceUpdated: false })
     })
   })
 })

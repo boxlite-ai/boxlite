@@ -25,12 +25,13 @@ import {
   headroomGiB,
   maxGrowthWithinWindow,
   nextSizeGiB,
+  performanceTarget,
   resolveCapGiB,
   resolveEffectiveCapGiB,
   sampleBucketAt,
   shouldTrigger,
 } from './runner-disk-expansion.service'
-import { GcpDiskClientLike, GcpZoneOperation } from './gcp-disk-client'
+import { GcpDiskClientLike, GcpDiskSnapshot, GcpZoneOperation } from './gcp-disk-client'
 import { runnerDiskConfig } from '../../config/configuration'
 
 const HOUR = 3600_000
@@ -149,6 +150,13 @@ function makeService(opts: {
   acceptedCount?: number
   hasPending?: boolean
   hasRecentRateLimit?: boolean
+  hasRecentPerformance?: boolean
+  /** The disks.get answer; the empty object is the size-only default. */
+  diskSnapshot?: GcpDiskSnapshot
+  /** When set, getDisk rejects with this error. */
+  getDiskError?: Error
+  /** When set, resizeDisk rejects with this error (mapped through toExpansionClientError). */
+  resizeError?: Error
   samples?: RunnerDiskUsageSample[]
   acquireLease?: boolean
   /** The MIN(fromGiB) the cap-baseline query reports; null (default) means no attempts yet. */
@@ -177,11 +185,12 @@ function makeService(opts: {
   const expansions = {
     find: jest.fn(async () => opts.pendingExpansions ?? []),
     count: jest.fn(async () => opts.acceptedCount ?? 0),
-    exist: jest.fn(async (criteria: { where: Partial<RunnerDiskExpansion> }) =>
-      criteria.where.status === RunnerDiskExpansionStatus.PENDING
-        ? (opts.hasPending ?? false)
-        : (opts.hasRecentRateLimit ?? false),
-    ),
+    exist: jest.fn(async (criteria: { where: Partial<RunnerDiskExpansion> }) => {
+      const where = criteria.where as Record<string, unknown>
+      if (where.status === RunnerDiskExpansionStatus.PENDING) return opts.hasPending ?? false
+      if (where.performanceUpdated === true) return opts.hasRecentPerformance ?? false
+      return opts.hasRecentRateLimit ?? false
+    }),
     insert: jest.fn(async () => ({ identifiers: [{ id: 'inserted-row' }], generatedMaps: [], raw: [] })),
     update: jest.fn(async () => ({ affected: 1, raw: [], generatedMaps: [] })),
     createQueryBuilder: jest.fn(() => baselineQuery),
@@ -200,7 +209,12 @@ function makeService(opts: {
   }
 
   const gcpDiskClient: GcpDiskClientLike = {
-    resizeDisk: jest.fn(async () => ({ operation: 'op-1' })),
+    resizeDisk: opts.resizeError
+      ? jest.fn(() => Promise.reject(opts.resizeError))
+      : jest.fn(async () => ({ operation: 'op-1' })),
+    getDisk: opts.getDiskError
+      ? jest.fn(() => Promise.reject(opts.getDiskError))
+      : jest.fn(async () => opts.diskSnapshot ?? {}),
     getZoneOperation: jest.fn(async () => opts.zoneOperation ?? { status: 'PENDING' as const }),
   }
 
@@ -245,6 +259,61 @@ function gcpRunner(overrides: Partial<Runner> = {}): Runner {
   Object.assign(runner, overrides)
   return runner
 }
+
+describe('performanceTarget', () => {
+  it('scales both fields at the measured slope, nothing clipped', () => {
+    expect(performanceTarget('3600', '240', '200', 300)).toEqual({
+      iops: '5400',
+      throughput: '360',
+      ceilingHit: false,
+      ceilingFields: [],
+    })
+  })
+
+  it('accepts numeric baseline values from the gRPC-typed snapshot identically', () => {
+    expect(performanceTarget(3600, 240, 200, 300)).toEqual({
+      iops: '5400',
+      throughput: '360',
+      ceilingHit: false,
+      ceilingFields: [],
+    })
+  })
+
+  it('rounds each field independently', () => {
+    expect(performanceTarget('3601', '241', '200', 300)).toMatchObject({ iops: '5402', throughput: '362' })
+  })
+
+  it('drops same-value fields in a degenerate ratio<1 round', () => {
+    expect(performanceTarget('3600', '240', 300, 250)).toEqual({
+      ceilingHit: false,
+      ceilingFields: [],
+    })
+  })
+
+  it('clips IOPS to the flat ceiling when the slope target outgrows it', () => {
+    expect(performanceTarget('99000', '200', '200', 400)).toEqual({
+      iops: '160000',
+      throughput: '400',
+      ceilingHit: true,
+      ceilingFields: ['iops'],
+    })
+  })
+
+  it('drops same-value fields already parked on the ceiling', () => {
+    expect(performanceTarget('160000', '2400', '320', 400)).toEqual({
+      ceilingHit: true,
+      ceilingFields: ['iops', 'throughput'],
+    })
+  })
+
+  it('returns undefined on any missing or non-positive baseline input', () => {
+    expect(performanceTarget(undefined, '240', '200', 300)).toBeUndefined()
+    expect(performanceTarget('3600', undefined, '200', 300)).toBeUndefined()
+    expect(performanceTarget('3600', '240', undefined, 300)).toBeUndefined()
+    expect(performanceTarget('3600', '240', '0', 300)).toBeUndefined()
+    expect(performanceTarget('-5', '240', '200', 300)).toBeUndefined()
+  })
+})
 
 describe('RunnerDiskExpansionService round', () => {
   it('stays dormant while disabled', async () => {
@@ -833,5 +902,90 @@ describe('RunnerDiskExpansionService round', () => {
     // 200 GiB disk: statfs total is ~195.8 GiB (4.18 GiB overhead, measured).
     // 195.8 / 200 = 0.979 > 0.975, so a correct resize confirms.
     expect(195.8 / 200).toBeGreaterThan(CONFIRM_TOLERANCE_RATIO)
+  })
+
+  it('carries performance fields when the baseline is present and the cooldown is clear', async () => {
+    const { service, gcpDiskClient, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250, { iops: '4500', throughput: '300' })
+    expect(expansions.update).toHaveBeenCalledWith(
+      'inserted-row',
+      expect.objectContaining({ accepted: true, operation: 'op-1', performanceUpdated: true }),
+    )
+  })
+
+  it('logs the full identity, operation, and perf before/after on a bundled request', async () => {
+    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {})
+    const { service } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+    })
+
+    try {
+      await service.evaluateAndConfirm()
+
+      const logged = logSpy.mock.calls.find((call) => String(call[0]).includes('expansion requested'))?.[1]
+      expect(logged).toBeDefined()
+      expect(logged).toEqual(
+        expect.objectContaining({
+          'runner.id': '11111111-1111-4111-8111-111111111111',
+          'runner.name': 'runner-1',
+          'disk.name': 'disk-1',
+          'disk.zone': 'z1',
+          'disk.project': 'proj',
+          'disk.operation': 'op-1',
+          'disk.from_gib': 200,
+          'disk.to_gib': 250,
+          'disk.perf_from_iops': '3600',
+          'disk.perf_from_throughput': '240',
+          'disk.perf_from_size_gib': '200',
+          'disk.perf_to_iops': '4500',
+          'disk.perf_to_throughput': '300',
+        }),
+      )
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it('sends size only while the performance cooldown is active', async () => {
+    const { service, gcpDiskClient, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      hasRecentPerformance: true,
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    expect(expansions.update).toHaveBeenCalledWith('inserted-row', { accepted: true, operation: 'op-1' })
+  })
+
+  it('still grows the disk when the baseline read fails', async () => {
+    const { service, gcpDiskClient } = makeService({ getDiskError: new Error('read boom') })
+
+    await service.evaluateAndConfirm()
+
+    expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+  })
+
+  it('marks performanceUpdated on a rejected performance-carrying attempt', async () => {
+    const { service, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      resizeError: GoogleError.parseHttpError({ error: { code: 400, message: 'bad' } }),
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(expansions.update).toHaveBeenCalledWith(
+      'inserted-row',
+      expect.objectContaining({
+        status: RunnerDiskExpansionStatus.FAILED,
+        error: EXPANSION_ERROR.NOT_ACCEPTED,
+        performanceUpdated: true,
+      }),
+    )
   })
 })

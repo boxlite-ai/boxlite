@@ -20,9 +20,33 @@ export interface GcpZoneOperation {
   error?: string
 }
 
+/** The disk's provisioned-performance state as the cloud reports it (int64-as-string). */
+export interface GcpDiskSnapshot {
+  sizeGb?: string
+  provisionedIops?: string
+  provisionedThroughput?: string
+}
+
+/**
+ * The provisioned-performance fields a PATCH will carry. A field is present
+ * only when its proportional target differs from the disk's current value —
+ * sending a same-value field is unreliable (the sibling size field has proof
+ * GCP 400s on "must be larger"), so the client builds `paths` from exactly
+ * these.
+ */
+export interface GcpDiskPerformanceFields {
+  iops?: string
+  throughput?: string
+}
+
 /** The surface the expansion controller needs; fakes implement exactly this in tests. */
 export interface GcpDiskClientLike {
-  resizeDisk(ref: RunnerDataDiskRef, sizeGb: number): Promise<{ operation: string }>
+  resizeDisk(
+    ref: RunnerDataDiskRef,
+    sizeGb: number,
+    performance?: GcpDiskPerformanceFields,
+  ): Promise<{ operation: string }>
+  getDisk(ref: RunnerDataDiskRef): Promise<GcpDiskSnapshot>
   getZoneOperation(ref: RunnerDataDiskRef, operation: string): Promise<GcpZoneOperation>
 }
 
@@ -33,9 +57,16 @@ interface DisksLike {
     project: string
     zone: string
     disk: string
-    diskResource: { name: string; sizeGb: string }
+    diskResource: { name: string; sizeGb: string; provisionedIops?: string; provisionedThroughput?: string }
     paths: string[]
   }): Promise<{ name: string }[]>
+  get(request: { project: string; zone: string; disk: string }): Promise<
+    {
+      sizeGb?: string | number | null
+      provisionedIops?: string | number | null
+      provisionedThroughput?: string | number | null
+    }[]
+  >
 }
 
 interface ZoneOperationsLike {
@@ -46,13 +77,17 @@ interface ZoneOperationsLike {
 
 /**
  * Thin wrapper over the two GCP Compute calls the expansion controller makes:
- * growing a disk (`disks.update`) and polling the zone operation it returns.
+ * growing a disk (`disks.update`) and polling the zone operation it returns,
+ * plus the read that grounds the proportional performance targets (`disks.get`).
  *
  * Three invariants live here and are pinned by tests:
- * - `paths` is exactly `['sizeGb']`. The v1 client also accepts `updateMask`,
- *   but it is silently ignored there — the request then goes out without
- *   `paths` as a full PATCH, which would reset provisionedIops/Throughput to
- *   defaults. Only `paths` reaches GCP as the field mask.
+ * - `paths` is always an explicit non-empty subset of the fields the body
+ *   carries: `['sizeGb']`, or `['sizeGb', 'provisionedIops']`,
+ *   `['sizeGb', 'provisionedThroughput']`, or all three. The v1 client also
+ *   accepts `updateMask`, but it is silently ignored there — the request then
+ *   goes out without `paths` as a full PATCH, which would reset
+ *   provisionedIops/Throughput to defaults. Only `paths` reaches GCP as the
+ *   field mask.
  * - the resource body carries the disk name. `disks.update` requires
  *   `resource.name` even though the mask only names `sizeGb`; without it GCP
  *   rejects the request outright (`Invalid value for field 'resource.name': ''`).
@@ -70,15 +105,39 @@ export class GcpDiskClient implements GcpDiskClientLike {
     this.zoneOperations = transport?.zoneOperations
   }
 
-  async resizeDisk(ref: RunnerDataDiskRef, sizeGb: number): Promise<{ operation: string }> {
+  async resizeDisk(
+    ref: RunnerDataDiskRef,
+    sizeGb: number,
+    performance?: GcpDiskPerformanceFields,
+  ): Promise<{ operation: string }> {
+    // The field mask names exactly the fields the body carries. A performance
+    // field joins only when its caller passed a value, so the four request
+    // shapes are: size-only, size+IOPS, size+throughput, and all three —
+    // never a mask that omits a carried field (that field would reset to the
+    // cloud default) and never a full PATCH.
+    const paths = ['sizeGb']
+    const diskResource: {
+      name: string
+      sizeGb: string
+      provisionedIops?: string
+      provisionedThroughput?: string
+    } = { name: ref.diskName, sizeGb: String(sizeGb) }
+    if (performance?.iops !== undefined) {
+      paths.push('provisionedIops')
+      diskResource.provisionedIops = performance.iops
+    }
+    if (performance?.throughput !== undefined) {
+      paths.push('provisionedThroughput')
+      diskResource.provisionedThroughput = performance.throughput
+    }
     let operation: { name: string } | undefined
     try {
       ;[operation] = await this.disksClient().update({
         project: ref.project,
         zone: ref.zone,
         disk: ref.diskName,
-        diskResource: { name: ref.diskName, sizeGb: String(sizeGb) },
-        paths: ['sizeGb'],
+        diskResource,
+        paths,
       })
     } catch (e) {
       // Map here so callers only ever see this module's error classes: a
@@ -86,6 +145,28 @@ export class GcpDiskClient implements GcpDiskClientLike {
       throw toExpansionClientError(e)
     }
     return { operation: operation.name }
+  }
+
+  /**
+   * Reads the disk's current size and provisioned performance — the measured
+   * baseline the proportional targets scale from. Values normalize to
+   * strings (the SDK's gRPC path can hand back numbers/Longs) so callers see
+   * int64-as-string end to end.
+   */
+  async getDisk(ref: RunnerDataDiskRef): Promise<GcpDiskSnapshot> {
+    let disk: Awaited<ReturnType<DisksLike['get']>>[number] | undefined
+    try {
+      ;[disk] = await this.disksClient().get({ project: ref.project, zone: ref.zone, disk: ref.diskName })
+    } catch (e) {
+      throw toExpansionClientError(e)
+    }
+    const asString = (value: string | number | null | undefined): string | undefined =>
+      value === null || value === undefined ? undefined : String(value)
+    return {
+      sizeGb: asString(disk?.sizeGb),
+      provisionedIops: asString(disk?.provisionedIops),
+      provisionedThroughput: asString(disk?.provisionedThroughput),
+    }
   }
 
   async getZoneOperation(ref: RunnerDataDiskRef, operation: string): Promise<GcpZoneOperation> {
