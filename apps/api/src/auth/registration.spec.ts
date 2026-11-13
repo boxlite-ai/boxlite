@@ -36,6 +36,7 @@ const storedUser = {
   publicKeys: [],
   createdAt,
   role: 'user',
+  referredByOrganizationId: null,
   emailVerified: true,
   keyPair: { privateKey: 'private-key', publicKey: 'public-key' },
 } as User
