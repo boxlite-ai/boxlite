@@ -110,6 +110,7 @@ for (const checkpointAccess of [false, true]) {
       dependencies,
       project: 'test-project',
       region: 'us-west1',
+      zone: 'us-west1-a',
       domain: 'example.invalid',
       dashboardDomain: null,
       callers: [],

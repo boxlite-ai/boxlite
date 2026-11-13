@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
 import { AsciiButton } from '@/components/ascii'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
@@ -164,9 +165,15 @@ const OrganizationSettings: React.FC = () => {
         }}
         className="mt-5 gap-0"
       >
-        <TabsList variant="segmented" aria-label="Organization settings">
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="member">Members</TabsTrigger>
+        <TabsList variant="underline" aria-label="Organization settings">
+          <TabsTrigger value="general">
+            <TabIcon name="settings" />
+            General
+          </TabsTrigger>
+          <TabsTrigger value="member">
+            <TabIcon name="members" />
+            Members
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="general" className="pt-6">
           <OrganizationGeneral key={selectedOrganization.id} />

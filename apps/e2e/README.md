@@ -6,6 +6,33 @@ These tests exercise the **full production path**:
 Python SDK (boxlite.Boxlite.rest) → HTTP → NestJS API → HTTP → boxlite-runner → libkrun VM
 ```
 
+Cloud runs accept an optional `tag` in the **E2E cloud** workflow, including
+reusable calls. For example, `tag=v0.13.1` downloads that release's Python wheel,
+Node SDK/native addon and CLI instead of compiling them. Leave `tag` blank to
+build clients from the selected checkout, as before. Only stable `vX.Y.Z` tags
+are accepted; unavailable artifacts fail the run without falling back to source.
+
+```bash
+gh workflow run e2e-cloud.yml -f stage=dev -f tag=v0.13.1
+```
+
+Tests still come from the selected checkout and target the selected deployed
+stage. On dev, C/Go domain drivers link the released C library; Go SDK source
+comes from the release tag. The Rust domain driver compiles against that tag's
+Rust SDK, so dev still has some Rust compilation. All driver source programs
+come from the test checkout, preserving current acceptance coverage. A release
+that lacks APIs required by current tests fails those tests or driver builds.
+Prod retains its Python-only smoke selection. This input changes client versions;
+it does not deploy or change the cloud stack.
+
+The Node release installer removes SDK development/workspace metadata before
+adding the test tools, while retaining runtime dependencies. npm resolves peer
+dependencies before applying `--omit=dev`; resolving the published SDK's build
+metadata can otherwise abort installation with an `edgesOut` error.
+To exercise the real npm resolver and TypeScript tools in a temporary checkout,
+run `E2E_RELEASE_REAL_NPM=1 make test:unit:scripts` with the workflow's Node/npm
+versions. This opt-in check downloads test tools from the npm registry.
+
 Existing `make test:integration:*` tests use the local PyO3 / FFI path
 (`Boxlite.default()`) and bypass both the API and the runner — so a bug that
 only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop,
@@ -32,6 +59,17 @@ creating a Box from the checkpoint through the SDK and actual guests.
 Guest reads verify immutable disk contents and inherited environment values.
 Deleting the checkpoint must leave the created Box usable.
 
+Stop requests are asynchronous: the case waits for the source to report `stopped`
+before capture. Source deletion and teardown wait for absence by stable Box ID,
+since deletion admission renames a Box before destruction finishes. Cleanup retries
+only the state-change conflict, bounds each Box removal to 30 seconds, and reports
+other errors while continuing the remaining cleanup.
+
+Checkpoint creates leave lifecycle options unset instead of receiving the harness
+defaults again. The source receives the suite's 300-second `auto_stop` and
+600-second `auto_delete` policy before capture; the restored Box must inherit both,
+which the case verifies through the API-backed SDK metadata.
+
 Run against an API/runner built from this branch with checkpoint storage enabled:
 
 ```bash
@@ -42,10 +80,26 @@ Use the existing environment/profile authentication described below. The case
 requires `capabilities.checkpoints_enabled=true`; absence fails before creating
 a Box. It uses unique `e2e-` resource names, retains the suite's bounded Box
 lifetimes, and reports cleanup failures. It is outside the production smoke
-selection because it uses two concurrent Boxes. Loopback, mock-storage and
+selection because it uses checkpoint storage and multiple guest lifecycles. Loopback, mock-storage and
 native stub checks do not satisfy this real VM/storage acceptance case.
 
 ### Existing coverage
+
+CLI cases invoke detached workloads as `boxlite run -d IMAGE sleep 300`.
+The image begins the CLI's trailing argument vector, so an extra `--` after
+IMAGE becomes the guest executable; it is not a command separator. Keep
+`boxlite exec BOX -- COMMAND` for exec, which uses a separate command argument.
+
+The CLI cases share `lib/cli_process.py` to include stdout, stderr and exit
+status in checked-command failures. Exit-code tests use `check=False` and
+inspect the returned result. Named-box creation failures fail the test; a
+unique suite name allows cleanup even when creation returns no Box ID.
+
+`tests/scripts/test_e2e_cli.py` drives these callers through the actual CLI and
+a loopback HTTP endpoint. Run it via `make test:unit:scripts` with the E2E
+Python dependencies installed and `BOXLITE_E2E_CLI` pointing to the built CLI.
+These checks verify request arguments and diagnostics; real cloud E2E remains
+necessary to verify the API, Runner and VM path together.
 
 Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
@@ -231,6 +285,18 @@ export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
 # Only for a stack that predates the image catalog: skip that case instead of
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
+
+# The live disk-expansion case (test_disk_expansion.py) runs only with both
+# set, after an operator has already grown the runner's data disk in GCP —
+# the test polls admin REST until the healthcheck-reported filesystem size
+# catches up (0.975 × target: the API's confirm tolerance, since ext4 keeps
+# the filesystem ~2% below the device), and never calls the GCP API itself.
+# Needs an admin-role API key. Set TARGET to the post-resize device size,
+# meaningfully larger than the pre-resize one. Mind the per-test pytest
+# timeout: propagation takes minutes (hyperdisk allows 2 resizes per
+# disk per 4h window):
+export BOXLITE_E2E_EXPANDED_DISK_RUNNER_ID=<runner-id>
+export BOXLITE_E2E_EXPANDED_DISK_TARGET_GIB=<new-size-in-gib>
 
 # The private image case runs only with a real private image and its login,
 # written with its host and a tag or digest. The prefix defaults to the

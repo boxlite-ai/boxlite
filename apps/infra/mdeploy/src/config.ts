@@ -102,7 +102,13 @@ const MAX_BACKUP_RETENTION_DAYS = 35
 /** A root disk small enough to hold no box image is not worth deploying. */
 const DISK_BOUNDS = { min: 20, max: 4_000 }
 
-const ALARM_NAMES: (keyof AlarmRequest)[] = ['apiServerErrors', 'proxyUnhealthyTargets', 'runnersUnreachable']
+const ALARM_NAMES: (keyof AlarmRequest)[] = [
+  'apiServerErrors',
+  'proxyUnhealthyTargets',
+  'runnersUnreachable',
+  'runnersDiskExpansionFailing',
+  'runnersDiskPressureCritical',
+]
 
 const assertObject = (value: unknown, where: string): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

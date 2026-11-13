@@ -74,6 +74,7 @@ function capture(configured: boolean) {
     home: 'gcp',
   })
   gcpApiProvider({
+    zone: 'us-east1-c',
     dependencies: {
       placement: {
         cloud: 'gcp',

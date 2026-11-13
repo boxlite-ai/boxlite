@@ -9,6 +9,60 @@ use axum::http::Method;
 use super::super::install_support::install;
 use crate::ssh_cloud_fixture::*;
 
+#[test]
+fn cli_fixture_runs_the_normal_binary_from_inline_tests() {
+    let executable = std::panic::catch_unwind(cli_executable);
+    assert!(
+        executable.is_ok(),
+        "inline tests must locate the normal CLI without integration-test variables"
+    );
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::new(executable.unwrap());
+    isolated(&mut command, home.path());
+    command
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(format!("boxlite {}\n", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn cli_fixture_handles_cargo_harness_layouts_and_explicit_binary_paths() {
+    let executable = cli_executable().canonicalize().unwrap();
+    for (layout, explicit_binary) in [
+        ("deps", false),
+        ("build/boxlite-cli/hash/out", false),
+        ("separate-build-directory", true),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = directory.path().join("custom-profile");
+        let harness_directory = profile.join(layout);
+        std::fs::create_dir_all(&harness_directory).unwrap();
+        let harness = harness_directory.join("cli-test-harness");
+        std::fs::copy(std::env::current_exe().unwrap(), &harness).unwrap();
+        let binary = profile.join(if explicit_binary {
+            "custom-cli"
+        } else {
+            "boxlite"
+        });
+        std::os::unix::fs::symlink(&executable, &binary).unwrap();
+
+        let mut command = Command::new(harness);
+        isolated(&mut command, directory.path());
+        command.env_remove("CARGO_BIN_EXE_boxlite").args([
+            "cli_fixture_runs_the_normal_binary_from_inline_tests",
+            "--nocapture",
+        ]);
+        if explicit_binary {
+            command.env("CARGO_BIN_EXE_boxlite", binary);
+        }
+        command
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("1 passed"));
+    }
+}
+
 /// Launch system OpenSSH with the installed user config; handshake failure is
 /// expected because this fixture authenticates CONNECT but never speaks SSH.
 fn installed_ssh(home: &Path, user_home: &Path, alias: &str) -> Command {

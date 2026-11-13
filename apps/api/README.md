@@ -832,6 +832,8 @@ consumers before producers; mixed-version traffic is not supported during activa
   while impact considers only non-destroyed, non-archived Boxes. Omitting this parameter
   excludes destroyed and archived Boxes from the count.
   `organizationId=<UUID>` selects an exact primary key; it cannot combine with `q`.
+  `include=memberEmails` adds `memberEmails` to each item: up to 200 non-empty emails per
+  organization, ordered by user ID, `[]` when none. Omitting it keeps the existing fields and cursors.
   Registration collectors use the same full page with `boxCountScope=all` and date bounds.
   Creator lookup and inventory aggregation are restricted to the page's organization IDs;
   no separate per-organization inventory call is needed for the first observation.
@@ -885,8 +887,9 @@ and Box cursors independently on detail. Responses use `Cache-Control: private, 
 ### Generated clients
 
 The TypeScript organization-list method accepts Axios request options in the original
-sixth position or after the new filters in the eighth position. This applies to the class,
-factory, functional interface and request creator. For an initialized `admin` client:
+sixth position or after the new filters in the eighth position. A caller that also passes
+`include` puts the options ninth. This applies to the class, factory, functional interface
+and request creator. For an initialized `admin` client:
 
 ```typescript
 const options = { headers: { Authorization: `Bearer ${adminApiKey}` }, timeout: 5000 }
@@ -901,6 +904,18 @@ await admin.adminListOrganizationsOverview(
   undefined,
   'all',
   organizationId,
+  options,
+)
+// Callers that select member emails pass the options after include.
+await admin.adminListOrganizationsOverview(
+  undefined,
+  undefined,
+  50,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  'memberEmails',
   options,
 )
 ```

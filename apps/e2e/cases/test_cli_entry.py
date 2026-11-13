@@ -19,7 +19,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -34,6 +33,7 @@ from conftest import (
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+from cli_process import run
 from images import default_image
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
@@ -41,34 +41,11 @@ IMAGE = default_image()
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 
-CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-
-
 @pytest.fixture(scope="module")
 def cli():
     if not BOXLITE_BIN or not Path(BOXLITE_BIN).exists():
         pytest.skip(f"boxlite CLI not found at {BOXLITE_BIN!r}")
     return BOXLITE_BIN
-
-
-def _cli_env() -> dict[str, str]:
-    """Env dict that steers the CLI to the REST API via the e2e profile."""
-    env = {**os.environ, "BOXLITE_PROFILE": CLI_PROFILE}
-    return env
-
-
-def run(cli, *args, timeout: int = 60, stdin: str | None = None,
-        check: bool = True) -> subprocess.CompletedProcess:
-    """Wrap subprocess.run with consistent settings + always capture."""
-    return subprocess.run(
-        [cli, *args],
-        timeout=timeout,
-        input=stdin,
-        text=True,
-        capture_output=True,
-        check=check,
-        env=_cli_env(),
-    )
 
 
 def test_cli_whoami_against_api(cli):
@@ -90,12 +67,12 @@ def test_cli_ls_returns_table(cli):
 
 
 def test_cli_run_exec_chain(cli):
-    """End-to-end CLI flow: `boxlite run -d <image> -- sleep 300`
+    """End-to-end CLI flow: `boxlite run -d <image> sleep 300`
     (detach mode), then `boxlite exec <id> -- echo HELLO`, then
     `boxlite rm -f <id>`. Asserts the exec captured stdout and the
     cleanup removed the box."""
     # 1. detach run prints the box id on stdout
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
     box_id = m.group(0)
@@ -189,7 +166,7 @@ def test_cli_exec_exit_code_propagates(cli):
     """A non-zero exit inside the box must propagate back through the
     CLI's own exit code. This is the CLI behaviour layer, not just the
     SDK — argv parsing + exit-code mapping is CLI-specific."""
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)

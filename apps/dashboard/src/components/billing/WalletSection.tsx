@@ -1,3 +1,4 @@
+import { TabIcon } from '@/components/ui/TabIcon'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -171,12 +172,14 @@ function MoneyHistorySection() {
   return (
     <section>
       <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
-        <TabsList variant="segmented">
+        <TabsList variant="underline" aria-label="Payment history">
           <TabsTrigger value="invoices">
+            <TabIcon name="document" />
             Billing history
             <Count value={invoicesQuery.data?.totalItems} />
           </TabsTrigger>
           <TabsTrigger value="credits">
+            <TabIcon name="credits" />
             Credit activity
             <Count value={transactionsQuery.data?.totalItems} />
           </TabsTrigger>

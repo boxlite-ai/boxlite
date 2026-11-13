@@ -50,6 +50,14 @@ describe('Sidebar primary navigation', () => {
 
   beforeAll(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
     window.matchMedia = vi
       .fn()
       .mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })
@@ -142,8 +150,9 @@ describe('Sidebar primary navigation', () => {
     act(() => vi.advanceTimersByTime(349))
     expect(logo.getAttribute('aria-expanded')).toBe('false')
     act(() => vi.advanceTimersByTime(1))
-    expect(document.querySelector('[aria-label="Pin navigation"]')).toBe(logo)
-    expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Keep navigation expanded"]')).toBe(logo)
+    expect(document.querySelector('[aria-label="Pin navigation"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).toBeNull()
     expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
     const panel = document.querySelector<HTMLElement>('aside > div')!
     expect(panel.dataset.state).toBe('preview')
@@ -193,16 +202,49 @@ describe('Sidebar primary navigation', () => {
     expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('true')
   })
 
-  it('dismisses the preview with its top collapse button without pinning', () => {
+  it('pins the preview with its top pin button and moves focus to collapse', () => {
     const logo = preview()
-    const collapse = document.querySelector<HTMLButtonElement>('[aria-label="Collapse navigation"]')!
-    expect(collapse.parentElement).toBe(logo.parentElement)
-    act(() => collapse.click())
+    const pin = document.querySelector<HTMLButtonElement>('[aria-label="Pin navigation"]')
+    expect(pin).not.toBeNull()
+    expect(pin).not.toBe(logo)
+    expect(pin?.parentElement).toBe(logo.parentElement)
+    act(() => pin?.click())
     act(() => vi.advanceTimersByTime(500))
-    expect(document.querySelector('[aria-label="Collapse navigation"]')).toBeNull()
-    expect(document.activeElement).toBe(logo)
-    expect(logo.getAttribute('aria-expanded')).toBe('false')
-    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
+    expect(document.querySelector('[aria-label="Pin navigation"]')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse navigation')
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('true')
+  })
+
+  it('does not resurrect labels hovered while expanded when the sidebar collapses', () => {
+    vi.useFakeTimers()
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/boxes')
+    for (const selector of [
+      'nav a[href="/dashboard/volumes"]',
+      'nav a[href="/dashboard/domains"]',
+      '[aria-label="Toggle Management navigation"]',
+    ]) {
+      const trigger = document.querySelector(selector)
+      expect(trigger).not.toBeNull()
+      const move = new MouseEvent('pointermove', { bubbles: true })
+      Object.defineProperty(move, 'pointerType', { value: 'mouse' })
+      act(() => trigger?.dispatchEvent(move))
+      act(() => vi.advanceTimersByTime(400))
+    }
+    act(() => document.querySelector<HTMLButtonElement>('[aria-label="Collapse navigation"]')?.click())
+    act(() => vi.advanceTimersByTime(400))
+    expect(document.querySelectorAll('[role="tooltip"]')).toHaveLength(0)
+  })
+
+  it('shows only the focused compact label and clears it when previewing', () => {
+    renderRoute('/dashboard/boxes')
+    const volumes = document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/volumes"]')
+    act(() => volumes?.focus())
+    expect([...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent)).toEqual(['Volumes'])
+    act(() => document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/domains"]')?.focus())
+    expect([...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent)).toEqual(['Domains'])
+    act(() => document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')?.click())
+    expect(document.querySelectorAll('[role="tooltip"]')).toHaveLength(0)
   })
 
   it('does not pin when using a group within the preview', () => {
@@ -248,6 +290,37 @@ describe('Sidebar primary navigation', () => {
     expect(disclosure.getAttribute('aria-expanded')).toBe('true')
     act(() => disclosure.click())
     expect(document.querySelector('#images-navigation')?.hasAttribute('hidden')).toBe(true)
+  })
+
+  it('reveals Checkpoints as the current Boxes child without changing its URL', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/checkpoints')
+    const group = document.querySelector('#boxes-navigation')!
+    expect(group).not.toBeNull()
+    expect(group.hasAttribute('hidden')).toBe(false)
+    expect(group.querySelector('a[aria-current="page"]')?.getAttribute('href')).toBe('/dashboard/checkpoints')
+    expect(group.querySelector('a[href="/dashboard/boxes"]')?.getAttribute('aria-current')).toBeNull()
+    expect(document.querySelector('[aria-label="Toggle Boxes navigation"]')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('emphasizes the Boxes ancestor in the compact rail without claiming the Box list is current', () => {
+    renderRoute('/dashboard/checkpoints')
+    const boxes = document.querySelector('nav[aria-label="Primary"] a[href="/dashboard/boxes"]')!
+    expect(boxes.className).toContain('bg-sidebar-accent')
+    expect(boxes.getAttribute('aria-label')).toBe('Boxes, current section: Checkpoints')
+    expect(boxes.getAttribute('aria-current')).toBeNull()
+    expect(document.querySelector('nav[aria-label="Primary"] a[href="/dashboard/checkpoints"]')).toBeNull()
+  })
+
+  it('reveals Checkpoints in the hover preview without pinning the navigation', () => {
+    vi.useFakeTimers()
+    renderRoute('/dashboard/checkpoints')
+    pointer(document.querySelector('[aria-label="Expand navigation"]')!, 'pointerover')
+    act(() => vi.advanceTimersByTime(350))
+    const child = document.querySelector('#boxes-navigation a[href="/dashboard/checkpoints"]')!
+    expect(child?.getAttribute('aria-current')).toBe('page')
+    expect(document.querySelector('#boxes-navigation')?.hasAttribute('hidden')).toBe(false)
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
   })
 
   it('reveals registry navigation when Images is opened from the compact rail', () => {
@@ -317,7 +390,6 @@ describe('Sidebar primary navigation', () => {
       '/dashboard/boxes',
       '/dashboard/images',
       '/dashboard/volumes',
-      '/dashboard/checkpoints',
       '/dashboard/domains',
     ])
     expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()

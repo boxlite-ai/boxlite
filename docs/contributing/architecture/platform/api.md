@@ -152,7 +152,7 @@ enabling consumers of this contract.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads. |
+| `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads; `include=memberEmails` adds up to 200 emails per organization. |
 | `GET` | `/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
 
 The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operations) list retired operations and their remaining alternatives.
@@ -357,7 +357,7 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 | `DELETE` | `/runners/{id}`                    | Deletes a runner.                                              |
 | `PATCH`  | `/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
 | `PATCH`  | `/runners/{id}/draining`           | Enables or disables runner draining.                           |
-| `POST`   | `/runners/healthcheck`             | Records or checks runner health.                               |
+| `POST`   | `/runners/healthcheck`             | Records or checks runner health; the optional `dataDiskRef` field refreshes the runner's data-disk identity (never cleared when omitted). |
 | `GET`    | `/jobs`                            | Lists jobs assigned to the authenticated runner.               |
 | `GET`    | `/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
 | `GET`    | `/jobs/{jobId}`                    | Gets a job by ID.                                              |

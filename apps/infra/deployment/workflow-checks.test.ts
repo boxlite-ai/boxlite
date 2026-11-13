@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -421,7 +421,22 @@ function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-unit-'))
   try {
     const log = join(directory, 'cargo.log')
+    const binary = join(directory, 'boxlite')
+    writeFileSync(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    for (const tool of ['bash', 'jq', 'mktemp', 'rm']) {
+      const found = spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'sh', tool], { encoding: 'utf8' })
+      assert.equal(found.status, 0, `${tool} is required for the real CLI build wrapper`)
+      symlinkSync(found.stdout.trim(), join(directory, tool))
+    }
     writeFileSync(join(directory, 'cargo'), `#!/bin/sh
+if [ "$1" = build ]; then
+  printf '%s\\n' "$CARGO_ARTIFACT"
+  exit 0
+fi
+if [ "$CARGO_BIN_EXE_boxlite" != "$CARGO_TEST_BIN" ] || [ ! -x "$CARGO_BIN_EXE_boxlite" ]; then
+  echo 'test runner did not receive the built CLI executable' >&2
+  exit 98
+fi
 if [ "$1" = nextest ] && ! command -v cargo-nextest >/dev/null 2>&1; then
   echo 'error: no such command: nextest' >&2
   exit 101
@@ -433,9 +448,19 @@ exit "$CARGO_STATUS"
       writeFileSync(join(directory, 'cargo-nextest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     }
     // Isolate tool discovery so an installed nextest cannot hide the fallback.
-    const result = spawnSync('/usr/bin/make', ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
+    const result = spawnSync('/usr/bin/make', [
+      '-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli',
+      'NEXTEST_PROFILE=ci', `SCRIPT_DIR=${join(REPO_ROOT, 'scripts')}`,
+    ], {
       cwd: REPO_ROOT,
-      env: { ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
+      env: {
+        ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode),
+        CARGO_BIN_EXE_boxlite: '', CARGO_TEST_BIN: binary,
+        CARGO_ARTIFACT: JSON.stringify({
+          reason: 'compiler-artifact', target: { name: 'boxlite', kind: ['bin'] },
+          profile: { test: false }, executable: binary,
+        }),
+      },
       encoding: 'utf8',
       timeout: 10_000,
     })

@@ -48,6 +48,64 @@ for (const home of ['aws', 'gcp'] as const) {
   }
 }
 
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} delivers FILESTORE_INSTANCES through the stage API group`, () => {
+    // The runner reads the resolved server/export from its dispatch, so this
+    // value is the deployment's own placement record for Filestore instances
+    // (PR boxlite-ai/boxlite#2608): absent on stages without the feature, a
+    // JSON array when an operator provisions one.
+    const path = new URL('../../mstage.env.json', import.meta.url)
+    const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+    const required = Object.fromEntries(
+      declared.envSelectGroup
+        .api!.filter((name) => !declared.envOptional.api!.includes(name))
+        .map((name) => [name, 'fixture']),
+    )
+    const instances = JSON.stringify([{ name: 'boxlite-dev-shared', server: '10.0.0.7', export: '/vol1' }])
+    const selected = valuesOfGroup({
+      group: 'api',
+      groups: declared.envSelectGroup,
+      optional: declared.envOptional.api,
+      where: path.pathname,
+      values: { ...required, FILESTORE_INSTANCES: instances },
+    })
+    const { environment, secrets } = apiEnvironmentFrom({
+      environment: { ...base, ...selected },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: home === 'aws' ? 'us-east-1' : 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(environment.FILESTORE_INSTANCES, instances)
+    assert.equal(Object.hasOwn(secrets, 'FILESTORE_INSTANCES'), false)
+  })
+
+  test(`${home} omits FILESTORE_INSTANCES when the stage does not set it`, () => {
+    const path = new URL('../../mstage.env.json', import.meta.url)
+    const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+    const required = Object.fromEntries(
+      declared.envSelectGroup
+        .api!.filter((name) => !declared.envOptional.api!.includes(name))
+        .map((name) => [name, 'fixture']),
+    )
+    const selected = valuesOfGroup({
+      group: 'api',
+      groups: declared.envSelectGroup,
+      optional: declared.envOptional.api,
+      where: path.pathname,
+      values: { ...required },
+    })
+    const { environment } = apiEnvironmentFrom({
+      environment: { ...base, ...selected },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: home === 'aws' ? 'us-east-1' : 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), false)
+  })
+}
+
 
 for (const home of ['aws', 'gcp'] as const) {
   for (const minimum of [undefined, '1', '3', '63']) {
@@ -647,4 +705,31 @@ test('identity OAuth uses a distinct optional client and a secret reference with
   assert.ok(catalog.envOptional.api.includes(secret))
   assert.ok(catalog.envSelectGroup.secret.includes(secret))
   assert.equal(catalog.envSelectGroup.secret.includes(identity), false)
+})
+
+/*
+ * The expansion switch and its cap are the API's to interpret; the deploy's
+ * whole job is to carry them or not carry them. An absent key is the API's
+ * own default — switch off, cap unset — which is what keeps a stage that
+ * never heard of the feature behaving exactly as it did before it existed.
+ */
+test('the disk-expansion switch travels only where the stage set it', () => {
+  const { environment } = assemble(base)
+  assert.equal('RUNNER_DISK_EXPANSION_ENABLED' in environment, false)
+  assert.equal('RUNNER_DISK_EXPANSION_CAP_GIB' in environment, false)
+
+  const on = assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'true', RUNNER_DISK_EXPANSION_CAP_GIB: '4096' })
+  assert.equal(on.environment.RUNNER_DISK_EXPANSION_ENABLED, 'true')
+  assert.equal(on.environment.RUNNER_DISK_EXPANSION_CAP_GIB, '4096')
+
+  const off = assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'false', RUNNER_DISK_EXPANSION_CAP_GIB: '512' })
+  assert.equal(off.environment.RUNNER_DISK_EXPANSION_ENABLED, 'false')
+  assert.equal(off.environment.RUNNER_DISK_EXPANSION_CAP_GIB, '512')
+})
+
+test('a disk-expansion switch that is neither true nor false is refused at the deploy', () => {
+  // 'True' would pass through and be read as off forever: the API compares
+  // strict equality, so a typo'd switch stays closed with nothing saying why.
+  // Refused here, where the stage can still be told.
+  assert.throws(() => assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'True' }), /must be true or false/)
 })

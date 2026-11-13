@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
+import { SEGMENTED_LIST, SEGMENTED_TRIGGER } from '@/components/ui/tabs'
 import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
@@ -84,18 +86,18 @@ export function CostOverTime() {
         title="Cost Over Time"
         count={total > 0 ? formatMoney(total) : undefined}
         right={
-          <div className="flex items-center bg-card">
+          <div role="group" aria-label="Cost view" className={SEGMENTED_LIST}>
             {(['chart', 'list'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setView(mode)}
-                className={`-ml-px border border-border px-3 py-1.5 font-mono text-meta uppercase tracking-[1px] transition-colors first:ml-0 ${
-                  view === mode
-                    ? 'relative z-10 border-border-selected bg-background font-semibold text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
+                type="button"
+                aria-pressed={view === mode}
+                data-state={view === mode ? 'active' : 'inactive'}
+                className={SEGMENTED_TRIGGER}
               >
-                {mode}
+                <TabIcon name={mode === 'chart' ? 'chart' : 'list'} />
+                {mode === 'chart' ? 'Chart' : 'List'}
               </button>
             ))}
           </div>

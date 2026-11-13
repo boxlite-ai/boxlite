@@ -1477,6 +1477,7 @@ type AdminAPIAdminListOrganizationsOverviewRequest struct {
 	createdFrom *string
 	boxCountScope *string
 	organizationId *string
+	include *string
 }
 
 // Organization ID or name
@@ -1517,6 +1518,12 @@ func (r AdminAPIAdminListOrganizationsOverviewRequest) BoxCountScope(boxCountSco
 // Exact organization UUID; avoids name search and cannot be combined with q.
 func (r AdminAPIAdminListOrganizationsOverviewRequest) OrganizationId(organizationId string) AdminAPIAdminListOrganizationsOverviewRequest {
 	r.organizationId = &organizationId
+	return r
+}
+
+// Add up to 200 member emails to each organization; omit to keep the existing fields.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) Include(include string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.include = &include
 	return r
 }
 
@@ -1578,6 +1585,9 @@ func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminL
 	}
 	if r.organizationId != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "organizationId", r.organizationId, "form", "")
+	}
+	if r.include != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "include", r.include, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}

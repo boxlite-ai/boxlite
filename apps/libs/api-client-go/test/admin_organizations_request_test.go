@@ -62,6 +62,20 @@ func TestAdminListOrganizationsOverviewSendsCreationWindowOnlyWhenSet(t *testing
 	})
 }
 
+func TestAdminListOrganizationsOverviewSendsIncludeOnlyWhenSet(t *testing.T) {
+	client, requests := adminClient(t)
+	ctx := context.Background()
+
+	_, _, _ = client.AdminAPI.AdminListOrganizationsOverview(ctx).Limit(20).Execute()
+	expectRequest(t, <-requests, "/api/admin/organizations", url.Values{"limit": {"20"}})
+
+	_, _, _ = client.AdminAPI.AdminListOrganizationsOverview(ctx).Limit(20).Include("memberEmails").Execute()
+	expectRequest(t, <-requests, "/api/admin/organizations", url.Values{
+		"limit":   {"20"},
+		"include": {"memberEmails"},
+	})
+}
+
 func TestAdminGetOrganizationOverviewSendsIncludeOnlyWhenSet(t *testing.T) {
 	client, requests := adminClient(t)
 	ctx := context.Background()

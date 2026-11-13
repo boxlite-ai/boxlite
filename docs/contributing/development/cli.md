@@ -61,6 +61,32 @@ The `serve` command has two test surfaces with different responsibilities:
   make test:integration:cli FILTER=ssh_rest
   ```
 
+`make test:unit:cli` builds the CLI and uses `jq` (required on PATH) to read its
+executable path from Cargo's JSON artifact output before running cargo test or nextest. It exports that exact
+path as `CARGO_BIN_EXE_boxlite` for unit tests that launch subprocesses. This also
+works with cached builds and custom target/build directories, without depending
+on Cargo's internal test layout (which changed in Cargo 1.100).
+
+Collect the CLI portion of coverage independently with:
+
+```bash
+BOXLITE_DEPS_STUB=1 make coverage:cli
+make coverage:report
+```
+
+`coverage:cli` appends profiles; the aggregate `coverage`/`coverage:lcov` targets
+clean profiles first and include this collector. It accepts the existing
+`FILTER`, `NEXTEST_FILTER_EXPR`, and `NEXTEST_PROFILE` settings. The preparatory
+CLI build uses cargo-llvm-cov's instrumentation and selected target/build
+directories, including `CARGO_LLVM_COV_TARGET_DIR` and
+`CARGO_LLVM_COV_BUILD_DIR` overrides. Instrumentation stays inside that build's
+subshell so it cannot alter the following cargo-llvm-cov invocation. Both entry
+points stop before tests if building or resolving the CLI executable fails.
+
+After changing these Make entry points, run both `make test:unit:scripts` and
+`make test:apps:infra`. Their Cargo fakes must emit executable artifact metadata;
+fixtures that isolate PATH must also expose the wrapper's real shell utilities.
+
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit tests
 and the `auth`, `ssh_cloud`, `custom_kernel_rc`, and `checkpoint` integration
 targets, excluding VM suites such as `ssh_rest.rs`.
@@ -70,6 +96,17 @@ In-process alias-installation tests parse the real CLI schema with environment
 bindings removed and resolve saved credentials without an ambient API-key
 override. Child-process regressions inject CLI settings to check this isolation
 without changing the parallel test runner's environment.
+
+The shared SSH fixture launches the normal `boxlite` executable, so
+`make test:unit:cli` builds it before running inline tests.
+Integration targets build it through Cargo's target selection.
+The fixture honors `CARGO_BIN_EXE_boxlite`; without that integration-test variable,
+it resolves the executable beside the nearest Cargo `deps` or `build` directory.
+For example, `custom-profile/build/boxlite-cli/<hash>/out/harness` and
+`custom-profile/deps/harness` both use `custom-profile/boxlite`.
+This supports custom target directories and profiles with colocated build outputs.
+If `build.build-dir` separates those outputs, set `CARGO_BIN_EXE_boxlite` to the
+normal CLI executable; missing binaries fail with a build instruction.
 
 The `checkpoint` target runs real CLI commands against loopback HTTP without a
 guest. It checks checkpoint management, import creation/replacement, tenant and

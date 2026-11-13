@@ -114,12 +114,12 @@ body {
     --destructive-foreground: 5 66% 46%;
     --destructive-separator: 5 48% 85%;
 
-    --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 218 17% 9%;
+    --sidebar-background: var(--background);
+    --sidebar-foreground: 0 0% 35%;
     --sidebar-primary: 218 17% 9%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 14% 93%;
-    --sidebar-accent-foreground: 218 17% 9%;
+    --sidebar-accent: 0 0% 94%;
+    --sidebar-accent-foreground: var(--selection-foreground);
     --sidebar-border: 218 16% 90%;
     --sidebar-ring: 196 100% 47%;
 
@@ -128,6 +128,11 @@ body {
     --scrollbar-track: 220 14% 96%;
     --scrollbar-thumb: 218 16% 74%;
     --scrollbar-thumb-hover: 196 100% 47%;
+    --control-hover: 0 0% 96%;
+    --selection: 0 0% 84%;
+    --selection-foreground: var(--foreground);
+    --sidebar-muted-foreground: 0 0% 42%;
+    --sidebar-hover: var(--control-hover);
   }
 
   .dark {
@@ -188,12 +193,12 @@ body {
     --destructive-foreground: 5 85% 72%;
     --destructive-separator: 5 29% 18%;
 
-    --sidebar-background: 0 0% 4%;
-    --sidebar-foreground: 0 0% 100%;
+    --sidebar-background: var(--background);
+    --sidebar-foreground: 0 0% 68%;
     --sidebar-primary: 0 0% 100%;
     --sidebar-primary-foreground: 0 0% 4%;
-    --sidebar-accent: 0 0% 12%;
-    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 13%;
+    --sidebar-accent-foreground: var(--selection-foreground);
     --sidebar-border: 0 0% 16%;
     --sidebar-ring: 196 100% 47%;
 
@@ -202,6 +207,11 @@ body {
     --scrollbar-track: 0 0% 3%;
     --scrollbar-thumb: 0 0% 24%;
     --scrollbar-thumb-hover: 196 100% 47%;
+    --control-hover: 0 0% 10%;
+    --selection: 0 0% 24%;
+    --selection-foreground: var(--foreground);
+    --sidebar-muted-foreground: 0 0% 68%;
+    --sidebar-hover: var(--control-hover);
   }
 
   html {

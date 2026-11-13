@@ -1,10 +1,11 @@
 """Tests for the suite's own guards — no stage required.
 
-These cover the two mechanisms that keep e2e runs from accumulating boxes in a
+These cover the guards that keep e2e runs from accumulating boxes in a
 shared organization, both of which are otherwise invisible until they fail in
 the way they are meant to prevent:
 
   * the lifetime this suite puts on every box it creates (`conftest`)
+  * checkpoint cleanup through pending state changes and completed deletion
   * the rule that decides what `apps/e2e/sweep.py` deletes
 
 Every case here is pure: no API, no box, no credential. They belong in this
@@ -15,12 +16,16 @@ rejects) got shipped in the first place.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import boxlite
 import pytest
+import test_checkpoints as checkpoint_case
 
 from conftest import (
     E2E_AUTO_DELETE_SECONDS,
@@ -67,6 +72,128 @@ def test_lifetime_defaults_are_applied_when_the_caller_sets_neither():
     bound_box_lifetime(options)
     assert options.auto_stop == E2E_AUTO_STOP_SECONDS
     assert options.auto_delete == E2E_AUTO_DELETE_SECONDS
+
+
+def test_checkpoint_lifetime_options_remain_inherited():
+    options = boxlite.BoxOptions(checkpoint="saved")
+    bound_box_lifetime(options)
+    assert options.auto_stop is None
+    assert options.auto_delete is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_cleanup_waits_for_pending_stop_and_stable_id_deletion():
+    names = {}
+    attempts = 0
+    deleting = False
+    gone = False
+    deletion_reads = 0
+
+    async def get_info(key):
+        nonlocal gone, deletion_reads
+        if key == names["copy"] or gone:
+            return None
+        if deleting:
+            # Deletion admission renames the Box before it is destroyed.
+            if key == names["source"]:
+                return None
+            assert key == "source-id"
+            deletion_reads += 1
+            if deletion_reads == 2:
+                gone = True
+                return None
+        return SimpleNamespace(id="source-id")
+
+    async def remove(key, force):
+        nonlocal attempts, deleting
+        assert key == "source-id" and force
+        attempts += 1
+        if attempts == 1:
+            raise boxlite.InvalidArgumentError("Box state change in progress")
+        deleting = True
+
+    async def remove_checkpoint(key, force):
+        assert key == names["archive"] and force
+        assert gone, "Checkpoint cleanup preceded actual Box deletion"
+
+    runtime = SimpleNamespace(
+        get_info=get_info,
+        remove=remove,
+        checkpoints=SimpleNamespace(remove=AsyncMock(side_effect=remove_checkpoint)),
+    )
+    resources = checkpoint_case.checkpoint_resources.__wrapped__(runtime)
+    created_names, owned = await anext(resources)
+    names.update(created_names)
+    owned.add(names["source"])
+    with pytest.raises(StopAsyncIteration):
+        await anext(resources)
+    assert attempts == 2
+    assert deletion_reads == 2
+    runtime.checkpoints.remove.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_operation", ["read", "remove", "deletion"])
+async def test_checkpoint_cleanup_bounds_blocked_operations(monkeypatch, blocked_operation):
+    monkeypatch.setattr(checkpoint_case, "LIFECYCLE_TIMEOUT_SECONDS", 0.01)
+    names = {}
+    accepted = False
+    blocked = asyncio.Event()
+
+    async def get_info(key):
+        if key == names["copy"]:
+            return None
+        if blocked_operation == "read" or accepted:
+            await blocked.wait()
+        return SimpleNamespace(id="source-id")
+
+    async def remove(key, force):
+        nonlocal accepted
+        if blocked_operation == "remove":
+            await blocked.wait()
+        accepted = True
+
+    runtime = SimpleNamespace(
+        get_info=get_info,
+        remove=remove,
+        checkpoints=SimpleNamespace(remove=AsyncMock()),
+    )
+    resources = checkpoint_case.checkpoint_resources.__wrapped__(runtime)
+    created_names, owned = await anext(resources)
+    names.update(created_names)
+    owned.add(names["source"])
+    with pytest.raises(AssertionError, match="Checkpoint E2E cleanup failed"):
+        await asyncio.wait_for(anext(resources), timeout=1)
+    runtime.checkpoints.remove.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [boxlite.InvalidArgumentError, boxlite.InvalidStateError])
+async def test_checkpoint_cleanup_preserves_unrelated_errors(error_type):
+    names = {}
+
+    async def get_info(key):
+        if key == names["source"]:
+            return None
+        return SimpleNamespace(id="owned-id")
+
+    runtime = SimpleNamespace(
+        get_info=get_info,
+        remove=AsyncMock(side_effect=[
+            boxlite.InvalidArgumentError("Box state change in progress"),
+            error_type("permission denied"),
+        ]),
+        checkpoints=SimpleNamespace(remove=AsyncMock()),
+    )
+    resources = checkpoint_case.checkpoint_resources.__wrapped__(runtime)
+    created_names, owned = await anext(resources)
+    names.update(created_names)
+    owned.add(names["copy"])
+    with pytest.raises(AssertionError, match="permission denied"):
+        await anext(resources)
+    # One busy-state retry, then one unrelated error; cleanup must still continue.
+    assert runtime.remove.await_count == 2
+    runtime.checkpoints.remove.assert_awaited_once_with(names["archive"], force=True)
 
 
 @pytest.mark.parametrize("field", ["auto_stop", "auto_delete"])

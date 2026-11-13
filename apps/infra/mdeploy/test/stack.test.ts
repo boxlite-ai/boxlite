@@ -44,6 +44,8 @@ const config: DeployConfig = parseDeployConfig(
       apiServerErrors: { threshold: 1, periods: 1 },
       proxyUnhealthyTargets: { threshold: 1, periods: 2 },
       runnersUnreachable: { threshold: 1, periods: 3 },
+      runnersDiskExpansionFailing: { threshold: 3, periods: 1 },
+      runnersDiskPressureCritical: { threshold: 1, periods: 2 },
     },
   }),
 )
@@ -149,12 +151,14 @@ const bundle = ({
   registryProxy = true,
   checkpoints = false,
   servesUserDomain = true,
+  resizeRunnerDisks = true,
 }: {
   clickhouse?: boolean
   registryCredentials?: boolean
   registryProxy?: boolean
   checkpoints?: boolean
   servesUserDomain?: boolean
+  resizeRunnerDisks?: boolean
 } = {}) => {
   const seen: Record<string, any> = {}
   const order: string[] = []
@@ -248,6 +252,7 @@ const bundle = ({
         ready: ['edge'],
       }),
     servesUserDomain: () => servesUserDomain,
+    resizeRunnerDisks: () => resizeRunnerDisks,
     registryProxy: (input: any) => (request: any) =>
       record(
         'registryProxy',
@@ -600,22 +605,23 @@ test('the API is granted exactly the capabilities its storage supports', () => {
     'list-own-bucket',
     'manage-volume-buckets',
     'read-telemetry',
+    'resize-runner-disks',
     'vend-volume-credentials',
     'write-registry-credentials',
   ])
 })
 
-test('the checkpoint archive grant comes after every grant an existing stage already holds', () => {
+test('adding the resize grant does not shift the checkpoint grant an existing stage already holds', () => {
   // Providers name each grant by its index; a grant inserted ahead of others
   // would move them to new resources, and on GCP that deletes the bindings.
   const kinds = (deployed: ReturnType<typeof bundle>) =>
     deployed.seen.api.request.capabilities.map((capability: any) => capability.kind)
-  const before = bundle()
+  const before = bundle({ checkpoints: true, resizeRunnerDisks: false })
   deployStack({ providers: before.providers, config, inputs: inputs() })
-  const after = bundle({ checkpoints: true })
+  const after = bundle({ checkpoints: true, resizeRunnerDisks: true })
   deployStack({ providers: after.providers, config, inputs: inputs() })
 
-  assert.deepEqual(kinds(after), [...kinds(before), 'manage-checkpoint-archives'])
+  assert.deepEqual(kinds(after), [...kinds(before), 'resize-runner-disks'])
 })
 
 test('checkpoints are on only where storage keeps a bucket for them, for the API and the hosts alike', () => {
@@ -641,6 +647,17 @@ test('checkpoints are on only where storage keeps a bucket for them, for the API
     false,
   )
   assert.equal(none.seen.runners.request.checkpointBucket, null)
+})
+
+test('the API is granted the disk resize only where a data disk exists to grow', () => {
+  // The AWS-shaped bundle keeps no per-runner data disk, and its provider
+  // refuses the capability outright — so the grant must be asked for and not
+  // assumed. A grant bounded to resources the cloud never creates would be a
+  // permission that silently matched nothing.
+  const { providers, seen } = bundle({ resizeRunnerDisks: false })
+  deployStack({ providers, config, inputs: inputs() })
+  const kinds = seen.api.request.capabilities.map((capability: any) => capability.kind)
+  assert.equal(kinds.includes('resize-runner-disks'), false)
 })
 
 test('the API writes registry passwords only where a store keeps them, and is told which store', () => {

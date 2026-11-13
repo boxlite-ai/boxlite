@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { NavigationIcon, type NavigationIconName } from '@/components/NavigationIcon'
 import { LogoText } from '@/assets/Logo'
 import {
   DropdownMenu,
@@ -26,12 +27,6 @@ import { cn } from '@/lib/utils'
 import {
   BookOpen,
   Building2,
-  Container,
-  Database,
-  Layers,
-  HardDrive,
-  Globe,
-  Github,
   CreditCardIcon,
   Check,
   ChevronDown,
@@ -42,9 +37,7 @@ import {
   MoonIcon,
   MoreHorizontal,
   PanelLeft,
-  Play,
-  Settings,
-  Server,
+  Pin,
   SunIcon,
 } from '@/components/ui/icon'
 import { usePostHog } from 'posthog-js/react'
@@ -59,55 +52,73 @@ interface SidebarProps {
 }
 
 interface NavItem {
-  icon?: React.ReactElement
+  icon: NavigationIconName
   label: string
   path: RoutePath | string
-  children?: { label: string; path: RoutePath; icon: React.ReactElement }[]
+  children?: { label: string; path: RoutePath; icon: NavigationIconName }[]
+}
+
+/** Navigation ownership follows declared children, even when their URLs are siblings. */
+function matchesNavItem(pathname: string, item: NavItem): boolean {
+  return [item.path, ...(item.children?.map((child) => child.path) ?? [])].some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  )
 }
 
 const PRIMARY_NAV_ITEMS: NavItem[] = [
-  { label: 'Boxes', icon: <Container className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.BOXES },
+  {
+    label: 'Boxes',
+    icon: 'box',
+    path: RoutePath.BOXES,
+    children: [
+      {
+        label: 'All Boxes',
+        path: RoutePath.BOXES,
+        icon: 'box',
+      },
+      {
+        label: 'Checkpoints',
+        path: RoutePath.CHECKPOINTS,
+        icon: 'checkpoint',
+      },
+    ],
+  },
   {
     label: 'Images',
-    icon: <Layers className="size-[18px] shrink-0" aria-hidden="true" />,
+    icon: 'images',
     path: RoutePath.IMAGES,
     children: [
       {
         label: 'Image library',
         path: RoutePath.IMAGES,
-        icon: <Layers className="size-3.5 shrink-0" aria-hidden="true" />,
+        icon: 'images',
       },
       {
         label: 'Private registries',
         path: RoutePath.IMAGE_REGISTRIES,
-        icon: <Server className="size-3.5 shrink-0" aria-hidden="true" />,
+        icon: 'registry',
       },
     ],
   },
   {
     label: 'Volumes',
-    icon: <HardDrive className="size-[18px] shrink-0" aria-hidden="true" />,
+    icon: 'volume',
     path: RoutePath.VOLUMES,
   },
-  {
-    label: 'Checkpoints',
-    icon: <Database className="size-[18px] shrink-0" aria-hidden="true" />,
-    path: RoutePath.CHECKPOINTS,
-  },
-  { label: 'Domains', icon: <Globe className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.DOMAINS },
+  { label: 'Domains', icon: 'domain', path: RoutePath.DOMAINS },
 ]
 
 const APPLICATION_NAV_ITEMS: NavItem[] = [
   {
     label: 'CI',
-    icon: <Play className="size-[18px] shrink-0" aria-hidden="true" />,
+    icon: 'ci',
     path: RoutePath.CI,
     children: [
-      { label: 'Runners', path: RoutePath.CI, icon: <Container className="size-3.5 shrink-0" aria-hidden="true" /> },
+      { label: 'Runners', path: RoutePath.CI, icon: 'box' },
       {
         label: 'Connects',
         path: RoutePath.CI_CONNECTS,
-        icon: <Github className="size-3.5 shrink-0" aria-hidden="true" />,
+        icon: 'github',
       },
     ],
   },
@@ -142,11 +153,13 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
             key={option.value}
             value={option.value}
             aria-label={`Use ${option.label.toLowerCase()} theme`}
-            // Every segment carries all four edges and overlaps its left neighbour by a
-            // pixel, so shared edges collapse into one line (same idea as the segmented
-            // tabs). Selection is a soft raised fill and a bold label, not a brighter
-            // outline: inside a small menu an outlined segment reads as a heavy box.
-            className="-ml-px h-9 justify-center gap-1.5 rounded-none border border-border text-meta text-muted-foreground transition-colors first:ml-0 hover:bg-accent/50 hover:text-foreground data-[state=on]:bg-accent data-[state=on]:font-semibold data-[state=on]:text-foreground"
+            // Collapse shared borders; focus must paint above a selected neighbor.
+            className={cn(
+              'relative -ml-px h-9 justify-center gap-1.5 rounded-none border border-border text-meta text-muted-foreground transition-colors first:ml-0',
+              'hover:bg-control-hover hover:text-foreground',
+              'data-[state=on]:z-10 data-[state=on]:bg-selection data-[state=on]:text-selection-foreground data-[state=on]:font-semibold data-[state=on]:hover:bg-selection data-[state=on]:hover:text-selection-foreground',
+              'focus-visible:z-20 focus-visible:border-border focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background data-[state=on]:focus-visible:z-20',
+            )}
           >
             {option.icon}
             <span>{option.label}</span>
@@ -158,6 +171,7 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
 }
 
 const NAVIGATION_EXPANDED_KEY = 'boxlite-navigation-expanded'
+const CURRENT_NAV_ITEM_CLASS = 'bg-sidebar-accent font-medium text-sidebar-accent-foreground hover:bg-sidebar-accent'
 
 /** Storage may be unavailable; the navigation still defaults to a usable compact rail. */
 function readExpandedPreference(): boolean {
@@ -178,6 +192,17 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   const [expanded, setExpanded] = useState(readExpandedPreference)
   const [peeking, setPeeking] = useState(false)
   const showLabels = expanded || peeking
+  const [activeTooltip, setActiveTooltip] = useState<string | null>(null)
+  useEffect(() => setActiveTooltip(null), [showLabels, pathname])
+  /** Only compact navigation needs labels; stale close events cannot dismiss another item. */
+  const navigationTooltipProps = (label: string) => ({
+    open: !showLabels && activeTooltip === label,
+    delayDuration: 300,
+    disableHoverableContent: true,
+    onOpenChange: (open: boolean) => {
+      setActiveTooltip((current) => (open && !showLabels ? label : current === label ? null : current))
+    },
+  })
   const panelRef = useRef<HTMLDivElement>(null)
   const pointerInside = useRef(false)
   const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -233,7 +258,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   }, [expanded])
   useEffect(() => {
     const activeGroup = [...PRIMARY_NAV_ITEMS, ...APPLICATION_NAV_ITEMS].find(
-      (item) => item.children && (pathname === item.path || pathname.startsWith(`${item.path}/`)),
+      (item) => item.children && matchesNavItem(pathname, item),
     )
     if (activeGroup)
       setOpenGroups((groups) => (groups.includes(activeGroup.path) ? groups : [...groups, activeGroup.path]))
@@ -270,9 +295,14 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
   const isActive = (path: string) => pathname === path || pathname.startsWith(`${path}/`)
   const railItemClass = (active: boolean) =>
     cn(
-      'flex h-10 min-w-0 shrink items-center gap-3 text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground',
+      'flex h-[38px] min-w-0 shrink items-center gap-3 rounded-none text-em leading-5 font-normal text-foreground transition-colors hover:bg-[hsl(var(--sidebar-hover))] hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
       showLabels ? 'w-full justify-start px-3' : 'w-10 justify-center',
-      active && 'bg-accent text-foreground hover:bg-accent',
+      active && CURRENT_NAV_ITEM_CLASS,
+    )
+  const childItemClass = (active: boolean) =>
+    cn(
+      'flex min-h-8 items-center gap-3 rounded-none px-3 text-body font-normal text-muted-foreground transition-colors hover:bg-[hsl(var(--sidebar-hover))] hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring',
+      active && CURRENT_NAV_ITEM_CLASS,
     )
 
   const managementActive = isActive(RoutePath.BILLING) || isActive(RoutePath.SETTINGS)
@@ -295,18 +325,22 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     </>
   )
 
-  const collapseControl = (
+  const navigationControl = (
     <button
       ref={expanded ? navigationToggleRef : undefined}
       type="button"
-      aria-label="Collapse navigation"
-      aria-expanded={true}
+      aria-label={expanded ? 'Collapse navigation' : 'Pin navigation'}
+      aria-expanded={expanded ? true : undefined}
       aria-controls="primary-navigation"
-      title="Collapse navigation"
-      onClick={expanded ? toggleNavigation : dismissPreview}
-      className="mr-2 flex size-9 shrink-0 items-center justify-center text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+      title={expanded ? 'Collapse navigation' : 'Pin navigation'}
+      onClick={toggleNavigation}
+      className="mr-2 flex size-9 shrink-0 items-center justify-center rounded-none text-muted-foreground hover:bg-control-hover hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
     >
-      <PanelLeft className="size-[18px]" aria-hidden="true" />
+      {expanded ? (
+        <PanelLeft className="size-[18px]" aria-hidden="true" />
+      ) : (
+        <Pin className="size-[18px]" aria-hidden="true" />
+      )}
     </button>
   )
 
@@ -322,8 +356,8 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
           data-state={expanded ? 'expanded' : peeking ? 'preview' : 'compact'}
           style={{ width: showLabels ? '224px' : '64px' }}
           className={cn(
-            'absolute inset-y-0 left-0 flex flex-col items-center border-r border-border bg-background pb-3',
-            peeking && !expanded && 'shadow-[8px_0_24px_-12px_rgba(0,0,0,0.3)]',
+            'absolute inset-y-0 left-0 flex flex-col items-center border-r border-sidebar-border bg-sidebar pb-3',
+            peeking && !expanded && 'shadow-[8px_0_24px_-12px_rgba(0,0,0,0.3)] bg-popover',
           )}
           onPointerEnter={() => {
             pointerInside.current = true
@@ -349,20 +383,20 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                 <Link
                   to={RoutePath.BOXES}
                   aria-label="BoxLite home"
-                  className="flex h-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                  className="flex h-full items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                 >
                   <span className="flex w-[115px] shrink-0 overflow-hidden">
                     <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
                   </span>
                 </Link>
-                {collapseControl}
+                {navigationControl}
               </>
             ) : (
               <>
                 <button
                   ref={navigationToggleRef}
                   type="button"
-                  aria-label={peeking ? 'Pin navigation' : 'Expand navigation'}
+                  aria-label={peeking ? 'Keep navigation expanded' : 'Expand navigation'}
                   aria-expanded={peeking}
                   aria-controls="primary-navigation"
                   title={peeking ? 'Keep navigation expanded' : 'Expand navigation'}
@@ -373,64 +407,74 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                   }}
                   onPointerLeave={() => clearTimeout(openTimer.current)}
                   onClick={toggleNavigation}
-                  className="flex h-full min-w-0 flex-1 items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                  className="flex h-full min-w-0 flex-1 items-center px-3 text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                 >
                   <span className={cn('flex shrink-0 overflow-hidden', peeking ? 'w-[115px]' : 'w-[38px]')}>
                     <LogoText className="h-[43.2px] w-auto max-w-none shrink-0" />
                   </span>
                 </button>
-                {peeking && collapseControl}
+                {peeking && navigationControl}
               </>
             )}
           </div>
           <nav
             id="primary-navigation"
             aria-label="Primary"
-            className="hidden min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto overflow-x-hidden px-2 py-4 md:flex"
+            className="hidden min-h-0 w-full flex-1 flex-col items-center gap-3 overflow-y-auto overflow-x-hidden px-2 py-4 md:flex"
           >
-            {NAV_SECTIONS.map((section) => (
+            {NAV_SECTIONS.map((section, index) => (
               <div
                 key={section.label}
                 role="group"
                 aria-label={section.label}
-                className="flex w-full shrink-0 flex-col items-center gap-2"
+                className={cn(
+                  'flex w-full shrink-0 flex-col items-center gap-0.5',
+                  index > 0 && 'border-t border-border pt-3',
+                )}
               >
                 {showLabels && (
-                  <div className="w-full px-3 pb-1 text-label uppercase tracking-[0.12em] text-muted-foreground">
+                  <div className="w-full px-3 pb-2 text-label leading-4 uppercase tracking-[0.1em] text-muted-foreground">
                     {section.label}
                   </div>
                 )}
                 {section.items.map((item) => {
                   const groupOpen = openGroups.includes(item.path)
                   const expandedGroup = showLabels && Boolean(item.children)
-                  const selected = isActive(item.path) && !(expandedGroup && groupOpen)
+                  const groupActive = matchesNavItem(pathname, item)
+                  const selected = groupActive && !(expandedGroup && groupOpen)
                   const currentChild = item.children?.filter((child) => isActive(child.path)).at(-1)
                   return (
                     <div key={item.path} className={cn('shrink-0', showLabels && 'w-full')}>
                       <div
                         className={cn(
-                          'flex items-center',
-                          expandedGroup && 'hover:bg-card',
-                          expandedGroup && selected && 'bg-accent hover:bg-accent',
+                          'group/nav-row flex items-center rounded-none',
+                          expandedGroup && 'hover:bg-[hsl(var(--sidebar-hover))]',
+                          expandedGroup && selected && CURRENT_NAV_ITEM_CLASS,
                         )}
                       >
-                        <Tooltip>
+                        <Tooltip {...navigationTooltipProps(item.label)}>
                           <TooltipTrigger asChild>
                             <Link
                               to={item.path}
                               onClick={() => {
                                 if (!showLabels && item.children) setExpanded(true)
                               }}
+                              aria-label={
+                                !showLabels && currentChild
+                                  ? `${item.label}, current section: ${currentChild.label}`
+                                  : undefined
+                              }
                               aria-current={
                                 isActive(item.path) && !(showLabels && item.children && groupOpen) ? 'page' : undefined
                               }
                               className={cn(
                                 railItemClass(selected && !expandedGroup),
-                                expandedGroup && 'hover:bg-transparent',
-                                isActive(item.path) && 'text-foreground',
+                                expandedGroup && 'hover:bg-transparent group-hover/nav-row:text-foreground',
+                                groupActive && 'text-foreground',
+                                selected && 'font-medium',
                               )}
                             >
-                              {item.icon}
+                              <NavigationIcon name={item.icon} selected={selected} />
                               <span className={showLabels ? 'truncate' : 'sr-only'}>{item.label}</span>
                             </Link>
                           </TooltipTrigger>
@@ -451,7 +495,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                                 groupOpen ? groups.filter((path) => path !== item.path) : [...groups, item.path],
                               )
                             }
-                            className="flex size-8 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                            className="mr-1 flex size-8 shrink-0 items-center justify-center rounded-none text-muted-foreground group-hover/nav-row:text-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                           >
                             <ChevronDown
                               className={cn('size-3.5 transition-transform', !groupOpen && '-rotate-90')}
@@ -461,18 +505,25 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                         )}
                       </div>
                       {showLabels && item.children && (
-                        <div id={`${item.label.toLowerCase()}-navigation`} hidden={!groupOpen} className="mt-1">
+                        <div
+                          id={`${item.label.toLowerCase()}-navigation`}
+                          hidden={!groupOpen}
+                          className="mt-0.5 space-y-0.5 pb-2"
+                        >
                           {item.children.map((child) => (
                             <Link
                               key={child.path}
                               to={child.path}
                               aria-current={currentChild === child ? 'page' : undefined}
-                              className={cn(
-                                'flex min-h-9 items-center gap-2 pl-7 pr-2 text-meta text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
-                                currentChild === child && 'bg-accent text-foreground hover:bg-accent',
-                              )}
+                              className={childItemClass(currentChild === child)}
                             >
-                              {child.icon}
+                              <span className="inline-flex size-[18px] shrink-0 items-center justify-center">
+                                <NavigationIcon
+                                  name={child.icon}
+                                  selected={currentChild === child}
+                                  className="size-4"
+                                />
+                              </span>
                               <span className="truncate">{child.label}</span>
                             </Link>
                           ))}
@@ -483,9 +534,9 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                 })}
               </div>
             ))}
-            <div className="my-1 h-px w-full shrink-0 bg-border" />
+            <div className="h-px w-full shrink-0 bg-border" />
             <div className={cn('shrink-0', showLabels && 'w-full')}>
-              <Tooltip>
+              <Tooltip {...navigationTooltipProps('Management')}>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
@@ -501,7 +552,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                       managementActive && 'text-foreground',
                     )}
                   >
-                    <Settings className="size-[18px] shrink-0" aria-hidden="true" />
+                    <NavigationIcon name="management" selected={managementActive && !(showLabels && managementOpen)} />
                     {showLabels && (
                       <>
                         <span>Management</span>
@@ -515,19 +566,23 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                 </TooltipTrigger>
                 {!showLabels && <TooltipContent side="right">Management</TooltipContent>}
               </Tooltip>
-              <div id="management-navigation" hidden={!showLabels || !managementOpen} className="mt-1">
+              <div
+                id="management-navigation"
+                hidden={!showLabels || !managementOpen}
+                className="mt-0.5 space-y-0.5 pb-2"
+              >
                 {[
                   {
                     label: 'Billing',
                     path: RoutePath.BILLING,
-                    icon: <CreditCardIcon className="size-3.5 shrink-0" aria-hidden="true" />,
+                    icon: 'billing' as const,
                   },
                   ...(selectedOrganization
                     ? [
                         {
                           label: 'Organization',
                           path: RoutePath.SETTINGS,
-                          icon: <Building2 className="size-3.5 shrink-0" aria-hidden="true" />,
+                          icon: 'organization' as const,
                         },
                       ]
                     : []),
@@ -536,12 +591,11 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                     key={item.path}
                     to={item.path}
                     aria-current={isActive(item.path) ? 'page' : undefined}
-                    className={cn(
-                      'flex min-h-9 items-center gap-2 pl-7 pr-2 text-meta text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
-                      isActive(item.path) && 'bg-accent text-foreground hover:bg-accent',
-                    )}
+                    className={childItemClass(isActive(item.path))}
                   >
-                    {item.icon}
+                    <span className="inline-flex size-[18px] shrink-0 items-center justify-center">
+                      <NavigationIcon name={item.icon} selected={isActive(item.path)} className="size-4" />
+                    </span>
                     <span className="truncate">{item.label}</span>
                   </Link>
                 ))}
@@ -549,7 +603,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             </div>
           </nav>
           <div className="flex w-full shrink-0 flex-col items-center gap-2 px-2 pt-2">
-            <Tooltip>
+            <Tooltip {...navigationTooltipProps('Quickstart')}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
@@ -558,7 +612,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                   aria-current={isActive(RoutePath.QUICKSTART) ? 'page' : undefined}
                   className={railItemClass(isActive(RoutePath.QUICKSTART))}
                 >
-                  <BookOpen className="size-[18px] shrink-0" aria-hidden="true" />
+                  <NavigationIcon name="quickstart" selected={isActive(RoutePath.QUICKSTART)} />
                   {showLabels && <span>Quickstart</span>}
                 </button>
               </TooltipTrigger>
@@ -581,7 +635,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
         >
           <Link
             to={RoutePath.BOXES}
-            className="flex h-full shrink-0 items-center md:hidden px-2 xs:px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+            className="flex h-full shrink-0 items-center md:hidden px-2 xs:px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
             aria-label="BoxLite home"
           >
             <LogoText className="h-9 w-auto" />
@@ -595,8 +649,8 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             aria-current={isActive(RoutePath.KEYS) ? 'page' : undefined}
             title="API Keys"
             className={cn(
-              'mr-2 md:mr-8 inline-flex h-9 shrink-0 items-center gap-2 px-3 text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground',
-              isActive(RoutePath.KEYS) && 'bg-accent text-foreground hover:bg-accent',
+              'mr-2 md:mr-8 inline-flex h-9 shrink-0 items-center gap-2 px-3 text-muted-foreground hover:bg-control-hover hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring',
+              isActive(RoutePath.KEYS) && 'bg-selection text-selection-foreground hover:bg-selection',
             )}
           >
             <KeyRound className="size-[18px]" aria-hidden="true" />
@@ -608,7 +662,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             <DropdownMenuTrigger
               aria-label="Open profile menu"
               title="Profile"
-              className="mr-0 xs:mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-card data-[state=open]:bg-card focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+              className="mr-0 xs:mr-3 inline-flex h-9 max-w-[240px] shrink-0 items-center justify-center gap-2 px-2 text-body font-medium text-foreground transition-colors hover:bg-control-hover data-[state=open]:bg-selection data-[state=open]:hover:bg-selection focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
             >
               <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-meta font-bold text-brand-foreground">
                 {user?.profile.picture ? (

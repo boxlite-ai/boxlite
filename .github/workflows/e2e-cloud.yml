@@ -1,12 +1,15 @@
 # E2E suite against a deployed cloud stack — SDK → API → Runner → VM.
 #
-# Builds Python SDK, Node SDK, and the CLI from source using
+# By default builds Python SDK, Node SDK, and the CLI from source using
 # BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
 # matter inside the runner, not the SDK client), then runs the REST
 # e2e pytest suite against the stage selected by `stage`.
 #
 # Dev also builds C, Go and Rust clients for the shared subdomain cases.
 # Legacy C/Go entry and coverage cases remain excluded below.
+# An optional tag downloads released Python/Node SDKs and CLI instead.
+# Dev retains its C/Go/Rust clients using release SDKs and the published C library;
+# only the Rust SDK and acceptance driver programs still need compilation.
 #
 # Does NOT build or deploy the API or runner — the stage is assumed to
 # be already running the version you want to test against.
@@ -113,7 +116,7 @@
 # smaller blast radius: only `-m smoke` ever runs with it.
 
 name: E2E cloud
-run-name: E2E cloud against ${{ inputs.stage || 'dev' }}
+run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format(' using {0}', inputs.tag) || '' }}
 
 on:
   workflow_call:
@@ -132,6 +135,10 @@ on:
         required: false
         type: string
         default: dev
+      tag:
+        description: 'Release client tag, e.g. v0.13.1 (blank = build from source).'
+        required: false
+        type: string
       sweep:
         description: 'Reclaim boxes earlier runs stranded (dev only).'
         required: false
@@ -169,6 +176,10 @@ on:
         required: false
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Release client tag, e.g. v0.13.1 (blank = build from source)'
+        required: false
+        type: string
       stage:
         description: 'Stage to test'
         required: true
@@ -233,6 +244,7 @@ concurrency:
 env:
   BOXLITE_DEPS_STUB: '1'
   STAGE: ${{ inputs.stage || 'dev' }}
+  RELEASE_TAG: ${{ inputs.tag || '' }}
 
 jobs:
   # workflow_call has a string stage; restrict it to supported test stages.
@@ -263,6 +275,21 @@ jobs:
           # inputs.ref is undefined and github.sha is the ref chosen in the
           # UI — the same commit either way, never the caller's default.
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Validate client release
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh validate
+
+      - name: Checkout release SDK sources for subdomain clients
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
+        uses: actions/checkout@v5
+        with:
+          repository: boxlite-ai/boxlite
+          ref: ${{ inputs.tag }}
+          path: target/e2e-release
           persist-credentials: false
 
       - name: Require the shared subdomain (dev)
@@ -331,23 +358,31 @@ jobs:
 
       # ── System deps ──────────────────────────────────────────────
       - name: Install system dependencies
+        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends protobuf-compiler
 
       # ── Rust toolchain ───────────────────────────────────────────
       - name: Setup Rust toolchain
+        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
         uses: dtolnay/rust-toolchain@stable
 
       # ── CLI (cargo build, warms the shared boxlite core) ─────────
       # Only the CLI cases need the binary, and `-m smoke` selects none of
       # them, so the prod leg skips the build rather than paying for it.
       - name: Build CLI
-        if: ${{ (inputs.stage || 'dev') != 'prod' }}
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
         run: |
           cargo build --release -p boxlite-cli
           sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
           boxlite --version
+
+      - name: Install release CLI
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh cli
 
       # ── Node SDK (napi-rs) ───────────────────────────────────────
       - name: Setup Node.js
@@ -357,7 +392,7 @@ jobs:
           node-version: '20'
 
       - name: Build Node SDK (napi + tsc)
-        if: ${{ (inputs.stage || 'dev') != 'prod' }}
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
         run: |
           cd sdks/node
           npm install --ignore-scripts
@@ -365,27 +400,56 @@ jobs:
           npm run build
           ls -lh native/ dist/
 
+      - name: Install release Node SDK
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh node
+
       - name: Setup Go for subdomain clients
         if: ${{ (inputs.stage || 'dev') == 'dev' }}
         uses: actions/setup-go@v5
         with:
-          go-version-file: sdks/go/go.mod
+          go-version-file: ${{ inputs.tag != '' && 'target/e2e-release/sdks/go/go.mod' || 'sdks/go/go.mod' }}
           cache: false
 
       - name: Build C, Go and Rust subdomain clients
-        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') == 'dev' }}
         run: |
           sudo apt-get install -y --no-install-recommends llvm
           make build:e2e:drivers SETUP_DONE=1
 
+      - name: Build release C, Go and Rust subdomain clients
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/ci/install-e2e-release.sh c
+          make build:e2e:release-drivers
+
       # ── Python SDK (maturin + PyO3) ──────────────────────────────
       - name: Build & install Python SDK
+        if: ${{ inputs.tag == '' }}
         run: |
           cd sdks/python
           pip install --break-system-packages --quiet maturin
           maturin build --release
           pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
-          pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout greenlet
+
+      - name: Setup Python for release wheel
+        if: ${{ inputs.tag != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install release Python SDK
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh python
+
+      - name: Install pytest dependencies
+        run: pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout greenlet
 
       # ── Run pytest ───────────────────────────────────────────────
       # --ignore rationale:
