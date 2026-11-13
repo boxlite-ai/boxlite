@@ -101,11 +101,6 @@ const Webhooks: React.FC = () => {
     <PageLayout>
       <PageHeader>
         <PageTitle>Webhooks</PageTitle>
-        <a href="https://docs.boxlite.ai" target="_blank" rel="noopener noreferrer" className="ml-auto">
-          <Button variant="link" size="sm">
-            Docs
-          </Button>
-        </a>
         {activeTab === 'endpoints' && <CreateEndpointDialog onSuccess={handleSuccess} />}
       </PageHeader>
 

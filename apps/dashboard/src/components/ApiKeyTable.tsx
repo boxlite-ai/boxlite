@@ -69,19 +69,10 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilt
               <ResourceFilterEmptyState title="No API keys match your search" onClear={onClearFilter} />
             ) : data.length === 0 ? (
               <ResourceEmptyState
-                title="No API keys yet."
+                title="No API Keys yet."
                 icon={<KeyRound className="size-6" />}
                 description="Create a key to get started."
-              >
-                <a
-                  href="https://docs.boxlite.ai"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="resource-guide-link"
-                >
-                  Setup guide →
-                </a>
-              </ResourceEmptyState>
+              />
             ) : (
               data.map((key) => {
                 const busy = isLoadingKey(key)

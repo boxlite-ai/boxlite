@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
+import { BOXLITE_CUSTOM_IMAGE_DOCS_URL } from '@/constants/ExternalLinks'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useState } from 'react'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -93,10 +94,10 @@ export function ConsoleTemplatePicker() {
           </Tabs>
         </div>
         <a
-          href="https://docs.boxlite.ai/cloud/use-your-image"
+          href={BOXLITE_CUSTOM_IMAGE_DOCS_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+          className="resource-guide-link inline-flex items-center gap-1"
         >
           Custom image <span aria-hidden="true">↗</span>
         </a>

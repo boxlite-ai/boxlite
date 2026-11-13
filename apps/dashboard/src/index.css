@@ -70,6 +70,7 @@ body {
     /* brand accent (the design's --accent blue) — kept distinct from shadcn's neutral
        hover "accent" so hovers stay neutral and the blue stays intentional. */
     --brand: 196 100% 47%;
+    --link: #0077a3;
     --brand-foreground: 218 17% 9%;
 
     --border: 218 16% 90%;
@@ -153,6 +154,7 @@ body {
     --accent-foreground: 0 0% 100%;
 
     --brand: 196 100% 47%;
+    --link: #49bde8;
     --brand-foreground: 218 17% 9%;
 
     --border: 0 0% 16%;
@@ -630,7 +632,13 @@ body {
 }
 
 .resource-guide-link {
-  @apply text-body text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand;
+  @apply underline underline-offset-4 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand;
+  color: var(--link);
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.resource-guide-link:hover {
+  text-decoration-color: currentColor;
 }
 
 /* Code boundaries use the same quiet structural border as the rest of the console. */

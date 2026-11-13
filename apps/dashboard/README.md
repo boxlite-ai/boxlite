@@ -1096,3 +1096,12 @@ Resource tables retain a minimum readable width in narrow desktop containers. Bo
 Boxes, Volumes, Domains, and API Keys use the same request-state distinction. First-request failures offer Retry instead of an empty inventory. Background refresh errors retain loaded records, and an active retry disables its recovery button. Domain permission messages remain separate from request failures.
 
 Boxes filters query the server, so they remain editable after a failed request even when no inventory is cached. Changing a search can recover independently of Retry. Client-side inventory filters still wait for data.
+
+### Contextual documentation links
+
+Feature guide links lead to the task named by their label, rather than the documentation landing page. Volumes opens the Cloud Volumes guide; image help and the template picker open Use your own image; SSH opens its Cloud connection guide. These destinations live in `constants/ExternalLinks.ts` so changes can be reviewed centrally.
+
+API Key and Webhook empty states no longer advertise generic home-page links as setup instructions. The profile menu still offers the documentation home. Guide links use the shared colored, underlined treatment, keeping them distinct from secondary action buttons.
+
+The source scan catches inline URLs and appended paths; it does not prove a destination's meaning or availability. When updating a guide, open the destination and check its content against the UI task.
+

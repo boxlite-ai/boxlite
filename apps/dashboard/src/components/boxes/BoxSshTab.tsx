@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 
+import { BOXLITE_SSH_DOCS_URL } from '@/constants/ExternalLinks'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Box, BoxState, NetworkMode, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { createPortal } from 'react-dom'
@@ -612,7 +613,7 @@ function SshControls({
                   )}
                 </ol>
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-muted-foreground">
-                  <a href="https://docs.boxlite.ai/cloud/ssh" target="_blank" rel="noreferrer">
+                  <a href={BOXLITE_SSH_DOCS_URL} target="_blank" rel="noreferrer" className="resource-guide-link">
                     SSH guide ↗
                   </a>
                   {(status?.enabled || credentials) && (
