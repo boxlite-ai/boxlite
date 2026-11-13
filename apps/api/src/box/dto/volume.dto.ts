@@ -8,7 +8,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { IsEnum } from 'class-validator'
 import { VOLUME_STORAGE_BACKENDS, VolumeStorageBackend } from './create-volume.dto'
 import { VolumeState } from '../enums/volume-state.enum'
-import { Volume } from '../entities/volume.entity'
+import { isFilestoreVolume, Volume } from '../entities/volume.entity'
 
 export class VolumeDto {
   @ApiProperty({
@@ -83,7 +83,7 @@ export class VolumeDto {
       name: volume.name,
       organizationId: volume.organizationId,
       state: volume.state,
-      storageBackend: volume.instance ? 'filestore' : 'object_storage',
+      storageBackend: isFilestoreVolume(volume) ? 'filestore' : 'object_storage',
       instance: volume.instance || undefined,
       createdAt: volume.createdAt?.toISOString(),
       updatedAt: volume.updatedAt?.toISOString(),

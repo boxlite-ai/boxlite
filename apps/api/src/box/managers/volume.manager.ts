@@ -7,7 +7,7 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown, OnModuleInit } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, In } from 'typeorm'
-import { Volume } from '../entities/volume.entity'
+import { isFilestoreVolume, Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -212,7 +212,7 @@ export class VolumeManager
       // left in place for ops cleanup, and only the row lands DELETED below.
       // The landing is shared with the bucket path, including the
       // `name-deleted` rename that frees the name for reuse.
-      if (!volume.instance) {
+      if (!isFilestoreVolume(volume)) {
         // A bucket that is already gone is absorbed by the store as success.
         try {
           await this.bucketStore.destroy(volume.getBucketName())

@@ -7,7 +7,6 @@
 import {
   ConflictException,
   Injectable,
-  Optional,
   Logger,
   NotFoundException,
   RequestTimeoutException,
@@ -18,7 +17,6 @@ import { Repository, Not, In, FindOptionsWhere } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { CreateVolumeDto } from '../dto/create-volume.dto'
-import { selectFilestoreInstance } from '../../config/filestore-instances'
 import { v4 as uuidv4 } from 'uuid'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -51,7 +49,7 @@ export class VolumeService {
     private readonly organizationService: OrganizationService,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
-    @Optional() private readonly filestoreInstanceResolver?: FilestoreInstanceResolver,
+    private readonly filestoreInstanceResolver: FilestoreInstanceResolver,
   ) {}
 
   async create(organization: Organization, createVolumeDto: CreateVolumeDto, ctx: Context): Promise<Volume> {
@@ -69,7 +67,9 @@ export class VolumeService {
     volumeId: string,
   ): Promise<Volume> {
     const isFilestore = createVolumeDto.storageBackend === 'filestore'
-    const filestoreInstance = await this.selectFilestoreInstance(createVolumeDto, volumeId)
+    if (!isFilestore && createVolumeDto.instance !== undefined) {
+      throw new BadRequestError('instance is valid only when storageBackend is "filestore"')
+    }
 
     // Only the object-storage kind needs the API's own bucket backend. A
     // filestore volume's storage is an NFS data directory the runner creates
@@ -102,6 +102,7 @@ export class VolumeService {
       throw new BadRequestError(`Volume with name ${volume.name} already exists`)
     }
 
+    const filestoreInstance = await this.selectFilestoreInstance(createVolumeDto, volumeId)
     volume.organizationId = organization.id
     volume.instance = filestoreInstance || undefined
 
@@ -117,25 +118,15 @@ export class VolumeService {
   }
 
   private async selectFilestoreInstance(createVolumeDto: CreateVolumeDto, volumeId: string): Promise<string> {
-    if (createVolumeDto.storageBackend !== 'filestore') {
-      if (createVolumeDto.instance !== undefined) {
-        throw new BadRequestError('instance is valid only when storageBackend is "filestore"')
-      }
-      return ''
-    }
+    if (createVolumeDto.storageBackend !== 'filestore') return ''
 
     if (createVolumeDto.instance) {
-      await this.filestoreInstanceResolver!.resolve(createVolumeDto.instance, 'request')
+      await this.filestoreInstanceResolver.resolve(createVolumeDto.instance, 'request')
       return createVolumeDto.instance
     }
 
-    const instances = this.configService.getOrThrow('volume.filestoreInstances').instances
-    if (!instances.length) {
-      throw new ServiceUnavailableException('Filestore is not configured')
-    }
-
-    const selected = selectFilestoreInstance(volumeId, instances)
-    await this.filestoreInstanceResolver!.resolve(selected.instance, 'configured')
+    const selected = this.filestoreInstanceResolver.select(volumeId)
+    await this.filestoreInstanceResolver.resolve(selected.instance, 'configured')
     return selected.instance
   }
 

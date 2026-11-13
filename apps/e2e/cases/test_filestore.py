@@ -159,7 +159,7 @@ def filestore_instance():
         _skip_when_key_cannot_attach_volumes(status)
 
         assert 200 <= status < 300, (
-            f"filestore probe box create failed: HTTP {status}: {body_str}"
+            f"filestore probe box create failed: HTTP {status}: {body}"
         )
     finally:
         _delete_box_by_name(probe_box_name)

@@ -677,6 +677,54 @@ func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
 	}
 }
 
+func TestFilestoreInstanceIsPathGuarded(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(c)
+
+	for _, instance := range []string{"", "../escape", "a/b", "a\\b", "ML", "-ml", strings.Repeat("a", 64)} {
+		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
+			{VolumeId: "vol-1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: instance, Server: "10.0.0.7", Export: "/vol1"}},
+		})
+		if err == nil {
+			t.Fatalf("instance %q: expected the path guard to refuse it, got nil", instance)
+		}
+		if !strings.Contains(err.Error(), "invalid filestore instance") {
+			t.Fatalf("instance %q: expected the instance guard error, got %q", instance, err)
+		}
+	}
+
+	if fake.mounts.Load() != 0 {
+		t.Errorf("mount command ran %d times; the guard must refuse before any mount work", fake.mounts.Load())
+	}
+}
+
+func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	useVolumeMountBasePath(t, base)
+
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(c)
+	subpath := "nested"
+
+	_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
+		{VolumeId: "vol-1", MountPath: "/data", Subpath: &subpath, Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+	})
+	if err == nil {
+		t.Fatal("expected filestore plus subpath to be refused, got nil")
+	}
+	if !strings.Contains(err.Error(), "subpath is not supported for filestore volumes") {
+		t.Fatalf("expected the filestore subpath error, got %q", err)
+	}
+	if fake.mounts.Load() != 0 {
+		t.Errorf("mount command ran %d times; subpath rejection must precede mount work", fake.mounts.Load())
+	}
+}
+
 // A create that fails partway through its volume list must not leave the
 // partial record behind. Filestore volumes write their record entries inside
 // the instance critical section, so a failure at a later volume leaves an

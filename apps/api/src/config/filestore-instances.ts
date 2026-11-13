@@ -1,8 +1,6 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
-import { createHash } from 'crypto'
-
 export interface FilestoreInstanceConfig {
   instance: string
   projectId: string
@@ -75,19 +73,4 @@ export function parseFilestoreInstances(env: NodeJS.ProcessEnv = process.env): F
   }
 
   return { instances }
-}
-
-export function selectFilestoreInstance(
-  volumeId: string,
-  instances: FilestoreInstanceConfig[],
-): FilestoreInstanceConfig {
-  if (!instances.length) {
-    throw new Error('no Filestore instances are configured')
-  }
-
-  const sorted = [...instances].sort((left, right) =>
-    left.instance === right.instance ? 0 : left.instance < right.instance ? -1 : 1,
-  )
-  const digest = createHash('sha256').update(volumeId).digest()
-  return sorted[digest.readUInt32BE(0) % sorted.length]
 }

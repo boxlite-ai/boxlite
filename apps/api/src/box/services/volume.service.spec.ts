@@ -1,5 +1,10 @@
 import { Context } from '../../common/context/context'
-import { NotFoundException, RequestTimeoutException, ServiceUnavailableException } from '@nestjs/common'
+import {
+  ForbiddenException,
+  NotFoundException,
+  RequestTimeoutException,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { VolumeState } from '../enums/volume-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { VolumeService } from './volume.service'
@@ -9,7 +14,14 @@ describe('VolumeService delete', () => {
     const volumeRepository = {
       findOne: jest.fn().mockResolvedValue(volume),
     }
-    const service = new VolumeService(volumeRepository as never, {} as never, {} as never, {} as never, {} as never)
+    const service = new VolumeService(
+      volumeRepository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
 
     return { service, volumeRepository }
   }
@@ -49,7 +61,14 @@ describe('VolumeService waitForReady', () => {
     const volumeRepository = {
       findOne: jest.fn().mockImplementation(() => Promise.resolve(volumes.shift() ?? null)),
     }
-    const service = new VolumeService(volumeRepository as never, {} as never, {} as never, {} as never, {} as never)
+    const service = new VolumeService(
+      volumeRepository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
     return { service, volumeRepository }
   }
 
@@ -82,7 +101,14 @@ describe('VolumeService validateVolumes canonicalization', () => {
     const volumeRepository = {
       find: jest.fn().mockResolvedValue(volumes),
     }
-    const service = new VolumeService(volumeRepository as never, {} as never, {} as never, {} as never, {} as never)
+    const service = new VolumeService(
+      volumeRepository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
     return { service, volumeRepository }
   }
 
@@ -134,7 +160,14 @@ describe('VolumeService validateVolumes query safety', () => {
 
   function createService(volumes: Array<Record<string, unknown>>) {
     const volumeRepository = { find: jest.fn().mockResolvedValue(volumes) }
-    const service = new VolumeService(volumeRepository as never, {} as never, {} as never, {} as never, {} as never)
+    const service = new VolumeService(
+      volumeRepository as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
     return { service, volumeRepository }
   }
 
@@ -227,7 +260,13 @@ describe('VolumeService filestore volumes', () => {
         return { instances: filestoreInstances }
       }),
     }
-    const filestoreInstanceResolver = { resolve: jest.fn().mockResolvedValue({ server: '10.0.0.7', export: '/vol1' }) }
+    const filestoreInstanceResolver = {
+      resolve: jest.fn().mockResolvedValue({ server: '10.0.0.7', export: '/vol1' }),
+      select: jest.fn().mockImplementation(() => {
+        if (!filestoreInstances.length) throw new ServiceUnavailableException('Filestore is not configured')
+        return filestoreInstances[0]
+      }),
+    }
     const service = new VolumeService(
       volumeRepository as never,
       boxRepository as never,
@@ -236,7 +275,7 @@ describe('VolumeService filestore volumes', () => {
       {} as never,
       filestoreInstanceResolver as never,
     )
-    return { service, volumeRepository, filestoreInstanceResolver }
+    return { service, volumeRepository, filestoreInstanceResolver, organizationService }
   }
 
   const organization = { id: 'org-1' } as never
@@ -254,13 +293,14 @@ describe('VolumeService filestore volumes', () => {
     expect(volume.instance).toBe('ml-scratch')
   })
 
-  it('still rejects a duplicate name among filestore volumes', async () => {
-    const { service } = createService({
+  it('rejects a duplicate name before consulting GCP', async () => {
+    const { service, filestoreInstanceResolver } = createService({
       id: 'existing',
       name: 'nfs-data',
       state: VolumeState.READY,
       instance: 'ml-scratch',
     })
+    filestoreInstanceResolver.resolve.mockRejectedValue(new ServiceUnavailableException('GCP unavailable'))
 
     await expect(
       service.create(
@@ -269,13 +309,35 @@ describe('VolumeService filestore volumes', () => {
         Context.user(),
       ),
     ).rejects.toThrow('already exists')
+    expect(filestoreInstanceResolver.resolve).not.toHaveBeenCalled()
+  })
+
+  it('rejects a suspended organization before consulting GCP', async () => {
+    const { service, filestoreInstanceResolver, organizationService } = createService(null)
+    organizationService.assertOrganizationIsNotSuspended.mockImplementation(() => {
+      throw new ForbiddenException('Organization is suspended')
+    })
+    filestoreInstanceResolver.resolve.mockRejectedValue(new ServiceUnavailableException('GCP unavailable'))
+
+    await expect(
+      service.create(
+        organization,
+        { name: 'nfs-data', storageBackend: 'filestore', instance: 'ml-scratch' },
+        Context.user(),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException)
+    expect(filestoreInstanceResolver.resolve).not.toHaveBeenCalled()
   })
 
   it('assigns an omitted Filestore instance from the configured objects', async () => {
-    const { service, filestoreInstanceResolver } = createService(null, [], [
-      { instance: 'zeta', projectId: 'zeta-project', zone: 'us-east5-a' },
-      { instance: 'alpha', projectId: 'alpha-project', zone: 'us-east5-b' },
-    ])
+    const { service, filestoreInstanceResolver } = createService(
+      null,
+      [],
+      [
+        { instance: 'zeta', projectId: 'zeta-project', zone: 'us-east5-a' },
+        { instance: 'alpha', projectId: 'alpha-project', zone: 'us-east5-b' },
+      ],
+    )
 
     const volume = await service.create(organization, { name: 'nfs-data', storageBackend: 'filestore' }, Context.user())
 
@@ -310,7 +372,9 @@ describe('VolumeService filestore volumes', () => {
 
   it('rejects a hash-assigned instance whose lookup fails, without persisting a row', async () => {
     const { service, volumeRepository, filestoreInstanceResolver } = createService(null)
-    filestoreInstanceResolver.resolve.mockRejectedValue(new ServiceUnavailableException('Filestore instance ... not found'))
+    filestoreInstanceResolver.resolve.mockRejectedValue(
+      new ServiceUnavailableException('Filestore instance ... not found'),
+    )
 
     await expect(
       service.create(organization, { name: 'nfs-data', storageBackend: 'filestore' }, Context.user()),

@@ -22,6 +22,24 @@ describe('FilestoreInstanceResolver', () => {
     fileShares: [{ name: 'vol1' }],
   }
 
+  it('sorts instances by name and keeps a stable selection for one volume id', () => {
+    const instances = [
+      { instance: 'zebra', projectId: 'project', zone: 'us-east5-a' },
+      { instance: 'middle', projectId: 'project', zone: 'us-east5-b' },
+      { instance: 'apple', projectId: 'project', zone: 'us-east5-c' },
+    ]
+    const { resolver } = createResolver(jest.fn(), { instances })
+
+    expect(resolver.select('a')).toEqual(instances[0])
+    expect(resolver.select('volume-id')).toEqual(resolver.select('volume-id'))
+  })
+
+  it('rejects automatic placement without candidates', () => {
+    const { resolver } = createResolver(jest.fn(), { instances: [] })
+
+    expect(() => resolver.select('volume-id')).toThrow('Filestore is not configured')
+  })
+
   it('rejects a name outside the deployment list', async () => {
     const { resolver } = createResolver(jest.fn())
 

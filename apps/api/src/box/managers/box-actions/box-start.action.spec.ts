@@ -76,6 +76,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any, // boxActivityService
       {} as any, // curatedImagePins
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -91,7 +92,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     expect(updatedFields.some((u) => u.state === BoxState.STARTING)).toBe(true)
   })
 
-  it('carries the filestore reference in the start metadata of a restarted box', async () => {
+  it('re-resolves the filestore target in the start metadata of a restarted box', async () => {
     const ownRunnerId = 'runner-own-1'
 
     const box = new Box('region-1', 'my-box')
@@ -146,12 +147,16 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any, // boxActivityService
       {} as any, // curatedImagePins
+      {} as any,
     )
+    const filestoreInstanceResolver = {
+      resolve: jest.fn().mockResolvedValue({ server: '10.0.0.9', export: '/vol2' }),
+    }
+    Object.assign(action, { filestoreInstanceResolver })
 
     await (action as BoxAction).run(box, lockCode)
 
-    // The persisted filestore reference rides along so the restart re-mounts
-    // the NFS target the create dispatch resolved.
+    expect(filestoreInstanceResolver.resolve).toHaveBeenCalledWith('ml-scratch', 'configured')
     const metadata = startBox.mock.calls[0][2] as { volumes: string }
     const volumes = JSON.parse(metadata['volumes'])
     expect(volumes).toEqual([
@@ -159,7 +164,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
         volumeId: 'volume-1',
         mountPath: '/data',
         subpath: undefined,
-        filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+        filestore: { instance: 'ml-scratch', server: '10.0.0.9', export: '/vol2' },
       },
     ])
   })
@@ -194,6 +199,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       organizationService as any,
       { getOrThrow: () => 1 } as any,
       redisLockProvider as any,
+      {} as any,
       {} as any,
       {} as any,
     )
@@ -247,6 +253,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any,
       {} as any,
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -294,6 +301,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any,
       {} as any,
+      {} as any,
     )
 
     await (action as BoxAction).run(box, lockCode)
@@ -330,6 +338,7 @@ describe('BoxStartAction image dispatch', () => {
       { getCode: jest.fn(async () => lockCode) } as any,
       {} as any,
       curatedImagePins as any,
+      {} as any,
     )
 
     await (action as BoxAction).run(box, lockCode)

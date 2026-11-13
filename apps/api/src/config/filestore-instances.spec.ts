@@ -1,4 +1,4 @@
-import { parseFilestoreInstances, selectFilestoreInstance } from './filestore-instances'
+import { parseFilestoreInstances } from './filestore-instances'
 
 describe('filestore instances configuration', () => {
   it('uses the temporary stage default when the variable is unset', () => {
@@ -46,29 +46,5 @@ describe('filestore instances configuration', () => {
       '{"instance":"ml-scratch","project_id":"other-project","zone":"us-east5-b"}]',
   ])('refuses invalid configuration %s', (raw) => {
     expect(() => parseFilestoreInstances({ FILESTORE_INSTANCES: raw })).toThrow('FILESTORE_INSTANCES')
-  })
-})
-
-describe('filestore instance hash selection', () => {
-  it('fails without candidates', () => {
-    expect(() => selectFilestoreInstance('volume-id', [])).toThrow('no Filestore instances are configured')
-  })
-
-  it('sorts instances by name before selecting', () => {
-    const instances = [
-      { instance: 'zebra', projectId: 'project', zone: 'us-east5-a' },
-      { instance: 'middle', projectId: 'project', zone: 'us-east5-b' },
-      { instance: 'apple', projectId: 'project', zone: 'us-east5-c' },
-    ]
-    expect(selectFilestoreInstance('a', instances)).toEqual(instances[0])
-  })
-
-  it('keeps a stable selection for one volume id', () => {
-    const instances = [
-      { instance: 'a', projectId: 'project-a', zone: 'us-east5-a' },
-      { instance: 'b', projectId: 'project-b', zone: 'us-east5-b' },
-      { instance: 'c', projectId: 'project-c', zone: 'us-east5-c' },
-    ]
-    expect(selectFilestoreInstance('volume-id', instances)).toEqual(selectFilestoreInstance('volume-id', instances))
   })
 })

@@ -68,6 +68,7 @@ function makeService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    noop,
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -208,6 +209,7 @@ function makeNetworkTunnelService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    noop,
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',

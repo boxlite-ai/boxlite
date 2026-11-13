@@ -57,3 +57,7 @@ export class Volume {
     return `boxlite-volume-${this.id}`
   }
 }
+
+export function isFilestoreVolume<T extends Pick<Volume, 'instance'>>(volume: T): volume is T & { instance: string } {
+  return Boolean(volume.instance)
+}

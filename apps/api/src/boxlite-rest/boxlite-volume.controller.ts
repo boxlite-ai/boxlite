@@ -16,6 +16,7 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { VolumeAccessGuard } from '../box/guards/volume-access.guard'
 import { VolumeState } from '../box/enums/volume-state.enum'
+import { isFilestoreVolume } from '../box/entities/volume.entity'
 
 type RestVolumeSummary = {
   id: string
@@ -100,7 +101,7 @@ export class BoxliteVolumeController {
       id: volume.id,
       name: volume.name,
       state: volume.state,
-      storage_backend: volume.instance ? 'filestore' : 'object_storage',
+      storage_backend: isFilestoreVolume(volume) ? 'filestore' : 'object_storage',
       created_at: volume.createdAt.toISOString(),
       ...(volume.instance ? { instance: volume.instance } : {}),
     }

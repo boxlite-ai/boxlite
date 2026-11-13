@@ -6008,18 +6008,8 @@ components:
           description: Filestore instance logical name selected from the API configuration
           example: boxlite-dev-shared
           type: string
-        server:
-          description: NFS server address resolved from GCP Filestore
-          example: 10.0.0.7
-          type: string
-        export:
-          description: NFS export path on the server
-          example: /vol1
-          type: string
       required:
-      - export
       - instance
-      - server
       type: object
     BoxVolume:
       example:

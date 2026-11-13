@@ -72,12 +72,14 @@ data copies.
 ## Runtime flow
 
 `apps/api/src/config/filestore-instances.ts` parses `FILESTORE_INSTANCES` as instance objects.
-`VolumeService.enqueueCreation` selects an explicit name or hashes the sorted list, then
-uses `FilestoreInstanceResolver` to verify the name and discover its current GCP mount
-target. `BoxService.create` calls the same resolver before dispatching a box mount.
+`FilestoreInstanceResolver` owns deterministic placement and GCP discovery.
+`VolumeService.enqueueCreation` selects an explicit name or hashes the sorted list through
+that resolver. `BoxService.create` and `BoxStartAction` resolve the current mount target
+before each supported create or start dispatch.
 
 The runner receives the resolved `FilestoreRef` and mounts `server:export` with the
-pinned NFSv4.1 and hard options.
+pinned NFSv4.1 and hard options. Instance names use the same path-safety grammar on the
+runner, and Filestore volumes reject `subpath` rather than silently ignoring it.
 
 ## Configuration
 
@@ -176,10 +178,17 @@ should be a separate reviewed contract, not hidden inside an instance-name list.
 Filestore volume `READY` immediately, exactly as the current implementation does. No IP
 or export is persisted in the public Volume row or database record.
 
-`BoxService.create` resolves every referenced volume's instance through the new resolver
-before dispatching. It then produces the same internal `filestore` reference that the
-runner already consumes. A failed lookup fails the box create loudly rather than allowing
-the runner to discover an invalid mount.
+`BoxService.create` resolves every referenced volume's instance through the resolver
+before dispatching. `BoxStartAction` does the same when it rebuilds create or start
+metadata, so recreating an instance under the same name cannot leave a restart pinned to
+its previous address. A failed lookup fails the dispatch loudly rather than allowing the
+runner to discover an invalid mount.
+
+Public Box responses expose only the logical instance name. The resolved server and
+export stay inside dispatch payloads and persisted volume metadata; generated public
+clients therefore expose `instance` without those connection details. This corrects the
+implementation to match the spec-first contract rather than adding fields to that
+contract.
 
 The resolver keeps successful responses in memory for 60 seconds, keyed by the full GCP
 resource name. This removes duplicate reads while one box create resolves multiple
@@ -256,3 +265,20 @@ Submitting FileStore sends only `{ "name": "...", "storageBackend": "filestore" 
 server assigns and resolves the instance. The success copy says the volume was created,
 because FileStore volumes are `READY` immediately. The list shows only the backend name,
 not the assigned instance; operators can inspect that fact through the API if needed.
+
+## Hardening verification
+
+The focused API suites cover stale-target rediscovery, public-response confidentiality,
+validation before GCP calls, dispatch mapping, placement, and lifecycle behavior: 347/347
+tests passed. With production changes reverted and only the regression tests retained,
+the stale-target, public-response, duplicate-name, and suspended-organization cases all
+failed for their original reasons. A test-only constructor adapter preserved the old
+signature during that run and was removed before the passing run.
+
+Runner tests prove invalid instance names and Filestore `subpath` are rejected before
+mount work. Both failed against the unguarded implementation and passed after the fix.
+The complete `pkg/boxlite` package passed afterward. The full runner suite also ran its
+unrelated `TestIntegrationExecutionInventoryRecoveryHTTP` case, which failed in
+`pkg/api/controllers`; that execution-inventory failure is outside this design.
+
+`make build:apps:api` passed. No live Filestore instance was mutated for these checks.

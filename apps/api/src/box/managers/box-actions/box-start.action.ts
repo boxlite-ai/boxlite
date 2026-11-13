@@ -19,6 +19,8 @@ import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
+import { boxVolumeForDispatch } from '../../utils/box-volume.util'
+import { FilestoreInstanceResolver } from '../../services/filestore-instance.resolver'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
 
@@ -34,6 +36,7 @@ export class BoxStartAction extends BoxAction {
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
     private readonly curatedImagePins: CuratedImagePinService,
+    private readonly filestoreInstanceResolver: FilestoreInstanceResolver,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
@@ -74,19 +77,7 @@ export class BoxStartAction extends BoxAction {
 
     const organization = await this.organizationService.findOne(box.organizationId)
 
-    const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
-    if (box.volumes?.length) {
-      metadata['volumes'] = JSON.stringify(
-        // filestore rides along so a Start after host reboot can re-mount the
-        // NFS instance from the same metadata the create used.
-        box.volumes.map((v) => ({
-          volumeId: v.volumeId,
-          mountPath: v.mountPath,
-          subpath: v.subpath,
-          ...(v.filestore ? { filestore: v.filestore } : {}),
-        })),
-      )
-    }
+    const metadata = await this.volumeMetadata(box, { ...organization?.boxMetadata })
 
     // A tenant's image was pinned by the resolver when the box was created. A
     // curated one keeps its tag on the box — the warm pool matches on it — and
@@ -127,24 +118,30 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
-    if (box.volumes?.length) {
-      metadata['volumes'] = JSON.stringify(
-        // Same shape as the create-side metadata above: a Start must be able
-        // to rebuild every volume reference the box was created with.
-        box.volumes.map((v) => ({
-          volumeId: v.volumeId,
-          mountPath: v.mountPath,
-          subpath: v.subpath,
-          ...(v.filestore ? { filestore: v.filestore } : {}),
-        })),
-      )
-    }
+    const metadata = await this.volumeMetadata(box, { ...organization?.boxMetadata })
 
     await runnerAdapter.startBox(box.id, box.authToken, metadata)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN
+  }
+
+  private async volumeMetadata(box: Box, metadata: Record<string, string>): Promise<Record<string, string>> {
+    if (!box.volumes?.length) return metadata
+
+    const volumes = await Promise.all(
+      box.volumes.map(async (volume) => {
+        const dispatch = boxVolumeForDispatch(volume)
+        if (!volume.filestore) return dispatch
+
+        const target = await this.filestoreInstanceResolver.resolve(volume.filestore.instance, 'configured')
+        return {
+          ...dispatch,
+          filestore: { instance: volume.filestore.instance, ...target },
+        }
+      }),
+    )
+    return { ...metadata, volumes: JSON.stringify(volumes) }
   }
 
   //  used to check if box is started on runner and update box state accordingly

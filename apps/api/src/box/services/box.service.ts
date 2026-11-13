@@ -6,12 +6,14 @@
 
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { requestedMemoryMib } from '../utils/memory-allocation'
-import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException, Optional } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager, Raw } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
+import { boxVolumeForDispatch } from '../utils/box-volume.util'
+import { isFilestoreVolume } from '../entities/volume.entity'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
@@ -211,7 +213,7 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
-    @Optional() private readonly filestoreInstanceResolver?: FilestoreInstanceResolver,
+    private readonly filestoreInstanceResolver: FilestoreInstanceResolver,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -372,16 +374,18 @@ export class BoxService {
             // the tenant-controlled passthrough the resolution exists to stop.
             throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
           }
-          const instance = resolved.instance
-            ? await this.filestoreInstanceResolver!.resolve(resolved.instance, 'configured')
+          const instance = isFilestoreVolume(resolved)
+            ? await this.filestoreInstanceResolver.resolve(resolved.instance, 'configured')
             : undefined
-          resolvedVolumes.push({
-            ...volume,
-            volumeId: resolved.id,
-            ...(instance
-              ? { filestore: { instance: resolved.instance, server: instance.server, export: instance.export } }
-              : {}),
-          })
+          resolvedVolumes.push(
+            boxVolumeForDispatch({
+              ...volume,
+              volumeId: resolved.id,
+              ...(instance
+                ? { filestore: { instance: resolved.instance, server: instance.server, export: instance.export } }
+                : {}),
+            }),
+          )
         }
         createBoxDto.volumes = resolvedVolumes
       } else if (image && !needsFreshBox) {

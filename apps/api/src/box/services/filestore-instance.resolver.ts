@@ -1,5 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common'
+import { createHash } from 'crypto'
 import { CloudFilestoreManagerClient } from '@google-cloud/filestore'
+import type { FilestoreInstanceConfig } from '../../config/filestore-instances'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { ServiceUnavailableException } from '@nestjs/common'
@@ -39,6 +41,17 @@ export class FilestoreInstanceResolver {
     private readonly configService: TypedConfigService,
     @Optional() private readonly clientFactory?: () => FilestoreInstanceLookup,
   ) {}
+
+  select(volumeId: string): FilestoreInstanceConfig {
+    const instances = this.configService.getOrThrow('volume.filestoreInstances').instances
+    if (!instances.length) throw new ServiceUnavailableException('Filestore is not configured')
+
+    const sorted = [...instances].sort((left, right) =>
+      left.instance === right.instance ? 0 : left.instance < right.instance ? -1 : 1,
+    )
+    const digest = createHash('sha256').update(volumeId).digest()
+    return sorted[digest.readUInt32BE(0) % sorted.length]
+  }
 
   async resolve(instanceName: string, source: FilestoreLookupSource): Promise<ResolvedFilestoreInstance> {
     const config = this.configService.getOrThrow('volume.filestoreInstances')

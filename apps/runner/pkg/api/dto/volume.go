@@ -21,9 +21,8 @@ type VolumeDTO struct {
 // piece the public API request or the persisted Volume row ever carries.
 // Server and Export are resolved by the API from GCP and travel inside the
 // internal dispatch DTO and the box's persisted volume metadata; the runner
-// consumes them as given. Because only the name is persisted across box
-// restarts, a NEW box create re-discovers the instance's current address;
-// the Start/recovery path replays the address persisted with the box.
+// consumes them as given. Every create, Start, and recovery dispatch resolves
+// the instance's current address before sending this reference.
 type FilestoreRef struct {
 	Instance string `json:"instance"`
 	// Server and Export name the NFS target the API resolved for Instance.

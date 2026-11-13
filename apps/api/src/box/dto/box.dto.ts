@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiHideProperty, ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
 import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.constant'
@@ -16,6 +16,7 @@ import { NetworkInfoResponseDto } from './network-info.dto'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { reportedBoxState } from '../utils/box-state.util'
 import { upstreamRefOf } from '../../image/utils/image-ref.util'
+import { boxVolumeForPublic } from '../utils/box-volume.util'
 
 @ApiSchema({ name: 'BoxProgress' })
 export class BoxProgressDto {
@@ -38,12 +39,9 @@ export class BoxProgressDto {
 /**
  * The filestore reference of a box volume. `instance` is the logical name the
  * Volume row persists; `server`/`export` are what the API resolves from GCP at
- * dispatch time. The
- * address travels only inside the internal dispatch DTO and the box's
- * persisted volume metadata — the public API request and response never carry
- * it. Because the API configuration stores only names, recreating an instance
- * under the same name leaves historical volume rows unchanged; the next
- * dispatch discovers its current address.
+ * dispatch time. The address travels only inside internal dispatch and persisted
+ * volume metadata. Public responses expose only `instance`; every dispatch
+ * discovers the current address.
  */
 @ApiSchema({ name: 'BoxVolumeFilestoreRef' })
 export class BoxVolumeFilestoreRef {
@@ -53,16 +51,10 @@ export class BoxVolumeFilestoreRef {
   })
   instance: string
 
-  @ApiProperty({
-    description: 'NFS server address resolved from GCP Filestore',
-    example: '10.0.0.7',
-  })
+  @ApiHideProperty()
   server: string
 
-  @ApiProperty({
-    description: 'NFS export path on the server',
-    example: '/vol1',
-  })
+  @ApiHideProperty()
   export: string
 }
 
@@ -430,7 +422,7 @@ export class BoxDto {
       privileged: box.privileged,
       network: NetworkInfoResponseDto.fromBox(box),
       labels: box.labels,
-      volumes: box.volumes,
+      volumes: box.volumes?.map(boxVolumeForPublic),
       state,
       desiredState: box.desiredState,
       errorReason: box.errorReason,

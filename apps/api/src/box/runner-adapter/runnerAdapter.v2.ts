@@ -19,6 +19,7 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerState } from '../enums/runner-state.enum'
+import { boxVolumeForDispatch } from '../utils/box-volume.util'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -169,12 +170,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,
-      volumes: box.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-        ...(volume.filestore ? { filestore: volume.filestore } : {}),
-      })),
+      volumes: box.volumes?.map(boxVolumeForDispatch),
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,
         value: secret.value,

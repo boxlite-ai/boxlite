@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ import (
 const volumeMountPrefix = "boxlite-volume-"
 const filestoreMountPrefix = "boxlite-filestore-"
 const volumeMountRecordDir = ".boxlite-volume-mounts"
+
+var filestoreInstanceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // How long a mount command may run before it is killed. The request context
 // cannot serve as this bound: Create is handed an undeadlined gin request
@@ -228,6 +231,12 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 		)
 	}
 	ref := vol.Filestore
+	if !filestoreInstanceNamePattern.MatchString(ref.Instance) {
+		return volumeMount{}, fmt.Errorf("invalid filestore instance %q: must match %s", ref.Instance, filestoreInstanceNamePattern)
+	}
+	if vol.Subpath != nil && *vol.Subpath != "" {
+		return volumeMount{}, fmt.Errorf("subpath is not supported for filestore volumes")
+	}
 
 	rootPath := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+ref.Instance)
 
@@ -255,10 +264,6 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 		return volumeMount{}, fmt.Errorf("failed to chmod filestore data directory %s: %s", dataDir, err)
 	}
 
-	// subpath does not apply to filestore volumes: the public API cannot send
-	// one for this variant, so nothing can obtain it today. If a future
-	// caller wants it, it joins under dataDir with the same outside-the-mount
-	// guard the object-storage branch uses.
 	mount := volumeMount{
 		hostPath:          dataDir,
 		mountPath:         vol.MountPath,
