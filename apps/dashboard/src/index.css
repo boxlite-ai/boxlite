@@ -664,3 +664,67 @@ body {
 .dark .quickstart-code-surface .code-scroll-edge {
   --scroll-surface: 0 0% 7%;
 }
+
+.quota-ticks {
+  display: inline-grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  width: 64px;
+  height: 8px;
+  flex: none;
+  vertical-align: middle;
+}
+.quota-tick {
+  position: relative;
+  background: hsl(var(--border));
+}
+.quota-tick > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+/* Resource icon animations affect their accents only; existing row feedback is independent. */
+.resource-state-accent,
+.resource-state-trace {
+  stroke: var(--resource-state-color);
+}
+.resource-state-face,
+.resource-state-light {
+  fill: var(--resource-state-color);
+  stroke: none;
+}
+.resource-state-face {
+  opacity: 0.07;
+}
+.resource-state-trace {
+  stroke-dasharray: 8 44;
+  animation: resource-state-trace 2.8s linear infinite;
+}
+.resource-state-breathe {
+  animation: resource-state-breathe 2.6s ease-in-out infinite;
+}
+@keyframes resource-state-trace {
+  to {
+    stroke-dashoffset: -52;
+  }
+}
+@keyframes resource-state-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .resource-state-trace,
+  .resource-state-breathe {
+    animation: none;
+  }
+  .resource-state-trace {
+    stroke-dashoffset: -7;
+  }
+}

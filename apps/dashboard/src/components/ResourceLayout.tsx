@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button'
 import { type ComponentProps, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Container, Search } from '@/components/ui/icon'
@@ -79,5 +80,16 @@ export function ResourceFilter({
       />
       <span className="font-mono text-meta tabular-nums text-muted-foreground">{count}</span>
     </div>
+  )
+}
+
+/** Filter misses share one recovery action and never imply that the inventory is empty. */
+export function ResourceFilterEmptyState({ title, onClear }: { title: string; onClear: () => void }) {
+  return (
+    <ResourceEmptyState title={title} icon={<Search />} description="Try another search or clear your filter.">
+      <Button type="button" variant="outline" size="sm" onClick={onClear}>
+        Clear filter
+      </Button>
+    </ResourceEmptyState>
   )
 }
