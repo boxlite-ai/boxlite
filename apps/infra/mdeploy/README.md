@@ -186,8 +186,26 @@ exist in GHCR; the workflow imports their digests into the target stage's AR/ECR
 enforces that stage's scan policy before deployment. Missing GHCR images stop the run and print
 a manual `mbuild-release` dispatch command. Deployment never starts a release build.
 GCP imports and scans use `GCP_IMAGE_PUBLISHER`; the job restores `GCP_DEPLOYER` before image verification and apply.
-Its `components` input
-selects artifact preparation; it is not a promise that the resource graph targets only those services.
+It is the public rollout entrypoint; the internal CLI receives the same `components` selection for preview and apply.
+
+| Selection | GCP deployment scope |
+| --- | --- |
+| `api` | Existing Cloud Run `Api` service and API Secret Manager read grants; image/env changes create a new revision |
+| `runner` | Existing Runner OS Policy assignments and artifact-read grant; retains canary-before-fleet rollout and waits |
+| `api+runner` (default) | Full infrastructure graph, including shared resources and topology changes |
+
+AWS/SST supports only `api+runner`; individual API/Runner selection fails before artifact preparation.
+GCP scoped updates require an existing workload and do not bootstrap a new stack.
+Runner selection refuses changed host counts, labels or policy membership; reconcile those through a full deployment.
+VMs, disks, proxy, database and other shared resources are outside the individual component targets.
+The API and Runner keep their existing environment groups and assembly; changing a store value alone does not update a running workload.
+For a configuration-only change, select its component and reuse the deployed artifact ref.
+
+Pulumi still evaluates the full inline program and validates its inputs, using recorded outputs for untargeted dependencies.
+New API secret references and a Runner release-to-build transition include their required read grants, even when absent from old state.
+Shared infrastructure changes require a full deployment; scoped updates skip the unrelated DNS/certificate preflight.
+Runner-only runs skip container-image verification; API-only release runs require a published release but not Runner attachments.
+Local provider/target tests do not prove live Cloud Run health or OS Config host compliance.
 
 A commit or open PR merge commit is accepted for `dev` and `stage`; both may use candidate workflow branches.
 `prod` requires a published release; release dispatches run from `main`.
@@ -217,6 +235,7 @@ npm run mdeploy -- --stage dev --refresh
 | `--refresh`          | Reconcile deployment state with the cloud; protected stages require `--confirm` |
 | `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage               |
 | `--local-env`        | Read ambient environment instead of the encrypted stage store                   |
+| `--components`       | Internal workflow selection: `api+runner` by default; GCP `api`/`runner` accept preview/apply only |
 
 `--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary

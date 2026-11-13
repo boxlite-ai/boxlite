@@ -56,7 +56,8 @@ Stage also accepts stable tags as commit references: it resolves the tag once, t
 It does not require a GitHub Release or use its published Runner assets.
 Dev/prod published stable releases still run from `main`; RC inputs remain refused.
 Dev/prod import existing release images from GHCR; stage is an independent deployment target.
-Production still requires a stable release on main, its published Runner assets and protected apply confirmation.
+Production requires a stable release on main and protected apply confirmation.
+Selections that include Runner also require its published tarball and checksum.
 Example stage preview after its prerequisites and artifacts are prepared:
 
 ```bash
@@ -64,8 +65,23 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='<full-main-sha
 gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f components=api+runner -f apply=false
 ```
 
-Run a preview of the chosen ref first. `components=api` or `runner` narrows artifact preparation,
-not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
+Run a preview of the chosen ref first. On GCP, `components=api` deploys the API image and its existing API environment
+through a new Cloud Run revision; `components=runner` converges the binary and Runner environment through OS Policies.
+Both include the workload's required read grants and leave unrelated infrastructure outside the targets.
+The default `api+runner` retains full-stack deployment; AWS/SST supports only that selection for now.
+Individual selection requires existing workloads; Runner fleet changes require a full deployment.
+Existing stage protection, configuration checks and per-stage queuing still apply; do not cancel a healthy apply to start another.
+
+Use the same public workflow for individual previews, after preparing the stage declaration:
+
+```bash
+gh workflow run mdeploy-all.yml --ref main -f stage=dev -f ref='<full-main-sha>' -f components=api -f apply=false
+gh workflow run mdeploy-all.yml --ref main -f stage=dev -f ref='<full-main-sha>' -f components=runner -f apply=false
+```
+
+For environment changes alone, reuse the deployed component's ref; its existing env group remains the configuration source.
+The internal CLI receives `--components` from the workflow; no separate public deployment workflow is introduced.
+
 Image releases are published to GHCR through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 Release deployment imports these existing images into the target stage's AR/ECR repository,
 verifies manifest digests and enforces the target scan policy. It never starts a release build.

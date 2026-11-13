@@ -13,6 +13,7 @@ import { resolveScope } from 'mstage/scope'
 import { run as mstage } from 'mstage/run'
 import { resolveDeployTarget } from './deploy.ts'
 import type { Intent } from './deploy.ts'
+import { deploymentComponents } from './components.ts'
 import { ambientEnvironment, assertAddressesAreNotSpent, fetchStageEnvironment, type StageEnvironment } from './env.ts'
 
 export class UsageError extends Error {
@@ -27,6 +28,7 @@ const USAGE = [
   '       npm run mdeploy -- --stage <stage> --diff',
   '       npm run mdeploy -- --stage <stage> --refresh',
   '       npm run mdeploy -- --stage <stage> --remove --confirm',
+  '       [--components api+runner|api|runner] (GCP scoped preview/apply only)',
   '',
   '--refresh reconciles the state with the cloud and clears the operations an',
   'interrupted run left pending. It changes no resource; it rewrites what this',
@@ -34,7 +36,7 @@ const USAGE = [
 ].join('\n')
 
 /** mdeploy's own switches. mstage parses them but never advertises them. */
-const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove', 'refresh'] }
+const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove', 'refresh'], values: ['components'] }
 
 export type RunInput = {
   argv: string[]
@@ -68,6 +70,15 @@ export const run = async ({
 
   const config = loadConfig({ cwd, environment })
   const scope = resolveScope({ options: options as Options, config, environment })
+  const named = [
+    options.diff === true && 'diff',
+    options.remove === true && 'remove',
+    options.refresh === true && 'refresh',
+  ].filter(Boolean) as Intent[]
+  if (named.length > 1)
+    throw new UsageError(`${named.map((one) => `--${one}`).join(' and ')} ask for different things; name one`)
+  const intent: Intent = named[0] ?? 'deploy'
+  const components = deploymentComponents({ value: options.components, home: scope.home, intent })
 
   /*
    * Ask mstage first: a deploy that starts without a usable session fails later
@@ -86,13 +97,6 @@ export const run = async ({
     log,
   })
   if (signedIn !== 0) throw new UsageError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
-  // One intent, named once. Three switches rather than two, so the pair test
-  // this replaces would have let `--diff --refresh` through.
-  const named = [options.diff === true && 'diff', options.remove === true && 'remove', options.refresh === true && 'refresh'].filter(
-    Boolean,
-  ) as Intent[]
-  if (named.length > 1) throw new UsageError(`${named.map((one) => `--${one}`).join(' and ')} ask for different things; name one`)
-  const intent: Intent = named[0] ?? 'deploy'
   // A protected stage is asked before its state is rewritten, for the reason it
   // is asked before a rollout: the resources are the same ones, and a refresh
   // that reads a resource as gone is the first half of recreating it.
@@ -141,5 +145,5 @@ export const run = async ({
   // into a CI log.
   log(`environment from ${stageEnvironment.source}${names.length > 0 ? `: ${names.join(', ')}` : ''}`)
 
-  return target.run({ intent, stageEnvironment: stageEnvironment.values, log })
+  return target.run({ intent, components, stageEnvironment: stageEnvironment.values, log })
 }

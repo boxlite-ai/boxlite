@@ -143,7 +143,7 @@ const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
  * fleet that silently never upgrades.
  */
 const RUNNER_LABEL = 'boxlite-runner'
-const runnerLabelValue = (controlPlaneRunnerName: string): string =>
+export const runnerLabelValue = (controlPlaneRunnerName: string): string =>
   controlPlaneRunnerName.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
 
 /**
@@ -692,7 +692,8 @@ udevadm trigger --name-match=kvm || true`,
           skipAwaitRollout: false,
         },
         {
-          dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])],
+          // Scoped updates skip the VM resources, so artifact access is also a direct prerequisite.
+          dependsOn: [...instances, ...dependsOn, ...staged, ...(previousBatch ? [previousBatch] : [])],
           customTimeouts: { create: '40m', update: '40m' },
         },
       )
