@@ -77,6 +77,16 @@ afterEach(() => {
 })
 
 describe('API key list filter', () => {
+  it('shows failure recovery instead of empty-account guidance after a failed initial request', async () => {
+    state.loaded = false
+    state.failed = true
+    await render()
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe('Could not load API keys')
+    expect(document.body.textContent).not.toContain('Create a key to get started.')
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')!
+    await act(async () => retry.click())
+    expect(state.refetch).toHaveBeenCalledTimes(1)
+  })
   it('matches names ignoring case and surrounding whitespace, and counts visible results', async () => {
     await render()
     const input = await search('  QUICKSTART  ')
@@ -103,6 +113,7 @@ describe('API key list filter', () => {
     expect(document.body.textContent).toContain('Create a key to get started.')
     expect(document.body.textContent).not.toContain('No API keys match your search')
     expect([...document.querySelectorAll('button')].some((button) => button.textContent === 'Create Key')).toBe(true)
+    expect(document.querySelector('.resource-empty a[href^="https://docs.boxlite.ai"]')).toBeNull()
   })
 
   it('revokes the matching key after filtering without changing its identity', async () => {

@@ -6,7 +6,7 @@
 import { TechnicalText } from '@/components/TechnicalText'
 import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 
-import { ResourceEmptyState, ResourceIdentity } from '@/components/ResourceLayout'
+import { ResourceFilterEmptyState, ResourceEmptyState, ResourceIdentity } from '@/components/ResourceLayout'
 import { isCheckpointBoxIdle } from '@/lib/checkpoints'
 import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -212,22 +212,18 @@ export function BoxTable({
     )
   }
 
-  const emptyState = (
+  const emptyState = hasFilter ? (
+    <ResourceFilterEmptyState
+      title="No matching Boxes"
+      onClear={() => onFiltersChange({ ...filters, idOrName: undefined })}
+    />
+  ) : (
     <ResourceEmptyState
-      title={hasFilter ? 'No matching Boxes' : 'No Boxes yet.'}
+      title="No Boxes yet."
       icon={<Container className="size-6" />}
-      description={
-        hasFilter
-          ? 'Try another name or clear your filter.'
-          : 'Your agent creates them through the SDK, or you can make one by hand.'
-      }
+      description="Your agent creates them through the SDK, or you can make one by hand."
     >
-      {hasFilter && (
-        <AsciiButton size="sm" onClick={() => onFiltersChange({ ...filters, idOrName: undefined })}>
-          Clear filter
-        </AsciiButton>
-      )}
-      {!hasFilter && onOpenQuickstart && (
+      {onOpenQuickstart && (
         <button type="button" onClick={onOpenQuickstart} className="resource-guide-link">
           Open Quickstart →
         </button>

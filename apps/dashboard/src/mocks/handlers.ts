@@ -10,6 +10,7 @@ import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handle
 import { sshHandlers } from './ssh-handlers'
 import { tunnelHandlers } from './tunnel-handlers'
 import { ciHandlers } from './ci-handlers'
+import { resourceStateHandlers } from './resource-state-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -91,6 +92,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...resourceStateHandlers(API_URL),
   ...ciHandlers(),
   ...sshHandlers,
   ...tunnelHandlers,
