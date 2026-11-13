@@ -104,6 +104,15 @@ const watch = ({
    * be counted over the stretch those strikes actually arrive in.
    */
   windowSeconds?: number
+  /**
+   * How long the aligned value must stay above the threshold before the
+   * policy fires. Defaults to `periods * windowSeconds`, which suits
+   * request-driven alarms whose metric arrives continuously. An alarm whose
+   * signal is paced — one failure line per cron round — cannot sustain that
+   * duration; it needs `"0s"` so a single aligned period crossing the
+   * threshold is enough to trigger.
+   */
+  durationSeconds?: number
 }): any[] => {
   const metric = new gcp.logging.Metric(`${resourceName}Metric`, {
     name: metricName,
@@ -124,7 +133,7 @@ const watch = ({
           // One below the threshold with a strict comparison, so "at least N"
           // means the same thing here as CloudWatch's GreaterThanOrEqual.
           thresholdValue: threshold.threshold - 1,
-          duration: `${threshold.periods * windowSeconds}s`,
+          duration: `${durationSeconds ?? threshold.periods * windowSeconds}s`,
           aggregations: [{ alignmentPeriod: `${windowSeconds}s`, perSeriesAligner: 'ALIGN_DELTA' }],
         },
       },
@@ -219,6 +228,7 @@ export const gcpAlarmProvider =
       threshold: request.runnersDiskExpansionFailing,
       description: 'Runner data-disk expansions are failing',
       notificationChannels,
+      durationSeconds: 0,
       /*
        * A quarter-hour window, not the default minute. The expansion loop is
        * paced by the control plane's cron: at most one attempt — so one
