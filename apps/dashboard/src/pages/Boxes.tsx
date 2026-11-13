@@ -1,4 +1,9 @@
-import { ResourceFilter } from '@/components/ResourceLayout'
+import {
+  ResourceFilter,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+} from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -8,10 +13,10 @@ import { ResourceFilter } from '@/components/ResourceLayout'
 import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
 import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { OrganizationSuspendedError } from '@/api/errors'
-import { AsciiButton, StatCard } from '@/components/ascii'
+import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
-import { Plus } from '@/components/ui/icon'
+import { Activity, Container, Plus, Square } from '@/components/ui/icon'
 
 import {
   AlertDialog,
@@ -166,16 +171,12 @@ const Boxes: React.FC = () => {
     isLoading: boxesDataIsLoading,
     isPlaceholderData: boxesDataIsPlaceholderData,
     error: boxesDataError,
+    isFetching: boxesFetching,
+    refetch: refetchBoxes,
   } = useBoxes(queryKey, queryParams)
   const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
   // Zero boxes and no filter narrowing the view: nothing to list, so the page
   // leads with how boxes get made.
-
-  useEffect(() => {
-    if (boxesDataError) {
-      handleApiError(boxesDataError, 'Failed to fetch boxes')
-    }
-  }, [boxesDataError])
 
   const updateBoxInCache = useCallback(
     (boxId: string, updates: Partial<Box>) => {
@@ -642,7 +643,7 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  // Fleet stat cards — real data, independent of the table's current filter/page.
+  // Fleet overview — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
 
   // Counts come straight from the paginated endpoint's `total` (limit=1, no full fetch).
@@ -728,7 +729,7 @@ const Boxes: React.FC = () => {
             <button
               type="button"
               onClick={() => navigate(RoutePath.QUICKSTART)}
-              className="inline-flex min-h-6 items-center text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+              className="resource-guide-link inline-flex min-h-6 items-center"
             >
               First time here? Follow Quickstart →
             </button>
@@ -737,17 +738,36 @@ const Boxes: React.FC = () => {
       </div>
 
       {(totalBoxesQuery.data ?? 0) >= FLEET_THRESHOLD && (
-        <div className="mb-6 grid shrink-0 grid-cols-3 gap-3" aria-label="Boxes overview">
-          <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
-          <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
-          <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
-        </div>
+        <dl
+          className="mb-4 grid shrink-0 grid-cols-3 border-y border-border bg-gradient-to-r from-card/80 to-card/20 py-3"
+          aria-label="Boxes overview"
+        >
+          {[
+            { label: 'Total boxes', value: totalBoxesDisplay, icon: Container, color: 'text-brand' },
+            { label: 'Running', value: runningBoxesDisplay, icon: Activity, color: 'text-success' },
+            { label: 'Stopped', value: stoppedBoxesDisplay, icon: Square, color: 'text-muted-foreground' },
+          ].map(({ label, value, icon: Icon, color }) => (
+            <div key={label} className="relative min-w-0 border-border px-3 sm:px-5 [&:not(:first-child)]:border-l">
+              <dt className="font-sans text-meta leading-4 tracking-[0.06em] text-muted-foreground">
+                {label}
+                <Icon
+                  aria-hidden="true"
+                  className={`absolute right-5 top-1/2 hidden size-[18px] -translate-y-1/2 sm:block ${color}`}
+                />
+              </dt>
+              <dd className="break-all font-mono text-section font-medium leading-6 tracking-tight tabular-nums sm:pr-7">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       )}
 
       {/* toolbar */}
       <div className="resource-toolbar">
         <ResourceFilter
           label="Filter boxes"
+          disabled={boxesDataIsLoading}
           value={filters.idOrName ?? ''}
           onChange={(value) => handleFiltersChange({ ...filters, idOrName: value || undefined })}
           count={boxesDataIsPlaceholderData ? '—' : (boxesData?.total ?? '—')}
@@ -769,44 +789,65 @@ const Boxes: React.FC = () => {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
-        <BoxTable
-          onCreateCheckpoint={
-            checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
-              ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
-              : undefined
-          }
-          boxIsLoading={boxIsLoading}
-          boxStateIsTransitioning={boxStateIsTransitioning}
-          handleStart={handleStart}
-          handleStop={handleStop}
-          handleDelete={(id: string) => {
-            setBoxToDelete(id)
-            setShowDeleteDialog(true)
-          }}
-          handleBulkDelete={handleBulkDelete}
-          handleBulkStart={handleBulkStart}
-          handleBulkStop={handleBulkStop}
-          data={boxesData?.items || []}
-          loading={boxesDataIsLoading}
-          isPageFetching={boxesDataIsPlaceholderData}
-          onRowClick={(box: Box) => {
-            navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
-          }}
-          pageCount={boxesData?.totalPages || 0}
-          totalItems={boxesData?.total || 0}
-          onPaginationChange={handlePaginationChange}
-          pagination={{
-            pageIndex: paginationParams.pageIndex,
-            pageSize: paginationParams.pageSize,
-          }}
-          sorting={sorting}
-          onSortingChange={handleSortingChange}
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          handleRecover={handleRecover}
-          onOpenQuickstart={() => navigate(RoutePath.QUICKSTART)}
-        />
+      <div className="resource-content mt-[14px]">
+        {boxesData === undefined ? (
+          boxesDataError ? (
+            <ResourceErrorState
+              title="Could not load Boxes"
+              retrying={boxesFetching}
+              onRetry={() => void refetchBoxes()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading Boxes…" />
+          )
+        ) : (
+          <>
+            {boxesDataError && (
+              <ResourceErrorNotice
+                title="Could not refresh Boxes. Showing previously loaded data."
+                retrying={boxesFetching}
+                onRetry={() => void refetchBoxes()}
+              />
+            )}
+            <BoxTable
+              onCreateCheckpoint={
+                checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
+                  ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
+                  : undefined
+              }
+              boxIsLoading={boxIsLoading}
+              boxStateIsTransitioning={boxStateIsTransitioning}
+              handleStart={handleStart}
+              handleStop={handleStop}
+              handleDelete={(id: string) => {
+                setBoxToDelete(id)
+                setShowDeleteDialog(true)
+              }}
+              handleBulkDelete={handleBulkDelete}
+              handleBulkStart={handleBulkStart}
+              handleBulkStop={handleBulkStop}
+              data={boxesData?.items || []}
+              loading={boxesDataIsLoading}
+              isPageFetching={boxesDataIsPlaceholderData}
+              onRowClick={(box: Box) => {
+                navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
+              }}
+              pageCount={boxesData?.totalPages || 0}
+              totalItems={boxesData?.total || 0}
+              onPaginationChange={handlePaginationChange}
+              pagination={{
+                pageIndex: paginationParams.pageIndex,
+                pageSize: paginationParams.pageSize,
+              }}
+              sorting={sorting}
+              onSortingChange={handleSortingChange}
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              handleRecover={handleRecover}
+              onOpenQuickstart={() => navigate(RoutePath.QUICKSTART)}
+            />
+          </>
+        )}
       </div>
 
       {checkpointSource && checkpointSource.organizationId === selectedOrganization?.id && (

@@ -457,10 +457,12 @@ describe('ApiClient.setBoxInboundMode', () => {
     const { ApiClient } = await import('./apiClient')
     const api = new ApiClient(config, 'tok')
 
-    await api.setBoxInboundMode('org-1', 'box-1', 'enabled')
+    const controller = new AbortController()
+    await api.setBoxInboundMode('org-1', 'box-1', 'enabled', controller.signal)
 
     expect(requests).toHaveLength(1)
     const [request] = requests
+    expect((request as { signal?: AbortSignal }).signal).toBe(controller.signal)
     expect(request.method).toBe('put')
     expect(request.baseURL).toBe('http://api.test/api')
     expect(request.url).toBe('/v1/org-1/boxes/box-1/network/inbound')
@@ -469,20 +471,26 @@ describe('ApiClient.setBoxInboundMode', () => {
   })
 })
 
-describe('ApiClient.getTunnelUrl', () => {
+describe('ApiClient.prepareBoxTunnel', () => {
   it('asks the /v1 tunnel route for a port, as the SDK does', async () => {
     vi.resetModules()
     const axios = (await import('axios')).default
     const requests: Array<{ method?: string; url?: string; params?: unknown }> = []
     axios.defaults.adapter = (async (cfg: never) => {
       requests.push(cfg)
-      return { data: { uri: 'https://3000-d-62.proxy.test' }, status: 200, statusText: '', headers: {}, config: cfg }
+      return {
+        data: { uri: 'https://3000-d-62.proxy.test', isPublic: true, token: null },
+        status: 200,
+        statusText: '',
+        headers: {},
+        config: cfg,
+      }
     }) as never
     const { ApiClient } = await import('./apiClient')
 
-    const uri = await new ApiClient(config, 'tok').getTunnelUrl('org-1', 'box-1', 3000)
+    const uri = await new ApiClient(config, 'tok').prepareBoxTunnel('org-1', 'box-1', 3000, true)
 
-    expect(uri).toBe('https://3000-d-62.proxy.test')
+    expect(uri).toEqual({ uri: 'https://3000-d-62.proxy.test', isPublic: true, token: null })
     expect(requests[0].method).toBe('post')
     expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/network/tunnel')
     expect(requests[0].params).toEqual({ port: 3000 })
@@ -560,4 +568,141 @@ it('sends organization-scoped onboarding requests with revisions and no generate
   expect(JSON.parse(requests[3].data)).toEqual({ text: 'Build a dashboard', revision: 1 })
   expect(JSON.parse(requests[4].data)).toEqual({ text: 'Build a dashboard', requestId: 'request-1' })
   expect(requests.every((r) => r.baseURL === 'http://api.test/api')).toBe(true)
+})
+
+describe('tunnel access contract', () => {
+  const token = `blt_${'a'.repeat(43)}`
+  const descriptor = { uri: 'https://3000-box.proxy.test', isPublic: false, token }
+  const configReply = { capabilities: { private_tunnels_enabled: true } }
+
+  it('checks live private capability before every prepare, preserves the descriptor and scopes all writes', async () => {
+    const requests: any[] = []
+    const api = await makeClient(
+      vi.fn(),
+      200,
+      (cfg: { url: string }) => (cfg.url === '/v1/config' ? configReply : descriptor),
+      requests,
+    )
+    await expect(api.prepareBoxTunnel('org/1', 'box/1', 3000, false)).resolves.toEqual(descriptor)
+    await api.prepareBoxTunnel('org/1', 'box/1', 3000, false)
+    expect(requests.map((r) => [r.method, r.url])).toEqual([
+      ['get', '/v1/config'],
+      ['post', '/v1/org%2F1/boxes/box%2F1/network/tunnel'],
+      ['get', '/v1/config'],
+      ['post', '/v1/org%2F1/boxes/box%2F1/network/tunnel'],
+    ])
+    expect(JSON.parse(requests[1].data)).toEqual({ isPublic: false })
+    expect(requests[1].params).toEqual({ port: 3000 })
+    expect(requests[1].headers.Authorization).toBe('Bearer tok')
+  })
+
+  it.each([{}, { capabilities: {} }, { capabilities: { private_tunnels_enabled: false } }])(
+    'never posts or falls back to public when capability is absent: %j',
+    async (body) => {
+      const requests: any[] = []
+      const api = await makeClient(vi.fn(), 200, body, requests)
+      await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).rejects.toMatchObject({ outcome: 'refused' })
+      expect(requests.map((r) => r.method)).toEqual(['get'])
+    },
+  )
+
+  it('does not submit after capability lookup fails or the scope is aborted', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 503, { message: 'unavailable' }, requests)
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).rejects.toThrow('Nothing was submitted')
+    expect(requests).toHaveLength(1)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, true, controller.signal)).rejects.toThrow()
+    expect(requests).toHaveLength(1)
+  })
+
+  it.each([
+    { ...descriptor, isPublic: true },
+    { uri: descriptor.uri },
+    { ...descriptor, token: null },
+    { ...descriptor, uri: 'javascript:alert(1)' },
+    { ...descriptor, uri: [descriptor.uri] },
+    { ...descriptor, uri: 'https://user:secret@example.test' },
+  ])('reports uncertain creation without retaining the invalid response: %j', async (body) => {
+    const api = await makeClient(vi.fn(), 200, (cfg: { url: string }) =>
+      cfg.url === '/v1/config' ? configReply : body,
+    )
+    const error = await api.prepareBoxTunnel('org-1', 'box-1', 3000, false).catch((e) => e)
+    expect(error.outcome).toBe('unknown')
+    expect(error.message).toContain('may be exposed')
+    expect(error.cause).toBeUndefined()
+    expect(JSON.stringify(error)).not.toContain(token)
+  })
+
+  it('accepts a masked token for an existing private tunnel without inventing a new secret', async () => {
+    const masked = { ...descriptor, token: `blt_${'*'.repeat(28)}abcd` }
+    const api = await makeClient(vi.fn(), 200, (cfg: { url: string }) =>
+      cfg.url === '/v1/config' ? configReply : masked,
+    )
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, false)).resolves.toEqual(masked)
+  })
+
+  it('surfaces an access-mode conflict without revoking or retrying', async () => {
+    const requests: any[] = []
+    const api = await makeClient(
+      vi.fn(),
+      409,
+      { message: 'Tunnel access mode differs; revoke it before recreating' },
+      requests,
+    )
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, true)).rejects.toThrow('different access mode')
+    expect(requests.map((r) => r.method)).toEqual(['post'])
+  })
+
+  it('revokes directly, without capabilities, inbound or readiness reads', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 204, undefined, requests)
+    await api.revokeBoxTunnel('org-1', 'box-1', 3000)
+    expect(requests.map((r) => [r.method, r.url, r.params])).toEqual([
+      ['delete', '/v1/org-1/boxes/box-1/network/tunnel', { port: 3000 }],
+    ])
+  })
+
+  it.each([0, 65536, 1.5, NaN])('rejects invalid port %s before any request', async (port) => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', port, false)).rejects.toThrow('1 to 65535')
+    await expect(api.revokeBoxTunnel('org-1', 'box-1', port)).rejects.toThrow('1 to 65535')
+    expect(requests).toHaveLength(0)
+  })
+})
+
+describe('tunnel request boundaries', () => {
+  it.each([1, 65535])('accepts boundary port %s with explicit public access', async (port) => {
+    const requests: any[] = []
+    const descriptor = { uri: 'https://port.proxy.test', isPublic: true, token: null }
+    const api = await makeClient(vi.fn(), 200, descriptor, requests)
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', port, true)).resolves.toEqual(descriptor)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].params).toEqual({ port })
+    expect(JSON.parse(requests[0].data)).toEqual({ isPublic: true })
+    expect(requests[0].timeout).toBe(30_000)
+  })
+
+  it.each([401, 403, 404, 409, 400])('classifies HTTP %s as refused after authentication recovery', async (status) => {
+    // A first 401 intentionally suspends while the shared interceptor redirects.
+    // Exercise the rejected response after that existing recovery attempt.
+    window.sessionStorage.setItem('boxlite.reauth-attempted', '1')
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), status, { message: 'Refused' }, requests)
+    await expect(api.prepareBoxTunnel('org-1', 'box-1', 3000, true)).rejects.toMatchObject({ outcome: 'refused' })
+    expect(requests).toHaveLength(1)
+    window.sessionStorage.removeItem('boxlite.reauth-attempted')
+  })
+
+  it('keeps a failed revocation uncertain and does not retry automatically', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 502, { message: 'Unavailable' }, requests)
+    await expect(api.revokeBoxTunnel('org-1', 'box-1', 3000)).rejects.toMatchObject({
+      outcome: 'unknown',
+      message: 'Could not confirm revocation. Retry revoking this port.',
+    })
+    expect(requests).toHaveLength(1)
+  })
 })

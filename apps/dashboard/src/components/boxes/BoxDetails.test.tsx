@@ -7,7 +7,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Box, BoxState } from '@boxlite-ai/api-client'
+import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import BoxDetails from './BoxDetails'
 
 const mocks = vi.hoisted(() => ({
@@ -50,6 +50,7 @@ vi.mock('react-oidc-context', () => ({
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
+    error: vi.fn(),
   },
 }))
 
@@ -60,7 +61,9 @@ vi.mock('@/components/OnboardingGuideDialog', () => ({
 // Owns its own mutations and needs an ApiProvider; these tests cover the detail
 // shell, and the network panel has its own stories.
 vi.mock('./BoxNetworkSection', () => ({
-  BoxNetworkSection: () => <div data-testid="network-section">Network settings</div>,
+  BoxNetworkSection: ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="network-section">Network settings{children}</div>
+  ),
 }))
 
 vi.mock('./BoxSshTab', async () => {
@@ -219,7 +222,8 @@ describe('BoxDetails overview', () => {
     expect(document.querySelector('[role="tab"]')).toBeNull()
     const network = document.querySelector('[data-testid="network-section"]')!
     const sshStatus = document.querySelector('[data-testid="ssh-status"]')!
-    expect(network.nextElementSibling?.contains(sshStatus)).toBe(true)
+    expect(sshStatus).not.toBeNull()
+    expect(network.contains(sshStatus)).toBe(true)
     await act(async () => ssh.click())
     expect(document.body.textContent).toContain('SSH controls')
     await act(async () => ssh.click())
@@ -254,7 +258,7 @@ describe('BoxDetails overview', () => {
       ['Terminal', '/dashboard/boxes/box-1/terminal', null],
     ])
     expect(document.querySelector('[aria-label="Box configuration"]')).not.toBeNull()
-    expect(document.querySelector('[aria-label="Box network and activity"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Box network"]')).not.toBeNull()
   })
 
   it('groups resource values with their units and preserves the full image reference', async () => {
@@ -281,6 +285,16 @@ describe('BoxDetails overview', () => {
     await renderBoxDetails()
 
     expect(document.body.textContent).toContain('box-one')
+  })
+
+  it('names preparing an image consistently with the list', async () => {
+    mocks.box = {
+      ...makeRunningBox(),
+      state: BoxState.CREATING,
+      progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
+    }
+    await renderBoxDetails()
+    expect(document.body.textContent).toContain('Pulling image')
   })
 
   // A box stores an opaque volume handle, so the mount list is only readable

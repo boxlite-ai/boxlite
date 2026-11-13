@@ -46,6 +46,14 @@ describe('CI page', () => {
     disk: 10,
   }
   beforeEach(() => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe = vi.fn()
+        unobserve = vi.fn()
+        disconnect = vi.fn()
+      },
+    )
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     vi.resetAllMocks()
     mocks.events.clear()
@@ -79,6 +87,7 @@ describe('CI page', () => {
   })
   afterEach(async () => {
     await act(async () => root?.unmount())
+    vi.unstubAllGlobals()
     root = undefined
     cache.clear()
     document.body.innerHTML = ''
@@ -113,17 +122,134 @@ describe('CI page', () => {
     expect(panel?.getAttribute('role')).toBe('tabpanel')
     expect(panel?.textContent).toContain(runner.name)
   })
+  it('omits table headings for a confirmed empty runner inventory', async () => {
+    mocks.api.getCiRunners.mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0, capacity })
+    await render()
+    expect(document.body.textContent).toContain('No CI runners')
+    expect(document.querySelector('thead')).toBeNull()
+  })
+  it.each([
+    ['/dashboard/ci', 'getCiRunners', 'Filter runners', 'Runners could not be loaded'],
+    ['/dashboard/ci/connects', 'getCiSettings', 'Filter connections', 'Could not load connections'],
+  ] as const)('presents an initial failure with recovery on %s', async (path, method, label, title) => {
+    mocks.api[method].mockRejectedValue(new Error('Unavailable'))
+    await render(path)
+    expect(document.querySelector(`[aria-label="${label}"]`)).not.toBeNull()
+    expect(document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)?.disabled).toBe(path !== '/dashboard/ci')
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe(title)
+    expect(document.querySelector('thead')).toBeNull()
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
+    expect(retry).toBeDefined()
+    const calls = mocks.api[method].mock.calls.length
+    await act(async () => retry!.click())
+    expect(mocks.api[method].mock.calls.length).toBeGreaterThan(calls)
+  })
+  it('retains connections when only the refresh fails', async () => {
+    await render('/dashboard/ci/connects')
+    mocks.api.getCiSettings.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      await cache.invalidateQueries({ queryKey: ['ci-settings'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.querySelector('tbody')?.textContent).toContain('alice')
+  })
+  it('retains a successful empty runner inventory after a refresh fails', async () => {
+    mocks.api.getCiRunners.mockResolvedValue({ items: [], total: 0, page: 1, totalPages: 0, capacity })
+    await render()
+    mocks.api.getCiRunners.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      await cache.invalidateQueries({ queryKey: ['ci-runners'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Unable to refresh runners')
+    expect(document.body.textContent).toContain('No CI runners yet')
+  })
+  it('omits table headings when no GitHub accounts are connected', async () => {
+    mocks.api.getCiSettings.mockResolvedValue({ available: true, connections: [] })
+    await render('/dashboard/ci/connects')
+    expect(document.body.textContent).toContain('No GitHub accounts connected')
+    expect(document.querySelector('thead')).toBeNull()
+  })
+  it('offers clear-filter recovery after a runner search has no matches', async () => {
+    mocks.api.getCiRunners.mockImplementation(async (_org, page, _limit, name) => ({
+      items: name ? [] : [runner],
+      total: name ? 0 : 1,
+      page,
+      totalPages: name ? 0 : 1,
+      capacity,
+    }))
+    await render()
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter runners"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'missing')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const clear = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Clear filter')
+    expect(clear).toBeDefined()
+    await act(async () => clear!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(input.value).toBe('')
+    expect(document.querySelector('tbody')?.textContent).toContain(runner.name)
+    expect(mocks.api.getCiRunners).toHaveBeenLastCalledWith('account-a', 1, 25)
+  })
+  it('shows Pulling image for a runner preparing its image', async () => {
+    mocks.api.getCiRunners.mockResolvedValue({
+      items: [{ ...runner, state: 'creating', progress: { phase: 'preparing_image' } }],
+      total: 1,
+      page: 1,
+      totalPages: 1,
+      capacity,
+    })
+    await render()
+    expect(document.querySelector('tbody')?.textContent).toContain('Pulling image')
+  })
+  it('keeps Next available after a cached first page fails to refresh', async () => {
+    mocks.api.getCiRunners.mockResolvedValue({ items: [runner], total: 26, page: 1, totalPages: 2, capacity })
+    await render()
+    mocks.api.getCiRunners.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      await cache.invalidateQueries({ queryKey: ['ci-runners'] })
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const next = [...document.querySelectorAll('button')].find(
+      (item) => (item.getAttribute('aria-label') || item.textContent) === 'Next',
+    )
+    expect(next).toBeDefined()
+    expect(next!.disabled).toBe(false)
+    mocks.api.getCiRunners.mockResolvedValue({ items: [runner], total: 26, page: 2, totalPages: 2, capacity })
+    await act(async () => next!.click())
+    expect(mocks.api.getCiRunners).toHaveBeenLastCalledWith('account-a', 2, 25)
+  })
+
   it('keeps Previous available when a later runner page fails', async () => {
     mocks.api.getCiRunners.mockImplementation(async (_organization, page) => {
       if (page === 2) throw Error('unavailable')
       return { items: [runner], total: 26, page: 1, totalPages: 2, capacity }
     })
     await render()
-    await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent === 'Next')!.click())
+    await act(async () =>
+      [...document.querySelectorAll('button')]
+        .find((item) => (item.getAttribute('aria-label') || item.textContent) === 'Next')!
+        .click(),
+    )
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
-    const previous = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Previous')
+    const previous = [...document.querySelectorAll('button')].find(
+      (item) => (item.getAttribute('aria-label') || item.textContent) === 'Previous',
+    )
     expect(previous).toBeDefined()
     expect(previous!.disabled).toBe(false)
     await act(async () => previous!.click())
@@ -136,9 +262,18 @@ describe('CI page', () => {
     await render()
     expect(document.querySelector('h1')?.textContent).toBe('Runners')
     expect(document.querySelector('tbody a')?.getAttribute('href')).toBe('/dashboard/boxes/runner-original')
-    expect(document.querySelector('tbody')?.textContent).toContain('JIT')
-    expect(document.querySelector('tbody')?.textContent).toContain('2 vCPU · 2 GiB RAM · 10 GiB disk')
-    expect(document.querySelector('tbody td svg')?.getAttribute('width')).toBe('28')
+    expect([...document.querySelectorAll('thead th')].map((cell) => cell.textContent)).toEqual([
+      'Name',
+      'Box ID',
+      'Image',
+      'CPU',
+      'Memory',
+      'Disk',
+      'Status',
+      'Created',
+    ])
+    const values = [...document.querySelectorAll('tbody tr:first-child td')].map((cell) => cell.textContent)
+    expect(values.slice(0, 6)).toEqual([runner.name, runner.id, runner.image, '2 vCPU', '2 GiB', '10 GiB'])
     expect(document.querySelector('[role="meter"]')).toBeNull()
     expect(document.body.textContent).toContain('CI slots 2 / 5')
     expect(mocks.api.getCiRunners).toHaveBeenCalledWith('account-a', 1, 25)
@@ -204,14 +339,49 @@ describe('CI page', () => {
     expect(document.body.textContent).toContain(label)
     expect(document.querySelector('[role="meter"]')).toBeNull()
   })
+  it('opens a modal editor and preserves invalid numeric text for correction', async () => {
+    await render()
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit limit')!.click(),
+    )
+    expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-modal')).toBe('true')
+    const input = document.querySelector<HTMLInputElement>('#ci-maximum')!
+    expect(input.inputMode).toBe('numeric')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'abc')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(input.value).toBe('abc')
+    await act(async () =>
+      input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })),
+    )
+    expect(mocks.api.setCiCapacity).not.toHaveBeenCalled()
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+  })
+  it('returns focus to the capacity edit action after Escape', async () => {
+    await render()
+    const edit = [...document.querySelectorAll('button')].find((item) => item.textContent?.startsWith('Edit'))!
+    await act(async () => {
+      edit.focus()
+      edit.click()
+    })
+    const input = document.querySelector<HTMLInputElement>('#ci-maximum')!
+    expect(document.activeElement).toBe(input)
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(edit)
+  })
   it('edits zero and inherited capacity from Runners and refreshes its original organization', async () => {
     await render()
     for (const value of ['0', '']) {
       await act(async () =>
-        [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit')!.click(),
+        [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit limit')!.click(),
       )
       const input = document.querySelector<HTMLInputElement>('#ci-maximum')!
-      expect(input.max).toBe('5')
+      expect(input.inputMode).toBe('numeric')
       await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
         input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -224,10 +394,62 @@ describe('CI page', () => {
     }
     expect(mocks.api.getCiRunners.mock.calls.length).toBe(3)
   })
+  it('makes account inheritance an explicit draft action and returns focus after saving', async () => {
+    mocks.api.getCiRunners.mockResolvedValue({
+      items: [runner],
+      total: 1,
+      page: 1,
+      totalPages: 1,
+      capacity: { ...capacity, effective_limit: 3, max_concurrent_jobs: 3 },
+    })
+    await render()
+    const edit = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit limit')!
+    await act(async () => edit.click())
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent).toBe('Concurrency limit')
+    const input = document.querySelector<HTMLInputElement>('#ci-maximum')!
+    expect(input.value).toBe('3')
+    await act(async () =>
+      [...dialog.querySelectorAll('button')].find((item) => item.textContent === 'Use account limit')!.click(),
+    )
+    expect(input.value).toBe('')
+    expect(input.placeholder).toBe('Account limit (5)')
+    expect(dialog.textContent).toContain('Using account limit')
+    expect(mocks.api.setCiCapacity).not.toHaveBeenCalled()
+    await act(async () => [...dialog.querySelectorAll('button')].find((item) => item.textContent === 'Save')!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(mocks.api.setCiCapacity).toHaveBeenCalledExactlyOnceWith('account-a', null)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(edit)
+  })
+  it('discards a cancelled capacity draft and restores the edit action focus', async () => {
+    await render()
+    const edit = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit limit')!
+    await act(async () => edit.click())
+    const input = document.querySelector<HTMLInputElement>('#ci-maximum')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '2')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((item) => item.textContent === 'Cancel')!.click(),
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.activeElement).toBe(edit)
+    expect(mocks.api.setCiCapacity).not.toHaveBeenCalled()
+    await act(async () => edit.click())
+    expect(document.querySelector<HTMLInputElement>('#ci-maximum')!.value).toBe('')
+  })
   it('keeps failed capacity edits actionable and prevents excess values', async () => {
     mocks.api.setCiCapacity.mockRejectedValueOnce(Error('unavailable'))
     await render()
-    await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit')!.click())
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit limit')!.click(),
+    )
     const input = document.querySelector<HTMLInputElement>('#ci-maximum')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '6')
@@ -250,6 +472,9 @@ describe('CI page', () => {
     expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(
       'Unable to save CI capacity',
     )
+    expect(input.value).toBe('3')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(input.disabled).toBe(false)
   })
   it('refreshes journal-only releases even when no Boxes or socket events exist', async () => {
     mocks.api.getCiRunners
@@ -280,13 +505,20 @@ describe('CI page', () => {
       capacity: { ...capacity, used: organization === 'account-a' ? 2 : 4 },
     }))
     await render()
-    await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit')!.click())
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((item) => item.textContent === 'Edit limit')!.click(),
+    )
     const form = document.querySelector('#ci-maximum')!.closest('form')!
     await act(async () => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })
     expect(mocks.api.setCiCapacity).toHaveBeenCalledExactlyOnceWith('account-a', null)
+    expect(form.getAttribute('aria-busy')).toBe('true')
+    const saving = [...form.querySelectorAll('button')].find((button) => button.textContent === 'Saving…')!
+    expect(saving.disabled).toBe(true)
+    await act(async () => form.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
     mocks.selection.selectedOrganization.id = 'account-b'
     await render()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
@@ -305,7 +537,11 @@ describe('CI page', () => {
         : { items: [{ ...runner, name: 'page-' + page }], total: 26, page, totalPages: 2, capacity },
     )
     await render()
-    await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent === 'Next')!.click())
+    await act(async () =>
+      [...document.querySelectorAll('button')]
+        .find((item) => (item.getAttribute('aria-label') || item.textContent) === 'Next')!
+        .click(),
+    )
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
@@ -344,7 +580,11 @@ describe('CI page', () => {
       totalPages: 2,
     }))
     await render()
-    await act(async () => [...document.querySelectorAll('button')].find((item) => item.textContent === 'Next')!.click())
+    await act(async () =>
+      [...document.querySelectorAll('button')]
+        .find((item) => (item.getAttribute('aria-label') || item.textContent) === 'Next')!
+        .click(),
+    )
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
@@ -363,7 +603,7 @@ describe('CI page', () => {
     await act(async () =>
       [...document.querySelectorAll('button')].find((item) => item.textContent === 'Update')!.click(),
     )
-    await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] [role="checkbox"]')!.click())
     await act(async () =>
       [...document.querySelectorAll('button')].find((item) => item.textContent === 'Update connection')!.click(),
     )

@@ -4,7 +4,7 @@ import { Link, Navigate } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { clearCiConnectSession, getCiConnectSession, completeCiRedirect } from '@/lib/ci-connect'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
-import { Button } from '@/components/ui/button'
+import { AsciiButton } from '@/components/ascii'
 import { CiOrganizationRecovery } from '@/components/CiAccountPicker'
 import { toast } from 'sonner'
 
@@ -61,62 +61,67 @@ export default function CiConnectCallback() {
   }, [api, retry])
   const result = view?.result
   return (
-    <main className="mx-auto max-w-lg space-y-5 px-6 py-20">
-      <Link
-        onClick={leave}
-        className="block font-mono text-meta underline underline-offset-4"
-        to="/dashboard/ci/connects"
-      >
-        Back to Connects
-      </Link>
-      <h1 className="font-display text-page font-semibold">Connect GitHub CI</h1>
-      {!view && !failed && <p role="status">Verifying GitHub authorization…</p>}
-      {storageFailed && (
-        <div role="alert">
-          GitHub authorization was received, but this browser could not select the original BoxLite organization. Free
-          browser storage and retry.
-          <Button onClick={() => view && selectOrganization(view.organization)}>Retry organization selection</Button>
-        </div>
-      )}
-      {['selection_required', 'installation_required', 'pending'].includes(result?.status || '') &&
-      !storageFailed &&
-      view &&
-      result?.id ? (
-        <Navigate replace to={'/dashboard/ci/connects?connect=' + encodeURIComponent(result.id)} />
-      ) : result?.status === 'connected' ? (
-        <>
-          <p role="status">GitHub connected. Listener setup: {result.listener_status}.</p>
-          <Button
-            onClick={() => {
-              if (selectOrganization(view!.organization)) window.location.assign('/dashboard/ci/connects')
-            }}
-          >
-            Continue to CI settings
-          </Button>
-        </>
-      ) : (
-        (view || failed) && (
+    <main className="mx-auto flex min-h-svh w-full max-w-[560px] flex-col justify-center px-6 py-12 font-sans">
+      <div className="space-y-5">
+        <Link
+          onClick={leave}
+          className="block font-sans text-meta underline underline-offset-4"
+          to="/dashboard/ci/connects"
+        >
+          Back to Connects
+        </Link>
+        <h1 className="font-display text-page font-semibold">Connect GitHub CI</h1>
+        {!view && !failed && <p role="status">Verifying GitHub authorization…</p>}
+        {storageFailed && (
+          <div role="alert">
+            GitHub authorization was received, but this browser could not select the original BoxLite organization. Free
+            browser storage and retry.
+            <AsciiButton onClick={() => view && selectOrganization(view.organization)}>
+              Retry organization selection
+            </AsciiButton>
+          </div>
+        )}
+        {['selection_required', 'installation_required', 'pending'].includes(result?.status || '') &&
+        !storageFailed &&
+        view &&
+        result?.id ? (
+          <Navigate replace to={'/dashboard/ci/connects?connect=' + encodeURIComponent(result.id)} />
+        ) : result?.status === 'connected' ? (
           <>
-            <p role="alert">
-              {result?.status === 'installation_required'
-                ? 'Install the GitHub App, then restart connect.'
-                : 'Authorization did not complete. Restart connect from CI settings.'}
-            </p>
-            {failed && getCiConnectSession() && (
-              <Button onClick={() => setRetry((value) => value + 1)}>Retry authorization status</Button>
-            )}
-            <CiOrganizationRecovery />
-            {result?.installation_url && (
-              <a className="underline" href={result.installation_url} rel="noreferrer" target="_blank">
-                Install GitHub App
-              </a>
-            )}
-            <Link className="block underline" to="/dashboard/ci/connects">
-              Back to CI settings
-            </Link>
+            <p role="status">GitHub connected. Listener setup: {result.listener_status}.</p>
+            <AsciiButton
+              variant="primary"
+              onClick={() => {
+                if (selectOrganization(view!.organization)) window.location.assign('/dashboard/ci/connects')
+              }}
+            >
+              Continue to CI settings
+            </AsciiButton>
           </>
-        )
-      )}
+        ) : (
+          (view || failed) && (
+            <>
+              <p role="alert">
+                {result?.status === 'installation_required'
+                  ? 'Install the GitHub App, then restart connect.'
+                  : 'Authorization did not complete. Restart connect from CI settings.'}
+              </p>
+              {failed && getCiConnectSession() && (
+                <AsciiButton onClick={() => setRetry((value) => value + 1)}>Retry authorization status</AsciiButton>
+              )}
+              <CiOrganizationRecovery />
+              {result?.installation_url && (
+                <a className="underline" href={result.installation_url} rel="noreferrer" target="_blank">
+                  Install GitHub App
+                </a>
+              )}
+              <Link className="block underline" to="/dashboard/ci/connects">
+                Back to CI settings
+              </Link>
+            </>
+          )
+        )}
+      </div>
     </main>
   )
 }

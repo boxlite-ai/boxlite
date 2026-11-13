@@ -73,16 +73,26 @@ function network(
   return { outbound: { mode: outbound, allow_net: allowNet }, inbound: { mode: inbound, allow_net: [] } }
 }
 
-/** The default: tunnel URLs require an organization sign-in. */
+/** Disabled inbound rejects new tunnel access, regardless of credentials. */
 export const InboundDisabled: Story = {
   name: '1 · Inbound disabled',
-  args: { network: network(NetworkMode.DISABLED), canManage: true, onToggleInbound: noop, onGetUrl: noop },
+  args: {
+    network: network(NetworkMode.DISABLED),
+    canManage: true,
+    onToggleInbound: noop,
+    onCreateTunnel: noop,
+  },
 }
 
-/** Anonymous access, so the value is the only amber thing on the sheet. */
+/** Enabled inbound applies each port’s public/private policy. */
 export const InboundEnabled: Story = {
   name: '2 · Inbound enabled',
-  args: { network: network(NetworkMode.ENABLED), canManage: true, onToggleInbound: noop, onGetUrl: noop },
+  args: {
+    network: network(NetworkMode.ENABLED),
+    canManage: true,
+    onToggleInbound: noop,
+    onCreateTunnel: noop,
+  },
 }
 
 /** Egress narrowed to an allowlist, the longest outbound value. */
@@ -92,7 +102,7 @@ export const OutboundAllowlist: Story = {
     network: network(NetworkMode.DISABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8']),
     canManage: true,
     onToggleInbound: noop,
-    onGetUrl: noop,
+    onCreateTunnel: noop,
   },
 }
 
@@ -103,14 +113,19 @@ export const Saving: Story = {
     canManage: true,
     inboundPending: true,
     onToggleInbound: noop,
-    onGetUrl: noop,
+    onCreateTunnel: noop,
   },
 }
 
 /** Viewers see the state but get no control that changes exposure. */
 export const ReadOnlyViewer: Story = {
   name: '5 · Viewer (read-only)',
-  args: { network: network(NetworkMode.ENABLED), canManage: false, onToggleInbound: noop, onGetUrl: noop },
+  args: {
+    network: network(NetworkMode.ENABLED),
+    canManage: false,
+    onToggleInbound: noop,
+    onCreateTunnel: noop,
+  },
 }
 
 /** Click through the confirmation dialog without a backend. */
@@ -118,6 +133,6 @@ export const Interactive: Story = {
   name: '6 · Interactive (click through)',
   render: () => {
     const [inbound, setInbound] = useState<NetworkMode>(NetworkMode.DISABLED)
-    return <BoxNetworkPanel network={network(inbound)} canManage onToggleInbound={setInbound} onGetUrl={noop} />
+    return <BoxNetworkPanel network={network(inbound)} canManage onToggleInbound={setInbound} onCreateTunnel={noop} />
   },
 }

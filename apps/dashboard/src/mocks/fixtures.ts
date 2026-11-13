@@ -145,6 +145,10 @@ export const MOCK_BOXES: Box[] = [
     id: 'mock-box-running',
     name: 'web-api',
     state: BoxState.STARTED,
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: ['api.openai.com', '10.0.0.0/8'] },
+      inbound: { mode: NetworkMode.DISABLED, allow_net: [] },
+    },
     createdAt: hoursAgo(2),
     volumes: [
       { volumeId: 'subtitle-models', mountPath: '/models' },
@@ -207,6 +211,21 @@ export const MOCK_BOXES: Box[] = [
       "Failed to pull image 'quay.io/acme/internal-tools:2.1': quay.io refused the pull (UNAUTHORIZED). The image is private or does not exist, and no registry login of the organization covers it.",
   }),
 ]
+
+// Opt-in fleet fixtures survive reloads without changing the default small account.
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'fleet') {
+  for (let index = 0; index < 7; index++) {
+    const running = index < 4
+    MOCK_BOXES.push(
+      buildBox({
+        id: `mock-fleet-${index + 1}`,
+        name: `${running ? 'worker' : 'batch'}-${index + 1}`,
+        state: running ? BoxState.STARTED : BoxState.STOPPED,
+        desiredState: running ? BoxDesiredState.STARTED : BoxDesiredState.STOPPED,
+      }),
+    )
+  }
+}
 
 export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
   items: MOCK_BOXES,

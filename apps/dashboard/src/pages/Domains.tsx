@@ -1,6 +1,16 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import { QuotaTicks } from '@/components/QuotaTicks'
+import { TechnicalText } from '@/components/TechnicalText'
+import { DomainResourceIcon } from '@/components/ResourceStateIcon'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -16,6 +26,7 @@ import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { copyToClipboard } from '@/lib/copy-text'
+import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
@@ -66,18 +77,29 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </p>
       </div>
 
-      <div className="resource-toolbar">
+      <div className="grid min-h-9 shrink-0 grid-cols-1 items-start gap-x-3 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto] [&_.resource-filter]:max-w-full">
         <ResourceFilter
           label="Filter domains"
           value={filter}
           onChange={(value) => setFilter(value)}
-          count={query.isSuccess ? rows.length : '—'}
-          disabled={!canManage || !query.isSuccess}
+          count={data ? rows.length : '—'}
+          disabled={!canManage || data === undefined}
         />
+        <AsciiButton
+          variant="primary"
+          className="h-11 shrink-0 justify-self-start sm:h-9 sm:justify-self-end"
+          disabled={!canClaim}
+          onClick={openForm}
+        >
+          <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
+        </AsciiButton>
         {canManage && query.isSuccess && data && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground">
-            <span className="font-mono tabular-nums">
-              {data.used} / {data.limit} domains held · {data.remaining} available
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground sm:col-span-2">
+            <span className="inline-flex items-center gap-2 font-mono tabular-nums">
+              <span>
+                {data.used} / {data.limit} domains held · {data.remaining} available
+              </span>
+              <QuotaTicks used={data.used} limit={data.limit} />
             </span>
             {!data.domain_suffix ? (
               <span>Domain requests are unavailable on this deployment.</span>
@@ -86,39 +108,48 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
             ) : null}
           </div>
         )}
-        <div className="flex-1" />
-        <AsciiButton variant="primary" className="h-11 sm:h-9" disabled={!canClaim} onClick={openForm}>
-          <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
-        </AsciiButton>
       </div>
 
-      {!canManage ? (
-        <div role="alert" className="flex flex-1 items-center justify-center text-body text-muted-foreground">
-          You need Box write permission to manage domains.
-        </div>
-      ) : query.isPending ? (
-        <div role="status" className="flex flex-1 items-center justify-center text-body text-muted-foreground">
-          Loading domains…
-        </div>
-      ) : query.isError ? (
-        <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-body">
-          <p className="text-destructive">Unable to load domains: {query.error.message}</p>
-          <AsciiButton onClick={() => void query.refetch()}>Retry</AsciiButton>
-        </div>
-      ) : (
-        data && (
+      <div className="resource-content scroll-edge mt-[14px]">
+        {!canManage ? (
+          <ResourceEmptyState
+            title="Permission required"
+            icon={<Globe />}
+            description="You need Box write permission to manage domains."
+          />
+        ) : data === undefined ? (
+          query.isError ? (
+            <ResourceErrorState
+              title="Could not load domains"
+              retrying={query.isFetching}
+              onRetry={() => void query.refetch()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading domains…" />
+          )
+        ) : (
           <>
+            {query.isError && (
+              <ResourceErrorNotice
+                title="Could not refresh domains. Showing previously loaded data."
+                retrying={query.isFetching}
+                onRetry={() => void query.refetch()}
+              />
+            )}
             {data.domains.length === 0 ? (
-              <div className="mt-[14px]">
-                <ResourceEmptyState
-                  title="No Domains yet."
-                  icon={<Globe className="size-6" />}
-                  description="Request a name, then connect it to your Box using the CLI or SDK."
-                />
-              </div>
+              <ResourceEmptyState
+                title="No Domains yet."
+                icon={<Globe className="size-6" />}
+                description="Request a name, then connect it to your Box using the CLI or SDK."
+              />
             ) : (
-              <div className="mt-[14px] min-h-0 flex-1 overflow-auto">
-                <table className="w-full min-w-[640px] table-fixed text-left font-mono text-body">
+              <div className="resource-content">
+                <table
+                  className={cn(
+                    'resource-table w-full min-w-[640px] table-fixed text-left font-sans text-body',
+                    rows.length === 0 && 'hidden',
+                  )}
+                >
                   <colgroup>
                     <col className="w-[36%]" />
                     <col className="w-[16%]" />
@@ -146,17 +177,16 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                         className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
                       >
                         <td className="px-4 py-3 font-semibold text-foreground">
-                          <div className="flex items-center gap-3">
-                            <Globe className="size-6 shrink-0 text-muted-foreground" />
-                            <span className="min-w-0 truncate" title={domain.hostname}>
-                              {domain.hostname}
+                          <ResourceIdentity icon={<DomainResourceIcon bound={Boolean(domain.target)} />}>
+                            <span className="resource-name" title={domain.hostname}>
+                              <TechnicalText value={domain.hostname} kind="hostname" />
                             </span>
-                          </div>
+                          </ResourceIdentity>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">
                           {domain.target ? (domain.target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
                         </td>
-                        <td className="truncate px-4 py-3 text-muted-foreground">
+                        <td className="truncate px-4 py-3 font-mono text-muted-foreground">
                           {domain.target?.type === 'box' ? (
                             <Link
                               to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(domain.target.box) })}
@@ -168,11 +198,12 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                             (domain.target?.app ?? '—')
                           )}
                         </td>
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                        <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
                           {domain.target?.type === 'box' ? domain.target.port : '—'}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <AsciiButton
+                            variant="quiet"
                             size="icon"
                             aria-label={`Copy ${domain.hostname}`}
                             title="Copy domain"
@@ -189,18 +220,16 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                   </tbody>
                 </table>
                 {rows.length === 0 && (
-                  <div className="flex flex-col items-center gap-3 py-10 text-center text-body text-muted-foreground">
-                    <p>No domain matches “{filter.trim()}”</p>
-                    <AsciiButton size="sm" onClick={() => setFilter('')}>
-                      Clear filter
-                    </AsciiButton>
-                  </div>
+                  <ResourceFilterEmptyState
+                    title={`No domain matches “${filter.trim()}”`}
+                    onClear={() => setFilter('')}
+                  />
                 )}
               </div>
             )}
           </>
-        )
-      )}
+        )}
+      </div>
 
       <Dialog
         open={open}

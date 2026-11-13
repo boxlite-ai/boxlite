@@ -54,9 +54,14 @@ export function ciHandlers() {
   const base = '*/v1/:organizationId/ci'
   const own = (organizationId: unknown) => organizationId === MOCK_ORGANIZATION.id
   const missing = () => new HttpResponse(null, { status: 404 })
+  const preview = () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview')
+  const emptyPreview = () =>
+    globalThis.localStorage?.getItem('desktop-review-empty') === '1' || preview() === 'ci-empty'
   return [
     http.get(`${base}/settings`, ({ params }) =>
-      own(params.organizationId) ? HttpResponse.json(settings) : missing(),
+      own(params.organizationId)
+        ? HttpResponse.json({ ...settings, connections: emptyPreview() ? [] : settings.connections })
+        : missing(),
     ),
     http.get(`${base}/runners`, ({ params, request }) => {
       if (!own(params.organizationId)) return missing()
@@ -64,7 +69,8 @@ export function ciHandlers() {
       const page = Math.max(1, Number(query.get('page')) || 1),
         limit = Math.min(200, Math.max(1, Number(query.get('limit')) || 25))
       const name = (query.get('name') ?? '').trim().toLowerCase()
-      const filtered = runners.filter((runner) => runner.name.toLowerCase().includes(name))
+      const visible = emptyPreview() ? [] : runners
+      const filtered = visible.filter((runner) => runner.name.toLowerCase().includes(name))
       return HttpResponse.json({
         items: filtered.slice((page - 1) * limit, page * limit),
         total: filtered.length,
@@ -72,11 +78,37 @@ export function ciHandlers() {
         totalPages: Math.ceil(filtered.length / limit),
         capacity: {
           available: settings.available,
-          used: runners.length,
+          used: visible.length,
           max_concurrent_jobs: settings.max_concurrent_jobs,
           commerce_limit: settings.commerce_limit,
           effective_limit: settings.effective_limit,
         },
+      })
+    }),
+    http.get(`${base}/connections/:bindingId/repositories`, ({ params, request }) => {
+      if (!own(params.organizationId)) return missing()
+      const connection = settings.connections.find((row) => row.binding_id === params.bindingId)
+      if (!connection) return missing()
+      const query = new URL(request.url).searchParams
+      const page = Math.max(1, Number(query.get('page')) || 1)
+      const limit = Math.min(100, Math.max(1, Number(query.get('limit')) || 25))
+      const names =
+        preview() === 'ci-repositories'
+          ? Array.from({ length: 30 }, (_, index) => `release-validation-integration-pipeline-${index + 1}`)
+          : ['web-app', 'agent-runtime', 'internal-tools']
+      const repositories = names.map((name, index) => ({
+        id: connection.account_type === 'User' ? index + 1 : index + 101,
+        name,
+        private: index === 2,
+        owner: { id: connection.account_type === 'User' ? 1 : 2, login: connection.github_account },
+      }))
+      return HttpResponse.json({
+        repositories: repositories.slice((page - 1) * limit, page * limit),
+        total: repositories.length,
+        page,
+        next_page: page * limit < repositories.length ? page + 1 : null,
+        repository_selection: 'selected',
+        installation_settings_url: connection.installation_settings_url,
       })
     }),
     http.get(`${base}/connect/configuration`, ({ params }) =>
