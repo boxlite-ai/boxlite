@@ -32,6 +32,17 @@ creating a Box from the checkpoint through the SDK and actual guests.
 Guest reads verify immutable disk contents and inherited environment values.
 Deleting the checkpoint must leave the created Box usable.
 
+Stop requests are asynchronous: the case waits for the source to report `stopped`
+before capture. Source deletion and teardown wait for absence by stable Box ID,
+since deletion admission renames a Box before destruction finishes. Cleanup retries
+only the state-change conflict, bounds each Box removal to 30 seconds, and reports
+other errors while continuing the remaining cleanup.
+
+Checkpoint creates leave lifecycle options unset instead of receiving the harness
+defaults again. The source receives the suite's 300-second `auto_stop` and
+600-second `auto_delete` policy before capture; the restored Box must inherit both,
+which the case verifies through the API-backed SDK metadata.
+
 Run against an API/runner built from this branch with checkpoint storage enabled:
 
 ```bash
@@ -42,7 +53,7 @@ Use the existing environment/profile authentication described below. The case
 requires `capabilities.checkpoints_enabled=true`; absence fails before creating
 a Box. It uses unique `e2e-` resource names, retains the suite's bounded Box
 lifetimes, and reports cleanup failures. It is outside the production smoke
-selection because it uses two concurrent Boxes. Loopback, mock-storage and
+selection because it uses checkpoint storage and multiple guest lifecycles. Loopback, mock-storage and
 native stub checks do not satisfy this real VM/storage acceptance case.
 
 ### Existing coverage
