@@ -267,8 +267,9 @@ GitHub runner group independently of the workflow label.
 
 1. A signed `workflow_job.queued` event stores a receipt and exact job identity,
    then wakes the shared controller; it does not assign the job itself.
-2. The controller verifies the installation/repository, reads the current job,
-   checks labels and durable account/tenant capacity, and records allocation intent.
+2. The controller verifies the installation/repository, rebuilds the complete
+   current GitHub queue before changing capacity, checks labels and durable
+   account/tenant limits, and records allocation intent.
 3. The REST adapter creates a Box and durably records the returned original ID
    before boot/JIT work. It does not adopt a same-name Box after an unknown create.
 4. GitHub creates JIT configuration with a purpose-limited runner credential.
@@ -280,8 +281,13 @@ GitHub runner group independently of the workflow label.
    and confirms its absence before returning physical Box capacity; runner
    cleanup and the allocation record remain until runner absence is confirmed.
 
-A completed notification alone does not stop a running worker. A successful
-runner DELETE is not evidence that its Box was idle. Unknown Box creation and
+A completed notification alone does not stop a running worker. Surplus online
+idle runners receive a 300-second registration grace, then use the shared
+[confirmed retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement).
+Uncertain unregistering never authorizes stopping a possibly assigned Box, including
+after restart. Its new persisted effect requires upgrading all state readers;
+the shared section also documents rollback and external busy-refusal assumptions.
+Unknown Box creation and
 uncertain delivery to a still-present Box remain reserved. A single 404 is not an absence proof: the REST adapter
 requires its original-ID ledger, unchanged principal and complete Box inventory.
 The host ledger must also match an ID already confirmed by the shared allocation;

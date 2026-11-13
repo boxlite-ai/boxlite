@@ -124,9 +124,10 @@ export class Listener {
       try {
         if (superseded) {
           // A pending scan must not delay retirement of independent owners.
-          const [drain, scan] = await Promise.allSettled([this.drain(signal), scans])
+          const retirement = this.drain(signal)
+          const [, scan] = await Promise.allSettled([retirement, scans])
           if (scan.status === 'rejected') this.options.host.report(scan.reason, 'compensation-retirement')
-          if (drain.status === 'rejected') throw drain.reason
+          await retirement
           // A scan may return a reader after the first drain has finished.
           await this.drain(signal)
         } else await scans
@@ -507,7 +508,21 @@ export class Listener {
           }
         }
       }
-      if (current) await refreshCounts(repairs)
+      if (current) {
+        try {
+          await refreshCounts(repairs)
+        } catch (error) {
+          if (error instanceof LeaseLost || error instanceof StateCorrupt || signal.aborted) throw error
+          // Failed queue reads retain demand, but must not strand known stopped
+          // resources. Unverified balancing cannot dispatch unsent reservations.
+          try {
+            await runtime.pool.balance(session.lease, closedCapacity, [], signal)
+          } catch (recovery) {
+            if (!(recovery instanceof DemandUncertain)) throw recovery
+          }
+          throw error
+        }
+      }
       const readCounts = (): LabelDemand[] => {
         const values = current ? [...counters.values()].filter(related).map(decodeDemand) : []
         if (values.some((value) => value.accountId !== scope.installation.account.id)) throw new StateCorrupt()
@@ -522,11 +537,12 @@ export class Listener {
         await runtime.pool.balance(session.lease, await resolve(demands), demands, signal)
       } catch (error) {
         if (!(error instanceof DemandUncertain) || !current) throw error
-        // PAT hosts and missed running events cannot derive a trustworthy deficit
-        // from transport counters alone. Rebuild once before any resource mutation.
+        // Notifications cannot authorize expansion or idle retirement. A partial
+        // rebuild is not an empty queue and cannot authorize either operation.
         await refreshCounts(repositories(scope))
         demands = readCounts()
-        await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
+        if (!deferredRepositories.size)
+          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
       }
       for (const notice of current ? notices : [])
         if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))
