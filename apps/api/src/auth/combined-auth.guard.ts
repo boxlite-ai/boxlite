@@ -6,6 +6,7 @@
 
 import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 import { MCP_DELEGATION_STRATEGY } from './mcp-delegation'
 
 /**
@@ -17,7 +18,7 @@ import { MCP_DELEGATION_STRATEGY } from './mcp-delegation'
  * fails through to the token strategies for everything else.
  *
  * `handleRequest` is invoked once — either when a strategy succeeds or when all strategies fail.
- * It preserves the local-registration requirement; other failures become a generic 401.
+ * It preserves referral rejections and the local-registration requirement; other failures become a generic 401.
  *
  * The generic reply is deliberate: a caller must not learn which strategy rejected it or why,
  * so a wrong key and an unknown key are indistinguishable.
@@ -28,8 +29,8 @@ export class CombinedAuthGuard extends AuthGuard([MCP_DELEGATION_STRATEGY, 'api-
 
   handleRequest(err: any, user: any) {
     if (
-      err instanceof ForbiddenException &&
-      (err.getResponse() as { code?: string }).code === 'registration_required'
+      err instanceof ReferralRegistrationException ||
+      (err instanceof ForbiddenException && (err.getResponse() as { code?: string }).code === 'registration_required')
     ) {
       throw err
     }

@@ -96,6 +96,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
           },
           Context.user({ userId, authMethod: 'jwt' }),
+          request.get(CustomHeaders.REFERRAL_CODE.name),
         )
       } catch (error) {
         if (!(error instanceof UserAlreadyExistsException)) throw error

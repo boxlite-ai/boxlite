@@ -210,6 +210,13 @@ func (a *UsersAPIService) CreateUserExecute(r UsersAPICreateUserRequest) (*http.
 type UsersAPIGetAuthenticatedUserRequest struct {
 	ctx context.Context
 	ApiService UsersAPI
+	xBoxLiteReferralCode *string
+}
+
+// Referral code of the inviting organization; read only on the request that creates the account
+func (r UsersAPIGetAuthenticatedUserRequest) XBoxLiteReferralCode(xBoxLiteReferralCode string) UsersAPIGetAuthenticatedUserRequest {
+	r.xBoxLiteReferralCode = &xBoxLiteReferralCode
+	return r
 }
 
 func (r UsersAPIGetAuthenticatedUserRequest) Execute() (*User, *http.Response, error) {
@@ -266,6 +273,9 @@ func (a *UsersAPIService) GetAuthenticatedUserExecute(r UsersAPIGetAuthenticated
 	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
 	if localVarHTTPHeaderAccept != "" {
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	if r.xBoxLiteReferralCode != nil {
+		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Referral-Code", r.xBoxLiteReferralCode, "simple", "")
 	}
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {

@@ -212,6 +212,17 @@ organization boundaries.
 | `POST`   | `/auth/link/adopt`                                   | Moves a linked account's data for the Action.  |
 | `GET`    | `/auth/link/status`                                  | Tells the Action whether BoxLite knows a user. |
 
+Send `X-BoxLite-Referral-Code` on the request that creates the account: the first
+JWT-authenticated request (for example, `GET /api/users/me`), or
+`POST /api/auth/register` when Turnstile protection is enabled.
+
+- With `BILLING_API_URL` set, the API resolves the code through
+  [Commerce](#externally-served-apis) and saves the inviting organization in
+  `user.referredByOrganizationId`. Case and surrounding spaces are ignored.
+- A malformed or unknown code returns 422 `invalid_referral_code`, and a Commerce
+  failure returns 503 `referral_unavailable`. Neither creates the account.
+- Existing accounts and deployments without `BILLING_API_URL` ignore the header.
+
 </details>
 
 <details>
@@ -1404,7 +1415,7 @@ their base URL from `GET /config` and disable the corresponding UI when it
 is unset; the same document carries PostHog's key and host to the browser.
 
 <details>
-<summary><b>External interfaces</b> · 5 APIs, 2 SaaS integrations</summary>
+<summary><b>External interfaces</b> · 6 APIs, 2 SaaS integrations</summary>
 
 | Interface     | Client                                                                                  | Base URL source                  | What it covers                                                                                                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1412,6 +1423,7 @@ is unset; the same document carries PostHog's key and host to the browser.
 | Billing API   | [`billingApiClient.ts`](../../../../apps/dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 22 routes: wallet and top-ups, signup credit delivery, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
 | Box admission | [`commerce-box-limit.service.ts`](../../../../apps/api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
 | Usage export  | [`api/src/usage/services`](../../../../apps/api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| Referral code | [`commerce-internal.client.ts`](../../../../apps/api/src/commerce/commerce-internal.client.ts) | `usageExport.url` | `GET /internal/organization?referral-code=`, authenticated with `USAGE_EXPORT_TOKEN` at account creation. |
 | Internal state reads | [`box-billing-state.service.ts`](../../../../apps/api/src/box/services/box-billing-state.service.ts) | `usageExport.url` | `GET /internal/billing-states`, server-side bearer `USAGE_EXPORT_TOKEN`. |
 | PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                                | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
 | Pylon         | [`App.tsx`](../../../../apps/dashboard/src/App.tsx) widget, production builds only                     | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
