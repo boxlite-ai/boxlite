@@ -71,6 +71,17 @@ bindings removed and resolve saved credentials without an ambient API-key
 override. Child-process regressions inject CLI settings to check this isolation
 without changing the parallel test runner's environment.
 
+The shared SSH fixture launches the normal `boxlite` executable, so
+`make test:unit:cli` builds it before running inline tests.
+Integration targets build it through Cargo's target selection.
+The fixture honors `CARGO_BIN_EXE_boxlite`; without that integration-test variable,
+it resolves the executable beside the nearest Cargo `deps` or `build` directory.
+For example, `custom-profile/build/boxlite-cli/<hash>/out/harness` and
+`custom-profile/deps/harness` both use `custom-profile/boxlite`.
+This supports custom target directories and profiles with colocated build outputs.
+If `build.build-dir` separates those outputs, set `CARGO_BIN_EXE_boxlite` to the
+normal CLI executable; missing binaries fail with a build instruction.
+
 The `checkpoint` target runs real CLI commands against loopback HTTP without a
 guest. It checks checkpoint management, import creation/replacement, tenant and
 credential forwarding, pagination, deletion errors, and rejection of configuration

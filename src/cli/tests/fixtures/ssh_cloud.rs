@@ -244,7 +244,29 @@ pub(crate) fn isolated(command: &mut Command, home: &Path) {
 }
 
 pub(crate) fn cli_executable() -> PathBuf {
-    assert_cmd::cargo::cargo_bin("boxlite")
+    let executable = std::env::var_os("CARGO_BIN_EXE_boxlite")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let harness = std::env::current_exe().expect("locate the CLI test harness");
+            // Cargo uses both profile/deps and profile/build/<package>/<hash>/out.
+            let profile = harness
+                .ancestors()
+                .find(|path| path.ends_with("deps") || path.ends_with("build"))
+                .and_then(Path::parent)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "unrecognized Cargo test path {}; set CARGO_BIN_EXE_boxlite",
+                        harness.display()
+                    )
+                });
+            profile.join(format!("boxlite{}", std::env::consts::EXE_SUFFIX))
+        });
+    assert!(
+        executable.is_file(),
+        "CLI binary not found at {}; build boxlite or set CARGO_BIN_EXE_boxlite",
+        executable.display()
+    );
+    executable
 }
 
 pub(crate) fn cli(home: &Path) -> Command {
