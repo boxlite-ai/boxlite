@@ -496,3 +496,44 @@ same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both
 The copy renders on the stage's Auth0 domain (`auth.dev.boxlite.ai` for dev), not the dashboard
 origin, and only to a visitor without an Auth0 session. After `apply`, run `preview` again: it reads
 the tenant back and reports `already up to date` once every write has landed.
+
+## Dev/stage test access
+
+The managed login Action enables the test access policy for the dev/stage tenant
+hostnames in `auth0/targets.json`; prod and unknown tenants keep their previous
+policy. This is login admission, not a private network or static-asset gateway.
+
+After verification and account linking, the final primary identity must have a
+verified email and either the exact corporate domain `polygala.ai` or an
+email-matching grant in its own environment metadata. An explicit matching denial
+wins over the domain default. Secondary-account grants are never merged into the
+primary. All clients requesting the API/MCP audiences receive this policy,
+including refresh exchanges; a Dashboard client cannot bypass it by changing its
+requested audience.
+
+```json
+{
+  "app_metadata": {
+    "boxlite_dev_access": {
+      "email": "tester@example.test",
+      "allowed": true,
+      "updatedAt": "2026-11-13T00:00:00.000Z",
+      "updatedBy": "administrator-subject"
+    }
+  }
+}
+```
+
+Backoffice Customers manages this metadata through the existing BoxLite Admin
+credential and OIDC Management client. Dev/stage API configuration enables
+`OIDC_INTERNAL_ACCESS_ENVIRONMENT` and requires the existing Management settings
+and `read:users` / `update:users_app_metadata` scopes. This policy makes no new
+Management calls during ordinary business requests and does not change token
+lifetimes. Existing JWTs remain valid until expiry. Revocation additionally
+cleans up memberships, keys and the personal Owner organization as described in
+the [API contract](../../api/README.md#test-environment-login-access).
+
+Generating code or a configuration preview does not change a live tenant.
+Review the dev/stage login-policy preview and API prerequisites before an
+explicitly authorized rollout. Reverting the Action/metadata cannot recover
+memberships, keys or resource states changed by user revocation.

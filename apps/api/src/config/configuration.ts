@@ -7,6 +7,7 @@
 import { turnstileConfig } from './turnstile-config'
 import { checkpointConfig } from './checkpoint-config'
 import { customDomainConfig } from './custom-domain-config'
+import { environmentAccessConfig } from './environment-access-config'
 
 /**
  * A whole number at least 1, or a hard failure.
@@ -657,6 +658,7 @@ const configuration = {
     endSessionEndpoint: process.env.OIDC_END_SESSION_ENDPOINT,
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
     managementApi: oidcManagementApiConfig(),
+    environmentAccess: environmentAccessConfig(),
     accountLink: oidcAccountLinkConfig(),
   },
   organizationInvitation: {

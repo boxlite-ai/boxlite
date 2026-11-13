@@ -370,6 +370,8 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 
 | Method   | Path                                 | What it does                                   |
 | -------- | ------------------------------------ | ---------------------------------------------- |
+| `GET`    | `/admin/environment-access`       | Internal dev/stage System Admin lookup of an existing Auth0 email and revocation targets. |
+| `PUT`    | `/admin/environment-access`       | Grants test login or revokes user keys, invited memberships and personal Owner organization access; reports partial cleanup. |
 | `GET`    | `/admin/runner-cpu-incidents`      | Queries CPU incident evidence by capture completion time range for backoffice operations. |
 | `GET`    | `/admin/runner-memory-incidents`   | Queries top-five memory snapshots by host sample time for backoffice operations. |
 | `GET`    | `/admin/runners`                 | Lists runners using admin authorization.       |
