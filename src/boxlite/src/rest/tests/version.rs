@@ -84,15 +84,18 @@ async fn released_0120_does_not_prove_pending_feature_support() {
 }
 
 #[tokio::test]
-async fn development_identity_and_untrusted_discovery() {
+async fn development_minimum_uses_semver_and_rejects_untrusted_discovery() {
+    let current = env!("CARGO_PKG_VERSION");
     for (reported, accepted) in [
+        (json!(current), true),
+        (json!(format!("{current}+build.42")), true),
+        (json!(format!("{current}-rc.1")), false),
         (json!("0.11.99"), false),
         (json!("0.12.0-rc.1"), false),
         (json!("0.12.0"), false),
         (json!("0.12.0+build.42"), false),
-        (json!("1.0.0"), false),
+        (json!("1.0.0"), true),
         (json!(crate::rest::api_version()), true),
-        (json!(format!("{}wrong", crate::rest::api_version())), false),
         (Value::Null, false),
         (json!(12), false),
         (json!("0.12"), false),
@@ -118,15 +121,40 @@ async fn development_identity_and_untrusted_discovery() {
             assert!(
                 error
                     .to_string()
-                    .contains("startExecution (body.user) requires matching development API")
+                    .contains("startExecution (body.user) requires server >=")
             );
         }
         let requests = task.await.unwrap();
         assert!(requests[0].0.starts_with("GET /v1/config HTTP/1.1"));
         assert_eq!(requests.len(), if accepted { 2 } else { 1 });
         if accepted {
+            assert!(requests[1].0.starts_with("POST /v1/boxes/id/exec HTTP/1.1"));
             assert_eq!(requests[1].1["user"], "1000:1000");
         }
+    }
+}
+
+#[tokio::test]
+async fn development_operation_minimum_accepts_same_and_newer_releases() {
+    for reported in [env!("CARGO_PKG_VERSION"), "1.0.0"] {
+        let (options, task) = server(vec![
+            (200, json!({"api_version":reported}).to_string()),
+            (200, "[]".into()),
+        ])
+        .await;
+        let result = ApiClient::new(&options)
+            .unwrap()
+            .get::<Value>("/boxes/id/snapshots")
+            .await
+            .unwrap();
+        assert_eq!(result, json!([]));
+        let requests = task.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1]
+                .0
+                .starts_with("GET /v1/boxes/id/snapshots HTTP/1.1")
+        );
     }
 }
 

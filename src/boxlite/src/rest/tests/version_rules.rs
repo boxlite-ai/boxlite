@@ -30,15 +30,16 @@ fn released_rules_keep_semver_precedence() {
 }
 
 #[test]
-fn unplanned_dominates_released_and_development_rules() {
+fn unplanned_dominates_all_version_minima() {
     for operation in ["unplanned", "0.11.0"] {
         let routes: Vec<Route> = serde_json::from_value(json!([{
             "method":"POST", "path":"/boxes", "operation":"createBox", "minimum":operation,
             "rules":[
                 {"location":"body","path":["unknown"],"minimum":"unplanned","condition":"present"},
-                {"location":"body","path":["next"],"minimum":api_version(),"exact":true,"condition":"present"}
+                {"location":"body","path":["next"],"minimum":api_version(),"condition":"present"}
             ]
-        }])).unwrap();
+        }]))
+        .unwrap();
         let root = Url::parse("https://example.test/v1").unwrap();
         let request = Client::new()
             .post("https://example.test/v1/boxes")

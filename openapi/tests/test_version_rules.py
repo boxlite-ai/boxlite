@@ -180,18 +180,31 @@ class VersionRulesTests(unittest.TestCase):
             }
         return self.spec
 
-    def test_pending_generation_is_exact_and_unplanned_stays_explicit(self):
+    def test_pending_generation_uses_workspace_version_and_preserves_unplanned(self):
         spec = self.pending_spec()
         identity = rules.api_version(spec, "0.12.0")
+        self.assertEqual(identity, "0.12.0")
         generated = json.loads(rules.render(spec, "0.12.0"))[0]["rules"]
         self.assertEqual(generated[0]["minimum"], "0.11.0")
         self.assertEqual(generated[1]["minimum"], identity)
-        self.assertIs(generated[1]["exact"], True)
+        self.assertNotIn("exact", generated[1])
         self.assertEqual(generated[2]["minimum"], "unplanned")
         self.assertNotIn("exact", generated[2])
         self.assertEqual(rules.api_version(copy.deepcopy(spec), "0.12.0"), identity)
         self.op["description"] = "changed contract"
-        self.assertNotEqual(rules.api_version(spec, "0.12.0"), identity)
+        self.assertEqual(rules.api_version(spec, "0.12.0"), identity)
+
+    def test_pending_operation_and_field_minima_preserve_workspace_version(self):
+        spec = self.pending_spec()
+        self.op[rules.MINIMUM] = "next-release"
+        for workspace in ["0.12.0", "0.13.0+build.7", "0.13.0-rc.1+build.7"]:
+            with self.subTest(workspace=workspace):
+                operation = json.loads(rules.render(spec, workspace))[0]
+                self.assertEqual(rules.api_version(spec, workspace), workspace)
+                self.assertEqual(operation["minimum"], workspace)
+                self.assertEqual(operation["rules"][1]["minimum"], workspace)
+                self.assertNotIn("exact", operation)
+                self.assertNotIn("exact", operation["rules"][1])
 
     def test_bump_finalizes_only_next_release_and_preserves_format(self):
         source = yaml.safe_dump(self.pending_spec()) + "# retained comment\n"
@@ -262,7 +275,11 @@ class VersionRulesTests(unittest.TestCase):
             def run(*args):
                 return subprocess.run([sys.executable, "openapi/generate_version_rules.py", *args],
                                       cwd=root, capture_output=True, text=True)
+            original_spec = spec.read_text()
             self.assertEqual(run().returncode, 0)
+            self.assertEqual(spec.read_text(), original_spec)
+            identity = root / "src/boxlite/src/rest/api_version.json"
+            self.assertEqual(json.loads(identity.read_text()), "0.12.0")
             self.assertEqual(run("--check").returncode, 0)
             self.assertNotEqual(run("--check", "--release").returncode, 0)
             self.assertNotEqual(run("--finalize").returncode, 0)
@@ -272,7 +289,6 @@ class VersionRulesTests(unittest.TestCase):
             self.assertEqual(finalized.returncode, 0, finalized.stderr)
             self.assertEqual(run("--check", "--release", "--tag", "v0.13.0").returncode, 0)
             self.assertNotEqual(run("--check", "--release", "--tag", "v0.12.0").returncode, 0)
-            identity = root / "src/boxlite/src/rest/api_version.json"
             self.assertEqual(json.loads(identity.read_text()), "0.13.0")
             self.assertIn("unplanned", spec.read_text())
             identity.write_text('"0.12.0"\n')

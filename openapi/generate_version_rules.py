@@ -2,7 +2,6 @@
 """Compile OpenAPI request-version declarations; check additions against a Git base."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -240,8 +239,7 @@ def api_version(spec, workspace):
     version(workspace)
     declared = spec["info"]["version"]
     if declared == "next-release":
-        digest = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return f"{workspace.split('+', 1)[0]}+dev.{digest}"
+        return workspace
     if declared != workspace:
         raise ValueError("OpenAPI info.version must match the workspace release or be next-release")
     return workspace
@@ -256,7 +254,7 @@ def validate_release(spec, workspace, *, releasing=False):
             value = node.get("minimum")
             if value == "next-release" and spec["info"]["version"] != "next-release":
                 raise ValueError("next-release requires info.version: next-release")
-            # Exact development rules dominate numeric floors only under this invariant.
+            # Numeric declarations refer to current or previous product releases.
             if value is not None and value not in PENDING and version(value) > version(workspace):
                 raise ValueError(f"{operation['operation']}: minimum {value} is newer than workspace {workspace}")
     return identity
@@ -311,7 +309,7 @@ def render(spec, workspace=None):
             if node.get("minimum") == "next-release":
                 if identity is None:
                     raise ValueError("next-release generation requires the workspace version")
-                node.update(minimum=identity, exact=True)
+                node["minimum"] = identity
     return "[\n" + ",\n".join(
         "  " + json.dumps({k: v for k, v in op.items() if k != "fields"}, separators=(",", ":"))
         for op in operations

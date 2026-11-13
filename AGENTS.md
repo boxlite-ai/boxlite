@@ -29,6 +29,21 @@
 - `make help` — list all targets ([Makefile](./Makefile))
 - Always use `make` targets for build, test, lint, format, setup, and distribution. Do not run `cargo`, `npm`, `python`, `go`, or `cbindgen` directly when a make target exists — the Makefile encapsulates correct flags, cross-compilation, environment setup, and ordering.
 
+### OpenAPI changes
+
+After editing `openapi/box.openapi.yaml`:
+
+1. Prepare the environment once with `make setup:openapi`.
+2. Regenerate the rules and API version with `make generate:openapi`.
+3. Validate with `make test:unit:openapi BASE=origin/main`.
+
+Commit the specification together with both updated generated files:
+
+- `src/boxlite/src/rest/version_rules.json`
+- `src/boxlite/src/rest/api_version.json`
+
+Do not edit generated files by hand. See [version declarations and release finalization](docs/reference/README.md#adding-an-operation-or-request-field) for the contract and release workflow.
+
 ## Code Style
 
 - [docs/contributing/development/rust-style.md](./docs/contributing/development/rust-style.md)
