@@ -65,7 +65,9 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
       provider(requestFor(count))
       const canary = resources.get('RunnerBinary')!
       assert.deepEqual(canary.options.customTimeouts, { create: '40m', update: '40m' })
-      assert.deepEqual(canary.args.instanceFilter.inclusionLabels, [{ labels: { 'boxlite-runner': 'default' } }])
+      assert.deepEqual(canary.args.instanceFilter.inclusionLabels, [
+        { labels: { 'boxlite-runner': 'default', 'boxlite-stage': 'dev' } },
+      ])
       assert.equal(canary.args.name, 'boxlite-app-dev-runner-binary')
       assert.deepEqual(canary.args.rollout, { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' })
       assert.equal(canary.args.skipAwaitRollout, false)
@@ -80,7 +82,7 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
       assert.deepEqual(
         fleet.args.instanceFilter.inclusionLabels,
         Array.from({ length: count - 1 }, (_, index) => ({
-          labels: { 'boxlite-runner': `runner-${index + 2}` },
+          labels: { 'boxlite-runner': `runner-${index + 2}`, 'boxlite-stage': 'dev' },
         })),
       )
       assert.deepEqual(fleet.args.rollout, { disruptionBudget: { percent: 100 }, minWaitDuration: '0s' })
@@ -88,6 +90,50 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
       assert.ok(fleet.options.dependsOn.includes(canary.resource))
       assert.deepEqual(fleet.args.osPolicies, canary.args.osPolicies)
     }
+  })
+  await t.test('GCP policies select only their own stage in a shared project', () => {
+    const matches = (policy: any, labels: Record<string, string>) =>
+      policy.instanceFilter.inclusionLabels.some(({ labels: required }: any) =>
+        Object.entries(required).every(([key, value]) => labels[key] === value),
+      )
+    for (const count of [1, 2]) {
+      const stages = new Map<string, { hosts: any[]; policies: any[] }>()
+      for (const stage of ['dev', 'stage']) {
+        globals.$app.stage = stage
+        resources.clear()
+        const request = requestFor(count)
+        for (const host of request.fleet) host.slot.nameTag = host.slot.nameTag.replace('-dev-', '-' + stage + '-')
+        provider(request)
+        stages.set(stage, {
+          hosts: [...resources.entries()]
+            .filter(([name]) => /^Runner(?:-runner-\d+)?$/.test(name))
+            .map(([, entry]) => entry.args),
+          policies: ['RunnerBinary', 'RunnerBinaryFleet'].flatMap((name) =>
+            resources.has(name) ? [resources.get(name)!.args] : [],
+          ),
+        })
+      }
+      for (const [stage, { hosts, policies }] of stages) {
+        const others = stages.get(stage === 'dev' ? 'stage' : 'dev')!.hosts
+        assert.equal(hosts.length, count)
+        assert.equal(policies.length, count)
+        for (const policy of policies) {
+          assert.ok(
+            hosts.some((host) => matches(policy, host.labels)),
+            'each batch selects an own-stage host',
+          )
+          assert.ok(
+            others.every((host) => !matches(policy, host.labels)),
+            stage + ' policy selected another stage',
+          )
+          for (const host of hosts) {
+            const { 'boxlite-stage': _stage, ...legacy } = host.labels
+            assert.equal(matches(policy, legacy), false, 'unscoped hosts must not match')
+          }
+        }
+      }
+    }
+    globals.$app.stage = 'dev'
   })
   await t.test('GCP refuses normalized labels that would overlap the two batches', () => {
     const request = requestFor(4)

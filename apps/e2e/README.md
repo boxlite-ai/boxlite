@@ -565,3 +565,17 @@ Run this file explicitly against the managed local stack; remote-stage suites do
 These tests require `BOXLITE_HOME_DIR` and the managed Runner URL/token; a missing or unreadable cgroup fails acceptance rather than silently skipping enforcement.
 Use `make test:fractional-cpus:acceptance` for local Runtime quota/lifecycle tests and `BOXLITE_REST_PATH_PREFIX= make test:integration:cli FILTER=fractional_cpus` for the real serve HTTP path and server restart.
 The membership policy remains best-effort in the product; the acceptance environment must successfully join the Box cgroup.
+
+## Stage cloud acceptance
+
+Run the existing `e2e-cloud` workflow with `stage=stage`. The API defaults to
+`https://api.stage.boxlite.ai`; the optional `BOXLITE_STAGE_API_URL` variable or
+`api_url` dispatch input overrides it, with the same precedence as dev. Provide independent
+`BOXLITE_STAGE_API_KEY`, `BOXLITE_STAGE_P2_API_KEY`, and
+`BOXLITE_STAGE_P2_READONLY_API_KEY` secrets. The p1 and p2 keys must belong to
+different organizations; p2_readonly must share p2's organization and have only
+read permissions. Missing stage settings never fall back to dev credentials.
+
+The existing profile helper checks HTTPS, organization membership and key permissions
+before writing the test profiles. Stage runs the main suite and identity lane, without dev's automatic sweep or
+shared-subdomain fixture. Production still runs the single-profile smoke suite.

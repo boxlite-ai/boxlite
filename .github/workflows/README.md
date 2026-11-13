@@ -33,8 +33,8 @@ LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
-DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (a commit or #<n> ──▶ <sha> images, dev)
-                                                     └─▶ mbuild-release (v<X.Y.Z> ──▶ v<X.Y.Z>-<sha>, dev then prod)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
+                                                     └─▶ mbuild-release (stable images ──▶ dev; dev ──▶ prod)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
                                         config workflow ◀── build workflows
@@ -64,10 +64,10 @@ own.
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
-| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the whole suite on `dev`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
-| `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the main suite and identity lane on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
+| `mdeploy-all.yml` | dispatch | — | Prepared GCP/AWS stages: dev/stage accept SHA/PR; stage treats stable tags as commit references. Candidate workflows can run from the selected branch. Dev/prod release workflows run from main; prod promotes from dev |
+| `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
+| `mbuild-release.yml` | dispatch, `workflow_call` | yes | Stable images tagged `v<X.Y.Z>-<sha>`: publish into dev, or promote from dev to prod; refuse versions already held by the target |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
@@ -382,7 +382,7 @@ the Go module tag, the workflow checks that the remote product tag still points 
 Define the stage in `.mstage.config.json`, bootstrap its intended cloud/path, and publish its declaration
 with `npm run mstage config put -- --stage <stage>`. The GitHub Environment name must match the stage.
 
-Manual workflow choices are allowlists: mdeploy-all currently exposes `dev` and `prod`, with distinct
+Manual workflow choices are allowlists: mdeploy-all currently exposes `dev`, `stage` and `prod`, with distinct
 commit/release policies. A new stage requires reviewing dispatch choices, ref-resolution/promotion
 policy and the associated workflow tests, including `apps/infra/deployment/release-safety.test.ts`.
 Declaring a stage locally does not make every workflow accept it.
