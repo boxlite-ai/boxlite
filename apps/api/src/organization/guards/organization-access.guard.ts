@@ -125,7 +125,11 @@ export class OrganizationAccessGuard implements CanActivate {
     try {
       const cachedOrganization = await this.redis.get(`organization:${organizationId}`)
       if (cachedOrganization) {
-        return JSON.parse(cachedOrganization)
+        const organization = JSON.parse(cachedOrganization)
+        if (organization.suspendedUntil != null) {
+          organization.suspendedUntil = new Date(organization.suspendedUntil)
+        }
+        return organization
       }
       const organization = await this.organizationService.findOne(organizationId)
       if (organization) {

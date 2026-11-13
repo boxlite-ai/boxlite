@@ -872,6 +872,12 @@ Run `make test:apps:dashboard FILTER='sends the dashboard activity source'` to c
 source header on authenticated requests. This target filters test names;
 omit `FILTER` to run all Dashboard unit tests.
 
+## Organization suspension
+
+Organization access caches organization records as JSON for 10 seconds. On cache reads,
+`suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
+deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
+
 ## Admin organization metadata
 
 System administrators read registration fields on the existing organization routes.
