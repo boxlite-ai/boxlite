@@ -7,6 +7,10 @@ Reconcile Filestore discovery prerequisites during deployment, grant the API
 the stage project, and retain sanitized GCP failure details in API logs without
 changing the client error contract.
 
+The resolver diagnostic slice is implemented. The effective-configuration, IAM,
+and service-enablement slices remain proposed. The default `FILESTORE_INSTANCES`
+entry remains `boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`.
+
 ## Context and evidence
 
 A Filestore volume create currently fails with:
@@ -158,9 +162,11 @@ In `FilestoreInstanceResolver`:
   client retains its own transient retry policy. No additional resolver retry or
   circuit breaker is introduced.
 
-The log should let an operator distinguish at least `PERMISSION_DENIED`,
+The log lets an operator distinguish at least `PERMISSION_DENIED`,
 `UNAUTHENTICATED`, API-disabled responses, `UNAVAILABLE`, and
-`DEADLINE_EXCEEDED` without reproducing the dashboard request.
+`DEADLINE_EXCEEDED` without reproducing the dashboard request. `BadRequestError`
+accepts an optional Nest exception-options object so the explicit-instance
+`NOT_FOUND` branch retains the same cause without changing its public response.
 
 ## Alternatives considered
 
@@ -183,9 +189,7 @@ The log should let an operator distinguish at least `PERMISSION_DENIED`,
    when Filestore is disabled.
 3. Add `file.googleapis.com` to bootstrap and test both fresh and
    already-enabled reconciliation.
-4. Add resolver `cause` and structured logging; test public error compatibility,
-   sanitized log fields, error-code preservation, and no negative caching.
-5. Update the Filestore discovery operational rollout and infrastructure runbook
+4. Update the Filestore discovery operational rollout and infrastructure runbook
    with same-project automation and external-project onboarding.
 
 ## Verification and rollout
@@ -207,6 +211,12 @@ interface. Defect proof runs each new regression test with production changes
 reverted: IAM/service assertions fail against the undeclared resources, and
 logging/cause assertions fail against the discarded error. Restoring the
 implementation must make the same tests pass without weakening their assertions.
+
+For the resolver diagnostic slice, reverting both production files while keeping
+the tests produced two failures: the generic lookup exception and the
+`NOT_FOUND` exception had no `cause`. Restoring the implementation produced 9/9
+passing resolver tests, and `make build:apps:api` passed. No live GCP request
+was run for this slice.
 
 Roll out infrastructure before or with the API image, then verify against the
 real stage:

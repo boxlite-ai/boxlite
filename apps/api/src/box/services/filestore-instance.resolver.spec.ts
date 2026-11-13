@@ -1,5 +1,5 @@
 import { BadRequestError } from '../../exceptions/bad-request.exception'
-import { ServiceUnavailableException } from '@nestjs/common'
+import { Logger, ServiceUnavailableException } from '@nestjs/common'
 import { FilestoreInstanceResolver, type FilestoreInstanceLookup } from './filestore-instance.resolver'
 
 describe('FilestoreInstanceResolver', () => {
@@ -48,15 +48,19 @@ describe('FilestoreInstanceResolver', () => {
     expect(getInstance).toHaveBeenCalledTimes(1)
   })
 
-  it('maps an explicit missing instance to 400 and a configured one to 503', async () => {
+  it('maps an explicit missing instance to 400 and a configured one to 503 with the cause', async () => {
     const notFound = Object.assign(new Error('NOT_FOUND'), { code: 5 })
 
-    await expect(
-      createResolver(jest.fn().mockRejectedValue(notFound)).resolver.resolve('ml-scratch', 'request'),
-    ).rejects.toBeInstanceOf(BadRequestError)
-    await expect(
-      createResolver(jest.fn().mockRejectedValue(notFound)).resolver.resolve('ml-scratch', 'configured'),
-    ).rejects.toBeInstanceOf(ServiceUnavailableException)
+    const explicit = createResolver(jest.fn().mockRejectedValue(notFound)).resolver.resolve('ml-scratch', 'request')
+    await expect(explicit).rejects.toBeInstanceOf(BadRequestError)
+    await expect(explicit).rejects.toMatchObject({ cause: notFound })
+
+    const configured = createResolver(jest.fn().mockRejectedValue(notFound)).resolver.resolve(
+      'ml-scratch',
+      'configured',
+    )
+    await expect(configured).rejects.toBeInstanceOf(ServiceUnavailableException)
+    await expect(configured).rejects.toMatchObject({ cause: notFound })
   })
 
   it('rejects an ambiguous or not-ready instance', async () => {
@@ -103,5 +107,28 @@ describe('FilestoreInstanceResolver', () => {
     await expect(
       createResolver(jest.fn().mockResolvedValue([multiShare])).resolver.resolve('ml-scratch', 'request'),
     ).rejects.toThrow('exactly one IPv4 address and one file share')
+  })
+
+  it('preserves a GCP lookup failure in the log and exception cause', async () => {
+    const gcpError = Object.assign(new Error('7 PERMISSION_DENIED: file.instances.get denied'), { code: 7 })
+    const { resolver } = createResolver(jest.fn().mockRejectedValue(gcpError))
+    const logError = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toMatchObject({
+        message:
+          "Could not look up Filestore instance 'projects/boxlite-dev/locations/asia-southeast1-b/instances/ml-scratch'",
+        cause: gcpError,
+      })
+      expect(logError).toHaveBeenCalledWith({
+        event: 'filestore_lookup_failed',
+        resourceName: 'projects/boxlite-dev/locations/asia-southeast1-b/instances/ml-scratch',
+        source: 'configured',
+        code: 7,
+        message: gcpError.message,
+      })
+    } finally {
+      logError.mockRestore()
+    }
   })
 })

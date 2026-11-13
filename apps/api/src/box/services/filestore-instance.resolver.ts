@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common'
+import { Injectable, Logger, Optional } from '@nestjs/common'
 import { CloudFilestoreManagerClient } from '@google-cloud/filestore'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
@@ -31,6 +31,7 @@ const CACHE_TTL_MS = 60_000
 
 @Injectable()
 export class FilestoreInstanceResolver {
+  private readonly logger = new Logger(FilestoreInstanceResolver.name)
   private client?: FilestoreInstanceLookup
   private readonly cache = new Map<string, { value: ResolvedFilestoreInstance; expiresAt: number }>()
 
@@ -64,10 +65,19 @@ export class FilestoreInstanceResolver {
     } catch (error) {
       if (this.isNotFound(error)) {
         throw source === 'request'
-          ? new BadRequestError(`Filestore instance '${resourceName}' was not found`)
-          : new ServiceUnavailableException(`Configured Filestore instance '${resourceName}' was not found`)
+          ? new BadRequestError(`Filestore instance '${resourceName}' was not found`, { cause: error })
+          : new ServiceUnavailableException(`Configured Filestore instance '${resourceName}' was not found`, {
+              cause: error,
+            })
       }
-      throw new ServiceUnavailableException(`Could not look up Filestore instance '${resourceName}'`)
+      this.logger.error({
+        event: 'filestore_lookup_failed',
+        resourceName,
+        source,
+        code: (error as { code?: number | string } | null)?.code,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      throw new ServiceUnavailableException(`Could not look up Filestore instance '${resourceName}'`, { cause: error })
     }
     return this.mountTarget(instance, source, resourceName)
   }
