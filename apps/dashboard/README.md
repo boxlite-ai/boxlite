@@ -1121,3 +1121,9 @@ Checkpoint creation and Box restoration use the shared form dialog, field styles
 The inventory uses the shared single-line row layout with source links, explicit status markers and a disk-and-clock glyph. A failed source lookup leaves the source identifier visible; only a successful lookup can identify a deleted source. Empty filtered results offer Clear filter.
 
 Initial capability and inventory failures share one recovery region and Retry retries failed requests. Refresh failures retain cached inventory, including a previously empty result. Recovery buttons are disabled during their own requests. Capability-disabled feedback remains distinct from a request failure, and retains Retry capabilities if refreshing that cached result fails. The inventory scrolls locally below its minimum width so names and actions remain readable. Creating-state motion respects reduced motion; failed-status details remain available to keyboard users.
+
+### CI runner capacity and recovery
+
+Runners use single-line resource rows, explicit status text and fixed 25-row pagination. Server-side search stays editable after a failed request. Initial failures show a retry state; refresh failures retain cached rows, including a successful empty inventory. Cached page counts remain available after a refresh failure, allowing navigation to another page. Paging stays locked during active requests; placeholder data does not provide a page count. Polling and socket invalidation remain active.
+
+Owners edit the concurrency limit in a centered modal. Numeric text stays editable until submission validates it; zero pauses new jobs, and “Use account limit” clears the draft to inherit the account allowance. Cancellation discards the draft. Saving locks dismissal and duplicate submission, while failures keep the draft available for correction. Focus returns to Edit limit when the modal closes.
