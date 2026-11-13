@@ -1484,9 +1484,10 @@ promised. Deployment and dev data reset remain operator actions.
 ## API release identity
 
 `GET /v1/config` reports the generated API identity bundled with this source, unless
-`VERSION` is explicitly supplied. Cloud publication passes that same identity to the
-image; deployment must not overwrite it with the deployment tool's workspace version.
+`VERSION` is explicitly supplied. Cloud publication passes that same identity to the image.
 Direct Docker builds and local API runs use the bundled value when `VERSION` is absent.
-Development identities match pending SDK rules exactly; release preparation replaces
-`next-release` with the chosen product version. `unplanned` stays explicitly unsupported.
+Development versions use the current workspace version unchanged, without adding
+a suffix or content hash. Pending SDK rules compare SemVer precedence, so build
+metadata does not affect acceptance. Release preparation replaces `next-release`
+with the chosen product version. `unplanned` stays explicitly unsupported.
 See [version declarations and release finalization](../../docs/reference/README.md#adding-an-operation-or-request-field).

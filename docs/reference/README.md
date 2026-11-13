@@ -46,7 +46,7 @@ implementation currently serves all 35 paths:
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
 `GET /v1/config` reports `api_version`, using the server's product release
-number (the same numbering as SDK releases), with a generated development identity before finalization. Version compatibility does not
+number (the same numbering as SDK releases), including during development. Version compatibility does not
 promise that every deployment enables every operation. Servers still reject
 unsupported features and unauthorized requests explicitly. Existing discovery
 flags remain for older SDKs; new SDK checks use only the version.
@@ -93,17 +93,23 @@ An operation-level annotation applies to every request to that operation.
 
 | Minimum | Development behavior | Bump behavior |
 | --- | --- | --- |
-| `next-release` | Requires the identical generated development API identity | Replaced with the chosen release version |
+| `next-release` | Uses the current workspace version as the minimum, compared by SemVer precedence | Replaced with the chosen release version |
 | `unplanned` | Returns `Unsupported`: not yet supported, before version discovery | Preserved unchanged |
 | Concrete SemVer | Requires that release or newer by SemVer precedence | Preserved unchanged |
 
-Development identity is `<workspace-version>+dev.<SHA-256 of canonical OpenAPI>`.
-For example, a `0.12.0+dev.<digest>` SDK does not accept stable `0.12.0` or an
-unrelated newer release as proof of a pending feature; only the same full identity matches.
-This identifies the declared contract, not implementation correctness or authorization.
-A different contract, even a documentation edit, changes the digest.
-Numeric minima cannot exceed the workspace release, so exact development rules
-cannot hide a stricter released requirement. `unplanned` dominates all triggered rules.
+Generation resolves `next-release` to the current version in the root `Cargo.toml`,
+such as `0.13.0`, without adding a suffix or hash. Any prerelease or build metadata
+already declared in the workspace version is preserved. The YAML remains unchanged;
+only release finalization replaces its `next-release` declarations.
+SemVer precedence ignores build metadata: a `0.13.0` minimum accepts
+`0.13.0`, `0.13.0+build.7`, and newer releases, but rejects
+`0.12.9` and `0.13.0-rc.1`. Ordinary requests without triggered rules still skip discovery.
+
+This permits different builds of the same version to interoperate, but cannot
+distinguish features added within that version. Servers still enforce feature
+availability and authorization. Rebuild older development SDKs that contain
+hash-based exact rules before using servers that report the workspace version.
+Numeric minima cannot exceed the workspace release. `unplanned` dominates all triggered rules.
 
 1. Add the operation or request field and its declaration to `openapi/box.openapi.yaml`.
 2. Run `make setup:openapi` once, then `make generate:openapi`.

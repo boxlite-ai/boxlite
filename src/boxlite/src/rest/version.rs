@@ -8,7 +8,7 @@ use semver::Version;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// API identity shared by matching servers and development SDK builds.
+/// API version shared by servers and SDK builds.
 pub fn api_version() -> &'static str {
     static VERSION: LazyLock<String> = LazyLock::new(|| {
         serde_json::from_str(include_str!("api_version.json")).expect("generated API version")
@@ -65,8 +65,6 @@ struct Route {
     path: String,
     operation: String,
     minimum: Option<Minimum>,
-    #[serde(default)]
-    exact: bool,
     rules: Vec<FieldRule>,
 }
 
@@ -75,8 +73,6 @@ struct FieldRule {
     location: String,
     path: Vec<String>,
     minimum: Minimum,
-    #[serde(default)]
-    exact: bool,
     condition: String,
     #[serde(default)]
     default: Value,
@@ -88,7 +84,6 @@ pub(super) struct Requirement<'a> {
     operation: &'a str,
     field: Option<&'a FieldRule>,
     minimum: &'a Minimum,
-    exact: bool,
 }
 
 impl Requirement<'_> {
@@ -103,12 +98,6 @@ impl Requirement<'_> {
                 self.operation, field
             ));
         }
-        if self.exact {
-            return BoxliteError::Unsupported(format!(
-                "{}{} requires matching development API {}; reported {}. Use the matching development server or a finalized SDK release.",
-                self.operation, field, self.minimum, reported
-            ));
-        }
         BoxliteError::Unsupported(format!(
             "{}{} requires server >= {}; reported {}. Upgrade the server and recreate the client, or omit the unsupported feature.",
             self.operation, field, self.minimum, reported
@@ -120,7 +109,7 @@ impl Requirement<'_> {
         let Minimum::Released(minimum) = self.minimum else {
             unreachable!()
         };
-        if (self.exact && server != minimum) || server.cmp_precedence(minimum).is_lt() {
+        if server.cmp_precedence(minimum).is_lt() {
             return Err(self.rejection(&server.to_string()));
         }
         Ok(())
@@ -176,7 +165,6 @@ fn evaluate<'a>(
         operation: &route.operation,
         field: None,
         minimum,
-        exact: route.exact,
     });
     // JSON is inspected only where rules require it. Never consume a streamed
     // archive or rebuild a serialized body: this is a guard, not a serializer.
@@ -245,18 +233,13 @@ fn evaluate<'a>(
             .iter()
             .any(|v| rule.condition == "present" || v != &rule.default)
             && required.as_ref().is_none_or(|r| {
-                rule.minimum == Minimum::Unplanned
-                    || (*r.minimum != Minimum::Unplanned
-                        && ((rule.exact && !r.exact)
-                            || (rule.exact == r.exact
-                                && rule.minimum.cmp_precedence(r.minimum).is_gt())))
+                rule.minimum == Minimum::Unplanned || rule.minimum.cmp_precedence(r.minimum).is_gt()
             })
         {
             required = Some(Requirement {
                 operation: &route.operation,
                 field: Some(rule),
                 minimum: &rule.minimum,
-                exact: rule.exact,
             });
         }
     }
