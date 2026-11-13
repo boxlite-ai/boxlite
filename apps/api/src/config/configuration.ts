@@ -423,8 +423,8 @@ function boundedNumber(
  * The `expansion` block drives the runner-disk-expansion cron: it grows a
  * GCP runner's data disk through `disks.update` when free space falls below a
  * water level, rate-limited to GCP's own budget (2 expansions per 4 hours)
- * and a configured cap. `enabled` defaults to false and no other key changes
- * any default, so an unset block is exactly today's behavior. The cap is its
+ * and a configured cap. `enabled` defaults to true; only an explicit
+ * `RUNNER_DISK_EXPANSION_ENABLED=false` keeps the cron dormant. The cap is its
  * own key rather than reusing `expandLimitGiB` because that key feeds the
  * placement admission formula: sharing it would widen the admission ceiling
  * the moment expansion is enabled. Resolution order:
@@ -457,9 +457,9 @@ export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
       'a percentage from 0 up to (not including) 100',
     ),
     expansion: {
-      // Master switch; the gray-release lever. Off means the controller,
-      // sampling and unschedulable marks all stay dormant.
-      enabled: env.RUNNER_DISK_EXPANSION_ENABLED === 'true',
+      // Master switch. Off stops the controller and sampling.
+      // Existing disk_expand_exhausted marks are not lifted while off.
+      enabled: env.RUNNER_DISK_EXPANSION_ENABLED?.trim().toLowerCase() !== 'false',
       // Expansion ceiling. Unset resolves at evaluation time to the admission
       // expand limit, then to a per-runner default of twice the disk's
       // baseline size — the size at its first expansion attempt, fixed across

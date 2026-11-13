@@ -214,7 +214,7 @@ export function sampleBucketAt(now: Date, intervalMinutes: number): Date {
  * lifts itself once usage drops, budget frees up, and the cap has room again.
  * A single Redis lease keeps multiple API instances from running the round.
  *
- * Everything is dormant while RUNNER_DISK_EXPANSION_ENABLED is off (default):
+ * Everything is dormant while RUNNER_DISK_EXPANSION_ENABLED is false:
  * no sampling, no marks, no GCP calls.
  */
 @Injectable()
