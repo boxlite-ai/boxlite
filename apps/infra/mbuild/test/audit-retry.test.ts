@@ -41,8 +41,13 @@ const fixture = (t: TestContext, manager: 'npm' | 'yarn') => {
       },
     }),
   )
-  script('gcloud', 'if [[ "$*" == *"repositories describe"* ]]; then echo True; fi')
-  script('docker', 'echo docker >> "$AUDIT_TEST_CALLS"; exit 99')
+  script('gcloud', 'if [[ "$*" == *"repositories describe"* ]]; then echo True; elif [[ "$*" == *"--format=json"* ]]; then echo "[]"; fi')
+  script('docker', 'if [ "$1" = login ]; then cat >/dev/null; exit 0; fi; echo docker >> "$AUDIT_TEST_CALLS"; exit 99')
+  script('curl', `if [[ "$*" == *'/token?'* ]]; then
+printf '%s\\n200\\napplication/json' '{"token":"test-token"}'
+else
+printf '%s\\n404\\napplication/json' '{"errors":[{"code":"MANIFEST_UNKNOWN"}]}'
+fi`)
   script('sleep', 'echo sleep >> "$AUDIT_TEST_CALLS"')
   const audit = 'echo audit >> "$AUDIT_TEST_CALLS"; echo "$AUDIT_TEST_STDOUT"; echo "$AUDIT_TEST_STDERR" >&2; exit 1'
   script('corepack', audit)
@@ -69,6 +74,13 @@ exec "$AUDIT_TEST_NODE" --import "$AUDIT_TEST_LOADER" --conditions=development "
     SHA: sha,
     TARGET_STAGE: 'dev',
     ARTIFACT: 'api',
+    GHCR_REPOSITORY: 'boxlite-ai/boxlite',
+    GHCR_USERNAME: 'test-actor',
+    GHCR_TOKEN: 'test-token',
+    GITHUB_ACTIONS: 'true',
+    GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+    GITHUB_WORKFLOW_REF: 'boxlite-ai/boxlite/.github/workflows/mbuild-release.yml@refs/heads/main',
+    GITHUB_JOB: 'publish', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', RUNNER_TEMP: directory,
     TAG: 'v1.2.3',
   }
   return {
@@ -127,6 +139,7 @@ for (const [filename, job] of [
   for (const manager of ['npm', 'yarn'] as const) {
     test(`${filename} stops after one failed ${manager} audit without backoff`, (t) => {
       const probe = fixture(t, manager)
+      if (filename === 'mbuild-release.yml') probe.env.MSTAGE_CONFIG = join(probe.env.MSTAGE_ENV_CONFIG, 'no-cloud-stage')
       const result = probe.run('bash', ['-c', shell])
       assert.equal(result.status, 1, result.stderr)
       assert.match(result.stderr, new RegExp(`${manager} audit did not pass`))

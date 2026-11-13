@@ -4,6 +4,7 @@ PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
 PHONY_TARGETS += test\:unit\:openapi\:server
 PHONY_TARGETS += test\:apps\:infra-local
+PHONY_TARGETS += test\:apps\:mbuild
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += test\:apps\:ci-listener
@@ -683,6 +684,10 @@ test\:apps\:infra: _ensure-infra-deps
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
+
+test\:apps\:mbuild: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mbuild
+	@cd apps/infra && npm run --silent test:mbuild
 
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
