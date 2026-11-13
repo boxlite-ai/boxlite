@@ -52,6 +52,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+import { BoxPageQuery } from './dto/box-page-query.dto'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -215,6 +216,7 @@ export class BoxliteBoxController {
     }
   }
 
+  /** Page the authenticated organization's live inventory with a continuation only when matches remain. */
   @Get()
   @ApiResponse({
     status: 200,
@@ -223,12 +225,29 @@ export class BoxliteBoxController {
   })
   async listBoxes(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Query('pageSize') pageSize?: string,
+    @Query() page: BoxPageQuery,
+    @Param('prefix') prefix?: string,
   ): Promise<ListBoxesResponseDto> {
-    const boxes = await this.boxService.findAllDeprecated(authContext.organizationId)
-    const dtos = await this.boxService.toBoxDtos(boxes)
+    const organizationId = authContext.organizationId
+    if (
+      !organizationId ||
+      authContext.organization?.id !== organizationId ||
+      (prefix && prefix !== 'default' && prefix !== organizationId)
+    ) {
+      throw new BadRequestException('A resolved organization is required to list boxes')
+    }
+    const boxes = await this.boxService.findInventory(organizationId, {
+      pageSize: page.pageSize,
+      status: page.status,
+      after: page.after(organizationId),
+    })
+    const returned = boxes.slice(0, page.pageSize)
+    const dtos = await this.boxService.toBoxDtos(returned)
     return {
       boxes: dtos.map(boxToBoxResponse),
+      ...(boxes.length > page.pageSize
+        ? { next_page_token: page.next(organizationId, returned[returned.length - 1].id) }
+        : {}),
     }
   }
 

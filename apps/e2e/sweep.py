@@ -47,6 +47,7 @@ from pathlib import Path
 import sys
 import time
 import urllib.error
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
@@ -84,10 +85,17 @@ def _idle_since(box: dict) -> datetime | None:
 
 
 def _list_boxes() -> list[dict]:
-    status, body = request_json("GET", auth_context().v1("boxes"))
-    if status != 200:
-        raise SystemExit(f"GET boxes returned HTTP {status}: {body}")
-    return list((body or {}).get("boxes") or [])
+    boxes = []
+    path = auth_context().v1("boxes")
+    while True:
+        status, body = request_json("GET", path)
+        if status != 200:
+            raise SystemExit(f"GET boxes returned HTTP {status}: {body}")
+        boxes.extend((body or {}).get("boxes") or [])
+        token = (body or {}).get("next_page_token")
+        if not token:
+            return boxes
+        path = auth_context().v1("boxes") + "?" + urlencode({"pageToken": token})
 
 
 def _delete(box_id: str) -> tuple[int, dict | None]:

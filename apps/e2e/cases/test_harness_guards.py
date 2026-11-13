@@ -342,6 +342,31 @@ def offline_sweep(monkeypatch):
     return calls
 
 
+def test_sweep_reads_every_inventory_page(monkeypatch, offline_sweep):
+    replies = iter([
+        (200, {"boxes": [{"box_id": "first"}], "next_page_token": "cursor+/="}),
+        (200, {"boxes": [{"box_id": "last"}]}),
+    ])
+
+    def request_json(method, path):
+        offline_sweep.append(path)
+        return next(replies)
+
+    monkeypatch.setattr(sweep_mod, "request_json", request_json)
+    assert [box["box_id"] for box in sweep_mod._list_boxes()] == ["first", "last"]
+    assert offline_sweep == ["/v1/boxes", "/v1/boxes?pageToken=cursor%2B%2F%3D"]
+
+
+def test_sweep_refuses_partial_inventory(monkeypatch, offline_sweep):
+    replies = iter([
+        (200, {"boxes": [{"box_id": "first"}], "next_page_token": "next"}),
+        (503, {"message": "unavailable"}),
+    ])
+    monkeypatch.setattr(sweep_mod, "request_json", lambda *args: next(replies))
+    with pytest.raises(SystemExit, match="HTTP 503"):
+        sweep_mod._list_boxes()
+
+
 def test_waiting_ends_when_the_box_reports_not_found(monkeypatch, offline_sweep):
     replies = iter([(200, None), (404, None)])
 

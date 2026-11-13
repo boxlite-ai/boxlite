@@ -25,6 +25,14 @@ dependency's type mapping because TypeScript replaces inherited `paths` as a who
 Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
 Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
 
+The MCP dispatcher streaming test sends data every 50 ms for longer than its
+one-second idle deadline, leaving scheduling room on coverage-instrumented CI.
+It checks every response byte and total elapsed time; a separate stalled-route
+case still verifies idle cancellation. The fixture stops sending when its socket closes.
+The PostgreSQL worker takeover test expires the stored lease at the pre-persistence
+hook, then acquires a replacement through the real lease store. Preparation keeps
+the normal lease duration, so CI scheduling cannot expire it before the tested boundary.
+
 ### Listener configuration tests
 
 `BOXLITE_LISTEN_HOST` selects the API listener address; unset or empty retains
@@ -91,6 +99,48 @@ publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
 The secret, allowed hostnames and verification timeout remain server-side. Restart
 the API to change a widget configuration; the dashboard reads it at runtime.
 The generated TypeScript and Go configuration models accept an absent `turnstile`.
+
+## Hosted Box inventory
+
+`GET /v1/boxes` and its prefixed alias return an organization-scoped live list,
+ordered by immutable Box ID ascending. `pageSize` defaults to 100 and accepts
+integers from 1 through 1000. Follow `next_page_token` as `pageToken` until the
+response omits it; repeat the same `status` selection. Page size may change.
+MCP `listBoxes` delegates to this REST operation and uses the same continuation.
+A resolved organization is required, including for system administrators; requests
+without one return 400 before querying inventory. A non-`default` path prefix must
+match the resolved organization; unresolved or mismatched prefixes return 400.
+
+Deployment must coordinate client upgrades with the bounded server response.
+Previously released native clients that issue only one list request return at most
+the first 100 Boxes after this server change. Upgrade those SDK/CLI clients to a
+version that follows continuation tokens before deploying this behavior for
+organizations with larger inventories; this endpoint has no legacy unbounded mode.
+The cloud E2E sweep follows every inventory continuation before selecting stale
+Boxes, and network-policy readback follows pages until it finds the target Box.
+Both remain correct when the organization inventory exceeds the default page size.
+
+Filtering occurs before the database limit and matches the response's public
+`status`, including desired-state transitions. For example, a stored started Box
+targeting stopped matches `stopping`, while a stopped Box targeting started matches
+`configured`. Archived Boxes match `stopped`; eligible errors and resizing match
+`unknown`. `paused` and `failed` are accepted but currently have no hosted matches.
+Destroyed Boxes and error Boxes targeting destruction remain excluded.
+
+Tokens are opaque, versioned and bound to organization, resource and status;
+malformed or incompatible tokens and invalid/repeated query values return 400.
+Base64url is encoding, not a signature: tokens carry a position, and every page
+reapplies authorization using the current authenticated organization. Deleting the
+boundary Box does not prevent continuation. Concurrent state changes and inserts
+behind the cursor require a fresh scan for a complete current inventory; pages
+are not a cross-request snapshot or creation-time ordering.
+
+Run `make test:apps:api TEST_FILES=box-inventory.integration.spec` with `DB_HOST`,
+`DB_PORT`, `DB_USERNAME`, `DB_DATABASE` and any required `DB_PASSWORD` to exercise
+real PostgreSQL queries, REST validation and MCP dispatch. The suite uses a unique
+schema and drops it afterward; it skips without `DB_HOST`. Authentication guards
+and enrichment dependencies are replaced in this harness, so it does not establish
+credential-policy enforcement or deployed infrastructure behavior.
 
 ## Registration email policy
 
