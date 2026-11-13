@@ -189,7 +189,7 @@ export function Metric({ label, value, sub }: { label: string; value: ReactNode;
 export const AsciiButton = forwardRef<
   HTMLButtonElement,
   ComponentProps<'button'> & {
-    variant?: 'primary' | 'secondary' | 'danger' | 'dangerSolid'
+    variant?: 'primary' | 'secondary' | 'danger' | 'dangerSolid' | 'quiet' | 'quiet-danger'
     size?: 'default' | 'sm' | 'icon' | 'icon-lg'
   }
 >(function AsciiButton({ variant = 'secondary', size = 'default', type = 'button', ...props }, ref) {
@@ -198,13 +198,15 @@ export const AsciiButton = forwardRef<
       ref={ref}
       type={type}
       variant={
-        variant === 'primary'
-          ? 'default'
-          : variant === 'dangerSolid'
-            ? 'destructive'
-            : variant === 'danger'
-              ? 'danger'
-              : 'outline'
+        variant === 'quiet' || variant === 'quiet-danger'
+          ? variant
+          : variant === 'primary'
+            ? 'default'
+            : variant === 'dangerSolid'
+              ? 'destructive'
+              : variant === 'danger'
+                ? 'danger'
+                : 'outline'
       }
       size={size === 'icon' ? 'icon-sm' : size}
       {...props}
@@ -223,14 +225,10 @@ export function AsciiChip({
     <button
       type="button"
       className={cn(
-        'border px-4 py-2 font-mono text-body tabular-nums transition-colors',
-        // What is not chosen recedes; the chosen one is simply at full value
-        // with a heavier label. A brand hairline is the weakest mark available
-        // and it measured 2.49:1 on the light theme, so brand is kept for
-        // things that are live rather than for marking a click.
+        'border border-border px-4 py-2 font-mono text-body tabular-nums transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-40',
         selected
-          ? 'border-border-selected bg-card font-semibold text-foreground'
-          : 'border-border text-muted-foreground hover:text-foreground',
+          ? 'bg-selection font-semibold text-selection-foreground hover:[&:not(:disabled)]:bg-selection'
+          : 'bg-transparent text-muted-foreground hover:[&:not(:disabled)]:bg-control-hover hover:[&:not(:disabled)]:text-foreground',
         className,
       )}
       {...props}
@@ -260,9 +258,8 @@ export function Panel({ className, children }: { className?: string; children: R
 /**
  * A note under a bar or field: plain explanatory text, no leading marker.
  *
- * The `▸` glyph is reserved for section/heading labels (`SectionTitle`, and
- * the inline heading treatment some dialogs use in its place) — it marks
- * "this line names a section". Putting it on body text too made a heading
+ * Body notes stay unadorned, separate from section headings and metric labels.
+ * Putting a heading marker on body text made a heading
  * and a caption underneath it look like the same kind of line.
  */
 export function PanelNote({ children }: { children: ReactNode }) {

@@ -3,7 +3,8 @@
 import { DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import type { QuickstartRecipe } from '@/lib/quickstart/recipes'
 import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
-import { cn } from '@/lib/utils'
+import { UNDERLINE_LIST, UNDERLINE_TRIGGER } from '@/components/ui/tabs'
+import { TabIcon } from '@/components/ui/TabIcon'
 
 export interface QuickstartPreview {
   recipe: QuickstartRecipe
@@ -40,11 +41,7 @@ export function QuickstartRecipeHeader({
       <div className="mb-5 flex flex-wrap items-center justify-between gap-2 pr-6 font-sans text-label text-muted-foreground">
         <span className="uppercase tracking-[1.5px]">Quickstart</span>
       </div>
-      <div
-        role="group"
-        aria-label="Quickstart action"
-        className="grid grid-cols-2 border-b border-border font-display text-body"
-      >
+      <div role="group" aria-label="Quickstart action" className={UNDERLINE_LIST}>
         {[
           { id: 'code-execution', label: 'Run code', selected: !publishing },
           { id: 'application-deployments', label: 'Build an app', selected: publishing },
@@ -56,13 +53,10 @@ export function QuickstartRecipeHeader({
             onClick={() => {
               if (!selected) preview.onRecipeChange(id)
             }}
-            className={cn(
-              'border-b-2 px-3 py-3 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand',
-              selected
-                ? 'border-foreground text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
+            data-state={selected ? 'active' : 'inactive'}
+            className={UNDERLINE_TRIGGER}
           >
+            <TabIcon name={id === 'code-execution' ? 'code' : 'browser'} />
             {label}
           </button>
         ))}

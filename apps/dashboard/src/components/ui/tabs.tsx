@@ -7,6 +7,7 @@
 'use client'
 
 import * as TabsPrimitive from '@radix-ui/react-tabs'
+import { Slot } from '@radix-ui/react-slot'
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'
@@ -27,36 +28,27 @@ type TabsVariant = 'default' | 'underline' | 'segmented'
 const TRIGGER_BASE =
   'inline-flex items-center justify-center whitespace-nowrap py-1 font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50'
 
-/*
- * `segmented` — square segments sharing collapsed edges.
- *
- * The chosen segment is the one lifted *out* of the strip: the strip's resting
- * surface is `--card`, and the active segment alone is `--background`, the
- * surface of the panel it opens. Weight and value do the rest — the active
- * label is the only one at `foreground` and `font-semibold`.
- *
- * Not `--accent`, which this repo has used for a selected fill (`Sidebar`,
- * `ui/toggle`, `ui/calendar`): it sits ~4 lightness points off the surface it
- * renders on — measured 1.18:1 light, 1.21:1 dark — which is why "which one is
- * selected?" was hard to answer on these strips, and it is also the hover tint,
- * so the two states conflated. Not `--brand` either: brand marks what is live
- * (a running box, a rising cost), and spending it on a click leaves nothing to
- * say "this one is actually doing something".
- */
-const SEGMENTED_LIST = 'inline-flex h-9 w-fit items-center justify-start gap-0 rounded-none bg-card p-0'
+/** Content navigation marks the current panel with a line, leaving action fills to buttons. */
+const UNDERLINE_LIST =
+  'inline-flex h-10 w-full shrink-0 items-end justify-start gap-6 rounded-none border-b border-border bg-transparent p-0'
+
+const UNDERLINE_TRIGGER = [
+  TRIGGER_BASE,
+  // Reserve the indicator in every state and overlap the baseline without shifting content.
+  'choice-trigger [--tab-icon-surface:hsl(var(--background))] relative -mb-px h-full shrink-0 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 py-2 text-body focus-visible:z-20',
+  'text-muted-foreground hover:text-foreground',
+  'data-[state=active]:border-foreground data-[state=active]:text-foreground',
+].join(' ')
+
+/** Compact choices share a persistent neutral selected fill; borders stay equally quiet. */
+const SEGMENTED_LIST = 'inline-flex h-9 w-fit items-center justify-start gap-0 rounded-none bg-transparent p-0'
 
 const SEGMENTED_TRIGGER = [
   TRIGGER_BASE,
-  // Every segment carries all four edges and pulls left by a pixel so the
-  // shared ones collapse into single rules. That is what lets the active
-  // segment brighten its *whole* outline; with a `border-r` divider it could
-  // only ever recolour one side, which does not read as an enclosure.
-  '-ml-px h-full gap-1.5 rounded-none border border-border px-5 text-meta first:ml-0',
-  'text-muted-foreground hover:text-foreground',
-  // `relative z-10` so the brightened outline wins the collapse against its
-  // neighbours instead of being half-covered by them.
-  'data-[state=active]:relative data-[state=active]:z-10 data-[state=active]:border-border-selected',
-  'data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:text-foreground',
+  // Overlap neutral edges; only keyboard focus needs to paint above neighboring segments.
+  'choice-trigger [--tab-icon-surface:hsl(var(--selection))] relative -ml-px h-full shrink-0 gap-1.5 rounded-none border border-border bg-transparent px-5 text-meta first:ml-0 focus-visible:z-20',
+  'text-muted-foreground hover:bg-control-hover hover:text-foreground',
+  'data-[state=active]:bg-selection data-[state=active]:text-selection-foreground data-[state=active]:font-semibold data-[state=active]:hover:bg-selection data-[state=active]:hover:text-selection-foreground',
 ].join(' ')
 
 const TabsVariantContext = React.createContext<TabsVariant>('default')
@@ -76,7 +68,7 @@ function TabsList({
         data-slot="tabs-list"
         className={cn(
           variant === 'underline'
-            ? 'inline-flex items-center w-full bg-transparent border-b border-border rounded-none h-auto p-0 gap-0 justify-start shrink-0 text-muted-foreground'
+            ? UNDERLINE_LIST
             : variant === 'segmented'
               ? SEGMENTED_LIST
               : 'inline-flex h-9 items-center justify-center bg-muted p-1 text-muted-foreground',
@@ -95,7 +87,7 @@ function TabsTrigger({ className, ...props }: React.ComponentProps<typeof TabsPr
       data-slot="tabs-trigger"
       className={cn(
         variant === 'underline'
-          ? `${TRIGGER_BASE} rounded-none border-b-2 border-transparent px-4 py-2.5 text-body data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none`
+          ? UNDERLINE_TRIGGER
           : variant === 'segmented'
             ? SEGMENTED_TRIGGER
             : `${TRIGGER_BASE} px-3 text-body data-[state=active]:bg-card data-[state=active]:text-foreground`,
@@ -110,4 +102,38 @@ function TabsContent({ className, ...props }: React.ComponentProps<typeof TabsPr
   return <TabsPrimitive.Content data-slot="tabs-content" className={cn('flex-1 outline-none', className)} {...props} />
 }
 
-export { Tabs, TabsContent, TabsList, TabsTrigger, TRIGGER_BASE }
+/** Route destinations share content navigation styling without tab/panel keyboard semantics. */
+function TabsNav({ className, ...props }: React.ComponentProps<'nav'>) {
+  return <nav className={cn(UNDERLINE_LIST, className)} {...props} />
+}
+
+function TabsNavLink({
+  active,
+  asChild = false,
+  className,
+  ...props
+}: React.ComponentProps<'a'> & { active: boolean; asChild?: boolean }) {
+  const Component = asChild ? Slot : 'a'
+  return (
+    <Component
+      {...props}
+      data-state={active ? 'active' : 'inactive'}
+      aria-current={active ? 'page' : undefined}
+      className={cn(UNDERLINE_TRIGGER, className)}
+    />
+  )
+}
+
+export {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  TabsNav,
+  TabsNavLink,
+  TRIGGER_BASE,
+  UNDERLINE_LIST,
+  UNDERLINE_TRIGGER,
+  SEGMENTED_LIST,
+  SEGMENTED_TRIGGER,
+}

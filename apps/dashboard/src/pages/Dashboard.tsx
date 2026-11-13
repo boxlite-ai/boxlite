@@ -109,7 +109,7 @@ const Dashboard: React.FC = () => {
             <>
               <header className="flex h-[60px] items-center justify-between border-b border-border px-6 sm:px-10">
                 <LogoText className="h-[40px] w-auto" />
-                <span className="font-mono text-meta text-muted-foreground">GET STARTED WITH BOXLITE</span>
+                <span className="font-sans text-label text-muted-foreground">GET STARTED WITH BOXLITE</span>
               </header>
               {content}
             </>

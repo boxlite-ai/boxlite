@@ -1057,3 +1057,9 @@ Desktop mock examples: [expanded navigation](../../docs/contributing/investigati
 In the compact rail, an active parent link includes its current child in its
 accessible name, such as “Boxes, current section: Checkpoints”. The parent is
 not marked as the current page when its destination differs from the current route.
+
+## Tabs and selection feedback
+
+Content tabs use a persistent underline. Compact choices, such as theme and chart/list mode, use a selected surface. Hover previews interaction without replacing selected feedback. Navigation links preserve route semantics; in-page tabs retain tab/panel keyboard behavior. Icon effects respect reduced motion. Billing, Organization and Quickstart use the same choice rules.
+
+Desktop mock evidence: [previous tabs](../../docs/contributing/investigations/assets/console-tabs/topic02-tabs-before-light.png), [updated light tabs](../../docs/contributing/investigations/assets/console-tabs/topic02-tabs-light.png), and [updated dark tabs](../../docs/contributing/investigations/assets/console-tabs/topic02-tabs-dark.png). The comparison isolates this change against the sidebar parent; both versions already use Inter and Commit Mono. Billing tabs retain arrow-key navigation and their associated panels.
