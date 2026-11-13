@@ -35,6 +35,16 @@ export class RunnerDiskExpansion {
   @Column()
   accepted: boolean
 
+  /**
+   * Whether the PATCH carried provisioned-performance fields. Written on
+   * every performance-carrying attempt regardless of outcome: GCP budgets
+   * performance changes once per 4h per disk, and a rejected attempt also
+   * starts that cooldown, so the gate reads this marker instead of
+   * reconstructing which historical attempts carried fields.
+   */
+  @Column({ default: false })
+  performanceUpdated: boolean
+
   @Column({ type: 'text', nullable: true })
   operation: string | null
 

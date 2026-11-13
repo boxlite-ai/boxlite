@@ -681,6 +681,7 @@ runner host, already grants more damaging capabilities (2026-11-12).
 | `runnerId` | `uuid` | cascades with the runner row |
 | `fromGiB` / `toGiB` | `double precision` | `toGiB` is the requested block-device size; `fromGiB` is the runner-reported filesystem total at request time (~2% below the device) |
 | `accepted` | `boolean` | whether the cloud accepted the request; only accepted rows count against the resize budget |
+| `performanceUpdated` | `boolean` | whether the PATCH carried provisioned-performance fields; every such attempt starts the per-disk performance cooldown regardless of outcome |
 | `operation` | `text` | nullable; zone operation name to poll for completion |
 | `status` | `enum` | `pending` \| `confirmed` \| `failed` |
 | `error` | `text` | nullable; `rate_limited`, `not_accepted`, `unconfirmed`, or the raw operation error |

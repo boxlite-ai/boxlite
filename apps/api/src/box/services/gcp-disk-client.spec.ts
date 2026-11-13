@@ -11,7 +11,7 @@ const ref: RunnerDataDiskRef = { provider: 'gcp', project: 'proj', zone: 'z1', d
 
 function fakeDisks(result: () => Promise<{ name: string }[]>) {
   const update = jest.fn(result)
-  return { update, client: { update } }
+  return { update, client: { update, get: jest.fn(async () => []) } }
 }
 
 describe('GcpDiskClient', () => {
@@ -64,6 +64,92 @@ describe('GcpDiskClient', () => {
       const client = new GcpDiskClient({ disks: disks.client })
 
       await expect(client.resizeDisk(ref, 100)).rejects.toThrow(rateLimited ? GcpDiskRateLimitedError : Error)
+    })
+  })
+
+  describe('resizeDisk performance fields', () => {
+    // The four request shapes the design pins. A mask that omits a carried
+    // field would reset that field to the cloud default; a full PATCH is the
+    // original reset hazard this invariant exists against.
+    it.each([
+      [
+        'size only',
+        undefined,
+        ['sizeGb'],
+        { name: 'disk-1', sizeGb: '4096' },
+      ],
+      [
+        'size + both performance fields',
+        { iops: '5400', throughput: '360' },
+        ['sizeGb', 'provisionedIops', 'provisionedThroughput'],
+        { name: 'disk-1', sizeGb: '4096', provisionedIops: '5400', provisionedThroughput: '360' },
+      ],
+      [
+        'size + IOPS only',
+        { iops: '7200' },
+        ['sizeGb', 'provisionedIops'],
+        { name: 'disk-1', sizeGb: '4096', provisionedIops: '7200' },
+      ],
+      [
+        'size + throughput only',
+        { throughput: '480' },
+        ['sizeGb', 'provisionedThroughput'],
+        { name: 'disk-1', sizeGb: '4096', provisionedThroughput: '480' },
+      ],
+    ])('sends $0', async (_label, performance, expectedPaths, expectedResource) => {
+      const update = jest.fn(async () => [{ name: 'operation-1' }])
+      const client = new GcpDiskClient({ disks: { update, get: jest.fn(async () => []) } })
+
+      await client.resizeDisk(ref, 4096, performance)
+
+      // objectContaining keeps other keys loose, but the paths array inside
+      // it matches exactly, pinning the mask per shape.
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({ diskResource: expectedResource, paths: expectedPaths }),
+      )
+    })
+
+    it('rejects exactly like a size-only update when the transport fails', async () => {
+      const throttled = GoogleError.parseHttpError({
+        error: { code: 429, message: 'rate', status: 'RESOURCE_EXHAUSTED' },
+      })
+      const update = jest.fn(() => Promise.reject(throttled))
+      const client = new GcpDiskClient({ disks: { update, get: jest.fn(async () => []) } })
+
+      await expect(client.resizeDisk(ref, 4096, { iops: '5400' })).rejects.toThrow(GcpDiskRateLimitedError)
+    })
+  })
+
+  describe('getDisk', () => {
+    it('returns the baseline with int64 values normalized to strings', async () => {
+      const get = jest.fn(async () => [
+        { sizeGb: 200, provisionedIops: '3600', provisionedThroughput: 240 },
+      ])
+      const client = new GcpDiskClient({ disks: { get, update: jest.fn() } })
+
+      await expect(client.getDisk(ref)).resolves.toEqual({
+        sizeGb: '200',
+        provisionedIops: '3600',
+        provisionedThroughput: '240',
+      })
+      expect(get).toHaveBeenCalledWith({ project: 'proj', zone: 'z1', disk: 'disk-1' })
+    })
+
+    it('leaves absent provisioned values undefined instead of guessing', async () => {
+      const get = jest.fn(async () => [{ sizeGb: '200' }])
+      const client = new GcpDiskClient({ disks: { get, update: jest.fn() } })
+
+      await expect(client.getDisk(ref)).resolves.toEqual({ sizeGb: '200' })
+    })
+
+    it('maps transport failures through the shared error mapping', async () => {
+      const throttled = GoogleError.parseHttpError({
+        error: { code: 429, message: 'rate', status: 'RESOURCE_EXHAUSTED' },
+      })
+      const get = jest.fn(() => Promise.reject(throttled))
+      const client = new GcpDiskClient({ disks: { get, update: jest.fn() } })
+
+      await expect(client.getDisk(ref)).rejects.toThrow(GcpDiskRateLimitedError)
     })
   })
 
