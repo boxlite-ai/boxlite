@@ -108,6 +108,9 @@ Previously released native clients that issue only one list request return at mo
 the first 100 Boxes after this server change. Upgrade those SDK/CLI clients to a
 version that follows continuation tokens before deploying this behavior for
 organizations with larger inventories; this endpoint has no legacy unbounded mode.
+The cloud E2E sweep follows every inventory continuation before selecting stale
+Boxes, and network-policy readback follows pages until it finds the target Box.
+Both remain correct when the organization inventory exceeds the default page size.
 
 Filtering occurs before the database limit and matches the response's public
 `status`, including desired-state transitions. For example, a stored started Box
