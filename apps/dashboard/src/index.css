@@ -659,12 +659,35 @@ body {
   }
 }
 
+/* Surface roles stay neutral; input shadows compose with Tailwind's focus rings. */
 :root {
+  --field-surface: 0 0% 99%;
+  --field-inset: inset 0 1px 2px rgb(16 24 40 / 0.035);
+  --shadow-floating: 0 2px 4px rgb(16 24 40 / 0.04), 0 8px 24px -8px rgb(16 24 40 / 0.14);
+  --shadow-dialog: 0 4px 8px rgb(16 24 40 / 0.05), 0 24px 64px -20px rgb(16 24 40 / 0.25);
   --scroll-edge-color: 0 0% 0% / 0.09;
 }
 .dark {
+  --field-surface: 0 0% 5%;
+  --field-inset: inset 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-floating: 0 2px 4px rgb(0 0 0 / 0.2), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-dialog: 0 4px 8px rgb(0 0 0 / 0.24), 0 24px 64px -20px rgb(0 0 0 / 0.65);
   --scroll-edge-color: 0 0% 100% / 0.065;
 }
+.console-input-surface:not([data-slot="input-group-control"]),
+.form-field-input {
+  background-color: hsl(var(--field-surface));
+  --tw-shadow: var(--field-inset);
+  --tw-shadow-colored: var(--field-inset);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+.console-floating-surface {
+  box-shadow: var(--shadow-floating);
+}
+.console-dialog-surface {
+  box-shadow: var(--shadow-dialog);
+}
+
 /* Local covers disappear with the scroll; shallow edge backgrounds never cover content.
    Use only on solid native scroll surfaces, not on masked Radix viewports. */
 .scroll-edge {

@@ -139,7 +139,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Name"
                     autoFocus
-                    className="form-field-input"
+                    className="form-field-input font-mono"
                   />
                 </div>
 

@@ -126,7 +126,7 @@ export function ResourceFilter({
   maxLength?: number
 }) {
   return (
-    <div className="resource-filter">
+    <div className="resource-filter console-input-surface">
       <Search aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
       <input
         aria-label={label}

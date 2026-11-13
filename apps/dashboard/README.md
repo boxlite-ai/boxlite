@@ -1203,3 +1203,13 @@ Revoke by port remains available for stopped Boxes and disabled inbound access.
 A result-specific revoke targets that exact port. Uncertain creation locks the
 submitted port and offers revocation instead of retrying creation. Existing
 connections can survive revocation; new requests are blocked after cache expiry.
+
+### Shared control surfaces
+
+Text fields, selectors and resource filters share a neutral inset surface. Floating
+menus and tooltips use the same shallow elevation; dialogs and sheets use a deeper
+shadow. Hard corners, structural borders, and existing keyboard-focus rings remain.
+Form bodies show subtle scroll edges only when more content is available. Resource
+names use the technical-value font while preset labels remain interface text.
+
+Grouped inputs and textareas inherit their InputGroup surface and focus ring; the inner controls remain transparent without an inset shadow. Standalone fields retain their subtle inset surface.
