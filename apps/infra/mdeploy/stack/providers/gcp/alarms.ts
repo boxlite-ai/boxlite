@@ -81,6 +81,7 @@ const watch = ({
   description,
   notificationChannels,
   windowSeconds = DEFAULT_WINDOW_SECONDS,
+  durationSeconds,
 }: {
   resourceName: string
   project: string
