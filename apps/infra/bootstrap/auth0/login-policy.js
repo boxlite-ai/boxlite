@@ -39,6 +39,7 @@ const MCP_RESOURCE_URL = __MCP_RESOURCE_URL_JSON__
 // The BoxLite API's audience. The API does not check email verification itself,
 // so no token for it may reach an unverified database user.
 const API_AUDIENCE = __API_AUDIENCE_JSON__
+const INTERNAL_ACCESS_ENVIRONMENT = __INTERNAL_ACCESS_ENVIRONMENT_JSON__
 
 // The API refuses a request signed for any audience but the one it serves.
 const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
@@ -100,10 +101,26 @@ function needsAccountLink(event) {
 // `event.authorization` unset. The names are the IANA-registered OpenID Connect
 // ones (RFC 9068 section 2.2.2). Auth0 drops them for third-party clients, so
 // the API stores them when present and never refuses a token for lacking them.
-function setIdentityClaims(event, api, emailVerified = event.user?.email_verified === true) {
+function setIdentityClaims(event, api, emailVerified = event.user?.email_verified === true, identity = event.user) {
+  const audience = event.resource_server?.identifier
+  if (INTERNAL_ACCESS_ENVIRONMENT && (
+    isBoxLiteLogin(event) || (API_AUDIENCE !== '' && audience === API_AUDIENCE)
+  )) {
+    const email = typeof identity?.email === 'string' ? identity.email.trim().toLowerCase() : ''
+    const grant = identity?.app_metadata?.[`boxlite_${INTERNAL_ACCESS_ENVIRONMENT}_access`]
+    const matches = grant?.email === email
+    if (
+      !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !emailVerified || identity?.blocked === true ||
+      (matches && grant.allowed === false) ||
+      (email.split('@')[1] !== 'polygala.ai' && !(matches && grant.allowed === true))
+    ) {
+      api.access.deny('This test environment is restricted. Ask a BoxLite administrator for access.')
+      return
+    }
+  }
   api.accessToken.setCustomClaim('email_verified', emailVerified)
-  api.accessToken.setCustomClaim('email', event.user?.email)
-  api.accessToken.setCustomClaim('name', event.user?.name)
+  api.accessToken.setCustomClaim('email', identity?.email)
+  api.accessToken.setCustomClaim('name', identity?.name)
 }
 
 async function tokenEndpoint(body, headers = {}) {
@@ -354,7 +371,7 @@ async function fold(event, api, accounts) {
   for (const user of folded) await adopt(event, stays.user_id, user.user_id)
   for (const user of folded) await link(event, api, stays.user_id, user.user_id)
   if (stays.user_id !== event.user.user_id) api.authentication.setPrimaryUser(stays.user_id)
-  setIdentityClaims(event, api, true)
+  setIdentityClaims(event, api, true, stays)
 }
 
 /**

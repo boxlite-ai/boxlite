@@ -170,7 +170,7 @@ const dashboardFrom = (environment: Environment, hosts: PublicHosts): Record<str
  * one would have the API fail at its first account-link rather than at boot.
  * Refusing here names the missing key.
  */
-const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, string> => {
+const oidcFrom = (environment: Environment, hosts: PublicHosts, stage: string): Record<string, string> => {
   const issuer = optional(environment, 'OIDC_ISSUER_BASE_URL')
   if (!issuer) {
     throw new ApiEnvironmentError(
@@ -187,6 +187,7 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
     optional(environment, key) ? { [key]: optional(environment, key) as string } : {}
   return {
     OIDC_ISSUER_BASE_URL: issuer,
+    OIDC_INTERNAL_ACCESS_ENVIRONMENT: stage === 'dev' || stage === 'stage' ? stage : '',
     OIDC_AUDIENCE: optional(environment, 'OIDC_AUDIENCE') ?? 'boxlite',
     // Safe to set unconditionally: the API probes the issuer's discovery
     // document at boot and only offers this fallback to the dashboard when the
@@ -410,7 +411,7 @@ export const apiEnvironmentFrom = ({
       // shell ran the deploy, since no group can fetch it.
       OTEL_ENABLED: 'true',
       ...dashboardFrom(environment, hosts),
-      ...oidcFrom(environment, hosts),
+      ...oidcFrom(environment, hosts, stage),
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),

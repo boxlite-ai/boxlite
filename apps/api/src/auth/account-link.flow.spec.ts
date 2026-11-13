@@ -80,6 +80,7 @@ function tenant(
     // Claims that replace the ID token's own, which are valid for this tenant.
     grant?: Record<string, unknown>
     adopt?: jest.Mock
+    environment?: 'dev' | 'stage'
   } = {},
 ) {
   const calls: Call[] = []
@@ -171,6 +172,7 @@ function tenant(
     .replace('__AUTH0_DOMAIN_JSON__', JSON.stringify(DOMAIN))
     .replace('__MCP_RESOURCE_URL_JSON__', JSON.stringify(''))
     .replace('__API_AUDIENCE_JSON__', JSON.stringify(''))
+    .replace('__INTERNAL_ACCESS_ENVIRONMENT_JSON__', JSON.stringify(options.environment ?? ''))
   expect(source).not.toMatch(/__[A-Z_]+_JSON__/)
   const exports: Record<string, Handler> = {}
   runInNewContext(source, { exports, require, Buffer, URL, fetch, console: { log: () => undefined } })
@@ -766,4 +768,31 @@ describe('login-time account link, Action and API together', () => {
       expect(again.seen.renders[0].vars.render).not.toBe(first.seen.renders[0].vars.render)
     })
   })
+})
+
+describe('test access after account linking', () => {
+  it.each([false, true])(
+    'uses only the final primary grant (allowed=%s), never the secondary grant',
+    async (allowed) => {
+      const email = 'ada@gmail.com'
+      const primary = Object.assign(account(PASSWORD_USER), {
+        email,
+        app_metadata: { boxlite_dev_access: { email, allowed } },
+      })
+      const { action } = tenant({ accounts: [primary], environment: 'dev' })
+      const step = transaction()
+      await action.onExecutePostLogin(
+        gmail({
+          user: {
+            app_metadata: { boxlite_dev_access: { email, allowed: !allowed } },
+          },
+        }),
+        step.api,
+      )
+      expect(step.seen.primary).toEqual([PASSWORD_USER])
+      expect(step.seen.denied).toHaveLength(allowed ? 0 : 1)
+      if (allowed) expect(step.api.accessToken.setCustomClaim).toHaveBeenCalledWith('email', email)
+      else expect(step.api.accessToken.setCustomClaim).not.toHaveBeenCalled()
+    },
+  )
 })

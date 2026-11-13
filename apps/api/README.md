@@ -1579,3 +1579,36 @@ Dashboard owns its normalized telemetry display types, independently of the remo
 
 The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
 No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.
+
+## Test environment login access
+
+`OIDC_INTERNAL_ACCESS_ENVIRONMENT=dev|stage` enables the internal System Admin
+`GET /api/admin/environment-access?email=...` and `PUT /api/admin/environment-access`
+management routes. It requires the existing enabled OIDC Management client,
+its ID/secret/audience, and provider scopes `read:users` / `update:users_app_metadata`.
+`mdeploy` supplies the setting only for dev/stage. Local/standalone and prod leave
+it unset. These routes are consumed by Backoffice and excluded from the customer
+Swagger surface; they do not add business-request authentication checks.
+
+Lookup requires an exact existing Auth0 email. Update requires `userId`, `email`
+and boolean `allowed`. A grant is stored in `app_metadata.boxlite_dev_access` or
+`boxlite_stage_access` with normalized email, allowed, updatedAt and updatedBy;
+other metadata is preserved. A matching explicit false blocks subsequent login
+and refresh, including corporate-domain default admission. The login Action
+checks verification and only the final primary identity's metadata after linking.
+
+Revoking also removes all API keys created by the identity across organizations,
+then exits invited memberships through existing deletion transactions. The
+personal organization is suspended only when its membership is the user's default,
+its role is Owner, and the organization creator matches. That Owner membership is
+retained, shared invited organizations are not suspended, and running personal
+Boxes receive normal stop intents. Active suspension timestamps are not reset on
+repeat. Default-membership and last-Owner checks still apply. Key and membership
+paging is deletion-safe; cleanup stops at its bounds and reports partial results.
+
+Read `cleanup.complete`, key cleanup, organization outcomes, Box outcomes and
+`errorCode`. A successful metadata write can precede failed local cleanup. No
+write retries automatically; an operator can inspect and repeat revoke. Regrant
+restores login only, never memberships, keys or organization state. Existing JWTs
+expire naturally, existing cache TTLs still apply, and open streams are not forcibly
+closed. There is no per-request Auth0 lookup or Redis revocation registry.

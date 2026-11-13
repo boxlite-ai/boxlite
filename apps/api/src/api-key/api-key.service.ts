@@ -183,6 +183,36 @@ export class ApiKeyService {
     await this.deleteWithEntityManager(this.apiKeyRepository.manager, apiKey)
   }
 
+  /** Revoke the creator's keys across organizations, including keys outside current memberships. */
+  async revokeUserKeys(
+    userId: string,
+    deadline = Date.now() + 20_000,
+  ): Promise<{ deleted: number; complete: boolean }> {
+    let deleted = 0
+    let complete = true
+    for (let page = 0; page < 100; page++) {
+      if (Date.now() >= deadline) return { deleted, complete: false }
+      try {
+        // Always read the first batch: deleting earlier rows makes offset paging unsafe.
+        const keys = await this.apiKeyRepository.find({ where: { userId }, take: 200 })
+        if (!keys.length) return { deleted, complete }
+        await this.apiKeyRepository.remove(keys)
+        deleted += keys.length
+        for (const key of keys) {
+          if (Date.now() >= deadline) return { deleted, complete: false }
+          try {
+            await this.redis.del(apiKeyValidationCacheKey(key.keyHash))
+          } catch {
+            complete = false
+          }
+        }
+      } catch {
+        return { deleted, complete: false }
+      }
+    }
+    return { deleted, complete: false }
+  }
+
   async updateLastUsedAt(organizationId: string, userId: string, name: string, lastUsedAt: Date): Promise<void> {
     const cooldownKey = `api-key-last-used-update-${organizationId}-${userId}-${name}`
 

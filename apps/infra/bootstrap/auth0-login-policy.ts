@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
+import targets from '../auth0/targets.json' with { type: 'json' }
 
 type JsonObject = Record<string, any>
 type JsonBody = JsonObject | JsonObject[]
@@ -462,9 +463,13 @@ export function hydrateLoginPolicyAction(
     __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
     __MCP_RESOURCE_URL_JSON__: JSON.stringify(values.mcpResourceUrl ?? ''),
     __API_AUDIENCE_JSON__: JSON.stringify(values.apiAudience ?? ''),
+    __INTERNAL_ACCESS_ENVIRONMENT_JSON__: JSON.stringify(
+      values.tenant === targets.dev.auth0TenantDomain ? 'dev' :
+        values.tenant === targets.stage.auth0TenantDomain ? 'stage' : '',
+    ),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL|API_AUDIENCE)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL|API_AUDIENCE|INTERNAL_ACCESS_ENVIRONMENT)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)

@@ -733,3 +733,12 @@ test('a disk-expansion switch that is neither true nor false is refused at the d
   // Refused here, where the stage can still be told.
   assert.throws(() => assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'True' }), /must be true or false/)
 })
+
+for (const stage of ['dev', 'stage', 'prod', 'preview']) {
+  test(`internal access management is scoped explicitly for ${stage}`, () => {
+    const { environment } = apiEnvironmentFrom({
+      environment: base, declaration: groups([]), region: 'ap-southeast-1', stage, home: 'aws',
+    })
+    assert.equal(environment.OIDC_INTERNAL_ACCESS_ENVIRONMENT, stage === 'dev' || stage === 'stage' ? stage : '')
+  })
+}
