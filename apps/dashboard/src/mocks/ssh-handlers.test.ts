@@ -1,19 +1,41 @@
 import axios from 'axios'
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import type { ApiClient } from '@/api/apiClient'
-import { generateSshCredentials, requestSsh } from '@/lib/ssh'
+import { requestSsh } from '@/lib/ssh'
 import { sshHandlers } from './ssh-handlers'
 
 const server = setupServer(...sshHandlers)
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterAll(() => server.close())
 
+function hostKey() {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-ssh-preview-'))
+  try {
+    const path = join(directory, 'host')
+    execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path])
+    return {
+      hostPublicKey: readFileSync(`${path}.pub`, 'utf8').split(' ').slice(0, 2).join(' '),
+      config: {
+        listen_address: '0.0.0.0:22',
+        host_private_key: readFileSync(path, 'utf8'),
+        accounts: [{ login: 'box', authorized_keys: [readFileSync(`${path}.pub`, 'utf8').trim()] }],
+      },
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+}
+
 it('mock SSH preserves the configured host identity across disable and enable', async () => {
   const api = { axiosInstance: axios.create({ baseURL: 'https://ssh-preview.test/' }) } as unknown as ApiClient
-  const keys = await generateSshCredentials()
-  const configured = await requestSsh(api, 'mock-org', 'identity-box', 'setup', keys.config)
+  const keys = hostKey()
+  const { data: configured } = await api.axiosInstance.post('v1/mock-org/boxes/identity-box/ssh', keys.config)
   expect(configured.host_public_key).toBe(keys.hostPublicKey)
   const expectedFingerprint = createHash('sha256')
     .update(Buffer.from(keys.hostPublicKey.split(' ')[1], 'base64'))
@@ -26,7 +48,6 @@ it('mock SSH preserves the configured host identity across disable and enable', 
   const enabled = await requestSsh(api, 'mock-org', 'identity-box', 'enable')
   expect(enabled.host_public_key).toBe(configured.host_public_key)
   expect(enabled.host_key_fingerprint).toBe(configured.host_key_fingerprint)
-  expect(JSON.stringify(enabled)).not.toContain(keys.privateKey)
   expect(JSON.stringify(enabled)).not.toContain(keys.config.host_private_key)
 })
 
@@ -34,7 +55,7 @@ it.each(['missing', 'empty', 'truncated'])(
   'mock SSH rejects a %s private-key block without saving configuration',
   async (kind) => {
     const api = { axiosInstance: axios.create({ baseURL: 'https://ssh-preview.test/' }) } as unknown as ApiClient
-    const keys = await generateSshCredentials()
+    const keys = hostKey()
     const envelope = Buffer.from(keys.config.host_private_key.replace(/-----[^\n]+-----/g, ''), 'base64')
     let offset = Buffer.byteLength('openssh-key-v1\0')
     for (let field = 0; field < 3; field++) offset += 4 + envelope.readUInt32BE(offset)
@@ -50,7 +71,7 @@ it.each(['missing', 'empty', 'truncated'])(
     const boxId = `invalid-${kind}-block`
 
     await expect(
-      requestSsh(api, 'mock-org', boxId, 'setup', { ...keys.config, host_private_key: privateKey }),
+      api.axiosInstance.post(`v1/mock-org/boxes/${boxId}/ssh`, { ...keys.config, host_private_key: privateKey }),
     ).rejects.toMatchObject({ response: { status: 400 } })
     expect(await requestSsh(api, 'mock-org', boxId, 'status')).toMatchObject({ enabled: false, generation: 0 })
     await expect(requestSsh(api, 'mock-org', boxId, 'enable')).rejects.toMatchObject({ response: { status: 409 } })

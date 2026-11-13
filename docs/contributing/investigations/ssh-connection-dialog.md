@@ -1,266 +1,85 @@
 # SSH connection dialog
 
-## Problem and scope
+## TL;DR
 
-The SSH tab combines connection instructions, listener controls and configuration
-replacement beside the browser terminal. Connecting from a local terminal requires
-reading a long explanation and manually adapting the generated command.
+The SSH dialog is static guidance for direct CLI login: install, run `boxlite auth login`, then `boxlite ssh <box-id>` to enter a shell. Keep these commands short: the CLI defaults already target the hosted API, and successful login caches the organization's routing prefix. The browser neither prepares SSH nor constructs a second OpenSSH command.
 
-Move connection preparation into a dialog opened by **Connect via SSH**, immediately
-before the box's start/stop action. Show live SSH status and its switch in the left
-Network section. Keep the browser terminal mounted and preserve its fullscreen
-control. Reuse the existing REST endpoints, permission checks, browser key generation
-and network mutation; backend, CLI and API schemas remain unchanged.
+## Scope and interaction
 
-## Interaction
+**Connect via SSH**, beside start/stop, opens three instruction sections with copyable commands. No preparation confirmation, status-dependent steps, mutations, downloads, key-path inputs, browser key generation or reset workflow. Guidance remains readable for stopped Boxes and read-only users; actual prerequisites are explained rather than simulated.
 
-Opening the dialog makes no writes. The entry confirmation explains that SSH and
-inbound access will be enabled. It also discloses conditional key creation and its
-replacement effects: setup replaces SSH accounts and host identity and disconnects
-existing clients.
+The dialog uses the shared constrained layout, divided fixed header, compact monospace text, square code surfaces and `AsciiButton` copy actions. The browser terminal stays mounted. Existing Network controls remain independent.
 
-After confirmation, one guarded operation prepares access. Success reveals three
-steps: set up the CLI, download or enter the private-key path, and copy the connection
-command. CLI instructions start expanded on every entry. **Hide commands** and
-**Show commands** are text actions that change their visibility for that opening
-only; they do not represent local installation or authentication. Downloading a
-private key uses an outlined button, leaving access confirmation as the primary
-action. Invalid or empty key paths hide the command.
+## Connection contract
 
-New keys remain downloadable before leaving the page. A download action does not
-prove that a file was saved or reveal its destination. Returning users enter the
-path to their existing key. A separate **Reset SSH configuration** confirmation
-handles intentional replacement without competing with the connection guide.
+1. Install or update the CLI.
+2. Run `boxlite auth login`, select the API-key method and enter a key for the selected organization. Entry is interactive; secrets never appear in copied commands.
+3. Start the Box, enable **Inbound access** in Network and run `boxlite ssh <box-id>`. This opens a shell directly as `box`; it does not merely print a command to run later. Box-write permission and local `ssh` and `ssh-keygen` are required.
 
-The sidebar switch only enables or disables saved configuration. It never generates
-keys or changes inbound access. Header, sidebar and dialog share a single controller
-and pending state. Status refreshes on request, window focus and every 30 seconds
-while visible and idle; reads do not overlap mutations.
+The CLI owns local Ed25519 credentials, remote credential scoping, tunnel lifetime and system OpenSSH. It uses its own known-hosts file and strict host checking. No manual fingerprint acceptance or separate Dashboard-generated `ssh` command is needed. Default login does not edit user OpenSSH configuration. Explicit `--install-ssh-config` is a separate CLI operation, not a prerequisite for direct login.
 
-The dialog title and close control remain fixed while the body scrolls. The scroll
-container spans the dialog's inner width so the scrollbar follows the right border;
-horizontal padding belongs to the header and scrolling content rather than the
-dialog shell. This preserves the content inset without leaving a gutter outside the
-scrollbar. Command lines wrap visually without changing copied content. Opening and
-closing the dialog preserves the browser terminal instance.
-
-## Backend contract
-
-| Action | Existing behavior preserved |
+| Credentials and observed SSH state | CLI preparation |
 | --- | --- |
-| Read status | GET `/ssh`; disabled status may omit the saved host identity. |
-| Enable | POST `/ssh/enable`; start saved configuration without generating keys. |
-| Disable | DELETE `/ssh`; stop the listener while retaining saved configuration. |
-| Setup | POST `/ssh` with generated configuration; replace accounts and host identity. |
-| Inbound | Existing box network mutation; an SSH failure does not roll this change back. |
+| No managed identity | Configure once; can replace prior SSH accounts/host identity and disconnect clients |
+| Saved identity, enabled | Read and verify host identity; no configuration replacement |
+| Saved identity, disabled with nonzero generation | Enable saved configuration once |
+| Saved identity, generation zero | Configure using saved keys under normal startup rules |
 
-Ordinary connection preparation and retry always read fresh status, enable inbound
-when needed, and call Enable if SSH is disabled. Only a verified missing-configuration
-response permits Setup. HTTP status alone, generic conflicts, authentication errors
-and transport failures cannot trigger key generation or configuration replacement.
-Already enabled SSH needs no configuration write.
+A mismatching observed host identity fails instead of reconfiguring healthy SSH. Authentication failure does not trigger replacement. Previously downloaded browser keys are not imported. Reusing the same CLI home, context, endpoint, organization and Box reuses managed keys.
 
-Missing configuration is a point-in-time observation. The existing API has no atomic
-create-if-absent operation: another client's configuration between Enable's failure
-and Setup can be replaced. The entry confirmation includes that replacement effect;
-the frontend does not claim to provide an atomic multi-client guarantee.
+Direct cloud login requires SSH control, tunnel support and inbound access. Exiting closes local forwarding but leaves the public tunnel declaration open, protected by SSH authentication. Revoke it with `boxlite network tunnel BOX PORT --revoke`, using the same context and prefix.
 
-Connection preparation and command presentation require a running box and
-`WRITE_BOXES`, including when SSH and inbound are already enabled, because the cloud
-proxy creates a network tunnel. Read-only members can inspect status. Permission
-loss, a stopped box or disabled access prevents use of a previously prepared guide.
-Existing busy guards and request versions prevent overlapping operations and stale
-responses from changing another account, endpoint, organization or box.
+## Decision and accepted tradeoff
 
-## Credentials and recovery
+The guide deliberately shows bare login and direct SSH, without endpoint or organization pinning, a dedicated context, shell quoting or environment cleanup. Only the Box ID is interpolated, and it must match `/^[A-Za-z0-9_][A-Za-z0-9_-]*$/`.
 
-Setup generates independent Ed25519 host and client keys in the browser. The guest
-configuration remains login `box` at `0.0.0.0:22`. Only the client's public key is sent;
-the host private key remains part of the existing configuration request. No crypto
-algorithm or request body changes.
+Bare login targets the CLI default endpoint (`https://api.boxlite.ai`) in a fresh setup, does not prompt for an endpoint and writes the selected context. Successful API-key login saves the organization's routing prefix, so the connect command needs no explicit prefix. The tradeoff is intentional: an unrelated selected context, exported `BOXLITE_*` variables or a non-production/self-hosted deployment can change the effective destination or credentials. The guide does not detect or handle these minority cases. One muted line directs users with self-hosted endpoints, other organizations or an existing CLI setup to the existing [SSH guide](https://docs.boxlite.ai/cloud/ssh).
 
-The browser retains the generated host public key beside the client private key.
-This metadata lets fresh GET and Enable responses compare host identity. It cannot
-establish whether a client key remains authorized. A failed Setup response can occur
-after configuration was persisted; matching identity recovers that configuration
-without posting Setup again. Enabled status by itself is insufficient evidence.
+## Existing controls
 
-Failed setup retains the generated key for download. Disabled status with an empty
-identity also preserves the key and path. A positively observed different enabled
-host clears obsolete credentials and path, and asks for the current configuration's
-key. Invalidation updates the live credential reference synchronously so a pending
-asynchronous continuation cannot reuse a discarded key.
+The Network SSH switch only enables/disables saved configuration. It never creates keys or changes inbound. Missing configuration opens the static guide; authentication and permission failures remain errors. Mutations require a running Box and `WRITE_BOXES`; unknown status cannot be toggled.
 
-Every ordinary retry follows the fresh-read/Enable path. Resubmitting retained
-configuration requires another verified missing-config response. Only the separate
-Reset confirmation intentionally replaces observed existing configuration. Cancelling
-Reset leaves the current path and credentials intact.
+Status reads refresh on demand, focus and every 30 seconds while visible and idle, deferring during mutations. Scope, permission and lifecycle changes invalidate stale responses. No automatic mutation retries. Dialog content is independent of these states.
 
-## Local preferences and command construction
+## Source basis and alternatives
 
-Private keys remain in component memory and the downloaded file. Closing the dialog
-preserves memory; leaving or reloading the page discards it. No private material is
-written to browser storage.
+The compatibility target is the direct-login contract in [CLI PR #2546](https://github.com/boxlite-ai/boxlite/pull/2546), not the older print-command CLI. Source references below refer to that PR:
 
-Optional sessionStorage remembers a validated key path and its host public key,
-scoped to API endpoint, authenticated identity, organization and box. A confirmed
-host change invalidates the path. Disabled status alone does not. Missing identity
-or unavailable storage falls back to component state. A remembered path is not proof
-that the file exists or that authentication will succeed. Restoring a saved path
-shows a neutral reminder to confirm that the key remains authorized. A matching
-host cannot establish whether authorization changed while the page was closed;
-the reminder does not claim that any configuration change was detected. Fresh
-manual paths and keys from acknowledged Setup do not trigger this restored-path
-reminder. It shares the existing authorization notice's lifetime.
+- `src/cli/src/commands/ssh/mod.rs`, `execute`: default invocation routes to managed preparation/login.
+- `src/cli/src/commands/ssh/setup.rs`, `execute` and `prepare_ssh`: conditional configure/enable/status, host identity checks and immediate connection. Alias installation returns separately without opening a session.
+- `src/cli/src/commands/ssh/connect.rs`, `execute` and `run_session`: loopback forwarding, system OpenSSH, private known-hosts file, strict checking and inherited terminal streams.
+- `docs/guides/ssh.md`, **CLI** and **Managed OpenSSH aliases**: credential scope, direct-session behavior, separate alias installation and persistent public tunnel declarations.
 
-The proxy command retains the existing
-`boxlite --path-prefix=… ssh --proxy -- BOX` operation with an explicit context
-for the Dashboard endpoint. CLI login uses that same context and API endpoint;
-credentials are never embedded in copied commands.
-Path handling supports `~/`, spaces, quotes, backslashes and literal percent signs
-while rejecting control characters and `${...}` expansion. Shell quoting and
-OpenSSH token expansion are both accounted for. Relative paths resolve in the local
-terminal's working directory.
+Keeping the older printed-command instructions would require an extra step that this CLI never offers. Blanket warnings that every reconnection replaces configuration would also contradict its healthy-reuse path. Keep direct login as the only primary flow; alias installation remains optional CLI functionality.
 
-The guide exposes the host fingerprint for verification. The cloud proxy requires
-inbound access and opens a public tunnel protected by SSH authentication. Exiting
-SSH leaves the tunnel declaration open; preparing SSH in the dashboard creates no
-tunnel.
+## Validation boundary
 
-## Design references
+Focused SSH checks cover the exact short commands, Box-ID validation, API-key instructions and the docs caveat, clipboard failure/retry, no-write guide actions, saved-state switches, permission/lifecycle guards and stale responses. Mock browser inspection covers the actual three-step guide, command copying and desktop/mobile layout. Neither a mock preview nor these Dashboard checks prove a live cloud SSH handshake or availability of the target CLI in the public installer.
 
-- [React state preservation](https://react.dev/learn/preserving-and-resetting-state)
-  informs stable terminal identity and scoped SSH controller state.
-- [Radix Dialog](https://www.radix-ui.com/primitives/docs/components/dialog)
-  supplies the existing modal, focus and dismissal behavior.
-- [OpenSSH configuration](https://man.openbsd.org/ssh_config), especially
-  IdentityFile, TOKENS and ENVIRONMENT VARIABLES, defines path expansion constraints.
-- The existing guest SSH service, cloud tunnel permissions and CLI context behavior
-  define the operation and recovery contract. No additional dependency is needed.
+## Compact layout
 
-## Validation
+Repeated “Local terminal” headers made the guide taller than the available
+desktop space. Copy actions now share each step heading; redundant prose and
+spacing are reduced without shrinking the 13px command text. The dialog is
+760px wide on desktop and bounded by the viewport height minus 32px. Short
+windows retain a thin body scrollbar and a fixed title/close control.
 
-### Audit corrections
+Browser checks observed all steps and the final guide link without scrolling at
+1280×720. At 1280×600 and 390×844, the body scrolled to the final link while the
+header stayed fixed and no horizontal overflow occurred. The 32 focused SSH
+checks passed; no live SSH handshake was run.
 
-Status refresh and mutation completion need separate lifetimes. A detail refresh
-requested during a mutation is deferred until the mutation has committed its
-response; scope changes, permission loss, stopped boxes and unmount still invalidate
-pending work. This prevents a pre-commit read from discarding a successful Disable.
+## Screenshots
 
-Reset retains the current key and path while inbound access is prepared and the
-configuration POST runs. The proposed replacement stays separately in memory until
-an enabled status exposes its host identity; failures retain both keys.
-An explicit Reset action is also available after preparation fails, using the same
-replacement confirmation and permission guards as the connection guide.
+Both screenshots use mock data. The earlier screenshot records the browser-key
+workflow and predates the current navigation; the new screenshot shows the current
+static three-step guide at 1280×720 with the short commands. Neither demonstrates
+a live SSH connection.
 
-A host-key match checks host identity, not whether a client key remains authorized.
-An externally observed generation change with the same host warns that the key may
-need authorization again without discarding a potentially valid private key. Copy
-feedback is scoped to the displayed command so late completion cannot report success
-for a newer path. Missing-configuration recognition accepts complete known diagnostics,
-including verified transport wrappers, and rejects missing-component diagnostics.
+### Previous browser-key guide
 
-The copied login and proxy commands both remove `BOXLITE_REST_URL` from their child
-environment before invoking the CLI and select the same endpoint-specific context.
-Relative filenames equal to `none`, case-insensitively, receive a `./` prefix so
-OpenSSH does not interpret them as disabling the identity file. The mock additionally
-requires a nonempty private-key block before accepting a generated-key envelope.
+![Previous SSH guide with key download and local path input](assets/ssh-connection-after.png)
 
-Regression checks exercise deferred mutation/refresh ordering, inbound failure before
-Reset submission, out-of-band authorization changes, recovery from Enable failure,
-pending-copy races, ambiguous diagnostics, real OpenSSH identity handling, CLI child
-environment, malformed mock envelopes and the sidebar portal's actual placement.
-The preview fingerprint is checked independently from the generated host public key.
+### Static direct-login guide
 
-Regression coverage includes consent before writes, fresh reads and request ordering,
-exact missing-config recovery, reconnect after Disable, another client's host change,
-failed Setup recovered through matching GET or Enable, retained downloads, explicit
-Reset, permission loss, stale responses, storage isolation and terminal preservation.
-UI boundary tests verify that invalid paths hide the command without replacing a
-saved valid path, clipboard rejection can be retried and changing the command resets
-copy feedback, and missing authenticated identity keeps paths in memory only.
-Key tests use OpenSSH to check generated host metadata and special-character paths.
-The MSW preview echoes the actual generated public host identity, retains saved
-configuration across Disable/Enable and hides disabled listener identity.
-
-Browser verification exercises first-time preparation, key download, path entry,
-close, sidebar Disable, status refresh and reconnect. Reconnect sends GET `/ssh`
-followed by POST `/ssh/enable`, without a Setup POST, and preserves the key download
-and path. The screenshots below use local mock data and contain no private keys.
-This verification does not establish a live cloud SSH handshake.
-
-On the main-based branch, the Dashboard suite passed all 97 test files
-and 858 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
-reused the existing local dependency installation without changing the lockfile.
-Browser measurements confirm the scrolling body's right edge meets the dialog's
-inner border at desktop and narrow widths, with no horizontal content overflow;
-the title keeps its position relative to the dialog while the body scrolls.
-Browser accessibility-tree verification confirms that the key input's description
-includes the active hint, authorization reminder and validation error together.
-
-### Recovery after configuration changes
-
-An external generation change observed while SSH is disabled remains pending until
-an enabled status can expose the host identity. Re-enabling the listener does not
-silence the authorization warning for a retained client key. A local Disable alone
-is not evidence that another client changed authorization.
-
-Reset keeps the existing private key and path while holding the proposed replacement
-in memory separately. A rejected or indeterminate configuration POST therefore does
-not destroy the only copy of either key. A later enabled status selects the matching
-host identity; if it matches the proposed replacement, the guide adopts that key and
-clears the previous path. An unresolved replacement remains downloadable and is reused
-for an explicitly confirmed retry. Merely observing the old host does not discard the
-candidate: a timed-out request may still finish. No recovery read submits Setup unless
-Enable reports an exact missing-configuration diagnostic. Both keys remain memory-only.
-
-Login and ProxyCommand explicitly select a context named `dashboard:<endpoint>`.
-The full normalized endpoint supplies a deterministic, collision-free name without
-changing the user's current context or overwriting unrelated profiles. Both commands
-remove `BOXLITE_REST_URL`; explicit `--context` overrides ambient context selectors.
-This prevents an ordinary context switch or login in another terminal from redirecting
-the proxy. Deliberately modifying the same named context can still change its endpoint:
-the current CLI cannot pin an arbitrary context and URL together, so that stronger
-contract would require a CLI change outside this frontend revision.
-
-Regression checks cover disabled-generation warnings, Setup rejection before changes,
-indeterminate Setup followed by either old or replacement host identity, retained key
-downloads, and matching explicit contexts despite ambient overrides. OpenSSH identity
-checks verify the generated public key and actual identity-file loading without relying
-on the version-specific numeric key-type enum.
-
-### Host identity and local home expansion
-
-Recovering a replacement by host identity selects the matching download, but does
-not prove that its client key is still authorized. Adoption after an indeterminate
-Setup therefore retains a conservative authorization warning, whether recovery
-comes from GET or Enable. Only the acknowledged Setup response for the submitted
-configuration clears that warning. Editing the local key path dismisses only the
-path-entry hint; it does not establish client authorization. The authorization
-warning survives path edits and unchanged status refreshes until an acknowledged
-Setup replaces the configuration. The key input's accessible description includes
-its persistent hint, any active identity/authorization notice, and any active path
-validation error. Notice and error references exist only while their elements are
-rendered; live-region roles remain for changes while focus is elsewhere.
-
-For a key path beginning with `~/`, both chmod and OpenSSH must resolve the same
-home directory, including when the path or HOME contains percent signs. The
-IdentityFile branch uses OpenSSH's
-`${HOME}` environment expansion for the leading home segment; shell chmod already
-uses `$HOME`. User-supplied variable expressions remain rejected. Real OpenSSH
-regressions use an isolated HOME different from the account home, including home
-directory names with spaces and percent signs, and verify identity loading and
-permissions on the same generated key.
-
-### Before
-
-The original SSH tab opens a prose-heavy connection-details dialog.
-
-![Original SSH connection details](assets/ssh-connection-before.png)
-
-### After
-
-The connection guide presents CLI setup, the key path and a copyable command, with
-SSH status in the Network section and the terminal preserved behind the dialog.
-
-![SSH connection guide](assets/ssh-connection-after.png)
+![Static SSH guide with all three steps visible](assets/ssh-connection-static.png)

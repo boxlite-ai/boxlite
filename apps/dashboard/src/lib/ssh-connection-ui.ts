@@ -2,32 +2,7 @@
 
 import { isAxiosError } from 'axios'
 
-type SshPreferences = { keyPath?: string; hostPublicKey?: string }
-
-/** Read optional, nonsecret path preferences; unavailable storage never blocks connecting. */
-export function readSshPreferences(key?: string): SshPreferences {
-  try {
-    const value = key ? JSON.parse(sessionStorage.getItem(key) ?? '{}') : {}
-    return {
-      keyPath: typeof value?.keyPath === 'string' ? value.keyPath : '',
-      hostPublicKey: typeof value?.hostPublicKey === 'string' ? value.hostPublicKey : '',
-    }
-  } catch {
-    return {}
-  }
-}
-
-/** Persist only in an authenticated scope; callers bind a validated path to its host identity. */
-export function rememberSshPreferences(key: string | undefined, update: SshPreferences) {
-  if (!key) return
-  try {
-    sessionStorage.setItem(key, JSON.stringify({ ...readSshPreferences(key), ...update }))
-  } catch {
-    // Storage is optional; blocked storage must not prevent a connection.
-  }
-}
-
-/** Classify actionable failures without interpreting partial diagnostics as permission to replace keys. */
+/** Keep missing configuration distinct from authentication, permission and transport failures. */
 export function sshFailureReason(error: unknown): 'missing-config' | 'authentication' | 'permission' | 'unknown' {
   if (!isAxiosError(error)) return 'unknown'
   if (error.response?.status === 401) return 'authentication'

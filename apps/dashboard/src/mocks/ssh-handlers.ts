@@ -13,7 +13,7 @@ const empty: SshStatus = {
 const route = '*/v1/:organizationId/boxes/:boxId/ssh'
 const scope = (params: PathParams) => `${params.organizationId}:${params.boxId}`
 
-// The preview must echo the generated host identity so the real UI can match keys.
+// Derive the status identity from the configured host key, as the service does.
 function hostPublicBlob(privateKey: string) {
   const decoded = atob(privateKey.replace(/-----[^\n]+-----/g, '').replace(/\s/g, ''))
   if (!decoded.startsWith('openssh-key-v1\0')) throw new Error('Invalid mock SSH key')
