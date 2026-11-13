@@ -76,6 +76,8 @@ own.
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
+Cloud E2E accepts an optional release-client `tag`; see the
+[suite guide](../../apps/e2e/README.md) for downloaded clients and remaining dev driver builds.
 Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
 Its separate identity step verifies cross-organization isolation and same-organization
 read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.

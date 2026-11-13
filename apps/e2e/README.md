@@ -6,6 +6,25 @@ These tests exercise the **full production path**:
 Python SDK (boxlite.Boxlite.rest) → HTTP → NestJS API → HTTP → boxlite-runner → libkrun VM
 ```
 
+Cloud runs accept an optional `tag` in the **E2E cloud** workflow, including
+reusable calls. For example, `tag=v0.13.1` downloads that release's Python wheel,
+Node SDK/native addon and CLI instead of compiling them. Leave `tag` blank to
+build clients from the selected checkout, as before. Only stable `vX.Y.Z` tags
+are accepted; unavailable artifacts fail the run without falling back to source.
+
+```bash
+gh workflow run e2e-cloud.yml -f stage=dev -f tag=v0.13.1
+```
+
+Tests still come from the selected checkout and target the selected deployed
+stage. On dev, C/Go domain drivers link the released C library; Go SDK source
+comes from the release tag. The Rust domain driver compiles against that tag's
+Rust SDK, so dev still has some Rust compilation. All driver source programs
+come from the test checkout, preserving current acceptance coverage. A release
+that lacks APIs required by current tests fails those tests or driver builds.
+Prod retains its Python-only smoke selection. This input changes client versions;
+it does not deploy or change the cloud stack.
+
 Existing `make test:integration:*` tests use the local PyO3 / FFI path
 (`Boxlite.default()`) and bypass both the API and the runner — so a bug that
 only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop,

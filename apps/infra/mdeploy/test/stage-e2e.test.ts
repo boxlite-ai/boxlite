@@ -19,6 +19,7 @@ const evaluate = (
   sweepRequested = true,
   variables: Record<string, string> = {},
   apiUrl = '',
+  tag = '',
 ): data.ExpressionData => {
   const contexts = new data.Dictionary(
     {
@@ -27,6 +28,7 @@ const evaluate = (
         { key: 'stage', value: new data.StringData(stage) },
         { key: 'sweep', value: new data.BooleanData(sweepRequested) },
         { key: 'api_url', value: new data.StringData(apiUrl) },
+        { key: 'tag', value: new data.StringData(tag) },
       ),
     },
     {
@@ -82,4 +84,38 @@ test('stage uses the same URL override, variable and default precedence as dev',
       'https://override.example.test',
     )
   }
+})
+
+test('cloud release clients preserve source defaults and stage coverage', () => {
+  for (const trigger of ['workflow_call', 'workflow_dispatch']) {
+    assert.equal(workflow.on[trigger].inputs.tag.type, 'string')
+    assert.equal(workflow.on[trigger].inputs.tag.required, false)
+  }
+  const enabled = (name: string, stage: string, tag: string) => {
+    const step = steps.find((step: any) => step.name === name)
+    assert.ok(step, name)
+    return !step.if || evaluate(step.if, stage, true, {}, '', tag).coerceString() === 'true'
+  }
+  for (const stage of ['', 'dev', 'stage', 'prod']) {
+    const dev = stage === '' || stage === 'dev'
+    const prod = stage === 'prod'
+    for (const tag of ['', 'v0.13.1']) {
+      assert.equal(enabled('Build CLI', stage, tag), !tag && !prod)
+      assert.equal(enabled('Build Node SDK (napi + tsc)', stage, tag), !tag && !prod)
+      assert.equal(enabled('Build & install Python SDK', stage, tag), !tag)
+      assert.equal(enabled('Build C, Go and Rust subdomain clients', stage, tag), !tag && dev)
+      assert.equal(enabled('Install release CLI', stage, tag), !!tag && !prod)
+      assert.equal(enabled('Install release Node SDK', stage, tag), !!tag && !prod)
+      assert.equal(enabled('Install release Python SDK', stage, tag), !!tag)
+      assert.equal(enabled('Build release C, Go and Rust subdomain clients', stage, tag), !!tag && dev)
+      assert.equal(enabled('Checkout release SDK sources for subdomain clients', stage, tag), !!tag && dev)
+      assert.equal(enabled('Setup Rust toolchain', stage, tag), !tag || dev)
+    }
+  }
+  const validate = steps.find((step: any) => step.name === 'Validate client release')
+  assert.ok(steps.indexOf(validate) < steps.indexOf(configure))
+  const checkout = steps.find((step: any) => step.name === 'Checkout release SDK sources for subdomain clients')
+  assert.equal(checkout.with.ref, '${{ inputs.tag }}')
+  assert.equal(checkout.with['persist-credentials'], false)
+  assert.equal(checkout.with.path, 'target/e2e-release')
 })

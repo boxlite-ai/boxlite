@@ -1,5 +1,6 @@
 PHONY_TARGETS += _ensure-python-deps _ensure-node-deps _ensure-apps-deps
 PHONY_TARGETS += build\:e2e\:drivers
+PHONY_TARGETS += build\:e2e\:release-drivers
 
 # Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:
@@ -63,3 +64,17 @@ build\:e2e\:drivers: dev\:go
 	$(CC) -std=c11 -Wall -Wextra -Werror -Isdks/c/include apps/e2e/sdks/c/e2e_domains.c -Ltarget/debug -lboxlite -Wl,-rpath,$(PROJECT_ROOT)/target/debug -o target/e2e/domain-c
 	@cd sdks/go && go build -tags boxlite_dev -o ../../target/e2e/domain-go ../../apps/e2e/sdks/go/e2e_domains.go
 	@cargo build --locked -p boxlite-e2e-rust --bin domain-rust
+
+# The workflow checks out the selected release separately. Driver sources stay
+# current, while headers, native libraries and SDK implementations come from it.
+E2E_RELEASE_ROOT := $(PROJECT_ROOT)/target/e2e-release
+E2E_RELEASE_C_SDK := $(PROJECT_ROOT)/target/e2e-c-sdk
+build\:e2e\:release-drivers:
+	@mkdir -p target/e2e target/debug "$(E2E_RELEASE_ROOT)/sdks/go/include" "$(E2E_RELEASE_ROOT)/apps/e2e/sdks/rust"
+	@cp "$(E2E_RELEASE_C_SDK)/lib/libboxlite.a" "$(E2E_RELEASE_ROOT)/sdks/go/"
+	@cp "$(E2E_RELEASE_C_SDK)/include/boxlite.h" "$(E2E_RELEASE_ROOT)/sdks/go/include/"
+	$(CC) -std=c11 -Wall -Wextra -Werror -I"$(E2E_RELEASE_C_SDK)/include" apps/e2e/sdks/c/e2e_domains.c -L"$(E2E_RELEASE_C_SDK)/lib" -lboxlite -Wl,-rpath,"$(E2E_RELEASE_C_SDK)/lib" -o target/e2e/domain-c
+	@cd "$(E2E_RELEASE_ROOT)/sdks/go" && go build -o "$(PROJECT_ROOT)/target/e2e/domain-go" "$(PROJECT_ROOT)/apps/e2e/sdks/go/e2e_domains.go"
+	@cp apps/e2e/sdks/rust/Cargo.toml apps/e2e/sdks/rust/e2e_domains.rs "$(E2E_RELEASE_ROOT)/apps/e2e/sdks/rust/"
+	@cd "$(E2E_RELEASE_ROOT)" && CARGO_TARGET_DIR="$(PROJECT_ROOT)/target/e2e-release-rust" cargo build --locked -p boxlite-e2e-rust --bin domain-rust
+	@cp target/e2e-release-rust/debug/domain-rust target/debug/domain-rust
