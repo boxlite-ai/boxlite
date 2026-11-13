@@ -17,7 +17,6 @@ import {
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getRestApiUrl } from '@/lib/environment'
 import { sshFailureReason } from '@/lib/ssh-connection-ui'
 import { requestSsh, sshConnectionInstructions, type SshInstructions, type SshStatus } from '@/lib/ssh'
 
@@ -62,7 +61,6 @@ function SshControls({
   statusContainer?: HTMLDivElement | null
 }) {
   const api = useApi()
-  const config = useConfig()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
   const [status, setStatus] = useState<SshStatus>()
   const [loading, setLoading] = useState(true)
@@ -80,11 +78,7 @@ function SshControls({
   const canManage = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   let instructions: SshInstructions | undefined
   try {
-    instructions = sshConnectionInstructions(
-      getRestApiUrl(config.apiUrl, undefined, config.oidc?.issuer),
-      organizationId,
-      box.id,
-    )
+    instructions = sshConnectionInstructions(box.id)
   } catch {
     /* Invalid connection metadata must never become a shell command. */
   }
@@ -251,7 +245,7 @@ function SshControls({
               />
               <SshStep number="02" title="Log in" command={instructions?.login ?? ''}>
                 <p className="mt-2 text-muted-foreground">
-                  Enter an{' '}
+                  Select the API-key method, then enter an{' '}
                   <a href="/dashboard/keys" target="_blank" rel="noreferrer" className="text-foreground underline">
                     API key ↗
                   </a>{' '}
@@ -268,14 +262,13 @@ function SshControls({
               First setup can replace existing SSH access and disconnect clients. Exiting SSH leaves its public tunnel
               open.
             </p>
-            <a
-              href="https://docs.boxlite.ai/cloud/ssh"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-block text-muted-foreground underline"
-            >
-              SSH guide ↗
-            </a>
+            <p className="text-meta leading-5 text-muted-foreground">
+              For self-hosted endpoints, other organizations or an existing CLI setup, follow the{' '}
+              <a href="https://docs.boxlite.ai/cloud/ssh" target="_blank" rel="noreferrer" className="underline">
+                SSH guide ↗
+              </a>
+              .
+            </p>
           </div>
         </DialogContent>
       </Dialog>

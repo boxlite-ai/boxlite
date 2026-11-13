@@ -95,10 +95,10 @@ the body, keeping the title and close control visible.
 ### Connection steps
 
 1. Install or update the CLI with the displayed installer.
-2. Log in with an API key for the selected organization. The key is entered
-   interactively, not embedded in a copied command.
+2. Run `boxlite auth login`, select the API-key method and enter a key for the
+   selected organization interactively, not in a copied command.
 3. Start the Box and enable **Inbound access** in its existing Network section.
-   Run `boxlite … --path-prefix=ORGANIZATION ssh -- BOX` to enter a shell directly.
+   Run `boxlite ssh <box-id>` to enter a shell directly.
    No second SSH command is needed. Connecting requires Box-write permission and
    local `ssh` and `ssh-keygen`.
 
@@ -119,18 +119,14 @@ stores SSH path preferences, or offers a configuration-reset flow. The guide is
 readable regardless of live SSH status; it does not claim to detect CLI installation,
 login, successful setup or a completed connection.
 
-### Context isolation
+Commands are deliberately short: the CLI default endpoint is the hosted API,
+`https://api.boxlite.ai`, and successful login caches the organization's routing
+prefix. Bare login writes the selected CLI context; the guide does not isolate
+existing CLI state or override exported `BOXLITE_*` variables. Its muted docs line
+points users with self-hosted endpoints, other organizations or an existing CLI
+setup to the [SSH guide](https://docs.boxlite.ai/cloud/ssh). The browser does not
+detect these cases. Box IDs are validated before inclusion in commands.
 
-Login and connection explicitly select `dashboard:<normalized API endpoint>`, for
-example `dashboard:https://api.boxlite.ai`. Login supplies that endpoint; connection
-pins the selected organization with `--path-prefix`. Neither changes the saved
-current context. Both commands remove inherited `BOXLITE_REST_URL` and
-`BOXLITE_API_KEY` from their child environments, without changing the parent shell.
-An ordinary context switch cannot redirect these commands; deliberately changing
-the same dedicated context can. Rerun the displayed login to restore it.
-
-The resolved authentication, endpoint and prefix remain in use throughout the
-direct session. No parent-shell environment cleanup or second command is required.
 Dashboard does not duplicate the CLI's identity-file paths, known-hosts handling
 or system OpenSSH invocation. Default login does not edit `~/.ssh/config`.
 

@@ -41,29 +41,18 @@ export async function requestSsh(
 }
 
 export type SshInstructions = {
-  endpoint: string
   login: string
   connect: string
 }
 
-/** Keep login and direct SSH on the Dashboard's endpoint and organization. */
-export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string): SshInstructions {
-  if (!/^[a-zA-Z0-9_-]+$/.test(boxId)) throw new Error('Invalid box ID')
-  const quote = (value: string) => {
-    if ([...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))
-      throw new Error('Invalid connection argument')
-    if (/^[a-zA-Z0-9_-]+$/.test(value)) return value
-    return `'${value.replace(/'/g, `'"'"'`)}'`
-  }
-  const url = new URL(apiUrl, window.location.origin)
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid API URL')
-  const endpoint = url.href.replace(/\/$/, '')
-  // A dedicated context keeps saved/ambient context changes from redirecting SSH.
-  // Ambient credentials must not override the login saved in this context.
-  const cli = `env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context ${quote(`dashboard:${endpoint}`)}`
+/**
+ * Keep the hosted guide short: CLI defaults already target the hosted API, and
+ * login caches the organization. Existing CLI setups and other endpoints use the docs.
+ */
+export function sshConnectionInstructions(boxId: string): SshInstructions {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(boxId)) throw new Error('Invalid box ID')
   return {
-    connect: `${cli} --path-prefix=${quote(organizationId)} ssh -- ${quote(boxId)}`,
-    endpoint,
-    login: `${cli} auth login --url ${quote(endpoint)} --method api-key`,
+    connect: `boxlite ssh ${boxId}`,
+    login: 'boxlite auth login',
   }
 }

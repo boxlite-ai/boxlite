@@ -92,9 +92,27 @@ describe('SSH BoxSshTab static guide and saved access', () => {
   it('offers direct CLI SSH immediately without configuring SSH in the browser', async () => {
     await render()
     await click('Connect via SSH')
-    const commands = [...document.querySelectorAll('pre')].map((node) => node.textContent).join('\n')
-    expect(commands).toContain('--path-prefix=org-1 ssh -- box-1')
-    expect(commands).not.toContain('ssh --proxy')
+    const commands = [...document.querySelectorAll('pre')].map((node) => node.textContent)
+    expect(commands).toEqual([
+      'curl -fsSL https://sh.boxlite.ai | sh\nexport PATH="$HOME/.local/bin:$PATH"',
+      'boxlite auth login',
+      'boxlite ssh box-1',
+    ])
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain(
+      'Select the API-key method, then enter an API key ↗ for this organization when prompted.',
+    )
+    expect(dialog.querySelector('a[href="/dashboard/keys"]')).not.toBeNull()
+    expect(dialog.textContent).toContain(
+      'First setup can replace existing SSH access and disconnect clients. Exiting SSH leaves its public tunnel open.',
+    )
+    const docs = dialog.querySelectorAll('a[href="https://docs.boxlite.ai/cloud/ssh"]')
+    expect(docs).toHaveLength(1)
+    expect(docs[0].parentElement!.textContent).toBe(
+      'For self-hosted endpoints, other organizations or an existing CLI setup, follow the SSH guide ↗.',
+    )
+    expect(docs[0].parentElement!.classList.contains('text-meta')).toBe(true)
+    expect(docs[0].parentElement!.classList.contains('text-muted-foreground')).toBe(true)
     expect(document.querySelector('input')).toBeNull()
     expect(mocks.post).not.toHaveBeenCalled()
     expect(mocks.inbound).not.toHaveBeenCalled()
@@ -136,7 +154,7 @@ describe('SSH BoxSshTab static guide and saved access', () => {
     await render()
     await click('Connect via SSH')
     expect(document.querySelector<HTMLButtonElement>('[aria-label="SSH access"]')!.disabled).toBe(true)
-    expect(document.querySelectorAll('pre')[2].textContent).toContain('ssh -- box-1')
+    expect(document.querySelectorAll('pre')[2].textContent).toContain('ssh box-1')
     await act(async () => document.querySelector<HTMLButtonElement>('[title="Refresh SSH status"]')!.click())
     expect(document.querySelector<HTMLButtonElement>('[aria-label="SSH access"]')!.disabled).toBe(false)
   })
@@ -166,7 +184,7 @@ describe('SSH BoxSshTab static guide and saved access', () => {
       await render()
       mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data } })
       await toggleSsh()
-      expect(document.querySelectorAll('pre')[2].textContent).toContain('ssh -- box-1')
+      expect(document.querySelectorAll('pre')[2].textContent).toContain('ssh box-1')
       expect(mocks.post).toHaveBeenCalledOnce()
       expect(document.querySelector('input')).toBeNull()
       await act(async () => window.dispatchEvent(new Event('focus')))
@@ -254,10 +272,14 @@ describe('SSH BoxSshTab static guide and saved access', () => {
     await render(BoxState.STARTED, scope === 'box' ? 'box-2' : 'box-1')
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     await click('Connect via SSH')
-    const connect = document.querySelectorAll('pre')[2].textContent
-    expect(connect).toContain(scope === 'organization' ? '--path-prefix=org-2' : '--path-prefix=org-1')
-    expect(connect).toContain(scope === 'box' ? 'ssh -- box-2' : 'ssh -- box-1')
-    expect(connect).toContain(scope === 'endpoint' ? 'other.example.test' : 'api.example.test')
+    expect(document.querySelectorAll('pre')[1].textContent).toBe('boxlite auth login')
+    expect(document.querySelectorAll('pre')[2].textContent).toBe(
+      scope === 'box' ? 'boxlite ssh box-2' : 'boxlite ssh box-1',
+    )
+    expect(mocks.get).toHaveBeenLastCalledWith(
+      `v1/${mocks.organization}/boxes/${scope === 'box' ? 'box-2' : 'box-1'}/ssh`,
+      { timeout: 30_000 },
+    )
   })
 
   it('does not read without an organization and blocks mutations for stopped Boxes', async () => {
