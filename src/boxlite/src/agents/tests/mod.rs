@@ -185,3 +185,186 @@ async fn reads_cached_config_capabilities_and_turn_state() {
     });
     assert_eq!(turn.state().unwrap().status, AgentTurnStatus::Running);
 }
+
+/// Records use the field names and enum strings documented under "C JSON fields".
+#[test]
+fn agents_records_use_documented_json_shapes() {
+    use crate::agents::{
+        AgentOutcome, AgentRequest, AgentRequestKind, AgentResult, AgentState, AgentStatus,
+        AgentSteeringReceipt, AgentSteeringStatus, AgentTurnState, AgentTurnStatus,
+    };
+    use serde_json::json;
+    let request = AgentRequest {
+        id: "req".into(),
+        turn_id: "msg".into(),
+        kind: AgentRequestKind::Permission {
+            tool: "bash".into(),
+            arguments: json!({"command": "ls"}),
+        },
+    };
+    let receipt = AgentSteeringReceipt {
+        id: "steer".into(),
+        turn_id: "msg".into(),
+        status: AgentSteeringStatus::Applied,
+    };
+    let state = AgentState {
+        id: "ses".into(),
+        status: AgentStatus::Busy,
+        cursor: None,
+        active_turn_id: Some("msg".into()),
+        queued_turn_ids: vec!["next".into()],
+        requests: vec![request.clone()],
+        steering: vec![receipt.clone()],
+    };
+    assert_eq!(
+        records::agent_state(&state),
+        json!({
+            "id": "ses", "status": "busy", "cursor": null, "active_turn_id": "msg",
+            "queued_turn_ids": ["next"],
+            "requests": [{"id": "req", "turn_id": "msg",
+                "kind": {"type": "permission", "tool": "bash", "arguments": {"command": "ls"}}}],
+            "steering": [{"id": "steer", "turn_id": "msg", "status": "applied"}],
+        })
+    );
+
+    let result = AgentResult {
+        turn_id: "msg".into(),
+        status: AgentTurnStatus::WaitingInput,
+        outcome: Some(AgentOutcome::Question),
+        text: Some("which file?".into()),
+        data: None,
+        artifacts: vec![],
+        usage: None,
+        error: None,
+    };
+    let turn = AgentTurnState {
+        id: "msg".into(),
+        agent_id: "ses".into(),
+        status: AgentTurnStatus::WaitingInput,
+        cursor: Some("c1".into()),
+        result: Some(result),
+        requests: vec![],
+        steering: vec![],
+    };
+    assert_eq!(
+        records::turn_state(&turn),
+        json!({
+            "id": "msg", "agent_id": "ses", "status": "waiting_input", "cursor": "c1",
+            "result": {"turn_id": "msg", "status": "waiting_input", "outcome": "question",
+                "text": "which file?", "data": null, "artifacts": [], "usage": null, "error": null},
+            "requests": [], "steering": [],
+        })
+    );
+}
+
+#[test]
+fn agents_config_and_capabilities_records_omit_or_null_unknowns() {
+    use crate::agents::{AgentCapabilities, AgentConfig};
+    use serde_json::json;
+    use std::time::Duration;
+    let config = AgentConfig {
+        model: Some("fake/fake-model".into()),
+        ..AgentConfig::default()
+    };
+    assert_eq!(
+        records::config(&config),
+        json!({"model": "fake/fake-model", "tools": [], "mcp": []})
+    );
+    let capabilities = AgentCapabilities {
+        operations: vec!["agent.send".into()],
+        input_kinds: vec!["text".into()],
+        max_queued_turns: None,
+        max_pending_steering: Some(1),
+        idempotency_retention: Some(Duration::from_millis(1500)),
+    };
+    assert_eq!(
+        records::capabilities(&capabilities),
+        json!({"operations": ["agent.send"], "input_kinds": ["text"], "max_queued_turns": null,
+            "max_pending_steering": 1, "idempotency_retention_seconds": 1.5})
+    );
+}
+
+#[test]
+fn agents_respond_parses_answers_and_permissions_and_rejects_other_shapes() {
+    use crate::BoxliteError;
+    use crate::agents::AgentResponse;
+    use serde_json::json;
+    assert!(matches!(
+        records::parse_response(json!({"type": "answer", "text": "yes", "data": {"n": 1}})),
+        Ok(AgentResponse::Answer { text, data: Some(data) }) if text == "yes" && data == json!({"n": 1})
+    ));
+    assert!(matches!(
+        records::parse_response(json!({"type": "permission", "approved": false})),
+        Ok(AgentResponse::Permission { approved: false })
+    ));
+    for invalid in [
+        json!({"type": "answer"}),
+        json!({"type": "permission", "approved": "yes"}),
+        json!({"type": "vote", "approved": true}),
+        json!({"type": "answer", "text": "yes", "extra": 1}),
+        json!("yes"),
+    ] {
+        assert!(
+            matches!(
+                records::parse_response(invalid.clone()),
+                Err(BoxliteError::InvalidArgument(_))
+            ),
+            "accepted {invalid}"
+        );
+    }
+}
+
+#[test]
+fn agents_config_parses_documented_fields_and_rejects_unknown_ones() {
+    use crate::BoxliteError;
+    use serde_json::json;
+    let config =
+        records::parse_config(json!({"model": "fake/fake-model", "tools": ["bash"]})).unwrap();
+    assert_eq!(config.model.as_deref(), Some("fake/fake-model"));
+    assert_eq!(config.tools, ["bash"]);
+    assert!(config.mcp.is_empty());
+    assert!(matches!(
+        records::parse_config(json!({"modle": "typo"})),
+        Err(BoxliteError::InvalidArgument(message)) if message.contains("modle")
+    ));
+}
+
+#[test]
+fn agent_records_reject_wrong_field_types() {
+    use serde_json::json;
+
+    for invalid in [
+        json!({"model": 7}),
+        json!({"reasoning": false}),
+        json!({"instructions": []}),
+        json!({"tools": "bash"}),
+        json!({"mcp": [42]}),
+    ] {
+        assert!(
+            matches!(
+                records::parse_config(invalid.clone()),
+                Err(BoxliteError::InvalidArgument(_))
+            ),
+            "accepted {invalid}"
+        );
+    }
+    assert!(matches!(
+        records::parse_response(json!({"type": "answer", "text": false})),
+        Err(BoxliteError::InvalidArgument(_))
+    ));
+}
+
+#[test]
+fn agent_config_preserves_false_zero_empty_collections_and_nested_nulls() {
+    use serde_json::json;
+
+    let input = json!({
+        "tools": [],
+        "mcp": [],
+        "permissions": {"enabled": false, "rules": [], "nested": {"value": null}},
+        "limits": {"count": 0, "options": {}},
+        "output_schema": {"items": [null, {"value": null}]}
+    });
+    let parsed = records::parse_config(input.clone()).unwrap();
+    assert_eq!(records::config(&parsed), input);
+}

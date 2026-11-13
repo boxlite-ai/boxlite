@@ -235,6 +235,8 @@ Node uses `AgentWaitOptions.timeoutSeconds`.
 The C JSON fields use the following shapes. A question's
 `schema` and an answer's `data` may be omitted. Nullable output fields use JSON
 `null`; arrays remain arrays, including when empty.
+The Rust core owns the shared mapping used by the CLI and future C bindings,
+so both surfaces use the same field names and validation rules.
 
 | Record | C JSON fields |
 |---|---|

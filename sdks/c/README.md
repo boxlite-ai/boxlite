@@ -4,6 +4,8 @@ C bindings for the BoxLite runtime, providing a stable C API for integrating Box
 
 The [agent API](../../docs/reference/agents.md#c-api-and-ownership) covers
 Box-owned sessions, turns, callbacks and handle ownership.
+The CLI and future C agent bindings share the core JSON mapping documented there;
+the C agent operations still return `Unsupported` until the bindings are wired.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 

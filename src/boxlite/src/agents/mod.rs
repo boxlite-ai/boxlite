@@ -12,6 +12,8 @@
 
 mod install;
 mod opencode;
+/// Shared JSON conversion for agent API consumers.
+pub mod records;
 mod types;
 pub use types::*;
 
