@@ -16,7 +16,7 @@ import { CopyButton } from '@/components/CopyButton'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { ChevronLeft, ChevronRight, RefreshCw, Activity, ChevronDown } from '@/components/ui/icon'
 import { format, subHours } from 'date-fns'
-import { TraceSummary, TraceSpan } from '@boxlite-ai/api-client'
+import type { TraceSummary, TraceSpan } from '@/types/telemetry'
 import { cn } from '@/lib/utils'
 import { tracesSearchParams, timeRangeSearchParams } from './SearchParams'
 

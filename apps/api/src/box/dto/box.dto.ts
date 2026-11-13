@@ -335,13 +335,6 @@ export class BoxDto {
   runnerId?: string
 
   @ApiPropertyOptional({
-    description: 'Deprecated compatibility field; always empty. Clients must tolerate its absence in a future release.',
-    deprecated: true,
-    example: '',
-  })
-  toolboxProxyUrl?: string
-
-  @ApiPropertyOptional({
     description:
       'What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled',
     type: BoxProgressDto,
@@ -410,8 +403,6 @@ export class BoxDto {
       lastActivityAt: lastActivityAt ? new Date(lastActivityAt).toISOString() : undefined,
       daemonVersion: box.daemonVersion,
       runnerId: box.runnerId,
-      // Older Runner decoders require the key even though Toolbox is retired.
-      toolboxProxyUrl: '',
       // Only while the box reads as being created. A started box is not
       // waiting on anything, so reporting what it once waited on would be a
       // field that never clears.
@@ -425,15 +416,4 @@ export class BoxDto {
         : {}),
     }
   }
-}
-
-@ApiSchema({ name: 'BoxLabels' })
-export class BoxLabelsDto {
-  @ApiProperty({
-    description: 'Key-value pairs of labels',
-    example: { environment: 'dev', team: 'backend' },
-    type: 'object',
-    additionalProperties: { type: 'string' },
-  })
-  labels: { [key: string]: string }
 }

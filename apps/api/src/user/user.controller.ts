@@ -119,26 +119,6 @@ export class UserController {
     return this.userService.findAll()
   }
 
-  /**
-   * @deprecated The generated keys are no longer consumed by anything.
-   * Scheduled for removal in a future release.
-   */
-  @Post('/:id/regenerate-key-pair')
-  @ApiOperation({
-    summary: 'Regenerate user key pair',
-    operationId: 'regenerateKeyPair',
-    deprecated: true,
-  })
-  @RequiredSystemRole(SystemRole.ADMIN)
-  @Audit({
-    action: AuditAction.REGENERATE_KEY_PAIR,
-    targetType: AuditTarget.USER,
-    targetIdFromRequest: (req) => req.params.id,
-  })
-  async regenerateKeyPair(@Param('id') id: string): Promise<User> {
-    return this.userService.regenerateKeyPair(id)
-  }
-
   @Get('/account-providers')
   @ApiOperation({
     summary: 'Get available account providers',

@@ -9,7 +9,6 @@ api_config.go
 api_health.go
 api_images.go
 api_jobs.go
-api_object_storage.go
 api_organizations.go
 api_preview.go
 api_regions.go
@@ -67,7 +66,6 @@ model_audit_log.go
 model_box.go
 model_box_class.go
 model_box_desired_state.go
-model_box_labels.go
 model_box_memory_usage_dto.go
 model_box_progress.go
 model_box_progress_phase.go
@@ -101,11 +99,7 @@ model_inbound_network_spec.go
 model_job.go
 model_job_status.go
 model_job_type.go
-model_log_entry.go
 model_memory_incident_list_dto.go
-model_metric_data_point.go
-model_metric_series.go
-model_metrics_response.go
 model_network_info.go
 model_network_mode.go
 model_oidc_config.go
@@ -123,8 +117,6 @@ model_outbound_network_spec.go
 model_paginated_audit_logs.go
 model_paginated_boxes.go
 model_paginated_jobs.go
-model_paginated_logs.go
-model_paginated_traces.go
 model_poll_jobs_response.go
 model_posthog_config.go
 model_prompt_draft_dto.go
@@ -147,9 +139,6 @@ model_runner_state.go
 model_save_onboarding_dto.go
 model_save_prompt_draft_dto.go
 model_send_webhook_dto.go
-model_storage_access_dto.go
-model_trace_span.go
-model_trace_summary.go
 model_turnstile_config.go
 model_update_box_state_dto.go
 model_update_job_status.go

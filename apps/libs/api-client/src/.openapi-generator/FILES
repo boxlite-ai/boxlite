@@ -11,7 +11,6 @@ api/config-api.ts
 api/health-api.ts
 api/images-api.ts
 api/jobs-api.ts
-api/object-storage-api.ts
 api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
@@ -74,7 +73,6 @@ docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md
 docs/BoxDesiredState.md
-docs/BoxLabels.md
 docs/BoxMemoryUsageDto.md
 docs/BoxProgress.md
 docs/BoxProgressPhase.md
@@ -112,14 +110,9 @@ docs/Job.md
 docs/JobStatus.md
 docs/JobType.md
 docs/JobsApi.md
-docs/LogEntry.md
 docs/MemoryIncidentListDto.md
-docs/MetricDataPoint.md
-docs/MetricSeries.md
-docs/MetricsResponse.md
 docs/NetworkInfo.md
 docs/NetworkMode.md
-docs/ObjectStorageApi.md
 docs/OidcConfig.md
 docs/OnboardingDto.md
 docs/Organization.md
@@ -136,8 +129,6 @@ docs/OutboundNetworkSpec.md
 docs/PaginatedAuditLogs.md
 docs/PaginatedBoxes.md
 docs/PaginatedJobs.md
-docs/PaginatedLogs.md
-docs/PaginatedTraces.md
 docs/PollJobsResponse.md
 docs/PosthogConfig.md
 docs/PreviewApi.md
@@ -164,9 +155,6 @@ docs/RunnersApi.md
 docs/SaveOnboardingDto.md
 docs/SavePromptDraftDto.md
 docs/SendWebhookDto.md
-docs/StorageAccessDto.md
-docs/TraceSpan.md
-docs/TraceSummary.md
 docs/TurnstileConfig.md
 docs/UpdateBoxStateDto.md
 docs/UpdateJobStatus.md
@@ -237,7 +225,6 @@ models/attach-ticket.ts
 models/audit-log.ts
 models/box-class.ts
 models/box-desired-state.ts
-models/box-labels.ts
 models/box-memory-usage-dto.ts
 models/box-progress-phase.ts
 models/box-progress.ts
@@ -273,11 +260,7 @@ models/index.ts
 models/job-status.ts
 models/job-type.ts
 models/job.ts
-models/log-entry.ts
 models/memory-incident-list-dto.ts
-models/metric-data-point.ts
-models/metric-series.ts
-models/metrics-response.ts
 models/network-info.ts
 models/network-mode.ts
 models/oidc-config.ts
@@ -295,8 +278,6 @@ models/outbound-network-spec.ts
 models/paginated-audit-logs.ts
 models/paginated-boxes.ts
 models/paginated-jobs.ts
-models/paginated-logs.ts
-models/paginated-traces.ts
 models/poll-jobs-response.ts
 models/posthog-config.ts
 models/prompt-draft-dto.ts
@@ -319,9 +300,6 @@ models/runner.ts
 models/save-onboarding-dto.ts
 models/save-prompt-draft-dto.ts
 models/send-webhook-dto.ts
-models/storage-access-dto.ts
-models/trace-span.ts
-models/trace-summary.ts
 models/turnstile-config.ts
 models/update-box-state-dto.ts
 models/update-job-status.ts

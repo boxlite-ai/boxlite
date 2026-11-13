@@ -68,8 +68,6 @@ type APIClient struct {
 
 	JobsAPI JobsAPI
 
-	ObjectStorageAPI ObjectStorageAPI
-
 	OrganizationsAPI OrganizationsAPI
 
 	PreviewAPI PreviewAPI
@@ -114,7 +112,6 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.HealthAPI = (*HealthAPIService)(&c.common)
 	c.ImagesAPI = (*ImagesAPIService)(&c.common)
 	c.JobsAPI = (*JobsAPIService)(&c.common)
-	c.ObjectStorageAPI = (*ObjectStorageAPIService)(&c.common)
 	c.OrganizationsAPI = (*OrganizationsAPIService)(&c.common)
 	c.PreviewAPI = (*PreviewAPIService)(&c.common)
 	c.RegionsAPI = (*RegionsAPIService)(&c.common)
