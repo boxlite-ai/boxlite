@@ -7,6 +7,7 @@
 import {
   ConflictException,
   Injectable,
+  Optional,
   Logger,
   NotFoundException,
   RequestTimeoutException,
@@ -17,6 +18,7 @@ import { Repository, Not, In, FindOptionsWhere } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { CreateVolumeDto } from '../dto/create-volume.dto'
+import { selectFilestoreInstance } from '../../config/filestore-instances'
 import { v4 as uuidv4 } from 'uuid'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -27,6 +29,7 @@ import { OrganizationService } from '../../organization/services/organization.se
 import { TypedConfigService } from '../../config/typed-config.service'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
+import { FilestoreInstanceResolver } from './filestore-instance.resolver'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { setTimeout as sleep } from 'timers/promises'
 import { isVolumeStorageConfigured } from '../stores/volume-bucket.store'
@@ -48,6 +51,7 @@ export class VolumeService {
     private readonly organizationService: OrganizationService,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
+    @Optional() private readonly filestoreInstanceResolver?: FilestoreInstanceResolver,
   ) {}
 
   async create(organization: Organization, createVolumeDto: CreateVolumeDto, ctx: Context): Promise<Volume> {
@@ -64,7 +68,8 @@ export class VolumeService {
     createVolumeDto: CreateVolumeDto,
     volumeId: string,
   ): Promise<Volume> {
-    const isFilestore = Boolean(createVolumeDto.instance)
+    const isFilestore = createVolumeDto.storageBackend === 'filestore'
+    const filestoreInstance = await this.selectFilestoreInstance(createVolumeDto, volumeId)
 
     // Only the object-storage kind needs the API's own bucket backend. A
     // filestore volume's storage is an NFS data directory the runner creates
@@ -72,16 +77,6 @@ export class VolumeService {
     // still serve filestore volumes — an org can run on filestore volumes alone.
     if (!isFilestore && !isVolumeStorageConfigured(this.configService)) {
       throw new ServiceUnavailableException('Object storage is not configured')
-    }
-
-    // The API's FILESTORE_INSTANCES configuration is the instance truth
-    // source, so an unknown name fails the create here — loud, and before the
-    // volume row exists — instead of surfacing as a runner mount failure at
-    // box create.
-    if (isFilestore && !this.configService
-        .getOrThrow('volume.filestoreInstances')
-        .some((inst) => inst.name === createVolumeDto.instance)) {
-      throw new BadRequestError(`unknown Filestore instance '${createVolumeDto.instance}'`)
     }
 
     this.organizationService.assertOrganizationIsNotSuspended(organization)
@@ -108,7 +103,7 @@ export class VolumeService {
     }
 
     volume.organizationId = organization.id
-    volume.instance = createVolumeDto.instance
+    volume.instance = filestoreInstance || undefined
 
     // Filestore volumes have no API-side provisioning step: the data
     // directory on the NFS instance is created by the runner lazily at first
@@ -119,6 +114,29 @@ export class VolumeService {
     const savedVolume = await this.volumeRepository.save(volume)
     this.logger.debug(`Created volume ${savedVolume.id} for organization ${organization.id}`)
     return savedVolume
+  }
+
+  private async selectFilestoreInstance(createVolumeDto: CreateVolumeDto, volumeId: string): Promise<string> {
+    if (createVolumeDto.storageBackend !== 'filestore') {
+      if (createVolumeDto.instance !== undefined) {
+        throw new BadRequestError('instance is valid only when storageBackend is "filestore"')
+      }
+      return ''
+    }
+
+    if (createVolumeDto.instance) {
+      await this.filestoreInstanceResolver!.resolve(createVolumeDto.instance, 'request')
+      return createVolumeDto.instance
+    }
+
+    const instances = this.configService.getOrThrow('volume.filestoreInstances').instances
+    if (!instances.length) {
+      throw new ServiceUnavailableException('Filestore is not configured')
+    }
+
+    const selected = selectFilestoreInstance(volumeId, instances)
+    await this.filestoreInstanceResolver!.resolve(selected.instance, 'configured')
+    return selected.instance
   }
 
   async waitForReady(volumeId: string, timeoutSeconds: number): Promise<Volume> {

@@ -37,23 +37,24 @@ export class BoxProgressDto {
 
 /**
  * The filestore reference of a box volume. `instance` is the logical name the
- * Volume row persists; `server`/`export`/`mountOptions` are what the API
- * resolves from its FILESTORE_INSTANCES configuration at dispatch time. The
+ * Volume row persists; `server`/`export` are what the API resolves from GCP at
+ * dispatch time. The
  * address travels only inside the internal dispatch DTO and the box's
  * persisted volume metadata — the public API request and response never carry
- * it — so an instance recreated under the same name needs a configuration
- * update, not a change to historical boxes.
+ * it. Because the API configuration stores only names, recreating an instance
+ * under the same name leaves historical volume rows unchanged; the next
+ * dispatch discovers its current address.
  */
 @ApiSchema({ name: 'BoxVolumeFilestoreRef' })
 export class BoxVolumeFilestoreRef {
   @ApiProperty({
-    description: 'Filestore instance logical name in the API configuration',
-    example: 'ml-scratch',
+    description: 'Filestore instance logical name selected from the API configuration',
+    example: 'boxlite-dev-shared',
   })
   instance: string
 
   @ApiProperty({
-    description: 'NFS server address resolved from the API configuration',
+    description: 'NFS server address resolved from GCP Filestore',
     example: '10.0.0.7',
   })
   server: string
@@ -63,12 +64,6 @@ export class BoxVolumeFilestoreRef {
     example: '/vol1',
   })
   export: string
-
-  @ApiPropertyOptional({
-    description: 'Extra mount options appended to the pinned NFSv4.1+hard base',
-    type: [String],
-  })
-  mountOptions?: string[]
 }
 
 @ApiSchema({ name: 'BoxVolume' })

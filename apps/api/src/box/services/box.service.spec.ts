@@ -397,9 +397,14 @@ describe('BoxService inbound defaults', () => {
       },
       configService: {
         getOrThrow: jest.fn((key: string) => {
-          expect(key).toBe('volume.filestoreInstances')
-          return [{ name: 'ml-scratch', server: '10.0.0.7', export: '/vol1' }]
+          if (key === 'volume.filestoreInstances') {
+            return { instances: [{ instance: 'ml-scratch', projectId: 'boxlite-dev', zone: 'asia-southeast1-b' }] }
+          }
+          throw new Error(`unexpected config key ${key}`)
         }),
+      },
+      filestoreInstanceResolver: {
+        resolve: jest.fn().mockResolvedValue({ server: '10.0.0.7', export: '/vol1' }),
       },
       ...overrides,
     })
@@ -1266,7 +1271,11 @@ describe('BoxService volume reference resolution', () => {
       redis: { exists: jest.fn().mockResolvedValue(1) },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       warmPoolService: { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) },
-      runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY }) },
+      runnerService: {
+        getRandomAvailableRunner: jest
+          .fn()
+          .mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY }),
+      },
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
@@ -1279,9 +1288,14 @@ describe('BoxService volume reference resolution', () => {
       },
       configService: {
         getOrThrow: jest.fn((key: string) => {
-          expect(key).toBe('volume.filestoreInstances')
-          return [{ name: 'ml-scratch', server: '10.0.0.7', export: '/vol1' }]
+          if (key === 'volume.filestoreInstances') {
+            return { instances: [{ instance: 'ml-scratch', projectId: 'boxlite-dev', zone: 'asia-southeast1-b' }] }
+          }
+          throw new Error(`unexpected config key ${key}`)
         }),
+      },
+      filestoreInstanceResolver: {
+        resolve: jest.fn().mockResolvedValue({ server: '10.0.0.7', export: '/vol1' }),
       },
       ...overrides,
     })
@@ -1291,9 +1305,9 @@ describe('BoxService volume reference resolution', () => {
   it('stamps the resolved id and the filestore instance into the persisted volume entry', async () => {
     const { service, boxRepository } = makeService({
       volumeService: {
-        validateVolumes: jest.fn().mockResolvedValue(
-          new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]]),
-        ),
+        validateVolumes: jest
+          .fn()
+          .mockResolvedValue(new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]])),
       },
     })
 
@@ -1309,11 +1323,13 @@ describe('BoxService volume reference resolution', () => {
 
     expect(boxRepository.insert.mock.calls[0][0]).toEqual(
       expect.objectContaining({
-        volumes: [{
-          volumeId: 'vol-uuid-1',
-          mountPath: '/data',
-          filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
-        }],
+        volumes: [
+          {
+            volumeId: 'vol-uuid-1',
+            mountPath: '/data',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          },
+        ],
       }),
     )
   })
@@ -1321,12 +1337,12 @@ describe('BoxService volume reference resolution', () => {
   it('fails the dispatch loudly when the instance left the configuration after the volume was created', async () => {
     const { service } = makeService({
       volumeService: {
-        validateVolumes: jest.fn().mockResolvedValue(
-          new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]]),
-        ),
+        validateVolumes: jest
+          .fn()
+          .mockResolvedValue(new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]])),
       },
-      configService: {
-        getOrThrow: jest.fn().mockReturnValue([{ name: 'other-instance', server: '9.9.9.9', export: '/vol1' }]),
+      filestoreInstanceResolver: {
+        resolve: jest.fn().mockRejectedValue(new BadRequestError("unknown Filestore instance 'ml-scratch'")),
       },
     })
 
@@ -1343,12 +1359,10 @@ describe('BoxService volume reference resolution', () => {
     ).rejects.toThrow("unknown Filestore instance 'ml-scratch'")
   })
 
-  it('keeps a bucket-backed volume entry free of any filestore key', async ()  => {
+  it('keeps a bucket-backed volume entry free of any filestore key', async () => {
     const { service, boxRepository } = makeService({
       volumeService: {
-        validateVolumes: jest.fn().mockResolvedValue(
-          new Map([['my-data', { id: 'vol-uuid-2', instance: undefined }]]),
-        ),
+        validateVolumes: jest.fn().mockResolvedValue(new Map([['my-data', { id: 'vol-uuid-2', instance: undefined }]])),
       },
     })
 

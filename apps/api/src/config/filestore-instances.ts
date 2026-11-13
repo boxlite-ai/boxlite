@@ -1,87 +1,93 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
-/**
- * One managed GCP Filestore NFS instance the API may dispatch. The API never
- * creates or deletes instances (the operator provisions them); this list is
- * the declarative set of what a box's mount dispatch may resolve to. Requests
- * and Volume rows carry only the logical name — the address travels solely
- * inside the internal dispatch DTO and the box's persisted volume metadata.
- */
-export interface FilestoreInstance {
-  name: string
-  server: string
-  export: string
-  mountOptions?: string[]
+import { createHash } from 'crypto'
+
+export interface FilestoreInstanceConfig {
+  instance: string
+  projectId: string
+  zone: string
 }
 
-/**
- * Bounds what a Filestore instance logical name may look like. The name is
- * joined into runner-side mount paths (/mnt/boxlite-filestore-<name>), so
- * this rejects anything that could carry a path separator or relative
- * component into one. The runner derives its mount paths from the dispatched
- * name and validates nothing, so this boundary is the only guard.
- */
+export interface FilestoreInstancesConfig {
+  instances: FilestoreInstanceConfig[]
+}
+
 export const FILESTORE_INSTANCE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
+const GCP_PROJECT_ID_PATTERN = /^[a-z](?:[a-z0-9-]{4,28}[a-z0-9])?$/
+const GCP_ZONE_PATTERN = /^[a-z]+(?:-[a-z0-9]+)*\d+-[a-z]$/
+const DEFAULT_FILESTORE_INSTANCES: FilestoreInstanceConfig[] = [
+  { instance: 'boxlite-dev-shared', projectId: 'boxlite-dev-project', zone: 'us-east5-a' },
+]
 
-/**
- * Decodes and validates the FILESTORE_INSTANCES JSON array. An unset or empty
- * value means "this deployment consumes no Filestore instances" and is not an
- * error; a create naming an instance outside the list is rejected loudly
- * instead.
- *
- * Every failure below is a deployment mistake that would otherwise surface as
- * a mystery at first box create: malformed JSON, a duplicate name (the runner
- * mount root is keyed by name, so duplicates would alias two instances onto
- * one path), an entry that cannot produce a usable mount, or a mount option
- * that would silently override the pinned protocol. All of them throw so the
- * API refuses to start rather than half-serve.
- */
-export function parseFilestoreInstances(env: NodeJS.ProcessEnv = process.env): FilestoreInstance[] {
+function parseFilestoreInstance(value: unknown): FilestoreInstanceConfig {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('FILESTORE_INSTANCES entries must be objects')
+  }
+
+  const entry = value as Record<string, unknown>
+  const instance = typeof entry.instance === 'string' ? entry.instance.trim() : ''
+  const projectId = typeof entry.project_id === 'string' ? entry.project_id.trim() : ''
+  const zone = typeof entry.zone === 'string' ? entry.zone.trim() : ''
+
+  if (!FILESTORE_INSTANCE_NAME_PATTERN.test(instance)) {
+    throw new Error(
+      `FILESTORE_INSTANCES entry has an invalid instance '${instance}' (must match ${FILESTORE_INSTANCE_NAME_PATTERN})`,
+    )
+  }
+  if (!GCP_PROJECT_ID_PATTERN.test(projectId)) {
+    throw new Error(
+      `FILESTORE_INSTANCES entry '${instance}' has an invalid project_id '${projectId}' (must match ${GCP_PROJECT_ID_PATTERN})`,
+    )
+  }
+  if (!GCP_ZONE_PATTERN.test(zone)) {
+    throw new Error(
+      `FILESTORE_INSTANCES entry '${instance}' has an invalid zone '${zone}' (must be a GCP zone such as us-east5-a)`,
+    )
+  }
+
+  return { instance, projectId, zone }
+}
+
+export function parseFilestoreInstances(env: NodeJS.ProcessEnv = process.env): FilestoreInstancesConfig {
   const raw = env.FILESTORE_INSTANCES?.trim()
-  if (!raw) return []
+  if (raw === undefined) {
+    return { instances: DEFAULT_FILESTORE_INSTANCES.map((instance) => ({ ...instance })) }
+  }
+  if (!raw) {
+    return { instances: [] }
+  }
 
-  let instances: FilestoreInstance[]
+  let parsed: unknown
   try {
-    instances = JSON.parse(raw)
+    parsed = JSON.parse(raw)
   } catch {
-    throw new Error('FILESTORE_INSTANCES is not a valid JSON array of instances')
+    throw new Error('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
   }
-  if (!Array.isArray(instances)) {
-    throw new Error('FILESTORE_INSTANCES is not a valid JSON array of instances')
-  }
-
-  const seen = new Set<string>()
-  for (const inst of instances) {
-    // JSON.parse returns whatever shape it finds: a missing name arrives as
-    // undefined, and RegExp.test would stringify it to the literal
-    // 'undefined' — which happens to match the pattern.
-    if (typeof inst.name !== 'string' || !FILESTORE_INSTANCE_NAME_PATTERN.test(inst.name)) {
-      throw new Error(`FILESTORE_INSTANCES entry has an invalid name '${inst.name}' (must match ${FILESTORE_INSTANCE_NAME_PATTERN})`)
-    }
-    if (seen.has(inst.name)) {
-      throw new Error(`FILESTORE_INSTANCES defines instance '${inst.name}' more than once`)
-    }
-    seen.add(inst.name)
-    if (!inst.server) {
-      throw new Error(`FILESTORE_INSTANCES entry '${inst.name}' has no server`)
-    }
-    if (!inst.export) {
-      throw new Error(`FILESTORE_INSTANCES entry '${inst.name}' has no export`)
-    }
-    // The protocol version and retry posture are design-pinned (NFSv4.1,
-    // hard): mount(8) lets a later duplicate option override an earlier one,
-    // so an entry carrying them would silently override the pinned argv.
-    // Everything else may be appended via mountOptions.
-    for (const opt of inst.mountOptions ?? []) {
-      const lower = opt.trim().toLowerCase()
-      for (const pinned of ['vers', 'nfsvers', 'proto', 'soft', 'hard']) {
-        if (lower.startsWith(pinned)) {
-          throw new Error(`FILESTORE_INSTANCES entry '${inst.name}' sets pinned mount option '${opt}' (protocol is NFSv4.1, retry posture is hard; mountOptions may not override them)`)
-        }
-      }
-    }
+  if (!Array.isArray(parsed)) {
+    throw new Error('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
   }
 
-  return instances
+  const instances = parsed.map(parseFilestoreInstance)
+  const instanceNames = instances.map((entry) => entry.instance)
+  if (new Set(instanceNames).size !== instanceNames.length) {
+    throw new Error('FILESTORE_INSTANCES defines an instance more than once')
+  }
+
+  return { instances }
+}
+
+export function selectFilestoreInstance(
+  volumeId: string,
+  instances: FilestoreInstanceConfig[],
+): FilestoreInstanceConfig {
+  if (!instances.length) {
+    throw new Error('no Filestore instances are configured')
+  }
+
+  const sorted = [...instances].sort((left, right) =>
+    left.instance === right.instance ? 0 : left.instance < right.instance ? -1 : 1,
+  )
+  const digest = createHash('sha256').update(volumeId).digest()
+  return sorted[digest.readUInt32BE(0) % sorted.length]
 }

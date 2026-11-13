@@ -412,16 +412,12 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 	return nil
 }
 
-// nfsMountArgs builds the argv for one mount(8) invocation: NFSv4.1, hard,
-// kernel defaults for timeo/retrans, and the dispatch's mountOptions joined
-// into the same -o list. A pure function so a test can pin the argv — the
-// protocol is version-pinned by design (NFSv4.1 only) and these flags are the
-// contract with the operator's provisioning.
+// nfsMountArgs builds the argv for one mount(8) invocation: NFSv4.1 and hard,
+// with kernel defaults for timeo/retrans. A pure function so a test can pin
+// the argv — the protocol and retry posture are design-pinned and are the
+// contract with the API's Filestore discovery.
 func nfsMountArgs(ref *dto.FilestoreRef, path string) []string {
 	opts := "vers=4.1,hard"
-	if len(ref.MountOptions) > 0 {
-		opts += "," + strings.Join(ref.MountOptions, ",")
-	}
 	return []string{"-t", "nfs", "-o", opts, ref.Server + ":" + ref.Export, path}
 }
 

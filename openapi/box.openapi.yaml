@@ -2938,17 +2938,26 @@ components:
           pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$"
           minLength: 2
           example: my-data
+        storageBackend:
+          type: string
+          enum: [object_storage, filestore]
+          default: object_storage
+          description: |
+            The backend that owns the volume. `object_storage` stores data in
+            `boxlite-volume-<id>`; `filestore` stores it in an NFS data
+            directory on the selected or automatically assigned Filestore
+            instance. This field, not the presence of `instance`, selects the
+            backend.
         instance:
           type: string
           pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
           description: |
             The Filestore instance the volume's data directory lives on.
-            Presence makes the volume a filestore volume; absence keeps it an
-            object-storage volume (data in boxlite-volume-<id>). The instance
-            must appear in the API's FILESTORE_INSTANCES configuration, which is checked at create time.
-            a box referencing an unregistered instance fails loudly at mount
-            time.
-          example: ml-scratch
+            Valid only when storageBackend is filestore. When omitted, the
+            API assigns an instance by hashing its configured names. The
+            instance must exist in GCP and in the API's FILESTORE_INSTANCES
+            configuration, checked at create and dispatch time.
+          example: boxlite-dev-shared
 
     Volume:
       type: object

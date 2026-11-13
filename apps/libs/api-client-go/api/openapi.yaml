@@ -6005,11 +6005,21 @@ components:
     BoxVolumeFilestoreRef:
       properties:
         instance:
-          description: Filestore instance logical name in the runner registry
-          example: ml-scratch
+          description: Filestore instance logical name selected from the API configuration
+          example: boxlite-dev-shared
+          type: string
+        server:
+          description: NFS server address resolved from GCP Filestore
+          example: 10.0.0.7
+          type: string
+        export:
+          description: NFS export path on the server
+          example: /vol1
           type: string
       required:
+      - export
       - instance
+      - server
       type: object
     BoxVolume:
       example:
@@ -7030,6 +7040,18 @@ components:
           - $ref: "#/components/schemas/VolumeState"
           description: Volume state
           example: ready
+        storageBackend:
+          description: The storage backend that owns the volume
+          enum:
+          - object_storage
+          - filestore
+          example: object_storage
+          type: string
+        instance:
+          description: Filestore instance name; filestore volumes only
+          example: boxlite-dev-shared
+          nullable: true
+          type: string
         createdAt:
           description: Creation timestamp
           example: 2023-01-01T00:00:00.000Z
@@ -7055,20 +7077,29 @@ components:
       - name
       - organizationId
       - state
+      - storageBackend
       - updatedAt
       type: object
     CreateVolume:
       example:
         name: my-data
-        instance: ml-scratch
+        storageBackend: filestore
+        instance: boxlite-dev-shared
       properties:
         name:
           example: my-data
           type: string
+        storageBackend:
+          description: The storage backend that owns the volume; defaults to object_storage
+          enum:
+          - object_storage
+          - filestore
+          example: filestore
+          type: string
         instance:
           description: The Filestore instance the volume stores its data on; filestore
-            volumes only
-          example: ml-scratch
+            volumes only. Omit to assign from configured instances.
+          example: boxlite-dev-shared
           type: string
       type: object
     JobStatus:

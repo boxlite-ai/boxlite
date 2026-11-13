@@ -12,12 +12,17 @@
  * Do not edit the class manually.
  */
 
-
-
 export interface BoxVolumeFilestoreRef {
-    /**
-     * Filestore instance logical name in the runner registry
-     */
-    'instance': string;
+  /**
+   * Filestore instance logical name selected from the API configuration
+   */
+  instance: string
+  /**
+   * NFS server address resolved from GCP Filestore
+   */
+  server: string
+  /**
+   * NFS export path on the server
+   */
+  export: string
 }
-

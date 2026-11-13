@@ -361,6 +361,7 @@ export const apiEnvironmentFrom = ({
   }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
   validateCiChannels(values, addresses)
+  const filestoreInstances = environment.FILESTORE_INSTANCES?.trim()
 
   return {
     environment: {
@@ -404,6 +405,11 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
+      ...(filestoreInstances !== undefined
+        ? {
+            FILESTORE_INSTANCES: filestoreInstances,
+          }
+        : {}),
       // On unless the stage says otherwise, and it says so through the api
       // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
       // no second switch: an inverted one read here would come from whatever

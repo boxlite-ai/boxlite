@@ -78,9 +78,9 @@ func probeLog(t *testing.T, logPath string) []string {
 	return lines
 }
 
-// The mount options are the contract with the operator's provisioning: the
+// The mount options are the contract with GCP Filestore discovery: the
 // instance is pinned to NFSv4.1 (the only version the Zonal/Regional tiers
-// serve) and hard, with the dispatch's mountOptions joined into the same -o list.
+// serve) and hard.
 // A quiet change here silently hands boxes a mount the instance cannot serve,
 // so the whole argv is pinned, not the parts someone remembered.
 func TestNfsMountArgsPinsTheProtocol(t *testing.T) {
@@ -95,14 +95,6 @@ func TestNfsMountArgsPinsTheProtocol(t *testing.T) {
 		}
 	})
 
-	t.Run("dispatch mountOptions join the same -o list", func(t *testing.T) {
-		ref := &dto.FilestoreRef{Instance: "ml", Server: "10.0.0.7", Export: "/vol1", MountOptions: []string{"ro"}}
-		want := []string{"-t", "nfs", "-o", "vers=4.1,hard,ro", "10.0.0.7:/vol1", path}
-
-		if got := nfsMountArgs(ref, path); !reflect.DeepEqual(got, want) {
-			t.Errorf("nfsMountArgs mismatch\n got: %v\nwant: %v", got, want)
-		}
-	})
 }
 
 // An NFS mount is a kernel mount with no daemon, so there is nothing that dies

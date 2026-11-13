@@ -21,7 +21,9 @@ var _ MappedNullable = &CreateVolume{}
 // CreateVolume struct for CreateVolume
 type CreateVolume struct {
 	Name *string `json:"name,omitempty"`
-	// The Filestore instance the volume stores its data on; filestore volumes only
+	// The storage backend that owns the volume; defaults to object_storage
+	StorageBackend *string `json:"storageBackend,omitempty"`
+	// The Filestore instance the volume stores its data on; filestore volumes only. Omit to assign from configured instances.
 	Instance *string `json:"instance,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
@@ -77,6 +79,38 @@ func (o *CreateVolume) SetName(v string) {
 	o.Name = &v
 }
 
+// GetStorageBackend returns the StorageBackend field value if set, zero value otherwise.
+func (o *CreateVolume) GetStorageBackend() string {
+	if o == nil || IsNil(o.StorageBackend) {
+		var ret string
+		return ret
+	}
+	return *o.StorageBackend
+}
+
+// GetStorageBackendOk returns a tuple with the StorageBackend field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateVolume) GetStorageBackendOk() (*string, bool) {
+	if o == nil || IsNil(o.StorageBackend) {
+		return nil, false
+	}
+	return o.StorageBackend, true
+}
+
+// HasStorageBackend returns a boolean if a field has been set.
+func (o *CreateVolume) HasStorageBackend() bool {
+	if o != nil && !IsNil(o.StorageBackend) {
+		return true
+	}
+
+	return false
+}
+
+// SetStorageBackend gets a reference to the given string and assigns it to the StorageBackend field.
+func (o *CreateVolume) SetStorageBackend(v string) {
+	o.StorageBackend = &v
+}
+
 // GetInstance returns the Instance field value if set, zero value otherwise.
 func (o *CreateVolume) GetInstance() string {
 	if o == nil || IsNil(o.Instance) {
@@ -122,6 +156,9 @@ func (o CreateVolume) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
 	}
+	if !IsNil(o.StorageBackend) {
+		toSerialize["storageBackend"] = o.StorageBackend
+	}
 	if !IsNil(o.Instance) {
 		toSerialize["instance"] = o.Instance
 	}
@@ -148,6 +185,7 @@ func (o *CreateVolume) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
+		delete(additionalProperties, "storageBackend")
 		delete(additionalProperties, "instance")
 		o.AdditionalProperties = additionalProperties
 	}

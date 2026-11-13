@@ -5,7 +5,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { IsNotEmpty, IsString, Matches, ValidateIf } from 'class-validator'
+import { IsEnum, IsNotEmpty, IsString, Matches, ValidateIf } from 'class-validator'
 
 /**
  * A volume can be mounted by name in place of its id, so a name has to be
@@ -34,6 +34,10 @@ export const VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/
  */
 export const FILESTORE_INSTANCE_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
 
+export const VOLUME_STORAGE_BACKENDS = ['object_storage', 'filestore'] as const
+
+export type VolumeStorageBackend = (typeof VOLUME_STORAGE_BACKENDS)[number]
+
 @ApiSchema({ name: 'CreateVolume' })
 export class CreateVolumeDto {
   @ApiProperty({ required: false, example: 'my-data' })
@@ -48,16 +52,24 @@ export class CreateVolumeDto {
   })
   name?: string
 
+  @ApiPropertyOptional({
+    description: 'The storage backend that owns the volume; defaults to object_storage',
+    enum: VOLUME_STORAGE_BACKENDS,
+    example: 'filestore',
+  })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsEnum(VOLUME_STORAGE_BACKENDS)
+  storageBackend?: VolumeStorageBackend
+
   /**
-   * The Filestore instance this volume's data directory lives on. Presence
-   * makes the volume a filestore volume (data on NFS); absence keeps it an
-   * object-storage volume (data in `boxlite-volume-<id>`). The name must
-   * appear in the API's FILESTORE_INSTANCES configuration, which is checked
-   * at create time.
+   * The Filestore instance this volume's data directory lives on. It is
+   * accepted only with `storageBackend: "filestore"`; if omitted, Filestore
+   * placement is assigned from the configured instances.
    */
   @ApiPropertyOptional({
-    description: 'The Filestore instance the volume stores its data on; filestore volumes only',
-    example: 'ml-scratch',
+    description:
+      'The Filestore instance the volume stores its data on; filestore volumes only. Omit to assign from configured instances.',
+    example: 'boxlite-dev-shared',
   })
   @ValidateIf((_, value) => value !== undefined)
   @IsString()

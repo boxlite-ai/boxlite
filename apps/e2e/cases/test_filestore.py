@@ -2,13 +2,13 @@
 stop/start, cross-box sharing, and lifecycle rules.
 
 A Filestore volume is a Volume row like any other (volume.service): created
-through `POST /volumes` with an `instance` naming the NFS instance that holds
-its data directory, mounted by box volume references that carry only
-`managed_volume` — the same selector form as bucket-backed volumes. The API
-resolves the instance address at dispatch time from its FILESTORE_INSTANCES
-configuration, validates the name at volume create, and hands the runner the
-resolved server and export inside the internal dispatch DTO — the public
-request and the persisted row carry only the logical name.
+through `POST /volumes` with `storageBackend: "filestore"` and an optional
+`instance` naming the NFS instance that holds its data directory, mounted by
+box volume references that carry only `managed_volume` — the same selector
+form as bucket-backed volumes. The API resolves the instance address at
+dispatch time from GCP Filestore, validates the name at volume create, and
+hands the runner the resolved server and export inside the internal dispatch
+DTO — the public request and the persisted row carry only the logical name.
 
 Data semantics (volumes.go filestoreDataDir): a volume's data directory is
 named by the volume id, so boxes sharing a volume share data, and a destroyed
@@ -45,10 +45,10 @@ real though: attaching any volume requires the key to hold volume permissions
 skip, mirroring test_volumes.
 
 Deployment reality, so nobody mistakes a green local run for coverage: the
-FILESTORE_INSTANCES configuration is provisioned on stage/prod API deployments
-today. A local single-machine stack has none, so the module only ever
-exercises its skip path locally — the four cases need an environment whose API
-config declares an instance and whose runner can reach it.
+FILESTORE_INSTANCES configuration is deployment runtime state. A local
+single-machine stack must set it empty to opt out of the temporary default, so
+its normal skip path only proves the gate works — the four cases need an
+environment whose API config declares an instance and whose runner can reach it.
 """
 
 from __future__ import annotations
@@ -81,17 +81,20 @@ def filestore_instance():
 
     The configuration is deployment-side env config with no listing API, so
     the only honest probe is one create attempt: the volume create IS the
-    probe, and the box create proves the runner mount chain behind it. A refusal carrying "unknown Filestore instance" means no configured
-    instance — the whole module skips with a warning naming what was tried. Anything else
+    probe, and the box create proves the runner mount chain behind it. An
+    empty instance list, an explicitly requested missing instance, or a
+    configured-but-missing auto-selected instance means the environment is
+    not provisioned — the
+    whole module skips with a warning naming what was tried. Anything else
     that fails is a defect, not a precondition. On success the probe box is
-    deleted immediately and the proven instance name is returned for the tests
-    to reuse.
+    deleted immediately and the proven instance name is returned for the
+    tests to reuse.
     """
-    # The built-in default is the stage instance name, so a workflow run
-    # needs no per-run configuration: an API whose configuration declares
-    # the name runs the four cases, one without it skips the module green.
-    candidate = os.environ.get("FILESTORE_E2E_INSTANCE") or "boxlite-dev-shared"
-    # An unknown instance always skips, never fails — including an
+    # FILESTORE_E2E_INSTANCE pins one configured instance for API
+    # compatibility checks. When unset, let the API's early deterministic
+    # hash assignment choose from its configured instances.
+    candidate = os.environ.get("FILESTORE_E2E_INSTANCE")
+    # An unavailable instance always skips, never fails — including an
     # explicitly exported name: the test instance can be recycled at any
     # time, so its absence is an unprovisioned environment, not a broken
     # run. The env var only pins WHICH name the gate probes.
@@ -103,28 +106,54 @@ def filestore_instance():
         status, body = request_json(
             "POST",
             auth_context().v1("volumes"),
-            with_bounded_lifetime({"name": probe_volume_name, "instance": candidate}),
+            with_bounded_lifetime(
+                {
+                    "name": probe_volume_name,
+                    "storageBackend": "filestore",
+                    **({"instance": candidate} if candidate else {}),
+                }
+            ),
         )
         body_str = json.dumps(body) if body else ""
-        if not (200 <= status < 300) and UNKNOWN_INSTANCE_MARKER in body_str:
-            warnings.warn(f"GCP FileStore instance=[{candidate}] not existed. Skip test_filestore.py .")
+        if not (200 <= status < 300) and (
+            UNKNOWN_INSTANCE_MARKER in body_str
+            or NO_INSTANCE_MARKER in body_str
+            or status in (400, 503)
+            and "was not found" in body_str
+        ):
+            warnings.warn(
+                "GCP FileStore "
+                f"instance=[{candidate or 'auto-assignment'}] not available. "
+                "Skip test_filestore.py ."
+            )
             pytest.skip(
-                f"GCP FileStore instance=[{candidate}] not existed — add it to the "
+                f"GCP FileStore instance=[{candidate or 'auto-assignment'}] not existed — add it to the "
                 "API's FILESTORE_INSTANCES configuration to enable"
             )
-        assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
-        assert body is not None and body.get("id"), f"volume create response has no id: {body}"
+        assert 200 <= status < 300, (
+            f"filestore volume create failed: HTTP {status}: {body}"
+        )
+        assert body is not None and body.get("id"), (
+            f"volume create response has no id: {body}"
+        )
         assert body.get("state") == "ready", (
             f"a filestore volume must be ready at once (the runner provisions the data "
             f"directory lazily at first mount), got {body}"
         )
-        assert body.get("instance") == candidate, f"volume response lost the instance: {body}"
+        candidate = body.get("instance")
+        assert candidate, f"volume response lost the instance: {body}"
+        if os.environ.get("FILESTORE_E2E_INSTANCE"):
+            assert candidate == os.environ["FILESTORE_E2E_INSTANCE"], (
+                f"API returned {candidate}; requested {os.environ['FILESTORE_E2E_INSTANCE']}"
+            )
         volume_id = body["id"]
 
         status, body = _create_box_with_volume(volume_id, name=probe_box_name)
         _skip_when_key_cannot_attach_volumes(status)
 
-        assert 200 <= status < 300, f"filestore probe box create failed: HTTP {status}: {body_str}"
+        assert 200 <= status < 300, (
+            f"filestore probe box create failed: HTTP {status}: {body_str}"
+        )
     finally:
         _delete_box_by_name(probe_box_name)
         if volume_id:
@@ -141,16 +170,22 @@ def _volumes_path(suffix: str = "") -> str:
     return auth_context().v1(f"volumes{suffix}")
 
 
-def _create_filestore_volume(instance: str, name: str | None = None) -> tuple[int, dict[str, Any] | None]:
+def _create_filestore_volume(
+    instance: str | None = None, name: str | None = None
+) -> tuple[int, dict[str, Any] | None]:
     """POST a filestore volume: a Volume row whose data directory will live on
     the named NFS instance."""
-    body: dict[str, Any] = {"instance": instance}
+    body: dict[str, Any] = {"storageBackend": "filestore"}
+    if instance is not None:
+        body["instance"] = instance
     if name is not None:
         body["name"] = name
     return request_json("POST", _volumes_path(), with_bounded_lifetime(body))
 
 
-def _create_box_with_volume(volume_selector: str, name: str | None = None) -> tuple[int, dict[str, Any] | None]:
+def _create_box_with_volume(
+    volume_selector: str, name: str | None = None
+) -> tuple[int, dict[str, Any] | None]:
     """POST a box mounting the volume by selector — the same `managed_volume`
     form a bucket-backed volume uses."""
     body: dict[str, Any] = {
@@ -168,7 +203,9 @@ def _skip_when_key_cannot_attach_volumes(status: int) -> None:
     is a precondition of the credential, not a defect; same skip class as
     test_volumes' managed-volume 403."""
     if status == 403:
-        pytest.skip("API key lacks volume attach permissions (READ_VOLUMES, WRITE_VOLUMES)")
+        pytest.skip(
+            "API key lacks volume attach permissions (READ_VOLUMES, WRITE_VOLUMES)"
+        )
 
 
 def _delete_box_by_name(name: str) -> None:
@@ -229,6 +266,8 @@ async def test_create_with_unregistered_instance_fails_loudly(filestore_instance
         f"the refusal must carry the API's words ({UNKNOWN_INSTANCE_MARKER!r}), "
         f"got HTTP {status}: {body_str}"
     )
+
+
 @pytest.mark.asyncio
 async def test_filestore_volume_data_survives_stop_start(rt, filestore_instance):
     """Bytes written through a filestore volume survive stop → start.
@@ -240,15 +279,18 @@ async def test_filestore_volume_data_survives_stop_start(rt, filestore_instance)
     own disk, and it had no coverage outside the runner's own tests.
     """
     volume_name = f"e2e-fs-keep-{uuid.uuid4().hex[:10]}"
-    box_name = f"e2e-fs-keep-box-{uuid.uuid4().hex[:10]}"
 
     status, body = _create_filestore_volume(filestore_instance, name=volume_name)
     assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
     volume_id = body["id"]
-    status, body = _create_box_with_volume(volume_name)  # by name, the other selector form
+    status, body = _create_box_with_volume(
+        volume_name
+    )  # by name, the other selector form
     assert 200 <= status < 300, f"filestore box create failed: HTTP {status}: {body}"
 
-    assert body is not None and body.get("box_id"), f"create response has no box_id: {body}"
+    assert body is not None and body.get("box_id"), (
+        f"create response has no box_id: {body}"
+    )
     box_id = body["box_id"]
     # The create's 2xx already means STARTED (the endpoint waits for it), so
     # the handle is usable for exec right away.
@@ -285,7 +327,6 @@ async def test_filestore_volume_shares_data_across_boxes(rt, filestore_instance)
     """
     volume_name = f"e2e-fs-share-{uuid.uuid4().hex[:10]}"
     box1_name = f"e2e-fs-share-a-{uuid.uuid4().hex[:8]}"
-    box2_name = f"e2e-fs-share-b-{uuid.uuid4().hex[:8]}"
 
     status, body = _create_filestore_volume(filestore_instance, name=volume_name)
     assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
@@ -326,7 +367,7 @@ async def test_filestore_volume_shares_data_across_boxes(rt, filestore_instance)
 
 
 @pytest.mark.asyncio
-async def test_filestore_volume_lifecycle_rules(filestore_instance):
+async def test_filestore_volume_lifecycle_rules(rt, filestore_instance):
     """Volume removal follows the same rules as bucket volumes: in-use refusal,
     removal once free.
 
@@ -360,11 +401,15 @@ async def test_filestore_volume_lifecycle_rules(filestore_instance):
         box_id = None
 
         status, body = request_json("DELETE", _volumes_path(f"/{volume_id}"))
-        assert status == 204, f"deleting a free volume must answer 204, got HTTP {status}: {body}"
+        assert status == 204, (
+            f"deleting a free volume must answer 204, got HTTP {status}: {body}"
+        )
 
         # A second delete with force is accepted as already-deleted.
         status, body = request_json("DELETE", _volumes_path(f"/{volume_id}?force=true"))
-        assert status == 204, f"force-deleting an already-deleted volume must answer 204, got HTTP {status}: {body}"
+        assert status == 204, (
+            f"force-deleting an already-deleted volume must answer 204, got HTTP {status}: {body}"
+        )
     finally:
         if box_id:
             await rt.remove(box_id, force=True)

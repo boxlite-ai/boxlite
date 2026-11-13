@@ -556,37 +556,37 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 ## GCP Filestore volumes
 
 A box mounts a **Filestore volume** — a Volume row whose data directory lives
-on a Filestore NFS instance, created through the volume API with an
-`instance` field and mounted by the same `managed_volume` selector as
-bucket-backed volumes. The reference carries the instance's **logical name**;
-the API resolves the address from its own configuration and dispatches it to
-the runner with the mount, so recreating an instance under the same name
-requires a configuration update, not a change to historical boxes.
+on a Filestore NFS instance, created through the volume API with
+`storageBackend: "filestore"` and an optional `instance` field. It is mounted
+by the same `managed_volume` selector as bucket-backed volumes. The reference
+carries the instance's **logical name**; the API resolves the address from GCP
+Filestore and dispatches it to the runner with the mount, so recreating an
+instance under the same name reuses the same logical identity without a change
+to historical boxes.
 
 ### Instance configuration (API side)
 
 `FILESTORE_INSTANCES` is an environment variable of the **API** deployment —
-a JSON array declaring which Filestore instances its mount dispatch may
-resolve to:
+a JSON object list declaring which GCP Filestore instances a create may
+auto-assign to or a mount dispatch may resolve to:
 
-```json
-[{"name": "ml-scratch", "server": "10.x.x.x", "export": "/vol1", "mountOptions": []}]
+```bash
+FILESTORE_INSTANCES='[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev-project","zone":"us-east5-a"}]'
 ```
 
-Validation runs when the API starts: malformed JSON, a duplicate name, a name
-outside `^[a-z0-9][a-z0-9-]{0,62}$`, an empty `server` or `export`, or a
-`mountOptions` entry carrying a pinned option (`vers`, `nfsvers`, `proto`,
-`soft`, `hard` — the protocol is NFSv4.1 and the retry posture is hard)
-refuses to start the API. A volume create naming an instance outside the list
-fails loudly; the runner configures no instances of its own and mounts what
-the dispatch carries.
+Validation runs when the API starts: invalid JSON, a duplicate instance, a name
+outside `^[a-z0-9][a-z0-9-]{0,62}$`, or invalid project/zone values refuse to
+start the API. Until removed, an unset variable temporarily defaults to
+`boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`; an explicit
+empty value disables Filestore. A volume create naming an instance outside the
+list fails loudly; the runner configures no instances of its own and mounts the
+resolved target the dispatch carries.
 
 ### How it mounts
 
 - One mount per instance, shared by every box referencing it; created on
   demand (`mount -t nfs -o vers=4.1,hard ...`), and reclaimed when no box
-  record references it anymore. `mountOptions` entries are appended to the
-  same `-o` list.
+  record references it anymore.
 - The box binds to the volume's data directory inside the export
   (`/mnt/boxlite-filestore-<instance>/<volume_id>`), `chmod 0777` — NFS
   permissions are real, unlike the FUSE backends' faked ones. The directory

@@ -314,6 +314,14 @@ test('the declared API group delivers the organization invitation lifetime on bo
   }
 })
 
+test('Filestore instance configuration distinguishes unset from explicit empty', () => {
+  const unset = assemble({ ...base, FILESTORE_INSTANCES: undefined })
+  assert.equal(Object.hasOwn(unset.environment, 'FILESTORE_INSTANCES'), false)
+
+  const disabled = assemble({ ...base, FILESTORE_INSTANCES: '   ' })
+  assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
+})
+
 test('the two dashboard origins are different on purpose, and both have a default', () => {
   // Static assets go through the CDN at the root domain; the dashboard's API
   // client talks to api.<domain> directly, because the CDN caps a WebSocket at

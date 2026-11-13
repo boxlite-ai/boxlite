@@ -21,8 +21,12 @@ var _ MappedNullable = &BoxVolumeFilestoreRef{}
 
 // BoxVolumeFilestoreRef struct for BoxVolumeFilestoreRef
 type BoxVolumeFilestoreRef struct {
-	// Filestore instance logical name in the runner registry
+	// Filestore instance logical name selected from the API configuration
 	Instance string `json:"instance"`
+	// NFS server address resolved from GCP Filestore
+	Server string `json:"server"`
+	// NFS export path on the server
+	Export string `json:"export"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -32,9 +36,11 @@ type _BoxVolumeFilestoreRef BoxVolumeFilestoreRef
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxVolumeFilestoreRef(instance string) *BoxVolumeFilestoreRef {
+func NewBoxVolumeFilestoreRef(instance string, server string, export string) *BoxVolumeFilestoreRef {
 	this := BoxVolumeFilestoreRef{}
 	this.Instance = instance
+	this.Server = server
+	this.Export = export
 	return &this
 }
 
@@ -70,6 +76,54 @@ func (o *BoxVolumeFilestoreRef) SetInstance(v string) {
 	o.Instance = v
 }
 
+// GetServer returns the Server field value
+func (o *BoxVolumeFilestoreRef) GetServer() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.Server
+}
+
+// GetServerOk returns a tuple with the Server field value
+// and a boolean to check if the value has been set.
+func (o *BoxVolumeFilestoreRef) GetServerOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Server, true
+}
+
+// SetServer sets field value
+func (o *BoxVolumeFilestoreRef) SetServer(v string) {
+	o.Server = v
+}
+
+// GetExport returns the Export field value
+func (o *BoxVolumeFilestoreRef) GetExport() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.Export
+}
+
+// GetExportOk returns a tuple with the Export field value
+// and a boolean to check if the value has been set.
+func (o *BoxVolumeFilestoreRef) GetExportOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Export, true
+}
+
+// SetExport sets field value
+func (o *BoxVolumeFilestoreRef) SetExport(v string) {
+	o.Export = v
+}
+
 func (o BoxVolumeFilestoreRef) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -81,6 +135,8 @@ func (o BoxVolumeFilestoreRef) MarshalJSON() ([]byte, error) {
 func (o BoxVolumeFilestoreRef) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["instance"] = o.Instance
+	toSerialize["server"] = o.Server
+	toSerialize["export"] = o.Export
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -95,6 +151,8 @@ func (o *BoxVolumeFilestoreRef) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"instance",
+		"server",
+		"export",
 	}
 
 	allProperties := make(map[string]interface{})
@@ -125,6 +183,8 @@ func (o *BoxVolumeFilestoreRef) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "instance")
+		delete(additionalProperties, "server")
+		delete(additionalProperties, "export")
 		o.AdditionalProperties = additionalProperties
 	}
 

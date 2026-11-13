@@ -6,7 +6,7 @@
 
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { requestedMemoryMib } from '../utils/memory-allocation'
-import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException, Optional } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike, EntityManager, Raw } from 'typeorm'
 import { Box } from '../entities/box.entity'
@@ -55,6 +55,7 @@ import {
 import { NetworkMode } from '../enums/network-mode.enum'
 import { networkMode } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
+import { FilestoreInstanceResolver } from './filestore-instance.resolver'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
   BoxSortField,
@@ -210,6 +211,7 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
+    @Optional() private readonly filestoreInstanceResolver?: FilestoreInstanceResolver,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -346,7 +348,10 @@ export class BoxService {
       const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
-        const volumes = await this.volumeService.validateVolumes(organization.id, createBoxDto.volumes.map((v) => v.volumeId))
+        const volumes = await this.volumeService.validateVolumes(
+          organization.id,
+          createBoxDto.volumes.map((v) => v.volumeId),
+        )
         // Replace the caller's selector with the volume it resolved to inside
         // this organization. A name is only unique per organization, but
         // everything downstream (the runner, the `boxlite-volume-<id>` bucket,
@@ -357,7 +362,8 @@ export class BoxService {
         // from its FILESTORE_INSTANCES configuration; the runner configures
         // no instances of its own. A name that left the configuration between
         // the volume's create and this dispatch fails loudly here.
-        createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
+        const resolvedVolumes = []
+        for (const volume of createBoxDto.volumes) {
           const resolved = volumes.get(volume.volumeId)
           if (!resolved) {
             // validateVolumes keys every selector or throws, so this is
@@ -367,21 +373,17 @@ export class BoxService {
             throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
           }
           const instance = resolved.instance
-            ? this.configService
-                .getOrThrow('volume.filestoreInstances')
-                .find((inst) => inst.name === resolved.instance)
+            ? await this.filestoreInstanceResolver!.resolve(resolved.instance, 'configured')
             : undefined
-          if (resolved.instance && !instance) {
-            throw new BadRequestError(`unknown Filestore instance '${resolved.instance}'`)
-          }
-          return {
+          resolvedVolumes.push({
             ...volume,
             volumeId: resolved.id,
             ...(instance
-              ? { filestore: { instance: instance.name, server: instance.server, export: instance.export, mountOptions: instance.mountOptions } }
+              ? { filestore: { instance: resolved.instance, server: instance.server, export: instance.export } }
               : {}),
-          }
-        })
+          })
+        }
+        createBoxDto.volumes = resolvedVolumes
       } else if (image && !needsFreshBox) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.

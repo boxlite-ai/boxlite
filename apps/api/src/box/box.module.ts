@@ -24,6 +24,7 @@ import { WarmPool } from './entities/warm-pool.entity'
 import { PreviewController } from './controllers/preview.controller'
 import { VolumeController } from './controllers/volume.controller'
 import { VolumeService } from './services/volume.service'
+import { FilestoreInstanceResolver } from './services/filestore-instance.resolver'
 import { VolumeManager } from './managers/volume.manager'
 import { Volume } from './entities/volume.entity'
 import { VolumeSubscriber } from './subscribers/volume.subscriber'
@@ -113,6 +114,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxLookupCacheInvalidationService,
     RedisLockProvider,
     VolumeService,
+    FilestoreInstanceResolver,
     VolumeManager,
     VolumeSubscriber,
     RunnerSubscriber,

@@ -18,11 +18,11 @@ type VolumeDTO struct {
 // row's logical instance name — it keys the mount root
 // (/mnt/boxlite-filestore-<name>) and the mount record, and it is the only
 // piece the public API request or the persisted Volume row ever carries.
-// Server, Export and MountOptions are resolved by the API from its
-// FILESTORE_INSTANCES configuration at dispatch time and travel only inside
+// Server and Export are resolved by the API from GCP at dispatch time and travel only inside
 // the internal dispatch DTO and the box's persisted volume metadata; the
-// runner consumes them as given. An instance recreated under the same name
-// needs a config update, not a change to historical boxes.
+// runner consumes them as given. Because the API configuration stores only
+// names, recreating an instance under the same name leaves historical volume
+// rows unchanged; the next dispatch discovers its current address.
 type FilestoreRef struct {
 	Instance string `json:"instance"`
 	// Server and Export name the NFS target the API resolved for Instance.
@@ -31,8 +31,4 @@ type FilestoreRef struct {
 	Server string `json:"server"`
 	// Export is the NFS export path on Server (Filestore's default is /vol1).
 	Export string `json:"export"`
-	// MountOptions carries the operator's extra mount options, appended to the
-	// pinned NFSv4.1+hard base. Optional; the API's config boundary rejects
-	// the pinned options, and the runner appends whatever survives.
-	MountOptions []string `json:"mountOptions,omitempty"`
 }
