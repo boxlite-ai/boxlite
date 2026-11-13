@@ -44,6 +44,7 @@ Dated root-cause analyses and design studies, newest first.
 - 2026-11-06 · [Registration email policy](investigations/2026-11-06-registration-email-policy.md): disposable-domain rejection at platform account creation with existing-user access preserved.
 - 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): historical credential and printed-command design, superseded by direct OpenSSH login.
 - 2026-11-02 · [VMM virtio-net device](investigations/2026-11-02-vmm-virtio-net.md): guest queue framing, gvproxy stream backpressure, event contracts and device-only qualification.
+- 2026-10-29 · [Cloud resize](investigations/2026-10-29-cloud-resize.md): durable resource growth, claim leases, retry recovery and atomic billing updates.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-23 · [Organization activity facts](investigations/organization-activation-facts.md): lifecycle timestamps, transaction boundaries, and migration availability.
 - 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)

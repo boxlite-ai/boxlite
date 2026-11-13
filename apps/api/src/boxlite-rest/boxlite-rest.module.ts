@@ -39,9 +39,13 @@ import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { BoxResizeService } from './box-resize.service'
+import { BoxliteResizeController } from './boxlite-resize.controller'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
+    UsageModule,
     BoxModule,
     AuthModule,
     ApiKeyModule,
@@ -59,6 +63,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     CiSettingsController,
     CiManagementController,
     CiWebhookController,
+    BoxliteResizeController,
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
@@ -72,6 +77,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
   providers: [
     BoxliteWsProxyService,
     CommerceBoxLimitService,
+    BoxResizeService,
     CiConnectService,
     CiSettingsService,
     CiNativeState,

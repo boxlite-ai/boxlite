@@ -87,6 +87,11 @@ The C ABI now uses `double` for CPU allocation fields and parameters.
 Rebuild C and Go consumers against matching headers and libraries.
 Existing integer Boxes retain their saved CPU allocations.
 
+Online resize accepts fractional CPU targets with the same 0.001-core precision.
+Rust `ResizeOptions.cpus` uses `Option<f64>`, Go uses `float64`, and the C resize
+parameter uses `double`; rebuild callers together. Cloud resize shares creation's
+Runner score policy and checks actual boot ceilings during job execution.
+
 ### Unreleased: exec command rejections
 
 For `exec`, missing executables now complete with exit status `127`;

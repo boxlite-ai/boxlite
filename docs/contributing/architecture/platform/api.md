@@ -589,7 +589,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Box lifecycle</b> · 7 routes</summary>
+<summary><b>Box lifecycle</b> · 8 routes</summary>
 
 | Method   | Path                                     | What it does                                |
 | -------- | ---------------------------------------- | ------------------------------------------- |
@@ -600,6 +600,24 @@ organization membership.
 | `DELETE` | `/v1[/{prefix}]/boxes/{boxId}`       | Destroys a box.                             |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/start` | Starts a box and waits until it is running. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/stop`  | Stops a box.                                |
+| `POST`   | `/v1[/{prefix}]/boxes/{boxId}/resize` | Grows CPU/RAM through a durable job; `{}` queries actual allocation. |
+
+Resize requires `write:boxes` and a running Linux Box on a compatible Runner.
+Admission uses the current Runner's creation score threshold and scheduling
+flags without a live resource preflight. CPU accepts 0.125–16 in 0.001 steps,
+subject to organization limits. Runtime execution validates boot ceilings.
+Memory growth rounds upward in 128 MiB increments relative to committed MiB:
+1024→1537 becomes 1664 MiB, while CPU-only changes preserve exact memory.
+In-flight retries use the original allocation for rounding, and shrink requests
+are rejected before rounding. Acceptance stores the target and a durable job,
+but leaves the Box and usage period at their old values until the Runner confirms
+the target. Completion then writes exact MiB, updates legacy whole-GiB storage,
+and switches the usage period using exact fractional GiB in one transaction. `200` returns `BoxResources`. After 30 seconds, `504` with code
+`resize_in_progress` leaves the job running; repeating the same target joins it,
+while a different target returns `409`. The normal Box response reports committed
+resources, so use the empty resize request to inspect actual allocation. Bounded
+failures become terminal after 10 attempts or 30 minutes and release the lifecycle
+fence; Box size and billing remain unchanged.
 
 </details>
 

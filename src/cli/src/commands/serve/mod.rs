@@ -1488,6 +1488,8 @@ fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool
 ///   starting the box; `/ssh/enable` also never starts it or counts as activity.
 ///   `POST /ssh` configures it and does count;
 /// - `DELETE`, which is removing the box, not using it.
+/// - `/resize`, whose handler stamps only explicit targets after parsing;
+///   empty requests merely observe allocations.
 ///
 /// `/stop` is excluded because it cannot matter: AutoStop ignores a box that is
 /// already stopped, and AutoDelete measures from `last_updated`, not this clock.
@@ -1497,7 +1499,7 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
         Some((box_id, tail)) => (box_id, tail),
         None => (rest, ""),
     };
-    if box_id.is_empty() || matches!(tail, "metrics" | "stop" | "ssh/enable") {
+    if box_id.is_empty() || matches!(tail, "metrics" | "stop" | "ssh/enable" | "resize") {
         return None;
     }
     // A read of the box resource itself is metadata, not use.
@@ -1941,6 +1943,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Box lifecycle
         .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
         .route("/v1/boxes/{box_id}/network/outbound", put(network::set_outbound))
+        .route("/v1/boxes/{box_id}/resize", post(boxes::resize_box))
         .route(
             "/v1/boxes/{box_id}/start",
             post(boxes::start_box),
@@ -2110,6 +2113,7 @@ mod tests {
     use std::time::Duration;
 
     mod executions;
+    mod resize;
     mod ssh;
 
     #[test]

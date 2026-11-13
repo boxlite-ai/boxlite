@@ -632,6 +632,106 @@ lookup or migration is required. For example, a Box created from `python:3.13`
 returns `"image": "python:3.13"` in both responses. Upgrade strict consumers to
 accept this field before rolling out the added response property.
 
+## Cloud resize
+
+Admission reuses creation's Runner score threshold, READY state and scheduling
+flags for the Box's current Runner. It does not rank or migrate that Runner,
+query its resources, or reserve capacity. Targets use committed Box CPU and exact
+MiB allocation; legacy rows fall back to `mem * 1024`. CPU accepts 0.125–16 in
+0.001 steps, and memory growth rounds upward in 128 MiB increments from the current
+allocation. For example, 300 MiB requested as 500 MiB becomes 556 MiB; a CPU-only
+resize keeps 300 MiB. Memory quota checks use the exact target divided by 1024.
+Admission resolves per-box limits through `OrganizationBoxLimitsService`, as
+creation does: administrator overrides take precedence, while default stored
+limits use the verified Commerce grant, including its cache and fallback policy.
+For example, a stored default of 4 CPUs with an effective grant of 8 permits an
+8-CPU resize; a grant of 2 rejects a 3-CPU resize before any job is written.
+Boot ceilings are enforced during execution, so an accepted job can fail without
+changing the committed size or billing.
+
+Explicit same-size requests also create idempotent jobs. Matching in-flight
+requests join their job even if the Runner's score falls after admission.
+Memory retries use the job's immutable previous allocation for the same rounding;
+requests for 500 or 556 MiB both join a pending 300→556 MiB resize.
+Explicit shrink requests are rejected before rounding. After completion, repeat
+the returned target or query resources instead of resending a smaller rounded request.
+Empty requests remain live resource queries and do not use the score gate.
+
+`BoxResizeService` accepts the existing SDK/CLI resize request. Under a usage
+lease and Box row lock, it stores the target CPU/MiB in a `RESIZE_BOX` payload,
+sets `resizePhase=APPLY`, and writes only `pending`/`resizeJobId` to the Box.
+The Box keeps its old size and the old usage period stays open while the Runner
+applies the target. `GET box` reports the committed size; the empty resize query
+reports the Runner's actual allocation.
+
+`ResizeJobService` uses database time, row locks, claim tokens and a durable
+deadline. It requeues expired leases every 15 seconds and retries failures with
+jittered 1–60 second backoff. Ordinary and eligible resize jobs share one
+oldest-first batch, including single-job polls. A committed requeue sends a Redis
+wake hint; polling also bounds its wait by the earliest durable retry time.
+Lost hints fall back to the poll timeout, capped at 60 seconds.
+Lease requeue skips rows locked by another
+transaction, and each terminalization bounds its row-lock wait, so one contended
+Box cannot stall unrelated cleanup. Completion validates the exact observed target and,
+in one transaction, updates Box `cpu` and `memory_mib`, retains legacy
+`mem = ceil(memory_mib / 1024)`, and clears the fence. It updates the locked Box
+snapshot before calling `closeUsagePeriod` and `openUsagePeriodFor`, then marks
+the job `COMPLETED`; the new period therefore uses exact fractional GiB. A
+resize that reaches 10 attempts or its 30-minute deadline, including an unclaimed
+PENDING job past the deadline, becomes terminal `FAILED`: the fence is released,
+the old Box size and usage period stay unchanged, and stop/suspension proceeds.
+Completion and renewal reject the overall deadline even while the current claim
+lease remains valid. A duplicate committed completion remains idempotent.
+Same-target requests reuse the job; the HTTP
+wait expires after 30 seconds without cancelling it.
+
+Every successful claim or renewal grants a fixed 120-second lease. The Runner
+uses 119 seconds from request send time, allowing one second for timing uncertainty.
+These durations form one protocol contract and must change together; the margin
+assumes server elapsed time advances at most one second faster during a lease.
+Database time and claim-token checks remain authoritative.
+
+Rollout order: install the additive migration, upgrade every runtime, SDK/ABI
+consumer, Runner and API instance, then set `CLOUD_RESIZE_ENABLED=true` (default
+false). Fractional targets require updated Runners. Old API claim/status
+writers cannot safely coexist with active resize jobs; older Runner clients also
+reject the new `RESIZE_BOX` response enum. Disable admission before
+rollback and drain all resize jobs before restoring old API binaries or schema.
+Disabling admission still permits queries and joining an existing target.
+
+`CLOUD_RESIZE_ENABLED` is declared in `apps/infra/mstage.env.json` under
+`env.selectGroup.api.optional`, so the deploy delivers it to the API container
+once a stage sets it. Set it per stage:
+
+```bash
+npm run mstage env set -- --stage dev CLOUD_RESIZE_ENABLED=true
+npm run mstage env set -- --stage prod --confirm CLOUD_RESIZE_ENABLED=true
+```
+
+Deleting the key, or setting it to anything but `true`, disables admission
+without a code change.
+
+If the branch was already deployed, the pre-deploy backfill must cover every open
+`RESIZE_BOX` job, restore Box `cpu` and `memory_mib` from `payload.previous` when
+the old admission wrote the target, and set legacy `mem` to the ceiling in GiB.
+Reconcile the usage period to the previous exact shape.
+
+If the Guest stops, the job retains its target and retries after the same Box
+restarts, up to the bounded attempt/deadline limit. Resize never creates a
+replacement VM or automatically restarts a workload. Operators can restore the
+existing Box through its owning Runner's authenticated `POST /boxes/:boxId/start`
+with the existing metadata. A permanently lost Runner/Box needs operational
+recovery; a terminal failure leaves the old size and billing in place.
+
+Validation: `make test:apps:api` includes PostgreSQL/Redis tests when `DB_*` and
+`REDIS_HOST` are configured. `REDIS_PORT` defaults to `6379`, matching CI; the
+resize suite checks connectivity before exercising jobs. For SDK/CLI acceptance, use the existing
+[E2E stack](../e2e/README.md), enable `CLOUD_RESIZE_ENABLED=true` on the API,
+and run `BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize`.
+It requires a Linux/KVM Runner and SDK/CLI builds from this tree; it verifies
+growth without a VM restart and removes its Box during teardown. Billing rollback
+and lease recovery are covered by component tests, not by killing shared services.
+
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record

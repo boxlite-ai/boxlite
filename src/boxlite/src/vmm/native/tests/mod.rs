@@ -84,6 +84,8 @@ impl TestBox {
             security: SecurityOptions::default(),
             nested_virtualization: false,
             cpus: Some(1),
+            max_cpus: None,
+            max_memory_mib: None,
             memory_mib: Some(256),
             kernel,
             fs_shares: FsShares::new(),

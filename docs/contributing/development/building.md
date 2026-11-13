@@ -21,6 +21,40 @@ make setup
 make dev:python
 ```
 
+## Guest firmware
+
+Linux builds compile the vendored libkrunfw kernel with `CONFIG_VIRTIO_MEM=y`
+for online memory growth. Run `make setup` first to install the kernel build
+dependencies. The first build downloads and compiles Linux; subsequent builds
+reuse it. Changes to the architecture's kernel configuration regenerate
+`.config` and rebuild the firmware.
+
+The Linux x86_64 firmware wrapper links with `-nostdlib`, including in the Nix
+shell. This avoids libc dependencies and symbol-version requirements in the
+bundle loaded by the static shim. Deleting only a libc `DT_NEEDED` entry from a
+normally linked wrapper leaves inconsistent ELF version metadata and can abort
+the loader before the VM starts. Makefile changes relink the wrapper; the
+existing aarch64 loader compatibility adjustment remains separate.
+
+`BOXLITE_BUILD_LIBKRUNFW=0` selects the pinned prebuilt firmware instead. That
+older firmware cannot grow memory, so running boxes report their initial memory
+as their memory ceiling. `BOXLITE_LIBKRUNFW_SOURCE` overrides either choice with
+an already built firmware source directory containing `kernel.c` and `Makefile`.
+macOS continues to use prebuilt firmware and does not support online resize.
+
+Use `make test:unit:libkrun` on a Linux/KVM host for the memory map, virtio-mem
+device, and VMM hotplug placement tests. The target also compiles the VMM test
+fixtures, including direct boot without shared-memory devices. Use
+`make test:integration:rust FILTER=resize` for live VM growth and restart recovery.
+The resize integration suite is compiled only on Linux because it exercises KVM
+and Linux cgroups.
+`make fmt:libkrun` formats the affected vendored crates.
+
+The shim's memory control socket is host-only and uses mode `0600`. The VMM
+seccomp profiles allow the corresponding permission syscall only with that mode.
+Each boot removes the previous socket, including a restart at the memory ceiling
+where no hotplug device is needed.
+
 ## NixOS and Nix
 
 `make setup` does not install packages on NixOS. Use the flake dev shell at the

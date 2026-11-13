@@ -100,8 +100,8 @@ print((await box.info()).cpus)  # 1.5; the guest sees 2 vCPUs
 
 | Input | Guest vCPUs | Additional CPU bandwidth quota |
 | --- | --- | --- |
-| Omitted/null | Existing default: 1 | None |
-| `2` or `2.0` | 2 | None; preserves integer behavior |
+| Omitted/null | Existing default: 1 | Applied when spare vCPUs are available |
+| `2` or `2.0` | 2 | Applied when spare vCPUs are available |
 | `0.5` | 1 | Half a CPU on Linux |
 | `1.5` | 2 | 1.5 CPUs on Linux |
 
@@ -113,6 +113,31 @@ Integer allocations add no new cgroup requirement and continue working on macOS.
 Zero, negatives, non-finite values, and excessive precision are rejected.
 A custom kernel may allow up to `255`; the derived integer topology must fit the kernel's existing CPU ceiling.
 Existing boxes created above the bundled kernel's ceiling still load and start with the existing warning.
+New boxes above 16 vCPUs with the bundled kernel fail with `InvalidArgument`.
+Creation does not check the host's CPUs or memory, and reusing an existing box
+preserves its saved allocation whatever its size.
+The host ceiling is the smallest of the CPUs the runtime may use (affinity and
+cgroup quota), the hypervisor's per-VM vCPU limit, and, with the bundled kernel,
+16. It sets only how far a running box can grow (below).
+Legacy boxes above 16 vCPUs still boot with a warning when using the bundled kernel.
+
+**Spare vCPUs (Linux/libkrun):** so a running box can later gain CPUs, a box boots
+with vCPUs up to the host ceiling but only `ceil(cpus)` online (`maxcpus=` on the
+guest kernel command line). `nproc` and `/proc/cpuinfo` show the online CPUs;
+`/sys/devices/system/cpu/present` shows the ceiling.
+
+- The box cgroup's `cpu.max` caps the whole VMM process at `cpus` CPUs, so
+  vCPUs a guest brings online by itself add no CPU time. VMM I/O threads share
+  that cap.
+- A stricter `max_cpu_time` host limit is kept.
+- Without the cgroup `cpu` controller (rootless sessions often lack it),
+  allocations boot exactly `ceil(cpus)` vCPUs and have no spares. Fractional
+  allocations require an enabled jailer and attempt to apply a CPU quota.
+- If a box has spare vCPUs and the cap cannot be written, startup fails.
+  Without spares, fractional quota write failures are logged and startup continues.
+  With the jailer disabled, integer allocations have no spares. macOS boots
+  exactly `cpus` vCPUs.
+
 
 ### Fractional CPUs (Linux)
 
@@ -126,15 +151,24 @@ Boot and device I/O also consume this budget; very small allocations can hit exi
 | --- | --- |
 | Execution host requirements | Linux and an enabled jailer; REST applies these requirements to the server |
 | Enforcement requirements | A writable cgroup v2 CPU controller for the Box's cgroup; rootless operation needs CPU delegation |
-| Quota write failure | Logged at error level; the Box starts with `ceil(cpus)` vCPUs and no bandwidth limit |
+| Quota write failure | Without spare vCPUs, logged at error level and startup continues without a bandwidth limit; with spare vCPUs, startup fails |
 | Membership failure | Existing best-effort joining remains; a Box can start without the requested quota taking effect |
 | Local macOS execution | Fractional values return `Unsupported` |
 | macOS REST client | Can request fractional CPUs from a supporting Linux server; the client needs no local cgroup support |
 | Existing host limits | A tighter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` behavior is unchanged |
 | Information queries | Return configured `cpus`, not CPU usage, reserved capacity, or proof of enforcement |
 
-CPU configuration is immutable after creation.
-Restart, reconnect, disk snapshot restore, clone, and archive import retain it.
+Creation options remain fixed; [online growth](#online-growth) changes the active
+allocation and preserves it across restarts. CPU resize targets use the same
+0.001-core precision as creation. For example, `0.5 → 0.75` changes only the
+bandwidth quota; `0.75 → 1.5` also brings a second vCPU online. Memory-only
+growth preserves the current CPU allocation. Shrinking remains unsupported.
+
+Cloud admission uses the current Runner's creation score threshold, READY state
+and scheduling flags. It calculates targets from the committed Box size without
+querying live resources or reserving capacity. The runtime checks boot ceilings
+when executing the job, so admission does not guarantee successful expansion.
+Cloud CPU targets use the same 0.125–16 range and organization limits as creation.
 Disk-only `restore_from_archive` retains the destination Box's CPU configuration.
 
 After option and security compatibility checks, `get_or_create` keeps an existing named Box's saved `cpus` for integer, fractional, and omitted requests.
@@ -189,13 +223,18 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 128 to 65536 MiB (64 GiB)
+**Range:** creation does not check `memory_mib` against host memory or
+`memory.max` limits. Those limits only bound how far a running box can grow.
 
-**Default:** 512 MiB
+**Default:** 1024 MiB
+
+`memory_mib` includes all boot RAM, including the kernel mapping. The guest
+reports less in `MemTotal` because the kernel reserves some of it. In particular,
+x86 boxes below the MMIO gap no longer receive extra RAM on top of this budget.
 
 **Behavior:**
-- Hard limit (box killed if exceeded)
-- Minimum 128 MiB required
+- The guest can use only allocated RAM; a workload exhausting it can trigger the guest OOM killer.
+- Use at least 128 MiB to leave space for the kernel and guest agent.
 
 **Monitor Usage:**
 
@@ -205,10 +244,90 @@ memory_mb = metrics.memory_usage_bytes / (1024**2)
 print(f"Memory: {memory_mb:.2f} MB")
 ```
 
-**Out of Memory:**
-- Box process is killed
-- Check stderr for OOM messages
-- Increase `memory_mib` if needed
+**Out of Memory:** check the guest console for OOM messages. Increase the allocation
+before the workload exhausts it; host memory limits can also terminate the VMM.
+
+## Online growth
+
+A running Linux/KVM box can grow CPUs and memory without restarting its workload.
+Targets are absolute. Omitting a resource retains its allocation; omitting both
+queries the allocation and the ceilings established for that boot.
+
+```python
+resources = await box.resize()
+resources = await box.resize(cpus=1.5, memory_mib=2048)
+print(resources.cpus, resources.memory_mib)
+print(resources.max_cpus, resources.max_memory_mib)
+```
+
+The same operation is available as Rust `LiteBox::resize(ResizeOptions)`,
+Node `box.resize({ cpus: 1.5, memoryMib: 2048 })`, Go `Box.Resize`,
+C `boxlite_resize_box`, and the Python synchronous wrappers. In C and Go,
+zero means leave that resource unchanged.
+
+```bash
+boxlite resize mybox --cpus 1.5 --memory 2048
+boxlite resize mybox
+```
+
+REST clients use `POST /v1/boxes/{box_id}/resize` with
+`{"cpus":1.5,"memory_mib":2048}`. The response contains `cpus`, `memory_mib`,
+`max_cpus`, and `max_memory_mib`.
+In `boxlite serve`, empty and all-null requests leave the AutoStop idle clock
+unchanged. Parsed explicit targets count as activity, including rejected attempts.
+
+Cloud uses the same SDK and CLI calls, rounding memory growth upward in 128 MiB
+increments relative to the committed allocation. From 1024 MiB,
+`await box.resize(memory_mib=1537)` requests 1664 MiB; from 300 MiB, requesting
+500 MiB produces 556 MiB. Omitting memory preserves its exact allocation.
+
+The control plane saves the target in a durable job, but the Box keeps its old
+CPU/RAM and usage period while the Runner applies the resize. Completion updates
+the exact MiB allocation and switches the usage period in one transaction;
+1664 MiB is recorded as 1.625 GiB for usage accounting. Retries are bounded; a job that reaches 10
+attempts or 30 minutes becomes terminal, releases the lifecycle fence, and leaves
+the old size and billing unchanged. A 30-second wait can return `504
+resize_in_progress`; retrying the same target joins that job using its original
+allocation for rounding. A different target conflicts until completion.
+After completion, repeat the returned target or query resources; a smaller
+request is rejected as shrinking before rounding. Box info shows the committed (old until completion)
+size; `resize()` with no options queries the Runner's allocation. Stop, delete and
+other conflicting lifecycle operations are rejected while resize is active; retry
+them after completion or terminal failure. If the Guest exits, resize waits for the
+same Box to restart before retrying; it does not restart the Guest itself. A restart
+can use old or partially applied resources, so reconciliation is still necessary.
+
+Cloud admission must be enabled by the operator after upgrading the control
+plane and Runner; see the [rollout sequence](../../apps/api/README.md#cloud-resize).
+
+- Both targets are validated before applying either. Shrinking, exceeding a
+  ceiling, and resizing a stopped box are rejected.
+- Local memory grows in increments of 128 MiB relative to the current allocation.
+  Its ceiling is limited by host/cgroup memory, KVM slots, and guest address space.
+- Unallocated hotplug slots have no KVM mapping and are protected with
+  `PROT_NONE`. The reservation adds no guest-usable RAM and commits no host RAM.
+  Slots become accessible as the virtio-mem driver plugs them.
+- Setting a host memory limit (`SecurityOptions.max_memory` in Python,
+  `advanced.security.resource_limits.max_memory` in Rust) disables memory growth:
+  that limit also constrains VMM virtual address space. Its memory ceiling equals
+  the starting allocation. A kernel without `CONFIG_VIRTIO_MEM=y` likewise
+  cannot grow memory.
+- Successful allocations survive stop/start and handle recovery. Concurrent
+  requests are serialized. A failed request can leave a partial allocation;
+  query again and retry the original target. A submitted operation can finish
+  after its caller disconnects.
+  Startup persists the allocation before publishing Running and cleans up the new
+  VM if that write fails. If the first memory
+  submission response is lost, a bounded status query recovers any observed mapping.
+- `cpus` reports the last committed CPU allocation. If a CPU RPC reply is lost,
+  the guest may have brought additional CPUs online while the host attempts
+  to restore the previous quota. A resource query still reports the committed
+  allocation; retry the original target to reconcile the guest and host state.
+  Guest CPU changes alone never increase the host allocation.
+- macOS does not support online resize.
+
+See [building from source](../contributing/development/building.md#guest-firmware)
+for the firmware needed by memory growth.
 
 ## Disk configuration
 

@@ -731,6 +731,18 @@ export type JsCloneOptions = Record<string, never>;
 
 export type JsExportOptions = Record<string, never>;
 
+export interface JsResizeOptions {
+  cpus?: number;
+  memoryMib?: number;
+}
+
+export interface JsBoxResources {
+  cpus: number;
+  memoryMib: number;
+  maxCpus: number;
+  maxMemoryMib: number;
+}
+
 export interface JsBox {
   readonly agents: Agents;
   readonly id: string;
@@ -755,6 +767,7 @@ export interface JsBox {
   ): Promise<JsBox>;
   export(dest: string, options?: JsExportOptions | null): Promise<string>;
   start(): Promise<void>;
+  resize(options: JsResizeOptions): Promise<JsBoxResources>;
   stop(): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;
   copyIn(

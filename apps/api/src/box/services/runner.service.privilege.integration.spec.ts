@@ -108,6 +108,29 @@ describeIfDatabase('RunnerService privilege capability (integration, real Postgr
     expect(ordinary.map((runner) => runner.id).sort()).toEqual([legacy.id, unsupported.id, supported.id].sort())
   })
 
+  it.each([
+    [{ availabilityScore: 0 }, false],
+    [{ availabilityScore: 1 }, true],
+    [{ availabilityScore: 2 }, true],
+    [{ unschedulable: true }, false],
+    [{ draining: true }, false],
+    [{ state: RunnerState.DECOMMISSIONED }, false],
+  ])('uses the same eligibility for creation and resize: %j', async (changes, accepted) => {
+    const runner = await readyRunner('resize')
+    await runners.update(runner.id, changes)
+    const candidates = await service.findAvailableRunners({})
+    expect(candidates.some((candidate) => candidate.id === runner.id)).toBe(accepted)
+    expect((await service.findAvailableRunner(runner.id)) !== null).toBe(accepted)
+  })
+
+  it('admits an existing Runner outside the top ten without moving its Box', async () => {
+    const current = await readyRunner('current')
+    await runners.update(current.id, { availabilityScore: 1 })
+    for (let i = 0; i < 10; i++) await readyRunner(`higher-${i}`)
+    expect((await service.findAvailableRunners({})).some((runner) => runner.id === current.id)).toBe(false)
+    expect((await service.findAvailableRunner(current.id))?.id).toBe(current.id)
+  })
+
   it('rejects privileged placement when no runner reports support', async () => {
     await readyRunner('legacy')
     await readyRunner('unsupported', false)

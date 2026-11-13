@@ -276,28 +276,36 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 ### `cpus: float`
 
 CPU allocation, default `1`, from `0.125` to `16` with the bundled kernel, in increments of `0.001`.
-Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
+Integers, including `2.0`, retain their online vCPU count; Linux also applies a bandwidth quota when spare vCPUs are available.
 Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
+New boxes above 16 vCPUs with the bundled kernel fail with `InvalidArgument`;
+custom kernels are not bound by that limit. Creation does not check the host's
+CPUs, and reusing an existing box preserves its saved allocation whatever its size.
+
+**Example:**
 ```python
 cpus=0.5  # 1 guest vCPU, half a CPU of aggregate time
 cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
-cpus=2    # 2 guest vCPUs, no additional bandwidth quota
+cpus=2    # 2 online guest vCPUs; quota also protects any spare vCPUs
 ```
 
 Fractional values require a Linux execution host and the jailer; enforcement also needs writable cgroup v2 CPU quotas.
 Local macOS execution rejects them; macOS REST clients can request them from a supporting Linux server.
-A quota-write failure is logged at error level and does not prevent startup; like best-effort cgroup membership, it can leave a running Box without enforcement.
+Without spare vCPUs, a quota-write failure is logged at error level and startup continues without enforcement.
+With spare vCPUs, quota-write failure prevents startup. Cgroup membership remains best-effort and can leave a running Box without enforcement.
 Information queries return the configured allocation.
-Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
+Creation options stay fixed; [online growth](../guides/resource-limits.md#online-growth) can increase the running allocation and persist it across restarts.
+See [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
 
 ### `memory_mib: int`
 
 Memory limit in mebibytes (MiB).
 
-**Default:** 512
+**Default:** 1024
 
-**Range:** 128 to 65536 (64 GiB)
+**Range:** creation does not check `memory_mib` against host memory or
+`memory.max` limits. Those limits only bound how far a running box can grow.
 
 **Example:**
 ```python
@@ -309,7 +317,8 @@ memory_mib=4096   # 4 GB
 **Notes:**
 - 1 MiB = 1024 KiB = 1,048,576 bytes
 - Minimum 128 MiB required for most images
-- Out of memory kills the box process
+- Guest memory exhaustion can kill individual guest processes; exit of the main command stops the box.
+- Host memory exhaustion or limits can terminate the VMM and therefore the whole box.
 - Monitor with `box.metrics().memory_usage_bytes`
 
 ### `disk_size_gb: int | None`

@@ -7,6 +7,7 @@
 //! - `execution`: Command execution (Exec, Wait, Kill RPCs)
 
 mod container;
+mod cpus;
 pub(crate) mod exec;
 pub(crate) mod files;
 mod guest;

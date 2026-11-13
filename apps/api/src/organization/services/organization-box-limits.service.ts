@@ -17,7 +17,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Resolves creation entitlements without persisting them over administrator quotas. */
+/** Resolves per-box entitlements without persisting them over administrator quotas. */
 @Injectable()
 export class OrganizationBoxLimitsService {
   private readonly logger = new Logger(OrganizationBoxLimitsService.name)

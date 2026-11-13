@@ -20,6 +20,11 @@
         "comment": "Native virtio-fs applies guest-requested modes to shared container metadata through pinned descriptors."
       },
       {
+        "syscall": "chmod",
+        "comment": "Make the host memory-control socket private (0600).",
+        "args": [{ "index": 1, "type": "dword", "op": "eq", "val": 384 }]
+      },
+      {
         "syscall": "getxattr",
         "comment": "virtiofs xattr passthrough (e.g. dropping security.capability on write); a blocked xattr syscall SIGSYS-kills the VMM"
       },

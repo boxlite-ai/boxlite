@@ -29,6 +29,7 @@ import { AddNestedVirtualizationAllowlist1793870400000 } from '../../migrations/
 import { FractionalBoxCpus1794405600000 } from '../../migrations/pre-deploy/1794405600000-fractional-box-cpus-migration'
 import { AddBoxMemoryMib1794484800000 } from '../../migrations/pre-deploy/1794484800000-add-box-memory-mib-migration'
 import { BoxService } from '../../box/services/box.service'
+import { AddCloudResizeJobs1793232000000 } from '../../migrations/pre-deploy/1793232000000-add-cloud-resize-jobs-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -290,6 +291,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
         await queryRunner.rollbackTransaction()
         throw error
       }
+      await new AddCloudResizeJobs1793232000000().up(queryRunner)
     } finally {
       await queryRunner.release()
     }

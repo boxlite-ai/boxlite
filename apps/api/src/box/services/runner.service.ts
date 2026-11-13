@@ -279,6 +279,16 @@ export class RunnerService {
   }
 
   async findAvailableRunners(params: GetRunnerParams): Promise<Runner[]> {
+    const runners = await this.runnerRepository.find({ where: this.availableRunnerFilter(params) })
+    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+  }
+
+  /** Apply creation admission to an existing assignment, without ranking or moving it. */
+  async findAvailableRunner(id: string): Promise<Runner | null> {
+    return this.runnerRepository.findOne({ where: { ...this.availableRunnerFilter({}), id } })
+  }
+
+  private availableRunnerFilter(params: GetRunnerParams): FindOptionsWhere<Runner> {
     const runnerFilter: FindOptionsWhere<Runner> = {
       state: RunnerState.READY,
       unschedulable: Not(true),
@@ -308,11 +318,7 @@ export class RunnerService {
       runnerFilter.supportsPrivileged = true
     }
 
-    const runners = await this.runnerRepository.find({
-      where: runnerFilter,
-    })
-
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    return runnerFilter
   }
 
   /**

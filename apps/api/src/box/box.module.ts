@@ -38,6 +38,7 @@ import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
+import { ResizeJobService } from './services/resize-job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
 import { BoxLookupCacheInvalidationService } from './services/box-lookup-cache-invalidation.service'
@@ -81,6 +82,7 @@ import { RunnerDiskExpansion } from './entities/runner-disk-expansion.entity'
 import { RunnerDiskUsageSample } from './entities/runner-disk-usage-sample.entity'
 import { RunnerDiskExpansionService } from './services/runner-disk-expansion.service'
 import { GcpDiskClient } from './services/gcp-disk-client'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
@@ -90,6 +92,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     OrganizationModule,
     RegionModule,
     ImageModule,
+    UsageModule,
     TypeOrmModule.forFeature([
       Box,
       Runner,
@@ -137,6 +140,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxStopAction,
     BoxDestroyAction,
     JobService,
+    ResizeJobService,
     JobStateHandlerService,
     BoxActivityService,
     BoxExitCodeService,
@@ -175,6 +179,8 @@ import { GcpDiskClient } from './services/gcp-disk-client'
   exports: [
     CheckpointService,
     CheckpointRecoverService,
+    BoxLookupCacheInvalidationService,
+    JobService,
     BoxService,
     TunnelService,
     DomainService,

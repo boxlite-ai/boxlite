@@ -277,6 +277,22 @@ fn enable_controllers(cgroup_path: &Path) -> Result<(), JailerError> {
 /// CFS period for `cpu.max`, in microseconds (the kernel default).
 const CPU_PERIOD_US: u64 = 100_000;
 
+/// Whether box cgroups can get the `cpu` controller, so `cpu.max` can cap a box.
+///
+/// Rootless sessions are often delegated only `memory` and `pids`; see
+/// [`enable_controllers`].
+pub fn cpu_controller_available() -> bool {
+    if !is_cgroup_v2_available() {
+        return false;
+    }
+    let base = get_cgroup_base();
+    let boxlite = base.join(BOXLITE_CGROUP).join("cgroup.controllers");
+    let delegated = fs::read_to_string(&boxlite)
+        .or_else(|_| fs::read_to_string(base.join("cgroup.subtree_control")))
+        .unwrap_or_default();
+    delegated.split_whitespace().any(|c| c == "cpu")
+}
+
 /// Apply the explicit aggregate Box CPU bandwidth, preserving stricter legacy limits.
 pub(crate) fn set_cpu_max(
     box_id: &str,
