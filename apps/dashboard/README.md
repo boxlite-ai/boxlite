@@ -1164,3 +1164,22 @@ Loading, empty results, and failures remain distinct; refresh failures retain
 known bindings with a retry action. Organization changes never reuse the previous
 organization’s bindings as placeholder data. Only HTTP(S) URLs without embedded
 credentials receive copy/open actions.
+
+### Explicit tunnel request contracts
+
+`ApiClient.prepareBoxTunnel(org, box, port, isPublic, signal)` sends an explicit
+access mode and validates the returned URI, access mode, and token shape. Private
+requests first check `/v1/config` for `private_tunnels_enabled`; a missing or
+failed capability check never falls back to public access.
+
+`revokeBoxTunnel` deletes the declaration for a port without checking Box state
+or inbound access. Both methods reject ports outside 1–65535 before making a
+request and apply bounded request timeouts. They do not automatically retry
+mutations. Refusals are distinguished from uncertain outcomes: transport failures
+or malformed creation responses may follow a successful server mutation. Error
+objects never retain the response or token. URI values must be strings; URL-parser
+coercion cannot turn a malformed response into a usable descriptor. Full and masked
+tokens remain distinct.
+
+These additive methods support the forthcoming tunnel dialog. The existing
+public-URL UI continues using its existing method until that migration.
