@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use boxlite_shared::errors::BoxliteResult;
 
-use super::{LockId, LockManager, Locker};
+use super::{LockGates, LockId, LockManager, Locker};
 use super::{lock_already_allocated, lock_exhausted, lock_invalid, lock_not_allocated};
 
 /// In-memory lock manager for testing.
@@ -33,6 +33,7 @@ pub struct InMemoryLockManager {
     locks: Vec<Arc<InMemoryLock>>,
     num_locks: u32,
     alloc_lock: Mutex<()>,
+    gates: LockGates,
 }
 
 struct InMemoryLock {
@@ -67,6 +68,7 @@ impl InMemoryLockManager {
             locks,
             num_locks,
             alloc_lock: Mutex::new(()),
+            gates: LockGates::default(),
         }
     }
 }
@@ -78,6 +80,7 @@ impl LockManager for InMemoryLockManager {
         for lock in &self.locks {
             if !lock.allocated.load(Ordering::SeqCst) {
                 lock.allocated.store(true, Ordering::SeqCst);
+                self.gates.get(lock.id);
                 return Ok(lock.id);
             }
         }
@@ -92,6 +95,7 @@ impl LockManager for InMemoryLockManager {
 
         Ok(Arc::new(InMemoryLocker {
             lock: self.locks[id.0 as usize].clone(),
+            gate: self.gates.get(id),
         }))
     }
 
@@ -105,7 +109,10 @@ impl LockManager for InMemoryLockManager {
             return Err(lock_already_allocated(id));
         }
 
-        Ok(Arc::new(InMemoryLocker { lock: lock.clone() }))
+        Ok(Arc::new(InMemoryLocker {
+            lock: lock.clone(),
+            gate: self.gates.get(id),
+        }))
     }
 
     fn free(&self, id: LockId) -> BoxliteResult<()> {
@@ -118,6 +125,7 @@ impl LockManager for InMemoryLockManager {
             return Err(lock_not_allocated(id));
         }
 
+        self.gates.remove(id);
         Ok(())
     }
 
@@ -125,6 +133,7 @@ impl LockManager for InMemoryLockManager {
         for lock in &self.locks {
             lock.allocated.store(false, Ordering::SeqCst);
         }
+        self.gates.clear();
         Ok(())
     }
 
@@ -150,6 +159,7 @@ impl LockManager for InMemoryLockManager {
         for lock in &self.locks {
             lock.allocated.store(false, Ordering::SeqCst);
         }
+        self.gates.clear();
         Ok(())
     }
 }
@@ -157,11 +167,16 @@ impl LockManager for InMemoryLockManager {
 /// Handle to an in-memory lock.
 struct InMemoryLocker {
     lock: Arc<InMemoryLock>,
+    gate: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl Locker for InMemoryLocker {
     fn id(&self) -> LockId {
         self.lock.id
+    }
+
+    fn gate(&self) -> Option<&Arc<tokio::sync::RwLock<()>>> {
+        Some(&self.gate)
     }
 
     fn lock(&self) {

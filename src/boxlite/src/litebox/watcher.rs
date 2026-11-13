@@ -1,33 +1,25 @@
-//! One watcher per box, owning all lifecycle observation.
+//! Observe a VM run and report exit/health events to the BoxImpl facade.
 //!
-//! [`BoxWatcher`] always follows the box's shim to its exit — recording
-//! `Stopped` and the exit code — and, when a HEALTHCHECK is configured and the
-//! guest is reachable, also probes the guest on an interval. It is the single
-//! successor to the former split exit-watcher + health-check tasks: a plain box
-//! gets an exit-only watcher (`health == None`), a health-checked box gets both
-//! from one `select!` loop.
-//!
-//! Folding the two together also deletes the whole "did the shim die?" branch
-//! the health check used to carry: a health tick can only fire while the shim is
-//! alive, or `wait_for_exit` would have won the `select!`. So a failed probe is
-//! unambiguously a *health* failure — never a dead box — and the exit arm is the
-//! single writer of `status` / `exit_code` / `pid`.
+//! Monitoring and guest probes do not hold lifecycle locks. The facade owns
+//! admission, run identity checks, state persistence, and exit cleanup.
 
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use boxlite_shared::errors::BoxliteError;
 
-use super::box_impl::BoxImpl;
-use super::state::{BoxState, HealthStatus};
+use super::box_impl::{BoxEvent, BoxImpl, BoxRun};
 use crate::portal::interfaces::GuestInterface;
 use crate::runtime::rt_impl::RuntimeImpl;
 use crate::{BoxID, HealthCheckOptions, HealthState};
+
+#[cfg(test)]
+#[path = "watcher/tests/operation_lock.rs"]
+mod operation_lock_tests;
 
 /// The optional health-probing half of a [`BoxWatcher`].
 ///
@@ -36,7 +28,7 @@ use crate::{BoxID, HealthCheckOptions, HealthState};
 /// its probe cannot be raced away. An *adopted* box — recovered already Running —
 /// is armed exit-only by the handout that first observed it and never carries a
 /// probe (adopted boxes are exit-only by design). Owns the ping and its timing /
-/// threshold config; the state writes live in [`BoxWatcher`].
+/// threshold config; state writes are reported through the BoxImpl operation gate.
 pub(crate) struct HealthProbe {
     guest: GuestInterface,
     interval: Duration,
@@ -44,8 +36,6 @@ pub(crate) struct HealthProbe {
     retries: u32,
     start_period: Duration,
     started_at: Instant,
-    /// Cache of the last persisted health status, to skip redundant DB writes.
-    last: HealthStatus,
 }
 
 /// Outcome of a single probe.
@@ -57,11 +47,7 @@ enum Probe {
 }
 
 impl HealthProbe {
-    pub(crate) fn new(
-        guest: GuestInterface,
-        config: HealthCheckOptions,
-        last: HealthStatus,
-    ) -> Self {
+    pub(crate) fn new(guest: GuestInterface, config: HealthCheckOptions) -> Self {
         Self {
             guest,
             interval: config.interval,
@@ -69,7 +55,6 @@ impl HealthProbe {
             retries: config.retries,
             start_period: config.start_period,
             started_at: Instant::now(),
-            last,
         }
     }
 
@@ -90,7 +75,7 @@ impl HealthProbe {
 /// A single task that observes one box's process for its whole life.
 pub(crate) struct BoxWatcher {
     shim_pid: u32,
-    state: Arc<RwLock<BoxState>>,
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Weak, and load-bearing. The task parks on the shim for the box's life, and
     /// `RuntimeImpl::Drop` runs `shutdown_sync` to kill shims. A strong `Arc`
     /// would deadlock the two — Drop cannot run until the task lets go, and the
@@ -99,9 +84,6 @@ pub(crate) struct BoxWatcher {
     runtime: Weak<RuntimeImpl>,
     shutdown: CancellationToken,
     box_id: BoxID,
-    box_name: Option<String>,
-    exit_file: std::path::PathBuf,
-    removes_on_exit: bool,
     /// `None` ⇒ exit-only watcher. `Some` ⇒ also probe the guest's health.
     health: Option<HealthProbe>,
 }
@@ -109,18 +91,18 @@ pub(crate) struct BoxWatcher {
 impl BoxWatcher {
     /// Build a watcher for `box`'s shim. `health` is `Some` only when the box has
     /// a HEALTHCHECK and a reachable guest (the caller supplies the probe).
-    pub(crate) fn new(bx: &BoxImpl, shim_pid: u32, health: Option<HealthProbe>) -> Self {
+    pub(crate) fn new(
+        bx: &BoxImpl,
+        shim_pid: u32,
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+        health: Option<HealthProbe>,
+    ) -> Self {
         Self {
             shim_pid,
-            state: Arc::clone(&bx.state),
+            started_at,
             runtime: Arc::downgrade(&bx.runtime),
             shutdown: bx.shutdown_token.child_token(),
             box_id: bx.config.id.clone(),
-            box_name: bx.config.name.clone(),
-            exit_file: bx
-                .layout
-                .container_exit_file(bx.config.container.id.as_str()),
-            removes_on_exit: bx.config.options.removes_on_stop(),
             health,
         }
     }
@@ -147,7 +129,7 @@ impl BoxWatcher {
                 // down rather than race it to the same fields.
                 _ = shutdown.cancelled() => return,
                 _ = shim.wait_for_exit() => {
-                    self.on_shim_exit();
+                    self.on_shim_exit().await;
                     return;
                 }
                 // Disabled (never fires) when there is no probe, degenerating to a
@@ -159,7 +141,7 @@ impl BoxWatcher {
                     tokio::select! {
                         _ = shutdown.cancelled() => return,
                         _ = shim.wait_for_exit() => {
-                            self.on_shim_exit();
+                            self.on_shim_exit().await;
                             return;
                         }
                         flow = self.on_health_tick() => {
@@ -174,151 +156,74 @@ impl BoxWatcher {
         }
     }
 
-    /// The shim exited on its own: record `Stopped` + the exit code, and (for a
-    /// health-checked box) flip the last health snapshot to Unhealthy — the whole
-    /// job the old exit watcher did, now the single writer of the transition.
-    fn on_shim_exit(&mut self) {
-        // The runtime is gone, so it has already torn everything down (its Drop
-        // runs shutdown_sync) and there is nobody left to report to.
+    /// Report process exit; BoxImpl owns state changes and configured cleanup.
+    async fn on_shim_exit(&mut self) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
         let Some(runtime) = self.runtime.upgrade() else {
             return;
         };
-
-        let stopped = {
-            let mut state = self.state.write();
-
-            if state.status.is_active() {
-                crate::runtime::rt_impl::record_main_command_exit(&mut state, &self.exit_file);
-            } else if state.exit_code.is_none()
-                && let Some(record) = boxlite_shared::layout::ExitRecord::read(&self.exit_file)
-            {
-                // Someone already marked the box Stopped without recording a code
-                // — a force stop that raced init's own exit, say — but the guest
-                // did write one. Don't fight for the status; just fill in the code
-                // they could not know. Delivering that code is the whole point of
-                // this watcher, and `recover_boxes` will not backfill it (its
-                // branch only fires on a *Running* box).
-                state.exit_code = Some(record.exit_code);
-            } else {
-                // Fully resolved by someone else (a concurrent stop, recovery).
-                return;
-            }
-
-            // A health-checked box that died is Unhealthy — its last snapshot, not
-            // a probe result (we never probe a dead box now).
-            if self.health.is_some() {
-                state.health_status.state = HealthState::Unhealthy;
-            }
-
-            state.clone()
-        };
-
-        tracing::info!(
-            box_id = %self.box_id,
-            exit_code = ?stopped.exit_code,
-            "Main command exited; box stopped"
-        );
-
-        // NotFound is expected for a remove-on-stop box: the exit raced the
-        // cleanup that deleted it, and the box being gone is the desired state.
-        match runtime.box_manager.save_box(&self.box_id, &stopped) {
-            Ok(()) | Err(BoxliteError::NotFound(_)) => {}
-            Err(e) => tracing::warn!(
-                box_id = %self.box_id,
-                error = %e,
-                "Failed to persist the box's exit"
-            ),
-        }
-
-        // The same tail `stop()` runs, because this is the box's *other* death.
-        // Without it a long-lived runtime keeps handing out the spent handle from
-        // its cache, and a remove-on-stop box — the default — that ran to
-        // completion is never cleaned up, because nobody called stop() to do it.
-        runtime.invalidate_box_impl(&self.box_id, self.box_name.as_deref());
-        if self.removes_on_exit
-            && let Err(e) = runtime.remove_box(&self.box_id, false)
+        if let Err(error) = runtime
+            .apply_box_observation(
+                &self.box_id,
+                self.observed_run(),
+                BoxEvent::Exited {
+                    health_checked: self.health.is_some(),
+                },
+            )
+            .await
+            && !matches!(error, BoxliteError::NotFound(_) | BoxliteError::Stopped(_))
         {
-            tracing::warn!(
-                box_id = %self.box_id,
-                error = %e,
-                "Failed to auto-remove the box after its main command exited"
-            );
+            tracing::warn!(box_id = %self.box_id, %error, "Failed to report box exit");
         }
     }
 
-    /// A probe interval elapsed (shim still alive): ping and account for health.
-    /// Returns `Break` once the box has gone Unhealthy — stop probing.
     async fn on_health_tick(&mut self) -> std::ops::ControlFlow<()> {
         use std::ops::ControlFlow::{Break, Continue};
-
-        // `check()` borrows the probe across its await; take the outcome and the
-        // config we need by value, then work on the box state with no live borrow.
-        let outcome = match self.health.as_mut() {
-            Some(probe) => probe.check().await,
-            None => return Continue(()),
+        let Some(probe) = self.health.as_mut() else {
+            return Continue(());
         };
-        let (retries, last) = match &self.health {
-            Some(probe) => (probe.retries, probe.last),
-            None => return Continue(()),
+        let outcome = probe.check().await;
+        let healthy = match outcome {
+            Probe::Skipped => return Continue(()),
+            Probe::Healthy => true,
+            Probe::Failed => false,
         };
-
-        match outcome {
-            Probe::Skipped => Continue(()),
-            Probe::Healthy => {
-                if last.state != HealthState::Healthy || last.failures != 0 {
-                    let snapshot = {
-                        let mut state = self.state.write();
-                        state.mark_health_check_success();
-                        state.clone()
-                    };
-                    self.persist(&snapshot);
-                    if let Some(probe) = self.health.as_mut() {
-                        probe.last = snapshot.health_status;
-                    }
-                }
-                Continue(())
-            }
-            Probe::Failed => {
-                tracing::warn!(box_id = %self.box_id, "Health check probe failed");
-                let new_failures = last.failures + 1;
-                let new_state = if new_failures >= retries {
-                    HealthState::Unhealthy
-                } else {
-                    last.state
-                };
-                if last.state == new_state && last.failures == new_failures {
-                    return Continue(());
-                }
-                let (snapshot, became_unhealthy) = {
-                    let mut state = self.state.write();
-                    let became_unhealthy = state.mark_health_check_failure(retries);
-                    (state.clone(), became_unhealthy)
-                };
-                self.persist(&snapshot);
-                if let Some(probe) = self.health.as_mut() {
-                    probe.last = snapshot.health_status;
-                }
-                if became_unhealthy {
+        let retries = probe.retries;
+        if self.shutdown.is_cancelled() {
+            return Break(());
+        }
+        let Some(runtime) = self.runtime.upgrade() else {
+            return Break(());
+        };
+        match runtime
+            .apply_box_observation(
+                &self.box_id,
+                self.observed_run(),
+                BoxEvent::Health { healthy, retries },
+            )
+            .await
+        {
+            Ok(Some(status)) => {
+                if status.state == HealthState::Unhealthy {
                     Break(())
                 } else {
                     Continue(())
                 }
             }
+            Ok(None) => Break(()),
+            Err(error) => {
+                tracing::warn!(box_id = %self.box_id, %error, "Failed to report box health");
+                Continue(())
+            }
         }
     }
 
-    /// Persist a state snapshot, upgrading the weak runtime. A gone runtime means
-    /// teardown is already under way — nothing to save.
-    fn persist(&self, snapshot: &BoxState) {
-        let Some(runtime) = self.runtime.upgrade() else {
-            return;
-        };
-        if let Err(e) = runtime.box_manager.save_box(&self.box_id, snapshot) {
-            tracing::error!(
-                box_id = %self.box_id,
-                error = %e,
-                "Failed to persist health status to database"
-            );
+    fn observed_run(&self) -> BoxRun {
+        BoxRun {
+            pid: self.shim_pid,
+            started_at: self.started_at,
         }
     }
 }

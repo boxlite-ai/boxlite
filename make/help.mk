@@ -83,6 +83,7 @@ help:
 	@echo "    make test:guest-artifacts   - Build and qualify the standalone guest artifacts"
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
 	@echo "    make test:integration:rust  - Run Rust integration tests (requires VM, FILTER=<pattern>)"
+	@echo "    make test:integration:lifecycle-race - Run ignored real-VM boot/stop regressions (BOXLITE_REPRO_ROOTFS=local OCI layout)"
 	@echo "    make test:integration:agents - Run OpenCode agent tests (requires VM, BOXLITE_TEST_OPENCODE_BINARY)"
 	@echo "    make test:perf:import-export - Run manual 1 GiB import/export benchmark (release, requires VM)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"

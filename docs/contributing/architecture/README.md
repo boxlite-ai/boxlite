@@ -95,11 +95,13 @@ to the OCI workload.
 
 ### Reader/writer locks
 
-`LockGuard::new_async` and `ReadLockGuard::new_async` retry nonblocking acquisition
-every 10ms with Tokio sleep. Cancelling a pending waiter must not release the
-current owner's lock. Dropping an acquired guard releases its lock; process exit
-also releases file locks when the last owning descriptor closes. Neither blocking
-nor asynchronous acquisition promises fairness.
+`LockGuard::new_async` and `ReadLockGuard::new_async` first await a shared per-ID
+Tokio reader/writer gate within their manager, then retry nonblocking kernel
+acquisition every 10ms with Tokio sleep. Local waiters queue fairly and wake on
+gate release; fairness does not extend across managers or processes. Cancelling a
+pending waiter releases only its own admission, not the current owner's lock.
+Dropping an acquired guard releases its lock; process exit also releases file
+locks when the last owning descriptor closes.
 
 Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=lock::` for the lock contract
 checks. Blocking tests acknowledge a failed acquisition before checking that the
@@ -116,6 +118,88 @@ deterministic local-filesystem trigger for the latter is established on macOS or
 Linux.
 See the [Linux error contract](https://man7.org/linux/man-pages/man2/flock.2.html#ERRORS)
 and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/flock.2).
+
+### Per-box lifecycle ownership
+
+`BoxImpl::with_operation` acquires the box's lifecycle write lock and refreshes
+persisted state before start/stop, implicit boot/adoption, outbound updates, and
+watcher reports. Internal boot and attach helpers reuse that admission; they never
+acquire a second lifecycle lock. An initialized handle cannot attach its old live
+resources to a different PID or `started_at`.
+
+Guards acquire the manager's per-ID local gate before `flock` and release `flock`
+before the gate; existing handles retain their gate even if removal frees the ID.
+Synchronous removal/shutdown use nonblocking `try_*` admission: a busy local gate
+or kernel lock returns `None`, so removal requests a retry and shutdown defers cleanup.
+The blocking constructors wait on the kernel lock alone, so they never queue behind
+the local gate.
+
+Implicit operations recheck whether booting may run a user-specified command after
+this refresh, under the same admission as boot. For example, `metrics()` waiting
+behind a stop must not restart a job whose command already ran. Explicit `start()`
+still permits a restart; attach-before-start still permits preparing a fresh box.
+
+Watcher observes processes and probes health without holding admission. It reports
+events through `RuntimeImpl::apply_box_observation` using a weak runtime reference;
+resolving an event does not arm another watcher. Successful observation resolution
+reuses the in-process handle cache without reading config/state; a cache miss loads them.
+For cached lookup failures, `None` confirms the box row is gone; other lookup errors
+remain retryable by health reporting. In particular, a missing entity lock while
+the row still exists leaves health probing enabled; a later tick can persist its
+report after the lock is restored. A missing row stops health reporting instead.
+The state refresh under lifecycle admission remains the sole authority.
+`BoxImpl::apply_observation` acquires lifecycle write admission, checks
+PID/`started_at`, and applies the report:
+health persistence or shared stop finalization (exit records, cache invalidation,
+and configured removal). The name distinguishes this state-changing commit phase
+from the watcher's process observation and health probing outside admission.
+Successful automatic removal is recorded on that handle, so a later `stop()` remains
+idempotent even after its row and lock are gone. Unrelated missing state is not
+treated as completed automatic removal.
+
+Stop finalization publishes its in-memory terminal state only after persistence
+succeeds (or the row is already gone). A failed write leaves the run identity
+retryable instead of making the handle appear to belong to an earlier VM.
+
+Explicit start keeps `Container.Start` background and cancellable. Outbound updates
+use the host network backend without awaiting that RPC: a pending container start
+cannot hold lifecycle admission and prevent stop. Returning live resources releases
+admission before subsequent executions, streams, or tunnels; metadata reads retain
+their short state lock.
+
+Explicit removal uses a nonblocking lifecycle write attempt and returns
+`InvalidState` when busy. Synchronous shutdown skips detached boxes and defers busy
+cleanup or lock-retrieval failures, including a missing lock file. A missing box row
+is already gone; a missing lock is not proof of completed cleanup. Async shutdown
+marks cleanup pending before awaiting stops and clears it only after every stop
+succeeds. Timeout, failure, or cancellation leaves a later synchronous shutdown or
+runtime Drop able to retry.
+
+Disk APIs retain their existing **per-handle `disk_ops` mutex**, not a disk-lock
+registry. The quiesce bracket also takes lifecycle write admission through
+freeze, pause, disk work, resume, and thaw. The order is `disk_ops` → lifecycle →
+state; lifecycle entrypoints never acquire `disk_ops`. Final archive writing
+releases lifecycle admission but retains disk exclusion while its caller awaits it.
+
+Disk operations still execute in the caller's future. Cancelling that future does
+not guarantee completion of disk work or resume/thaw cleanup: a blocking worker
+may continue after the caller drops its guards. Cancellation-safe owner tasks are
+a separate change, not a guarantee provided by lifecycle admission.
+
+Stopped-disk operations retain their existing coordination limits. There is no
+cross-handle disk registry or lifecycle-read/disk-write composition yet; complete
+snapshot/clone/export lock migration is separate work.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` for host
+admission and cleanup checks. Stand-in processes and loopback guest RPCs are not
+VM evidence. For real boot/stop races and implicit-job restart prevention, leave
+dependency stubs unset and run `make test:integration:lifecycle-race` with
+`BOXLITE_REPRO_ROOTFS` pointing to a local OCI image layout, not an unpacked rootfs.
+The image must provide `/bin/sh` and `/bin/sleep`, which both VM test suites invoke.
+This target explicitly runs the ignored tests. The implicit-operation regression
+counts guest-written markers before cleanup and checks that explicit restart still
+works.
+
 
 ### ShimController
 
@@ -452,8 +536,12 @@ Retrieve a separate handle for every concurrent acquisition, even for the same
 ID: cloning an `Arc<dyn Locker>` shares the file descriptor and lock ownership.
 For example, retrieve two handles to hold two read guards; dropping either guard
 then leaves the other reader protected. Nested acquisition and read-to-write
-upgrades are unsupported. Blocking acquisition is synchronous; fairness is not
-guaranteed.
+upgrades are unsupported. Blocking guard acquisition is synchronous and waits on
+the kernel lock alone; it bypasses the local gate, as do the manual `Locker`
+methods. FIFO fairness covers queued async acquisitions on the manager-local
+per-ID gate, not kernel contention. Try acquisition takes no queue position: it
+respects existing admission reservations and fails fast while a queued async writer
+owns the gate.
 
 Blocking and nonblocking file-lock acquisition retry interrupted calls (`EINTR`)
 without changing the requested mode. Nonblocking acquisition returns `false` only

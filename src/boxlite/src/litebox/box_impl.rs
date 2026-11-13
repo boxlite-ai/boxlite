@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -26,6 +26,7 @@ use crate::event_listener::EventListener;
 use crate::fs::BindMountHandle;
 use crate::litebox::copy::{CopyOptions, CopySourceKind};
 use crate::litebox::{BoxConnection, BoxTunnel, SshConfig, SshStatus, TunnelOptions};
+#[cfg(test)]
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -35,6 +36,10 @@ use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
 use crate::{BoxID, BoxInfo};
+
+mod operations;
+use operations::StopReason;
+pub(crate) use operations::{BoxEvent, BoxRun};
 
 // ============================================================================
 // TYPE ALIASES
@@ -140,7 +145,7 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
-    network_updates: tokio::sync::Mutex<()>,
+    auto_removed: AtomicBool,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -200,7 +205,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
-            network_updates: tokio::sync::Mutex::new(()),
+            auto_removed: AtomicBool::new(false),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -226,13 +231,14 @@ impl BoxImpl {
     ///
     /// Must be called from a tokio context.
     pub(crate) fn arm_watcher(&self, health: Option<super::watcher::HealthProbe>) {
-        let Some(shim_pid) = self.state.read().pid else {
+        let state = self.state.read();
+        let Some(shim_pid) = state.pid else {
             return;
         };
-        if self.state.read().status != BoxStatus::Running {
+        if state.status != BoxStatus::Running {
             return;
         }
-        self.spawn_watcher_once(shim_pid, health);
+        self.spawn_watcher_once(shim_pid, state.started_at, health);
     }
 
     /// Spawn the box's watcher exactly once, whatever `health` the caller brings —
@@ -241,9 +247,15 @@ impl BoxImpl {
     /// the `live` cell gives the VM. `init_live_state` calls this directly, under
     /// the state lock that publishes Running, so a concurrent exit-only handout
     /// cannot win the cell ahead of it and strand the health probe.
-    fn spawn_watcher_once(&self, shim_pid: u32, health: Option<super::watcher::HealthProbe>) {
-        self.watcher
-            .get_or_init(|| super::watcher::BoxWatcher::new(self, shim_pid, health).spawn());
+    fn spawn_watcher_once(
+        &self,
+        shim_pid: u32,
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+        health: Option<super::watcher::HealthProbe>,
+    ) {
+        self.watcher.get_or_init(|| {
+            super::watcher::BoxWatcher::new(self, shim_pid, started_at, health).spawn()
+        });
     }
 
     // ========================================================================
@@ -299,6 +311,18 @@ impl BoxImpl {
     ///
     /// A Running VM may still have an unstarted container; this starts its main command once.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        match self.with_operation(self.start_inner()).await {
+            Err(BoxliteError::NotFound(_)) if self.shutdown_token.is_cancelled() => {
+                Err(BoxliteError::Stopped(
+                    "Handle invalidated after stop(). Use runtime.get() to get a new handle."
+                        .into(),
+                ))
+            }
+            result => result,
+        }
+    }
+
+    async fn start_inner(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -324,7 +348,7 @@ impl BoxImpl {
         // Boot creates the container; running its init is the separate step that
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
-        let live = self.ensure_booted().await?;
+        let live = self.ensure_booted_locked().await?;
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
@@ -714,9 +738,19 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        self.live
-            .get_or_try_init(|| self.init_live_state(false))
-            .await
+        self.with_operation(async {
+            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running
+            {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Box {} is not running",
+                    self.id()
+                )));
+            }
+            self.live
+                .get_or_try_init(|| self.init_live_state(false))
+                .await
+        })
+        .await
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -747,7 +781,19 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
-        let _network_update = self.network_updates.lock().await;
+        match self.with_operation(self.stop_inner()).await {
+            Err(BoxliteError::NotFound(_))
+                if self.auto_removed.load(Ordering::Acquire)
+                    || (self.shutdown_token.is_cancelled()
+                        && self.state.read().status == BoxStatus::Stopped) =>
+            {
+                Ok(())
+            }
+            result => result,
+        }
+    }
+
+    async fn stop_inner(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Early exit if already stopped (idempotent, prevents double-counting)
@@ -783,7 +829,7 @@ impl BoxImpl {
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
         let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted().await {
+        if should_attach && let Ok(live) = self.ensure_booted_locked().await {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -820,30 +866,42 @@ impl BoxImpl {
             ),
         }
 
+        self.finish_stop(StopReason::Requested)?;
+        tracing::info!(box_id = %self.id(), elapsed_ms = t0.elapsed().as_millis() as u64, "Box stopped");
+        Ok(())
+    }
+
+    fn finish_stop(&self, reason: StopReason) -> BoxliteResult<()> {
         // Check if box was persisted
         let was_persisted = self.state.read().lock_id.is_some();
 
-        // Update state
+        // Publish the terminal state only after persistence succeeds, so a failed
+        // write cannot make this run look like a stale handle on the next retry.
         {
-            let mut state = self.state.write();
+            let mut current = self.state.write();
+            let mut state = current.clone();
 
-            // Only transition to Stopped if we were Running (or other active state).
-            // If we were Configured (never started), stay Configured so next start()
-            // triggers full initialization (creating disks).
-            if !state.status.is_configured() {
-                // Take the exit code the guest recorded on its way down, as
-                // docker does: `docker stop` leaves ExitCode 137, not 0. The
-                // guest writes the exit file when init dies — including when it
-                // dies because *we* killed it — before it checks whether the
-                // teardown was host-driven. The watcher cannot do this: stop()
-                // cancels its token, and it stands down precisely so it does not
-                // race this path.
-                crate::runtime::rt_impl::record_main_command_exit(
-                    &mut state,
-                    &self
-                        .layout
-                        .container_exit_file(self.config.container.id.as_str()),
-                );
+            let exit_file = self.layout.container_exit_file(self.container_id());
+            match reason {
+                StopReason::Requested => {
+                    if !state.status.is_configured() {
+                        crate::runtime::rt_impl::record_main_command_exit(&mut state, &exit_file);
+                    }
+                }
+                StopReason::Exited { health_checked } => {
+                    if state.status.is_active() {
+                        crate::runtime::rt_impl::record_main_command_exit(&mut state, &exit_file);
+                    } else if state.exit_code.is_none()
+                        && let Some(record) = boxlite_shared::layout::ExitRecord::read(&exit_file)
+                    {
+                        state.exit_code = Some(record.exit_code);
+                    } else {
+                        return Ok(());
+                    }
+                    if health_checked {
+                        state.health_status.state = crate::HealthState::Unhealthy;
+                    }
+                }
             }
 
             if was_persisted {
@@ -857,6 +915,7 @@ impl BoxImpl {
                             box_id = %self.config.id,
                             "Box already removed from DB during stop (likely cleanup after init failure)"
                         );
+                        *current = state;
                         return Ok(());
                     }
                     Err(e) => return Err(e),
@@ -865,31 +924,27 @@ impl BoxImpl {
                 // Box was never started - persist now so it survives restarts
                 self.runtime.box_manager.add_box(&self.config, &state)?;
             }
+            *current = state;
         }
 
         // Invalidate cache so new handles get fresh BoxImpl
         self.runtime
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
 
-        for listener in &self.event_listeners {
-            listener.on_box_stopped(&self.config.id, None);
+        if matches!(reason, StopReason::Requested) {
+            for listener in &self.event_listeners {
+                listener.on_box_stopped(&self.config.id, None);
+            }
+            self.runtime
+                .runtime_metrics
+                .boxes_stopped
+                .fetch_add(1, Ordering::Relaxed);
         }
-
-        tracing::info!(
-            box_id = %self.config.id,
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Box stopped"
-        );
-
-        // Increment runtime-wide stopped counter
-        self.runtime
-            .runtime_metrics
-            .boxes_stopped
-            .fetch_add(1, Ordering::Relaxed);
 
         // Apply the configured remove-on-stop policy.
         if self.config.options.removes_on_stop() {
-            self.runtime.remove_box(self.id(), false)?;
+            self.runtime.remove_box_locked(self.id(), false)?;
+            self.auto_removed.store(true, Ordering::Release);
         }
 
         Ok(())
@@ -1179,7 +1234,15 @@ impl BoxImpl {
     /// `start()`). `attach` deliberately does *not* use this: it boots without
     /// running init, so a client can attach before `start()`.
     async fn live_state(&self) -> BoxliteResult<&LiveState> {
-        let live = self.ensure_booted().await?;
+        let live = self
+            .with_operation(async {
+                if self.shutdown_token.is_cancelled() {
+                    return Err(BoxliteError::Stopped("Box handle has been stopped".into()));
+                }
+                self.ensure_usable_without_rerunning_main("use")?;
+                self.ensure_booted_locked().await
+            })
+            .await?;
         self.ensure_container_started(live).await?;
         Ok(live)
     }
@@ -1192,12 +1255,23 @@ impl BoxImpl {
     /// Stopped — and this `OnceCell` still holds that dead VM's `LiveState`.
     /// `OnceCell` cannot be re-initialized, so `get_or_try_init` would return the
     /// corpse and the promised restart would silently not happen. The guard lives
-    /// here, at the one funnel `live_state` and `attach` share.
+    /// in `ensure_booted_locked`, shared by `live_state`, `start`, and `attach`.
     ///
     /// A `Stopped` box whose cell is empty is fine: that is a fresh handle, and
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        self.with_operation(async {
+            if self.shutdown_token.is_cancelled() {
+                return Err(BoxliteError::Stopped("Box handle has been stopped".into()));
+            }
+            self.ensure_booted_locked().await
+        })
+        .await
+    }
+
+    /// Caller owns lifecycle admission, including when stop attaches for teardown.
+    async fn ensure_booted_locked(&self) -> BoxliteResult<&LiveState> {
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1346,25 +1420,6 @@ impl BoxImpl {
         // to run it a second time.
         let adopting_running = state.status == BoxStatus::Running;
 
-        // Retrieve the lock (allocated in create())
-        let lock_id = state.lock_id.ok_or_else(|| {
-            BoxliteError::Internal(format!(
-                "box {} is missing lock_id (status: {:?})",
-                self.config.id, state.status
-            ))
-        })?;
-        let locker = self.runtime.lock_manager.retrieve(lock_id)?;
-        tracing::debug!(
-            box_id = %self.config.id,
-            lock_id = %lock_id,
-            "Acquired lock for box (first_start={})",
-            is_first_start
-        );
-
-        // Hold the lock for the duration of build operations.
-        // LockGuard acquires lock on creation and releases on drop.
-        let _guard = LockGuard::new(&*locker);
-
         // Build the box (lock is held)
         // New and restarted VMs remain guarded until DB persistence succeeds.
         // Running adoption disarms cleanup before reconnecting to the live VM.
@@ -1474,10 +1529,9 @@ impl BoxImpl {
                         .health_check
                         .clone()
                         .expect("guest is fetched only when a health check is configured"),
-                    state.health_status,
                 )
             });
-            self.spawn_watcher_once(pid, health);
+            self.spawn_watcher_once(pid, state.started_at, health);
 
             tracing::debug!(
                 box_id = %self.config.id,
@@ -1499,7 +1553,6 @@ impl BoxImpl {
             "Box booted successfully (first_start={})",
             is_first_start
         );
-        // Lock is automatically released when _guard drops
         Ok(live_state)
     }
 }
@@ -1522,6 +1575,13 @@ impl BoxImpl {
     /// Guest RPCs are best-effort with timeout — failure degrades to
     /// crash-consistent (SIGSTOP-only), not operation failure.
     pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
+    where
+        Fut: Future<Output = BoxliteResult<R>>,
+    {
+        self.with_operation(self.quiesce_inner(fut)).await
+    }
+
+    async fn quiesce_inner<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
@@ -1613,7 +1673,7 @@ impl BoxImpl {
     /// Best-effort guest filesystem quiesce (FIFREEZE) with timeout.
     /// Returns true if quiesce succeeded.
     async fn guest_quiesce(&self) -> bool {
-        let Ok(live) = self.live_state().await else {
+        let Ok(live) = self.ensure_booted_locked().await else {
             tracing::warn!("Cannot quiesce: LiveState not available");
             return false;
         };
@@ -1647,7 +1707,7 @@ impl BoxImpl {
 
     /// Best-effort guest filesystem thaw (FITHAW) with timeout.
     async fn guest_thaw(&self) {
-        let Ok(live) = self.live_state().await else {
+        let Ok(live) = self.ensure_booted_locked().await else {
             tracing::warn!("Cannot thaw: LiveState not available");
             return;
         };
@@ -1788,47 +1848,30 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
         &self,
         policy: crate::runtime::options::OutboundNetworkConfig,
     ) -> BoxliteResult<()> {
-        let _update = self.network_updates.lock().await;
-        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
-            return Err(BoxliteError::InvalidState(
-                "outbound policy updates require a running box".into(),
-            ));
-        }
-        let backend = self.network().await?;
-        let lock_id = self
-            .state
-            .read()
-            .lock_id
-            .ok_or_else(|| BoxliteError::Internal("running box has no lock".into()))?;
-        let locker = self.runtime.lock_manager.retrieve(lock_id)?;
-        let _guard = loop {
-            if let Some(guard) = LockGuard::try_new(&*locker) {
-                break guard;
+        self.with_operation(async {
+            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+                return Err(BoxliteError::InvalidState(
+                    "outbound policy updates require a running box".into(),
+                ));
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        };
-        let current = self.runtime.box_manager.update_box(&self.config.id)?;
-        if current.status != BoxStatus::Running {
-            return Err(BoxliteError::InvalidState(
-                "outbound policy updates require a running box".into(),
-            ));
-        }
-        let previous = backend.outbound().await?;
-        backend.set_outbound(&policy).await?;
-        if let Err(error) = self
-            .runtime
-            .box_manager
-            .save_outbound(&self.config.id, &policy)
-        {
-            if let Err(rollback) = backend.set_outbound(&previous).await {
-                return Err(BoxliteError::InvalidState(format!(
-                    "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the complete update"
-                )));
+            let live = self.ensure_booted_locked().await?;
+            let backend = live.network.as_deref().ok_or_else(|| {
+                BoxliteError::Unsupported("box networking is disabled".into())
+            })?;
+            let previous = backend.outbound().await?;
+            backend.set_outbound(&policy).await?;
+            if let Err(error) = self.runtime.box_manager.save_outbound(&self.config.id, &policy) {
+                if let Err(rollback) = backend.set_outbound(&previous).await {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the complete update"
+                    )));
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
-        self.state.write().outbound_policy = Some(policy);
-        Ok(())
+            self.state.write().outbound_policy = Some(policy);
+            Ok(())
+        })
+        .await
     }
 
     async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel> {
@@ -1880,6 +1923,7 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     mod execution_recovery;
+    mod operation_lock;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network
@@ -2071,6 +2115,13 @@ mod tests {
     }
 
     async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
+        running_box_for_start_test_with_live(gate, |_| {}).await
+    }
+
+    async fn running_box_for_start_test_with_live(
+        gate: Arc<StartGate>,
+        configure: impl FnOnce(&mut LiveState),
+    ) -> StartFixture {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -2117,7 +2168,7 @@ mod tests {
             .event_listeners
             .push(listener.clone() as Arc<dyn EventListener>);
 
-        let live = LiveState::new(
+        let mut live = LiveState::new(
             Box::new(InfoTestHandler(0)),
             guest_session,
             None,
@@ -2132,6 +2183,7 @@ mod tests {
             #[cfg(target_os = "linux")]
             None,
         );
+        configure(&mut live);
         assert!(box_impl.live.set(live).is_ok(), "install live state");
 
         StartFixture {
@@ -2638,8 +2690,7 @@ mod tests {
         drop(child);
     }
 
-    /// The watcher records `Stopped` + the guest's exit code the moment the shim
-    /// dies — the exit-arm of `BoxWatcher`, the single writer of the transition.
+    /// The watcher reports shim exit through the facade's lifecycle admission.
     #[tokio::test]
     async fn box_watcher_records_stopped_with_exit_code_when_the_shim_dies() {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
