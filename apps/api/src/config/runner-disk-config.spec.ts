@@ -6,14 +6,13 @@
 import { runnerDiskConfig } from './configuration'
 
 describe('runnerDiskConfig', () => {
-  it('defaults to no overcommit, no expand limit and a 10% free-space floor', () => {
+  it('defaults expansion on, with no overcommit or expand limit and a 10% free-space floor', () => {
     const config = runnerDiskConfig({})
     expect(config).toMatchObject({ overcommitRatio: 1, expandLimitGiB: undefined, minFreePercentage: 10 })
-    // The expansion block defaults to fully dormant: enabled=false, no cap.
-    // Off must mean today's behavior exactly — sampling, marks and GCP calls
-    // all stay down while enabled is false.
+    // The expansion block defaults to enabled with its bounded settings. An
+    // explicit false disables sampling, marks and GCP calls.
     expect(config.expansion).toEqual({
-      enabled: false,
+      enabled: true,
       capGiB: undefined,
       triggerPercentage: 20,
       headroomFloorGiB: 20,
@@ -43,6 +42,12 @@ describe('runnerDiskConfig', () => {
       expandLimitGiB: 4096,
       minFreePercentage: 0,
       expansion: expect.objectContaining({ enabled: true, capGiB: 512, liftPercentage: 60 }),
+    })
+  })
+
+  it('keeps expansion off when explicitly disabled', () => {
+    expect(runnerDiskConfig({ RUNNER_DISK_EXPANSION_ENABLED: 'false' })).toMatchObject({
+      expansion: expect.objectContaining({ enabled: false }),
     })
   })
 
