@@ -1221,3 +1221,9 @@ tabs and semantic icons. Template categories remain compact selected choices,
 with category icons and wrapping at constrained widths. Selecting a language
 still changes only the displayed example; selecting an Image view preserves its
 existing route behavior. The SDK example's Quickstart link uses the shared link color.
+
+### Billing history refresh feedback
+
+The Wallet tab retains loaded invoices and credit activity while refreshing. A failed refresh shows a retry notice above the cached table; first-load failure uses the shared resource error state instead of an empty table. Pagination remains available when the cached response includes its page count.
+
+An unsuccessful refresh does not mean the wallet has no records. Both histories keep their existing query keys and payment operations; Retry repeats only the read request.

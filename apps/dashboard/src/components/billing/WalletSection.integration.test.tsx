@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   // The query itself has not answered at all.
   historiesPending: false,
   historiesError: false,
+  historyRefreshError: false,
+  historyRefreshing: false,
   refetchHistory: vi.fn(),
   failLaterPage: false,
   // The wallet query has not answered yet.
@@ -85,6 +87,9 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
         totalPages: 2,
       },
       isLoading: false,
+      isError: mocks.historyRefreshError,
+      isFetching: mocks.historyRefreshing,
+      refetch: mocks.refetchHistory,
     }
   },
   useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
@@ -112,6 +117,9 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
         totalPages: 2,
       },
       isLoading: false,
+      isError: mocks.historyRefreshError,
+      isFetching: mocks.historyRefreshing,
+      refetch: mocks.refetchHistory,
     }
   },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
@@ -163,6 +171,8 @@ describe('WalletSection top-up checkout', () => {
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
     mocks.fetchCheckoutUrl.mockResolvedValue('https://checkout.stripe.com/c/pay/cs_connect')
     mocks.totalsUnknown = false
+    mocks.historyRefreshError = false
+    mocks.historyRefreshing = false
     mocks.historiesError = false
     mocks.failLaterPage = false
     mocks.refetchHistory.mockClear()
@@ -302,6 +312,41 @@ describe('WalletSection top-up checkout', () => {
     // time is what keeps a grant from ever sitting beside a charge.
     expect(document.body.textContent).toContain('2026-07-18')
     expect(document.body.textContent).not.toContain('BOX-2026-0002')
+  })
+
+  it.each([
+    ['Billing history', 'BOX-2026-0002', 'refreshing'],
+    ['Credit activity', '2026-07-18', 'refreshing'],
+    ['Billing history', 'BOX-2026-0002', 'error'],
+    ['Credit activity', '2026-07-18', 'error'],
+  ])('retains loaded %s during %s (%s)', async (tabName, record, phase) => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    if (tabName === 'Credit activity') {
+      const tab = [...host.querySelectorAll<HTMLElement>('[role="tab"]')].find((el) =>
+        el.textContent?.includes(tabName),
+      )!
+      await act(async () => {
+        tab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+        tab.click()
+      })
+    }
+    expect(host.textContent).toContain(record)
+    mocks.historyRefreshing = phase === 'refreshing'
+    mocks.historyRefreshError = phase === 'error'
+    await act(async () => root!.render(<WalletSection />))
+    expect(host.textContent).toContain(record)
+    if (phase === 'error') {
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain('Showing previously loaded data')
+      await act(async () => {
+        host.querySelector<HTMLButtonElement>('[role="alert"] button')!.click()
+      })
+      expect(mocks.refetchHistory).toHaveBeenCalledOnce()
+    }
   })
 
   it('keeps failed money histories distinct from empty records and retries', async () => {
