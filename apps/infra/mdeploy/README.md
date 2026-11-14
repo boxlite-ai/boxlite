@@ -6,6 +6,11 @@ mdeploy selects the stage's cloud engine, validates its inputs, and applies one 
 
 [Infrastructure index](../README.md) · [Deployment walkthrough](../docs/deployment.md) · [Architecture](../docs/architecture.md)
 
+mdeploy derives API runtime IAM from explicit capabilities. Read
+[API runtime IAM capabilities](../docs/api-runtime-iam.md) before adding an API permission,
+diagnosing Filestore lookup permissions, or deciding whether deployment grants a role
+automatically.
+
 ## Execution path
 
 ```text
@@ -165,10 +170,10 @@ These declarations leave revision labels and all other environments unchanged. S
 GCP workload service accounts keep the `<appShort>-<stage>-<artifact>-run` identity format and the 30-character limit.
 For `stage`, two artifact segments use shorter names:
 
-| Workload | Service account ID | Characters |
-| --- | --- | --- |
-| Collector | `bl-app-stage-otel-run` | 21 |
-| Registry Proxy | `bl-app-stage-registry-run` | 25 |
+| Workload       | Service account ID          | Characters |
+| -------------- | --------------------------- | ---------- |
+| Collector      | `bl-app-stage-otel-run`     | 21         |
+| Registry Proxy | `bl-app-stage-registry-run` | 25         |
 
 Other roles and environments retain their existing IDs. Logical resource names, workload roles and IAM references remain attached to the same account resources.
 Do not rename existing dev/prod accounts: changing an account ID replaces the identity.

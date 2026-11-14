@@ -586,6 +586,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
           fetch-depth: 0
 

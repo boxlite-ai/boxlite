@@ -149,12 +149,42 @@ export class BoxliteBoxController {
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
-    if (request) request[AUDIT_TARGET_ID] = box.id
-    if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+    let boxId: string | undefined
+    try {
+      let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
+      boxId = box.id
+      if (request) request[AUDIT_TARGET_ID] = box.id
+      if (box.state !== BoxState.STARTED) {
+        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      }
+      return boxToBoxResponse(box)
+    } catch (error) {
+      this.logCreateFailure(error, dto, organization.id, boxId)
+      throw error
     }
-    return boxToBoxResponse(box)
+  }
+
+  private logCreateFailure(error: unknown, dto: CreateBoxDto, organizationId: string, boxId?: string): void {
+    const statusCode = error instanceof HttpException ? error.getStatus() : 500
+    const response = error instanceof HttpException ? error.getResponse() : undefined
+    const responseCode =
+      response && typeof response === 'object' && !Array.isArray(response)
+        ? (response as Record<string, unknown>).code
+        : undefined
+    this.logger.error(
+      {
+        event: 'box.create.failed',
+        organizationId,
+        ...(boxId ? { boxId } : {}),
+        statusCode,
+        ...(typeof responseCode === 'string' ? { code: responseCode } : {}),
+        volumeCount: dto.volumes?.length ?? 0,
+        volumeIds: dto.volumes?.map((volume) => volume.managed_volume) ?? [],
+        mountPaths: dto.volumes?.map((volume) => volume.guest_path) ?? [],
+        err: error,
+      },
+      'Box creation failed',
+    )
   }
 
   /** Admit an inherited configuration, record its request, then wait without losing its identity. */
@@ -212,7 +242,7 @@ export class BoxliteBoxController {
   private assertCanAttachVolumes(authContext: OrganizationAuthContext): void {
     const required = [OrganizationResourcePermission.READ_VOLUMES, OrganizationResourcePermission.WRITE_VOLUMES]
     if (!hasOrganizationResourcePermissions(authContext, required)) {
-      throw new ForbiddenException(`Attaching a managed volume requires: ${required.join(', ')}`)
+      throw new ForbiddenException(`Attaching a volume requires: ${required.join(', ')}`)
     }
   }
 

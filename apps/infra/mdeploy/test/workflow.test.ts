@@ -423,3 +423,13 @@ test('the failure summary renders for a run that failed before it addressed anyt
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test('the deploy checks out the resolved merge commit', () => {
+  const jobs = (load(workflow) as {
+    jobs: Record<string, { steps: Array<{ uses?: string; with?: { ref?: string } }> }>
+  }).jobs
+  const checkout = jobs.deploy?.steps.find((step) => String(step.uses ?? '').startsWith('actions/checkout@'))
+
+  assert.ok(checkout, 'the deploy job no longer checks out the source')
+  assert.equal(checkout.with?.ref, '${{ needs.resolve.outputs.sha }}')
+})

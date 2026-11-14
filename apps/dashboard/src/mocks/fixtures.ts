@@ -242,6 +242,7 @@ export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
 function buildVolume(overrides: Partial<VolumeDto> & Pick<VolumeDto, 'id' | 'name' | 'state'>): VolumeDto {
   return {
     organizationId: MOCK_ORGANIZATION_ID,
+    storageBackend: 'object_storage',
     createdAt: daysAgo(31),
     updatedAt: now,
     lastUsedAt: undefined,
@@ -279,6 +280,15 @@ export const MOCK_VOLUMES: VolumeDto[] = [
     lastUsedAt: daysAgo(31),
   }),
   buildVolume({
+    id: 'vol-k5l6m7n8',
+    name: 'shared-training-data',
+    state: VolumeState.READY,
+    createdAt: daysAgo(3),
+    lastUsedAt: hoursAgo(1),
+    storageBackend: 'filestore',
+    instance: 'boxlite-dev-shared',
+  }),
+  buildVolume({
     id: 'vol-m3n4o5p6',
     name: 'tmp-debug',
     state: VolumeState.PENDING_DELETE,
@@ -312,6 +322,7 @@ export const MOCK_VOLUME_USAGE: Record<string, { boxId: string; boxName: string;
     { boxId: 'mock-box-stopped', boxName: 'batch-worker', mountPath: '/models' },
   ],
   'vol-e5f6g7h8': [{ boxId: 'mock-box-running', boxName: 'web-api', mountPath: '/data' }],
+  'vol-k5l6m7n8': [{ boxId: 'mock-box-running', boxName: 'web-api', mountPath: '/training' }],
 }
 
 // --- Billing history depth -------------------------------------------------

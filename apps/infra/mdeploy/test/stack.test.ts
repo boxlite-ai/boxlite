@@ -81,7 +81,22 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   runnerEnvironment: {},
   runnerSecrets: {},
   clickHouseRetentionHours: null,
+  filestoreProjects: [],
   ...overrides,
+})
+
+test('filestore projects become the final API capability', () => {
+  const { providers, seen } = bundle()
+  deployStack({
+    providers,
+    config,
+    inputs: inputs({ filestoreProjects: ['zeta-project', 'alpha-project'] }),
+  })
+
+  assert.deepEqual(seen.api.request.capabilities.at(-1), {
+    kind: 'read-filestore-instances',
+    projects: ['zeta-project', 'alpha-project'],
+  })
 })
 
 test('retention is resolved once, and only a self-hosted ClickHouse accepts one', () => {
