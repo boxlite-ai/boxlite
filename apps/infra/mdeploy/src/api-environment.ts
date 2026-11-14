@@ -322,7 +322,7 @@ const runnerDiskExpansionFrom = (environment: Environment): Record<string, strin
 }
 
 const DEFAULT_FILESTORE_INSTANCES = JSON.stringify([
-  { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+  { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
 ])
 
 function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {

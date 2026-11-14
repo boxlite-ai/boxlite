@@ -571,13 +571,13 @@ a JSON object list declaring which GCP Filestore instances a create may
 auto-assign to or a mount dispatch may resolve to:
 
 ```bash
-FILESTORE_INSTANCES='[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev-project","zone":"us-east5-a"}]'
+FILESTORE_INSTANCES='[{"instance":"boxlite-filestore-stage","project_id":"boxlite-dev-project","zone":"us-east4-a"}]'
 ```
 
 Validation runs when the API starts: invalid JSON, a duplicate instance, a name
 outside `^[a-z0-9][a-z0-9-]{0,62}$`, or invalid project/zone values refuse to
 start the API. Until removed, an unset variable temporarily defaults to
-`boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`; an explicit
+`boxlite-filestore-stage` in `boxlite-dev-project`, zone `us-east4-a`; an explicit
 empty value disables Filestore. A volume create naming an instance outside the
 list fails loudly; the runner configures no instances of its own and mounts the
 resolved target the dispatch carries.

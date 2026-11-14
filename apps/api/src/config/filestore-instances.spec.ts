@@ -3,7 +3,7 @@ import { parseFilestoreInstances } from './filestore-instances'
 describe('filestore instances configuration', () => {
   it('uses the temporary stage default when the variable is unset', () => {
     expect(parseFilestoreInstances({})).toEqual({
-      instances: [{ instance: 'boxlite-dev-shared', projectId: 'boxlite-dev-project', zone: 'us-east5-a' }],
+      instances: [{ instance: 'boxlite-filestore-stage', projectId: 'boxlite-dev-project', zone: 'us-east4-a' }],
     })
   })
 

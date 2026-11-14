@@ -110,7 +110,7 @@ for (const home of ['aws', 'gcp'] as const) {
     assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
     if (home === 'gcp') {
       assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [
-        { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+        { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
       ])
     }
   })
@@ -345,7 +345,7 @@ test('GCP materializes the default Filestore placement and derives its project',
   assert.equal(unset.environment.FILESTORE_SUPPORTED, 'true')
   assert.deepEqual(unset.filestoreProjects, ['boxlite-dev-project'])
   assert.deepEqual(JSON.parse(unset.environment.FILESTORE_INSTANCES), [
-    { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
+    { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
   ])
 
   const disabled = apiEnvironmentFrom({

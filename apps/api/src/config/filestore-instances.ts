@@ -15,7 +15,7 @@ export const FILESTORE_INSTANCE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
 const GCP_PROJECT_ID_PATTERN = /^[a-z](?:[a-z0-9-]{4,28}[a-z0-9])?$/
 const GCP_ZONE_PATTERN = /^[a-z]+(?:-[a-z0-9]+)*\d+-[a-z]$/
 const DEFAULT_FILESTORE_INSTANCES: FilestoreInstanceConfig[] = [
-  { instance: 'boxlite-dev-shared', projectId: 'boxlite-dev-project', zone: 'us-east5-a' },
+  { instance: 'boxlite-filestore-stage', projectId: 'boxlite-dev-project', zone: 'us-east4-a' },
 ]
 
 function parseFilestoreInstance(value: unknown): FilestoreInstanceConfig {

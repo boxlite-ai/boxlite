@@ -8,8 +8,8 @@ the stage project, and retain sanitized GCP failure details in API logs without
 changing the client error contract.
 
 The resolver diagnostics, effective-configuration, IAM, and service-enablement
-slices are implemented. The default `FILESTORE_INSTANCES` entry remains
-`boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`.
+slices are implemented. The default `FILESTORE_INSTANCES` entry is
+`boxlite-filestore-stage` in `boxlite-dev-project`, zone `us-east4-a`.
 
 ## Context and evidence
 
