@@ -219,6 +219,35 @@ export function nextSizeGiB(capacityGiB: number, headroomGiB: number, stepPercen
  */
 export const PERFORMANCE_COOLDOWN_MS = 4 * 60 * 60 * 1000 + 10 * 60 * 1000
 
+/**
+ * Bounds the optional baseline read (disks.get) so a hung read cannot stall
+ * the round. The generated client's default Get config is a 600,000 ms
+ * timeout with idempotent retries (SDK 7.9.0), runners are evaluated
+ * sequentially, and the cron lease lasts 60s — one black-holed read would
+ * delay every later runner's expansion and outlive the lease. 5 seconds is
+ * far above a healthy read; expiry takes the same size-only fallback as a
+ * failed read, and the next cron round retries naturally: that retry is the
+ * bounded retry.
+ */
+export const BASELINE_READ_DEADLINE_MS = 5_000
+
+/**
+ * Races the promise against {@link BASELINE_READ_DEADLINE_MS}. The timeout
+ * promise carries its own catch so a read that resolves in time never leaves
+ * an unhandled rejection behind.
+ */
+function raceDeadline<T>(promise: Promise<T>): Promise<T> {
+  const timeout = new Promise<never>((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`baseline read exceeded ${BASELINE_READ_DEADLINE_MS}ms`)),
+      BASELINE_READ_DEADLINE_MS,
+    )
+    timer.unref?.()
+  })
+  timeout.catch(() => {})
+  return Promise.race([promise, timeout])
+}
+
 /** Hyperdisk Balanced per-disk provisioned-performance ceilings (GCP docs). */
 export const PERF_IOPS_PER_GIB_CEILING = 500
 export const PERF_IOPS_CEILING = 160_000
@@ -763,7 +792,9 @@ export class RunnerDiskExpansionService {
 
     let disk: GcpDiskSnapshot
     try {
-      disk = await this.gcpDiskClient.getDisk(ref)
+      // Deadline-raced: see BASELINE_READ_DEADLINE_MS. Expiry lands in the
+      // same size-only fallback as a failed read below.
+      disk = await raceDeadline(this.gcpDiskClient.getDisk(ref))
     } catch (e) {
       this.logger.warn(`Runner ${runner.id} disk read failed, expanding size only: ${errorMessage(e)}`, {
         ...expansionLogBase(runner, ref),
