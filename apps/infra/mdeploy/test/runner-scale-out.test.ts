@@ -69,6 +69,14 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
         { labels: { 'boxlite-runner': 'default', 'boxlite-stage': 'dev' } },
       ])
       assert.equal(canary.args.name, 'boxlite-app-dev-runner-binary')
+      assert.ok(
+        canary.args.osPolicies.some((policy: any) =>
+          policy.resourceGroups.some((group: any) =>
+            group.resources.some((resource: any) => resource.pkg?.apt?.name === 'nfs-common'),
+          ),
+        ),
+        'existing hosts need the NFS client even when the runner binary is current',
+      )
       assert.deepEqual(canary.args.rollout, { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' })
       assert.equal(canary.args.skipAwaitRollout, false)
       const fleet = resources.get('RunnerBinaryFleet')

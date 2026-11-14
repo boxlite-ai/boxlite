@@ -110,6 +110,8 @@ const SERVICES = [
   // The state bucket, for both Pulumi's state and mstage's store, and the
   // stack's own storage.Bucket.
   'storage.googleapis.com',
+  // The Filestore instances the API resolves for NFS-backed volumes.
+  'file.googleapis.com',
   // The repository a stage's images are published into.
   'artifactregistry.googleapis.com',
   // Where mbuild's scan gate reads an image's findings from

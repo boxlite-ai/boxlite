@@ -58,6 +58,17 @@ test('cloud boot installs the standalone kernel before starting the runner', () 
   assert.match(script, /libkrunfw-kernel-dind-x86_64\.bin/)
 })
 
+test('cloud boot installs the NFS client filestore volumes mount with', () => {
+  // filestore volumes run `mount -t nfs -o vers=4.1,hard` as root. nfs-common is
+  // not in the Ubuntu cloud image's default package set, so the boot carries it:
+  // a host without it fails the first filestore box with "unknown filesystem
+  // type nfs", on an instance whose script nobody will read again.
+  const script = render()
+  const installs = script.search(/^apt-get install -y .*nfs-common.*$/m)
+  assert.notEqual(installs, -1, 'the NFS client package is not installed')
+  assert.ok(installs < script.indexOf('systemctl start boxlite-runner'))
+})
+
 test('the script fails fast, and logs where a person can find it', () => {
   const script = render()
   assert.match(script, /^#!\/bin\/bash/)
