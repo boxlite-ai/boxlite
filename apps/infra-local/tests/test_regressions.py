@@ -139,7 +139,7 @@ class NativeRegressions(unittest.TestCase):
         self.assertTrue(any(call.args[0] == ["make", "_ensure-apps-deps"] for call in run.call_args_list))
 
     def test_unowned_port_is_a_conflict_and_is_never_killed(self):
-        component = native._components(self.p)["api"]
+        component = native._components(self.p, self.cfg)["api"]
         with patch.object(native, "_component_pid", return_value=None), patch.object(
             native, "_port_listening", return_value=True
         ), patch.object(os, "kill") as kill, patch.object(subprocess, "run"), patch.object(

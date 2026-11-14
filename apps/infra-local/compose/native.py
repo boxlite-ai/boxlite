@@ -27,10 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import _local_arm64
+from . import cloud_apps
 from . import orchestrator
 from .config import InfraConfig, worktree_home
 from .doctor import _lsof_owner
-from .services import SERVICES
+from .services import SERVICES, local_services
 
 # ── L2 ports + identities (the native host processes) ──────────────────────
 PORT_API = int(os.environ.get("BOXLITE_LOCAL_API_PORT", "3001"))  # override if :3001 is taken
@@ -236,7 +237,7 @@ class _Component:
     env: dict[str, str]   # extra env layered on top of os.environ
 
 
-def _components(p: _Paths) -> dict[str, _Component]:
+def _components(p: _Paths, cfg: InfraConfig) -> dict[str, _Component]:
     apps = p.apps
     api_env = {
         # M5-native dev override: the runner reports system-wide CPU/mem/disk
@@ -254,6 +255,7 @@ def _components(p: _Paths) -> dict[str, _Component]:
         "REGISTRY_SECRET_STORE": "file",
         "REGISTRY_SECRET_DIR": str(p.registry_secrets),
         **_parse_dotenv(apps / ".env"),
+        **cfg.external_stores,
     }
     return {
         "api": _Component(
@@ -301,6 +303,7 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "OIDC_DOMAIN": "http://localhost:25556/auth/v1",
                 "REDIS_HOST": "127.0.0.1",
                 "REDIS_PORT": "26379",
+                **{k: v for k, v in cfg.external_stores.items() if k.startswith("REDIS_")},
                 "SHUTDOWN_TIMEOUT_SEC": "10",
                 "OTEL_LOGGING_ENABLED": "true",
                 "OTEL_TRACING_ENABLED": "true",
@@ -349,12 +352,16 @@ def start_component(p: _Paths, comp: _Component) -> bool:
         err(f"{comp.name}: port {comp.port} belongs to an unverified process; stop it explicitly before retrying")
         return False
     log(f"starting {comp.name}...")
+    environment = {**os.environ, **comp.env}
+    if comp.name == "api":
+        subprocess.run(["make", "build:apps:cloud-app-artifacts"], cwd=p.repo_root, check=True)
+        environment.update(cloud_apps.environment(p.state, comp.port, environment))
     p.logs.mkdir(parents=True, exist_ok=True)
     with open(_log_file(p, comp.name), "ab") as logf:
         proc = subprocess.Popen(
             comp.argv,
             cwd=str(comp.cwd) if comp.cwd else None,
-            env={**os.environ, **comp.env},
+            env=environment,
             stdout=logf,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach: survives our exit + own process group
@@ -423,7 +430,7 @@ def _l1_running(cfg: InfraConfig) -> bool:
 
 async def _ensure_l1_async(cfg: InfraConfig) -> bool:
     """Reconcile every dependency and its health before starting native apps."""
-    changed = await orchestrator.up(cfg, SERVICES)
+    changed = await orchestrator.up(cfg, local_services(cfg))
     ok("L1 boxes reconciled and healthy")
     return changed
 
@@ -434,7 +441,7 @@ def _l1_rows(cfg: InfraConfig) -> list[tuple[str, str]]:
         runtime = orchestrator.get_runtime()
         infos = {i.name: i for i in await runtime.list_info()}
         rows = []
-        for name, spec in SERVICES.items():
+        for name, spec in local_services(cfg).items():
             box_name = f"boxlite-local-{name}"
             item = infos.get(box_name)
             state = item.state.status.lower() if item else "missing"
@@ -454,7 +461,9 @@ def _pg_port() -> int:
 
 
 def _psql(cfg: InfraConfig, sql: str, *, tuples: bool = False) -> subprocess.CompletedProcess:
-    args = ["psql", "-h", "127.0.0.1", "-p", str(_pg_port()), "-U", cfg.pg_user, "-d", cfg.pg_db]
+    host = cfg.external_stores.get("DB_HOST", "127.0.0.1")
+    port = cfg.external_stores.get("DB_PORT", str(_pg_port()))
+    args = ["psql", "-h", host, "-p", port, "-U", cfg.pg_user, "-d", cfg.pg_db]
     if tuples:
         args += ["-tA"]
     args += ["-c", sql]
@@ -654,7 +663,7 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
     _seed_api_env(p, agent_img)
 
     # 5. start the requested L2 components
-    table = _components(p)
+    table = _components(p, cfg)
     healthy = True
     for name in comps:
         if not start_component(p, table[name]):
@@ -686,19 +695,19 @@ def down(cfg: InfraConfig, components: list[str] | None = None, *, include_l1: b
         stop_component(p, name)
     if include_l1:
         log("stopping L1 boxes...")
-        asyncio.run(orchestrator.down(cfg, SERVICES))  # boxes removed; data volumes survive
+        asyncio.run(orchestrator.down(cfg, local_services(cfg)))  # boxes removed; data volumes survive
     ok("stack down")
     return 0
 
 
 def status(cfg: InfraConfig) -> int:
     p = _paths(cfg)
-    table = _components(p)
+    table = _components(p, cfg)
     exit_code = 0
 
     print(f"{_BOLD}L1 — infra-local boxes{_RESET}")
     rows = _l1_rows(cfg)
-    expected = {f"boxlite-local-{name}" for name in SERVICES}
+    expected = {f"boxlite-local-{name}" for name in local_services(cfg)}
     if expected - {name for name, _ in rows} or any(state != "running" for _, state in rows):
         exit_code = 1
     if rows:
@@ -768,10 +777,11 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
     the host sleeps and its clock drifts). The host data volume survives.
     """
     p = _paths(cfg)
-    table = _components(p)
+    table = _components(p, cfg)
     l2 = [n for n in names if n in ALL_COMPONENTS]
-    l1 = [n for n in names if n in SERVICES]
-    unknown = [n for n in names if n not in ALL_COMPONENTS and n not in SERVICES]
+    selected = local_services(cfg)
+    l1 = [n for n in names if n in selected]
+    unknown = [n for n in names if n not in ALL_COMPONENTS and n not in selected]
     if unknown:
         err(f"unknown component/box: {' '.join(unknown)}")
         return 2
@@ -789,8 +799,8 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
         async def go() -> None:
             for box in l1:
                 log(f"recreating L1 box: boxlite-local-{box}")
-                await orchestrator.down(cfg, SERVICES, only=[box])
-                await orchestrator.up(cfg, SERVICES, only=[box])
+                await orchestrator.down(cfg, selected, only=[box])
+                await orchestrator.up(cfg, selected, only=[box])
 
         asyncio.run(go())
         for box in l1:
@@ -809,6 +819,9 @@ def _stop_l2_and_wipe_runner(p: _Paths) -> None:
 
 def reset(cfg: InfraConfig, *, hard: bool = False) -> int:
     """Wipe L2 runtime state; L1 boxes stay. --hard also drops + rebuilds the schema."""
+    if cfg.external_stores:
+        err("reset is unavailable for externally managed stores")
+        return 1
     p = _paths(cfg)
     _stop_l2_and_wipe_runner(p)
     if not _l1_running(cfg):
@@ -843,7 +856,7 @@ def nuke(cfg: InfraConfig) -> int:
     p = _paths(cfg)
     _stop_l2_and_wipe_runner(p)
     log("nuking everything (L1 boxes + data + logs)...")
-    asyncio.run(orchestrator.down(cfg, SERVICES, wipe=True))
+    asyncio.run(orchestrator.down(cfg, local_services(cfg), wipe=True))
     shutil.rmtree(p.logs, ignore_errors=True)
     _wipe_registry_secrets(p)
     ok("nuke complete — next `up` is a true cold start")
@@ -872,7 +885,7 @@ def seed(cfg: InfraConfig, *, no_bounce: bool = False, no_wait: bool = False) ->
     """Wait for the API's onApplicationBootstrap auto-seed + a registered runner."""
     p = _paths(cfg)
     if not _pg_reachable(cfg):
-        err(f"postgres not reachable at 127.0.0.1:{_pg_port()} — bring up L1 first (`compose up`)")
+        err(f"cannot connect to configured PostgreSQL database {cfg.pg_db}")
         return 1
 
     if not no_bounce:

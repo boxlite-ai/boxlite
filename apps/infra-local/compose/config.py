@@ -75,6 +75,7 @@ class InfraConfig:
     pg_user: str = "boxlite"
     pg_password: str = field(default="boxlite", repr=False)
     pg_db: str = "boxlite"
+    external_stores: dict[str, str] = field(default_factory=dict, repr=False)
     rustfs_user: str = "rustfsadmin"
     rustfs_password: str = field(default="rustfsadmin", repr=False)
     pgadmin_email: str = "admin@boxlite.dev"
@@ -113,11 +114,24 @@ class InfraConfig:
     def load(cls) -> "InfraConfig":
         # Only identity/credential/path fields are env-overridable; host ports
         # are fixed (see the field comment above) and stay at their defaults.
+        external = {}
+        if os.environ.get("BOXLITE_LOCAL_EXTERNAL_STORES") == "1":
+            for key in ("DB_HOST", "DB_USERNAME", "DB_DATABASE", "REDIS_HOST"):
+                if not os.environ.get(key):
+                    raise ValueError(f"{key} is required with BOXLITE_LOCAL_EXTERNAL_STORES=1")
+            external = {key: os.environ[key] for key in (
+                "DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE",
+                "REDIS_HOST", "REDIS_PORT", "REDIS_USERNAME", "REDIS_PASSWORD", "REDIS_TLS",
+            ) if key in os.environ}
+            external.setdefault("DB_PORT", "5432")
+            external.setdefault("REDIS_PORT", "6379")
+            external.setdefault("DB_PASSWORD", "")
         return cls(
             host_hub=os.environ.get("BOXLITE_HOST_HUB", "host.boxlite.internal"),
-            pg_user=os.environ.get("BOXLITE_PG_USER", "boxlite"),
-            pg_password=os.environ.get("BOXLITE_PG_PASSWORD", "boxlite"),
-            pg_db=os.environ.get("BOXLITE_PG_DB", "boxlite"),
+            pg_user=external.get("DB_USERNAME", os.environ.get("BOXLITE_PG_USER", "boxlite")),
+            pg_password=external.get("DB_PASSWORD", os.environ.get("BOXLITE_PG_PASSWORD", "boxlite")),
+            pg_db=external.get("DB_DATABASE", os.environ.get("BOXLITE_PG_DB", "boxlite")),
+            external_stores=external,
             rustfs_user=os.environ.get("BOXLITE_RUSTFS_USER", "rustfsadmin"),
             rustfs_password=os.environ.get("BOXLITE_RUSTFS_PASSWORD", "rustfsadmin"),
             pgadmin_email=os.environ.get("BOXLITE_PGADMIN_EMAIL", "admin@boxlite.dev"),
