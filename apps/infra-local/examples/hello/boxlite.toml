@@ -1,0 +1,12 @@
+name = "local-hello"
+access = "public"
+
+[runtime]
+image = "node"
+size = "nano"
+
+[[service]]
+name = "web"
+command = "node server.mjs"
+port = 3000
+health = "/"

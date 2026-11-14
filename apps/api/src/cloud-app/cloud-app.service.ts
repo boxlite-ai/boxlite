@@ -76,6 +76,7 @@ export class CloudAppService implements OnModuleInit {
     const ctx = buildCtx(
       {
         publicUrl: settings.publicUrl,
+        supervisorUrl: settings.supervisorUrl!,
         managementUrl,
         artifactUrl,
         sessionSecret: settings.sessionSecret!,

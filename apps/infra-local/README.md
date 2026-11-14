@@ -57,6 +57,40 @@ automatic registration. Ordinary access by existing accounts does not run a new 
 
 ## Commands
 
+### Deploy the example App
+
+The local API serves App management requests and polls the deployment queue. Starting the API
+builds the CLI and Linux Supervisor artifacts. The host CLI uses `http://localhost:3001`, and the
+Supervisor inside the Box uses `http://host.boxlite.internal:3001` to download its binary and
+source snapshot and report deployment status. The API saves its generated App signing credentials
+in `.apps-local/cloud-app-credentials.json` across restarts.
+
+To reuse existing development PostgreSQL and Redis services, export `BOXLITE_LOCAL_EXTERNAL_STORES=1`
+and their `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, `REDIS_HOST`,
+`REDIS_PORT` and Redis credentials before running the local stack commands. Choose a dedicated
+PostgreSQL database for migrations and an instance of Redis intended for development. The stack
+then omits the PostgreSQL, Redis and pgAdmin VMs. It still provisions the RustFS `boxlite` bucket
+for uploaded source files.
+
+1. From the repository root, run `make -C apps/infra-local up`. Open the Dashboard at
+   `http://localhost:3000`, select your organization, and create an App named `local-hello`.
+2. Set `BOXLITE_API_URL=http://localhost:3001/api/v1/<organization-id>` and export it. Use
+   an organization API key with `read:apps` and `write:apps` for `boxlite-app login`, or
+   supply the key via `BOXLITE_API_KEY`.
+3. From the repository root, run the built CLI in the example directory:
+
+   ```sh
+   cd apps/infra-local/examples/hello
+   node ../../../cloud-app-cli/dist/boxlite-app.cjs --app local-hello check
+   node ../../../cloud-app-cli/dist/boxlite-app.cjs --app local-hello deploy
+   ```
+
+4. Open the `main` environment URL from the Apps page. A live deployment serves
+   `Hello from a BoxLite App!` on `/` through the local proxy. This example only needs
+   a Node runtime. Apps that declare `[database]` also need the official Neon API settings.
+
+### Stack commands
+
 `make <verb>` is a thin alias for `python -m compose <verb>` (the CLI is the
 source of truth — `python -m compose --help`):
 

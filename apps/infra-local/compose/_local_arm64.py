@@ -177,10 +177,13 @@ def ensure_local_boxlite() -> None:
     maturin = venv / "bin" / "maturin"
     if not maturin.exists():
         subprocess.run([str(venv / "bin" / "pip"), "install", "-q", "maturin"], check=True)
+    build_env = {**os.environ, "VIRTUAL_ENV": str(venv)}
+    # maturin rejects two active environment roots when the venv was created from Conda.
+    build_env.pop("CONDA_PREFIX", None)
     subprocess.run(
         [str(maturin), "develop"],
         cwd=str(REPO / "sdks" / "python"),
-        env={**os.environ, "VIRTUAL_ENV": str(venv)},
+        env=build_env,
         check=True,
     )
 
