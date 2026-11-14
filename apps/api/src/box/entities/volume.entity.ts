@@ -45,7 +45,19 @@ export class Volume {
   @Column({ nullable: true })
   lastUsedAt?: Date
 
+  // Filestore-only: the Filestore instance's logical name in the API's
+  // FILESTORE_INSTANCES configuration that holds the volume's data directory. Null
+  // for object-storage volumes, whose data lives in `boxlite-volume-<id>` on
+  // the API's own object storage backend. The volume kind is derived: a row
+  // with an instance is a filestore volume, without one an object-storage one.
+  @Column({ nullable: true })
+  instance?: string
+
   public getBucketName(): string {
     return `boxlite-volume-${this.id}`
   }
+}
+
+export function isFilestoreVolume<T extends Pick<Volume, 'instance'>>(volume: T): volume is T & { instance: string } {
+  return Boolean(volume.instance)
 }

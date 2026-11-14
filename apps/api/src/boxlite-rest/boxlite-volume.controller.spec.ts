@@ -50,6 +50,7 @@ describe('BoxliteVolumeController', () => {
       id: volume.id,
       name: volume.name,
       state: volume.state,
+      storage_backend: 'object_storage',
       created_at: createdAt.toISOString(),
       updated_at: updatedAt.toISOString(),
       last_used_at: lastUsedAt.toISOString(),
@@ -96,6 +97,7 @@ describe('BoxliteVolumeController', () => {
           id: volume.id,
           name: volume.name,
           state: volume.state,
+          storage_backend: 'object_storage',
           created_at: createdAt.toISOString(),
         },
       ],
@@ -110,12 +112,23 @@ describe('BoxliteVolumeController', () => {
       id: volume.id,
       name: volume.name,
       state: volume.state,
+      storage_backend: 'object_storage',
       created_at: createdAt.toISOString(),
       updated_at: updatedAt.toISOString(),
       last_used_at: lastUsedAt.toISOString(),
       error_reason: undefined,
     })
     expect(volumeService.findOne).toHaveBeenCalledWith(volume.id)
+  })
+
+  it('marks a Filestore volume and exposes only its logical instance', async () => {
+    const { controller, volumeService } = createController()
+    volumeService.findOne.mockResolvedValue({ ...volume, instance: 'ml-scratch' })
+
+    await expect(controller.get(volume.id)).resolves.toMatchObject({
+      storage_backend: 'filestore',
+      instance: 'ml-scratch',
+    })
   })
 
   it('deletes a volume by ID', async () => {

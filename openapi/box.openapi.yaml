@@ -2311,6 +2311,14 @@ components:
               type: boolean
               description: Server honors `ExecRequest.user`.
               example: true
+            object_storage_enabled:
+              type: boolean
+              description: Whether object-storage volume creation is configured
+              example: true
+            filestore_enabled:
+              type: boolean
+              description: Whether at least one Filestore instance is configured
+              example: true
             idempotency_key_lifetime:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
@@ -2887,7 +2895,10 @@ components:
         Managed volume mounted into a box. Host bind mounts have no
         representation here: the path would name the server's filesystem, not
         the caller's, so the only mount source this API accepts is a managed
-        volume.
+        volume. This includes Filestore volumes — a volume whose data
+        directory lives on a Filestore NFS instance — which are created
+        through the volume endpoints and referenced identically by id or
+        name.
       additionalProperties: false
       required: [managed_volume, guest_path]
       properties:
@@ -2918,7 +2929,7 @@ components:
       type: object
       description: Managed persistent volume summary, as returned by the list endpoint
       additionalProperties: false
-      required: [id, name, state, created_at]
+      required: [id, name, state, storage_backend, created_at]
       properties:
         id:
           type: string
@@ -2928,10 +2939,23 @@ components:
           description: User-assigned volume name
         state:
           $ref: "#/components/schemas/VolumeState"
+        storage_backend:
+          type: string
+          enum: [object_storage, filestore]
+          description: |
+            The backend that owns the volume. Derived from whether `instance`
+            is present.
+          example: filestore
         created_at:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+        instance:
+          type: string
+          description: |
+            Filestore-only: the NFS instance holding the volume's data
+            directory. Absent for object-storage volumes, whose data lives in
+            boxlite-volume-<id>.
 
     CreateVolumeRequest:
       type: object
@@ -2946,12 +2970,32 @@ components:
           pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$"
           minLength: 2
           example: my-data
+        storageBackend:
+          type: string
+          enum: [object_storage, filestore]
+          default: object_storage
+          description: |
+            The backend that owns the volume. `object_storage` stores data in
+            `boxlite-volume-<id>`; `filestore` stores it in an NFS data
+            directory on the selected or automatically assigned Filestore
+            instance. This field, not the presence of `instance`, selects the
+            backend.
+        instance:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}$"
+          description: |
+            The Filestore instance the volume's data directory lives on.
+            Valid only when storageBackend is filestore. When omitted, the
+            API assigns an instance by hashing its configured names. The
+            instance must exist in GCP and in the API's FILESTORE_INSTANCES
+            configuration, checked at create and dispatch time.
+          example: boxlite-dev-shared
 
     Volume:
       type: object
       description: Managed persistent volume detail, as returned by create/get
       additionalProperties: false
-      required: [id, name, state, created_at, updated_at]
+      required: [id, name, state, storage_backend, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2961,6 +3005,13 @@ components:
           description: User-assigned volume name
         state:
           $ref: "#/components/schemas/VolumeState"
+        storage_backend:
+          type: string
+          enum: [object_storage, filestore]
+          description: |
+            The backend that owns the volume. Derived from whether `instance`
+            is present.
+          example: filestore
         created_at:
           type: string
           format: date-time
@@ -2976,6 +3027,12 @@ components:
         error_reason:
           type: string
           description: Failure detail when state is "error"
+        instance:
+          type: string
+          description: |
+            Filestore-only: the NFS instance holding the volume's data
+            directory. Absent for object-storage volumes, whose data lives in
+            boxlite-volume-<id>.
 
     ListVolumesResponse:
       type: object

@@ -6987,6 +6987,8 @@ components:
         name: my-volume
         organizationId: 123e4567-e89b-12d3-a456-426614174000
         state: ready
+        storageBackend: object_storage
+        instance: boxlite-dev-shared
         createdAt: 2023-01-01T00:00:00.000Z
         updatedAt: 2023-01-01T00:00:00.000Z
         lastUsedAt: 2023-01-01T00:00:00.000Z
@@ -7009,6 +7011,17 @@ components:
           - $ref: "#/components/schemas/VolumeState"
           description: Volume state
           example: ready
+        storageBackend:
+          description: The storage backend that owns the volume
+          enum:
+          - object_storage
+          - filestore
+          example: object_storage
+          type: string
+        instance:
+          description: Filestore instance name; filestore volumes only
+          example: boxlite-dev-shared
+          type: string
         createdAt:
           description: Creation timestamp
           example: 2023-01-01T00:00:00.000Z
@@ -7034,14 +7047,29 @@ components:
       - name
       - organizationId
       - state
+      - storageBackend
       - updatedAt
       type: object
     CreateVolume:
       example:
         name: my-data
+        storageBackend: filestore
+        instance: boxlite-dev-shared
       properties:
         name:
           example: my-data
+          type: string
+        storageBackend:
+          description: The storage backend that owns the volume; defaults to object_storage
+          enum:
+          - object_storage
+          - filestore
+          example: filestore
+          type: string
+        instance:
+          description: The Filestore instance the volume stores its data on; filestore
+            volumes only. Omit to assign from configured instances.
+          example: boxlite-dev-shared
           type: string
       type: object
     JobStatus:
