@@ -12,60 +12,57 @@
  * Do not edit the class manually.
  */
 
-
 // May contain unused imports in some cases
 // @ts-ignore
-import type { VolumeState } from './volume-state';
+import type { VolumeState } from './volume-state'
 
 export interface VolumeDto {
-    /**
-     * Volume ID
-     */
-    'id': string;
-    /**
-     * Volume name
-     */
-    'name': string;
-    /**
-     * Organization ID
-     */
-    'organizationId': string;
-    /**
-     * Volume state
-     */
-    'state': VolumeState;
-    /**
-     * The storage backend that owns the volume
-     */
-    'storageBackend': VolumeDtoStorageBackendEnum;
-    /**
-     * Filestore instance name; filestore volumes only
-     */
-    'instance'?: string;
-    /**
-     * Creation timestamp
-     */
-    'createdAt': string;
-    /**
-     * Last update timestamp
-     */
-    'updatedAt': string;
-    /**
-     * Last used timestamp
-     */
-    'lastUsedAt'?: string | null;
-    /**
-     * The error reason of the volume
-     */
-    'errorReason': string | null;
+  /**
+   * Volume ID
+   */
+  id: string
+  /**
+   * Volume name
+   */
+  name: string
+  /**
+   * Organization ID
+   */
+  organizationId: string
+  /**
+   * Volume state
+   */
+  state: VolumeState
+  /**
+   * The storage backend that owns the volume
+   */
+  storageBackend: VolumeDtoStorageBackendEnum
+  /**
+   * Filestore instance name; filestore volumes only
+   */
+  instance?: string
+  /**
+   * Creation timestamp
+   */
+  createdAt: string
+  /**
+   * Last update timestamp
+   */
+  updatedAt: string
+  /**
+   * Last used timestamp
+   */
+  lastUsedAt?: string | null
+  /**
+   * The error reason of the volume
+   */
+  errorReason: string | null
 }
 
 export const VolumeDtoStorageBackendEnum = {
-    OBJECT_STORAGE: 'object_storage',
-    FILESTORE: 'filestore',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
+  OBJECT_STORAGE: 'object_storage',
+  FILESTORE: 'filestore',
+  UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const
 
-export type VolumeDtoStorageBackendEnum = typeof VolumeDtoStorageBackendEnum[keyof typeof VolumeDtoStorageBackendEnum];
-
-
+export type VolumeDtoStorageBackendEnum = (typeof VolumeDtoStorageBackendEnum)[keyof typeof VolumeDtoStorageBackendEnum]

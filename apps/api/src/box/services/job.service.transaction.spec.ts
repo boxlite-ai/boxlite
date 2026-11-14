@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { ConflictException } from '@nestjs/common'
+import { ConflictException, Logger } from '@nestjs/common'
 import { Job } from '../entities/job.entity'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { JobService } from './job.service'
@@ -47,6 +47,43 @@ function makeService(transactionalJob: Job) {
   const service = new JobService(jobRepository as any, {} as any, jobStateHandlerService as any)
   return { entityManager, jobRepository, jobStateHandlerService, service }
 }
+
+describe('JobService creation diagnostics', () => {
+  it('logs the job, runner, resource and database code without logging its payload', async () => {
+    const failure = Object.assign(new Error('insert failed'), {
+      code: '58000',
+      query: 'INSERT INTO job VALUES (?)',
+      parameters: ['do-not-log'],
+    })
+    const jobRepository = { insert: jest.fn().mockRejectedValue(failure) }
+    const service = new JobService(jobRepository as any, {} as any, {} as any)
+    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      await expect(
+        service.createJob(null, JobType.CREATE_BOX, 'runner-1', ResourceType.BOX, 'box-1', {
+          env: { SECRET: 'do-not-log' },
+        }),
+      ).rejects.toBe(failure)
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'job.create.failed',
+          jobType: JobType.CREATE_BOX,
+          runnerId: 'runner-1',
+          resourceType: ResourceType.BOX,
+          resourceId: 'box-1',
+          code: '58000',
+          errorName: 'Error',
+        }),
+        'Job creation failed',
+      )
+      expect(log.mock.calls[0][0]).not.toHaveProperty('err')
+      expect(JSON.stringify(log.mock.calls)).not.toContain('do-not-log')
+    } finally {
+      log.mockRestore()
+    }
+  })
+})
 
 describe('JobService.updateJobStatus transaction boundary', () => {
   it('locks, validates, and saves the Job in one transaction before completion handling', async () => {

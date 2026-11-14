@@ -38,6 +38,23 @@ describe('BoxStateWaiterService', () => {
     ])
   })
 
+  it('returns the failed Box identity and a stable error code', async () => {
+    const { waiter } = makeWaiter(BoxState.ERROR)
+    ;(waiter as any).boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-1',
+      state: BoxState.ERROR,
+      errorReason: 'runner has not declared filestore',
+    })
+
+    const error = await waiter.waitForStarted('box-1', 'org-1', 1).catch((failure) => failure)
+
+    expect(error.getResponse()).toMatchObject({
+      message: 'Box state transition failed: runner has not declared filestore',
+      code: 'BOX_STATE_TRANSITION_FAILED',
+      boxId: 'box-1',
+    })
+  })
+
   it('rejects instead of returning a non-target state on timeout', async () => {
     jest.useFakeTimers()
     const { waiter } = makeWaiter()

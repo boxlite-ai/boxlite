@@ -32,6 +32,7 @@ function makeService() {
   const boxRepository = {
     findOneByIdOrName: jest.fn(),
     conditionalStartForProxy: jest.fn(),
+    insert: jest.fn(),
   } as any
   const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn() } as any
   // assertOrganizationIsNotSuspended mirrors the real implementation: throw
@@ -67,6 +68,7 @@ function makeService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    noop,
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -207,6 +209,7 @@ function makeNetworkTunnelService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    noop,
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -394,6 +397,17 @@ describe('BoxService inbound defaults', () => {
       },
       imageResolverService: {
         resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
+      },
+      configService: {
+        getOrThrow: jest.fn((key: string) => {
+          if (key === 'volume.filestoreInstances') {
+            return { instances: [{ instance: 'ml-scratch', projectId: 'boxlite-dev', zone: 'asia-southeast1-b' }] }
+          }
+          throw new Error(`unexpected config key ${key}`)
+        }),
+      },
+      filestoreInstanceResolver: {
+        resolve: jest.fn().mockResolvedValue({ server: '10.0.0.7', export: '/vol1' }),
       },
       ...overrides,
     })
@@ -1237,5 +1251,140 @@ describe('BoxService runner assignment', () => {
     // left to mistake it for, there is no retryable reading of this failure.
     await expect(assign()).rejects.toMatchObject({ status: 400, message: 'No available runners' })
     expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+})
+
+// A box's persisted volume entry must carry the resolved entity id — and,
+// for a filestore volume, the entity's instance, which is what the runner's
+// mount dispatch (create now, start-after-reboot metadata later) hands over.
+// Persisting the caller's selector or dropping the instance would leave the
+// runner unable to mount the volume.
+describe('BoxService volume reference resolution', () => {
+  function makeService(overrides: Record<string, unknown> = {}) {
+    const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
+      getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
+      organizationService: {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      },
+      organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
+      redis: { exists: jest.fn().mockResolvedValue(1) },
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      warmPoolService: { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) },
+      runnerService: {
+        getRandomAvailableRunner: jest
+          .fn()
+          .mockResolvedValue({ id: 'runner-1', draining: false, state: RunnerState.READY }),
+      },
+      boxRepository,
+      eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
+      toBoxDto: jest.fn((box) => box),
+      imageAdmissionService: {
+        assert: jest.fn().mockResolvedValue(undefined),
+        spendColdPullBudget: jest.fn().mockResolvedValue(undefined),
+      },
+      imageResolverService: {
+        resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
+      },
+      configService: {
+        getOrThrow: jest.fn((key: string) => {
+          if (key === 'volume.filestoreInstances') {
+            return { instances: [{ instance: 'ml-scratch', projectId: 'boxlite-dev', zone: 'asia-southeast1-b' }] }
+          }
+          throw new Error(`unexpected config key ${key}`)
+        }),
+      },
+      filestoreInstanceResolver: {
+        resolve: jest.fn().mockResolvedValue({ server: '10.0.0.7', export: '/vol1' }),
+      },
+      ...overrides,
+    })
+    return { service, boxRepository }
+  }
+
+  it('stamps the resolved id and the filestore instance into the persisted volume entry', async () => {
+    const { service, boxRepository } = makeService({
+      volumeService: {
+        validateVolumes: jest
+          .fn()
+          .mockResolvedValue(new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]])),
+      },
+    })
+
+    await service.create(
+      {
+        name: 'nfs-box',
+        image: 'quay.io/acme/app:v1',
+        volumes: [{ volumeId: 'my-data', mountPath: '/data' }],
+      } as any,
+      { id: 'org-1' } as any,
+      Context.user(),
+    )
+
+    expect(boxRepository.insert.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        volumes: [
+          {
+            volumeId: 'vol-uuid-1',
+            mountPath: '/data',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          },
+        ],
+      }),
+    )
+  })
+
+  it('fails the dispatch loudly when the instance left the configuration after the volume was created', async () => {
+    const { service, boxRepository } = makeService({
+      volumeService: {
+        validateVolumes: jest
+          .fn()
+          .mockResolvedValue(new Map([['my-data', { id: 'vol-uuid-1', instance: 'ml-scratch' }]])),
+      },
+      filestoreInstanceResolver: {
+        resolve: jest.fn().mockRejectedValue(new BadRequestError("unknown Filestore instance 'ml-scratch'")),
+      },
+    })
+
+    await expect(
+      service.create(
+        {
+          name: 'nfs-box',
+          image: 'quay.io/acme/app:v1',
+          volumes: [{ volumeId: 'my-data', mountPath: '/data' }],
+        } as any,
+        { id: 'org-1' } as any,
+        Context.user(),
+      ),
+    ).rejects.toThrow("unknown Filestore instance 'ml-scratch'")
+    // A failed dispatch must not leave a persisted box row behind.
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  it('keeps a bucket-backed volume entry free of any filestore key', async () => {
+    const { service, boxRepository } = makeService({
+      volumeService: {
+        validateVolumes: jest.fn().mockResolvedValue(new Map([['my-data', { id: 'vol-uuid-2', instance: undefined }]])),
+      },
+    })
+
+    await service.create(
+      {
+        name: 'bucket-box',
+        image: 'quay.io/acme/app:v1',
+        volumes: [{ volumeId: 'my-data', mountPath: '/data' }],
+      } as any,
+      { id: 'org-1' } as any,
+      Context.user(),
+    )
+
+    expect(boxRepository.insert.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        volumes: [{ volumeId: 'vol-uuid-2', mountPath: '/data' }],
+      }),
+    )
   })
 })
