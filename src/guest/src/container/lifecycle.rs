@@ -5,7 +5,7 @@
 
 use super::capabilities::CapabilitySet;
 use super::command::ContainerCommand;
-use super::spec::{ContainerDevices, MountOverride, UserMount};
+use super::spec::{ContainerCgroup, ContainerDevices, MountOverride, UserMount};
 use super::stdio::{ContainerStdio, InitIo};
 use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
@@ -106,7 +106,7 @@ impl Container {
     /// - `env`: Environment variables in "KEY=VALUE" format
     /// - `workdir`: Working directory inside container
     /// - `user_mounts`: Bind mounts from guest VM paths into container
-    /// - `capabilities`/`readonly_paths`/`mount_override`: security fields
+    /// - `capabilities`/`readonly_paths`/`mount_override`/`cgroup`: fields
     ///   resolved at the RPC boundary
     ///
     /// # Errors
@@ -129,6 +129,7 @@ impl Container {
         readonly_paths: Vec<String>,
         mount_override: MountOverride,
         devices: ContainerDevices,
+        cgroup: ContainerCgroup,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -208,6 +209,7 @@ impl Container {
             &user_mounts,
             tty,
             &devices,
+            cgroup,
         )?;
 
         let stdio = if tty {

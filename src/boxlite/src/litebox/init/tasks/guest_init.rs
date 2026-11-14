@@ -11,9 +11,12 @@ use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::runtime::cpu_count::{CPU_PERIOD_US, CpuCount};
+use crate::runtime::options::BoxOptions;
 use async_trait::async_trait;
-use boxlite_shared::ContainerDevice;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use boxlite_shared::{ContainerDevice, ContainerResources};
 
 /// Oldest guest release that honors `advanced.capabilities` on
 /// `Container.Init`. An earlier guest drops the field and starts the container
@@ -105,6 +108,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     } else {
                         Vec::new()
                     },
+                    resources: container_resources(&ctx.config.options)?,
                     advanced: advanced.into(),
                 },
             };
@@ -182,6 +186,25 @@ async fn run_guest_init(
     Ok(())
 }
 
+/// The box limits the container reads in its cgroup, from the values the VM
+/// really gets: unset options fall back to the VM defaults, and the CPU quota
+/// is the host jailer's, legacy `max_cpu_time` cap included. No guest pids
+/// limit is exposed yet, so `pids.max` stays `max`.
+fn container_resources(options: &BoxOptions) -> BoxliteResult<ContainerResources> {
+    let cpus = match options.cpu_count()? {
+        Some(cpus) => cpus,
+        None => CpuCount::new(f64::from(DEFAULT_CPUS))?,
+    };
+    let max_cpu_time = options.advanced.security.resource_limits.max_cpu_time;
+    let memory_mib = options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB);
+    Ok(ContainerResources {
+        cpu_quota_us: i64::try_from(cpus.cfs_quota_us(max_cpu_time)).unwrap_or(i64::MAX),
+        cpu_period_us: CPU_PERIOD_US,
+        memory_limit_bytes: i64::from(memory_mib) << 20,
+        pids_limit: 0,
+    })
+}
+
 /// The guest VM's own `/dev/kvm`, republished into the OCI workload so a nested
 /// hypervisor can open it. The host's `/dev/kvm` is never passed through.
 fn kvm_device() -> ContainerDevice {
@@ -195,6 +218,39 @@ fn kvm_device() -> ContainerDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn limits_for(cpus: Option<f64>, memory_mib: Option<u32>, cap: Option<u64>) -> (i64, u64, i64) {
+        let mut options = BoxOptions {
+            cpus,
+            memory_mib,
+            ..Default::default()
+        };
+        options.advanced.security.resource_limits.max_cpu_time = cap;
+        let resources = container_resources(&options).expect("valid options");
+        assert_eq!(resources.pids_limit, 0, "no guest pids limit is exposed");
+        (
+            resources.cpu_quota_us,
+            resources.cpu_period_us,
+            resources.memory_limit_bytes,
+        )
+    }
+
+    /// The container reads the same budget the VM and the host jailer enforce,
+    /// including the defaults applied when the caller leaves them unset.
+    #[test]
+    fn container_resources_mirror_the_box_size() {
+        assert_eq!(
+            limits_for(Some(2.0), Some(3072), None),
+            (200_000, 100_000, 3_221_225_472)
+        );
+        assert_eq!(
+            limits_for(None, None, None),
+            (100_000, 100_000, 1_073_741_824)
+        );
+        assert_eq!(limits_for(Some(0.5), Some(512), None).0, 50_000);
+        // The legacy cap lowers the guest quota exactly as it lowers the host's.
+        assert_eq!(limits_for(Some(2.0), None, Some(1)).0, 100_000);
+    }
     /// A privileged request always carries the capability policy it expands to,
     /// so any guest that satisfies the privileged floor must already satisfy
     /// the capability floor. Pinning the constants to literals only restates

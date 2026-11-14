@@ -19,7 +19,8 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
 use crate::container::{
-    validate_mount_override, CapabilitySet, Container, ContainerDevices, MountOverride, UserMount,
+    validate_mount_override, CapabilitySet, Container, ContainerCgroup, ContainerDevices,
+    MountOverride, UserMount,
 };
 use crate::layout::GuestLayout;
 use crate::storage::block_device::BlockDeviceMount;
@@ -245,7 +246,9 @@ impl ContainerService for GuestServer {
         let capability_policy = advanced.capabilities.unwrap_or_default();
         let capabilities = CapabilitySet::resolve(&capability_policy.add, &capability_policy.drop)
             .map_err(BoxliteError::into_validation_status)?;
-        let readonly_paths = advanced.linux.unwrap_or_default().readonly_paths;
+        let linux = advanced.linux.unwrap_or_default();
+        let readonly_paths = linux.readonly_paths;
+        let cgroup = ContainerCgroup::from_proto(linux.cgroup_namespace, init_req.resources);
 
         info!("🚀 Starting OCI container with received configuration");
 
@@ -403,6 +406,7 @@ impl ContainerService for GuestServer {
             readonly_paths,
             mount_override,
             devices,
+            cgroup,
         ) {
             Ok(mut container) => {
                 // Init is created, not yet running — Init never runs it; the

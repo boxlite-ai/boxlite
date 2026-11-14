@@ -5,13 +5,16 @@
 use super::capabilities::CapabilitySet;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::ContainerDevice as ProtoContainerDevice;
+use boxlite_shared::ContainerResources as ProtoContainerResources;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Component, Path, PathBuf};
 
 use oci_spec::runtime::{
-    LinuxBuilder, LinuxDevice, LinuxDeviceBuilder, LinuxDeviceType, LinuxIdMappingBuilder,
-    LinuxNamespaceBuilder, LinuxNamespaceType, Mount, MountBuilder, PosixRlimitBuilder,
-    PosixRlimitType, ProcessBuilder, RootBuilder, Spec, SpecBuilder, UserBuilder,
+    LinuxBuilder, LinuxCpuBuilder, LinuxDevice, LinuxDeviceBuilder, LinuxDeviceType,
+    LinuxIdMappingBuilder, LinuxMemoryBuilder, LinuxNamespaceBuilder, LinuxNamespaceType,
+    LinuxPidsBuilder, LinuxResources, LinuxResourcesBuilder, Mount, MountBuilder,
+    PosixRlimitBuilder, PosixRlimitType, ProcessBuilder, RootBuilder, Spec, SpecBuilder,
+    UserBuilder,
 };
 
 /// Host-resolved source/options override for one of the guest's own standard
@@ -23,6 +26,41 @@ use oci_spec::runtime::{
 pub struct MountOverride {
     pub source: String,
     pub options: Vec<String>,
+}
+
+/// Host-resolved cgroup choices for the container. The default is the
+/// historical shape: no namespace, no mount, no limits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContainerCgroup {
+    /// Unshare a cgroup namespace and mount cgroup2 read-only at
+    /// `/sys/fs/cgroup`, so the container sees its own cgroup as the root.
+    pub namespace: bool,
+    /// Limits written to the container cgroup; `None` leaves it unlimited.
+    pub limits: Option<CgroupLimits>,
+}
+
+/// Literal cgroup v2 limits; 0 leaves a controller at the kernel default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CgroupLimits {
+    pub cpu_quota_us: i64,
+    pub cpu_period_us: u64,
+    pub memory_limit_bytes: i64,
+    pub pids_limit: i64,
+}
+
+impl ContainerCgroup {
+    /// An older host sends neither field: that keeps the historical shape.
+    pub fn from_proto(namespace: bool, resources: Option<ProtoContainerResources>) -> Self {
+        let limits = resources
+            .map(|r| CgroupLimits {
+                cpu_quota_us: r.cpu_quota_us,
+                cpu_period_us: r.cpu_period_us,
+                memory_limit_bytes: r.memory_limit_bytes,
+                pids_limit: r.pids_limit,
+            })
+            .filter(|l| l.cpu_quota_us > 0 || l.memory_limit_bytes > 0 || l.pids_limit > 0);
+        Self { namespace, limits }
+    }
 }
 
 /// User-specified bind mount for container
@@ -175,6 +213,7 @@ pub fn create_oci_spec(
     user_mounts: &[UserMount],
     tty: bool,
     devices: &ContainerDevices,
+    cgroup: ContainerCgroup,
 ) -> BoxliteResult<Spec> {
     let caps = capabilities.to_oci()?;
     tracing::info!(
@@ -182,10 +221,11 @@ pub fn create_oci_spec(
         mount_source = mount_override.source,
         mount_options = ?mount_override.options,
         readonly_paths_count = readonly_paths.len(),
+        ?cgroup,
         "building container spec"
     );
-    let namespaces = build_default_namespaces()?;
-    let mut mounts = build_standard_mounts(bundle_path, mount_override.clone())?;
+    let namespaces = build_default_namespaces(cgroup.namespace)?;
+    let mut mounts = build_standard_mounts(bundle_path, mount_override.clone(), cgroup.namespace)?;
 
     // Add user-specified bind mounts
     for user_mount in user_mounts {
@@ -225,6 +265,7 @@ pub fn create_oci_spec(
         namespaces,
         devices.as_slice(),
         readonly_paths.to_vec(),
+        cgroup.limits,
     )?;
 
     SpecBuilder::default()
@@ -440,17 +481,23 @@ fn find_group_in_group_file(rootfs: &str, name: &str) -> BoxliteResult<u32> {
 
 /// Build default namespaces for container isolation.
 ///
-/// No cgroup namespace: tested and found unnecessary for DinD (see
-/// docs/architecture/privileged-mode-design.md, Trade-offs) — `dockerd`
-/// tolerates writing cgroup limits without a private cgroup namespace view.
-fn build_default_namespaces() -> BoxliteResult<Vec<oci_spec::runtime::LinuxNamespace>> {
-    Ok(vec![
+/// `cgroup_namespace` is host-resolved: off for privileged containers, whose
+/// `dockerd` writes cgroups in the guest tree. youki joins the container
+/// cgroup before unsharing, so the namespace is rooted at that cgroup.
+fn build_default_namespaces(
+    cgroup_namespace: bool,
+) -> BoxliteResult<Vec<oci_spec::runtime::LinuxNamespace>> {
+    let mut namespaces = vec![
         build_namespace(LinuxNamespaceType::Pid)?,
         build_namespace(LinuxNamespaceType::Ipc)?,
         build_namespace(LinuxNamespaceType::Uts)?,
         build_namespace(LinuxNamespaceType::Mount)?,
         // build_namespace(LinuxNamespaceType::User)?,
-    ])
+    ];
+    if cgroup_namespace {
+        namespaces.push(build_namespace(LinuxNamespaceType::Cgroup)?);
+    }
+    Ok(namespaces)
 }
 
 /// Build a single namespace specification
@@ -559,6 +606,7 @@ fn build_linux_spec(
     namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
     devices: &[LinuxDevice],
     readonly_paths: Vec<String>,
+    cgroup_limits: Option<CgroupLimits>,
 ) -> BoxliteResult<oci_spec::runtime::Linux> {
     // UID/GID mappings for user namespace
     // Map full range of UIDs/GIDs to allow non-root users (nginx=33, etc.)
@@ -576,8 +624,9 @@ fn build_linux_spec(
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build GID mapping: {}", e)))?];
 
-    // The cgroup namespace gets its view from the guest init's cgroup2 mount;
-    // no per-container resource limits are configured by this OCI spec.
+    // No `cgroups_path`: youki keeps the container in `:youki:<id>`, one level
+    // under the guest root, so no intermediate cgroup hits the cgroup v2
+    // "no internal processes" rule. Box limits are written there.
     let _ = container_id; // Suppress unused warning
 
     let mut builder = LinuxBuilder::default()
@@ -585,6 +634,9 @@ fn build_linux_spec(
         .uid_mappings(uid_mappings)
         .gid_mappings(gid_mappings)
         .readonly_paths(readonly_paths);
+    if let Some(limits) = cgroup_limits {
+        builder = builder.resources(build_resources(limits)?);
+    }
 
     // No device-cgroup rule: tested and found unnecessary for DinD (see
     // docs/architecture/privileged-mode-design.md, Trade-offs) — the guest
@@ -596,9 +648,39 @@ fn build_linux_spec(
     }
 
     builder
-        // .cgroups_path(cgroups_path)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))
+}
+
+/// OCI resources youki writes to `cpu.max`, `memory.max` and `pids.max`. A
+/// positive memory limit with no swap value writes only `memory.max`. The
+/// empty device list matches `Linux::default()`, so no device rule changes.
+fn build_resources(limits: CgroupLimits) -> BoxliteResult<LinuxResources> {
+    let err = |e: oci_spec::OciSpecError| BoxliteError::Internal(format!("cgroup limits: {e}"));
+    let mut resources = LinuxResourcesBuilder::default().devices(Vec::new());
+    if limits.cpu_quota_us > 0 {
+        let cpu = LinuxCpuBuilder::default()
+            .quota(limits.cpu_quota_us)
+            .period(limits.cpu_period_us)
+            .build()
+            .map_err(err)?;
+        resources = resources.cpu(cpu);
+    }
+    if limits.memory_limit_bytes > 0 {
+        let memory = LinuxMemoryBuilder::default()
+            .limit(limits.memory_limit_bytes)
+            .build()
+            .map_err(err)?;
+        resources = resources.memory(memory);
+    }
+    if limits.pids_limit > 0 {
+        let pids = LinuxPidsBuilder::default()
+            .limit(limits.pids_limit)
+            .build()
+            .map_err(err)?;
+        resources = resources.pids(pids);
+    }
+    resources.build().map_err(err)
 }
 
 /// Build standard mounts for container filesystem
@@ -609,6 +691,7 @@ fn build_linux_spec(
 fn build_standard_mounts(
     bundle_path: &Path,
     mount_override: MountOverride,
+    cgroup_namespace: bool,
 ) -> BoxliteResult<Vec<Mount>> {
     let dev_mount_options = vec![
         "nosuid".to_string(),
@@ -681,7 +764,8 @@ fn build_standard_mounts(
         // The guest init mounts cgroup2 at /sys/fs/cgroup. It is carried in as
         // a submount of the recursive /sys bind, so it is the `rro` above —
         // not a plain `ro` — that keeps it read-only for an ordinary
-        // container; a privileged container gets it writable.
+        // container; a privileged container gets it writable. With a cgroup
+        // namespace, the read-only cgroup mount added below covers it.
         // /tmp - Temporary filesystem
         MountBuilder::default()
             .destination("/tmp")
@@ -695,6 +779,27 @@ fn build_standard_mounts(
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /tmp mount: {}", e)))?,
     ];
+
+    // After the /sys bind: inside the new cgroup namespace youki mounts a fresh
+    // cgroup2 rooted at the container's own cgroup, so `cpu.max` and
+    // `memory.max` sit at /sys/fs/cgroup. Read-only even for container root.
+    if cgroup_namespace {
+        mounts.push(
+            MountBuilder::default()
+                .destination("/sys/fs/cgroup")
+                .typ("cgroup")
+                .source("cgroup")
+                .options(
+                    ["nosuid", "noexec", "nodev", "ro"]
+                        .map(String::from)
+                        .to_vec(),
+                )
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build cgroup mount: {e}"))
+                })?,
+        );
+    }
 
     // Bind-mount /etc/hostname, /etc/hosts, /etc/resolv.conf from the bundle
     // dir into the container. Uses rbind + rprivate (matching Docker defaults).
@@ -743,7 +848,8 @@ mod tests {
         }])
         .unwrap();
 
-        let linux = build_linux_spec("test-box", vec![], devices.as_slice(), Vec::new()).unwrap();
+        let linux =
+            build_linux_spec("test-box", vec![], devices.as_slice(), Vec::new(), None).unwrap();
         let mapped = linux.devices().as_ref().expect("mapped device");
         assert_eq!(mapped.len(), 1);
         let device = &mapped[0];
@@ -763,6 +869,7 @@ mod tests {
             vec![],
             ContainerDevices::default().as_slice(),
             Vec::new(),
+            None,
         )
         .unwrap();
 
@@ -1267,7 +1374,8 @@ mod tests {
         let devices = ContainerDevices::default();
         let readonly = vec!["/proc/sys".to_string()];
 
-        let linux = build_linux_spec("c", vec![], devices.as_slice(), readonly.clone()).unwrap();
+        let linux =
+            build_linux_spec("c", vec![], devices.as_slice(), readonly.clone(), None).unwrap();
 
         assert_eq!(linux.readonly_paths().as_deref(), Some(readonly.as_slice()));
     }
@@ -1288,9 +1396,11 @@ mod tests {
             vec![],
             devices.as_slice(),
             vec!["/proc/sys".to_string()],
+            None,
         )
         .unwrap();
-        let unconfined = build_linux_spec("c", vec![], devices.as_slice(), Vec::new()).unwrap();
+        let unconfined =
+            build_linux_spec("c", vec![], devices.as_slice(), Vec::new(), None).unwrap();
 
         assert_eq!(
             hardened.masked_paths().as_deref(),
@@ -1329,7 +1439,7 @@ mod tests {
             source: source.clone(),
             options: options.clone(),
         };
-        let mounts = build_standard_mounts(dir.path(), mount_override).unwrap();
+        let mounts = build_standard_mounts(dir.path(), mount_override, false).unwrap();
         let sys = mounts
             .iter()
             .find(|mount| mount.destination().to_str() == Some("/sys"))
@@ -1337,6 +1447,150 @@ mod tests {
 
         assert_eq!(sys.source().as_deref(), Some(Path::new(&source)));
         assert_eq!(sys.options().as_deref(), Some(options.as_slice()));
+    }
+
+    // ==================
+    // Container cgroup view and limits
+    // ==================
+
+    fn mount_at<'a>(mounts: &'a [Mount], destination: &str) -> Option<(usize, &'a Mount)> {
+        mounts
+            .iter()
+            .enumerate()
+            .find(|(_, mount)| mount.destination() == Path::new(destination))
+    }
+
+    /// A non-privileged container sees its own cgroup at /sys/fs/cgroup: a
+    /// cgroup namespace plus a read-only cgroup2 mount placed after the /sys
+    /// bind, which it would otherwise be shadowed by.
+    #[test]
+    fn cgroup_namespace_adds_namespace_and_read_only_mount_after_sys() {
+        let dir = tempfile::tempdir().unwrap();
+        let sys = MountOverride {
+            source: "/sys".to_string(),
+            options: vec!["rbind".to_string(), "rro".to_string()],
+        };
+
+        let namespaces = build_default_namespaces(true).unwrap();
+        assert!(namespaces
+            .iter()
+            .any(|ns| ns.typ() == LinuxNamespaceType::Cgroup));
+
+        let mounts = build_standard_mounts(dir.path(), sys, true).unwrap();
+        let (sys_index, _) = mount_at(&mounts, "/sys").expect("/sys mount");
+        let (cgroup_index, cgroup) = mount_at(&mounts, "/sys/fs/cgroup").expect("cgroup mount");
+        assert!(cgroup_index > sys_index, "cgroup mount must follow /sys");
+        assert_eq!(cgroup.typ().as_deref(), Some("cgroup"));
+        let options = cgroup.options().clone().unwrap_or_default();
+        for required in ["ro", "nosuid", "noexec", "nodev"] {
+            assert!(options.iter().any(|o| o == required), "missing {required}");
+        }
+    }
+
+    /// Without the host's signal (privileged, or an older host) the spec keeps
+    /// its historical shape: no cgroup namespace, no cgroup mount, and the
+    /// same resources `Linux::default()` carries.
+    #[test]
+    fn default_cgroup_keeps_the_historical_spec_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = create_oci_spec(
+            "c",
+            "/rootfs",
+            &["/bin/sh".to_string()],
+            &[],
+            "/",
+            0,
+            0,
+            &CapabilitySet::default(),
+            &[],
+            &MountOverride {
+                source: "/sys".to_string(),
+                options: vec!["rbind".to_string()],
+            },
+            dir.path(),
+            &[],
+            false,
+            &ContainerDevices::default(),
+            ContainerCgroup::from_proto(false, None),
+        )
+        .expect("spec builds");
+
+        let linux = spec.linux().as_ref().expect("linux section");
+        assert!(!linux
+            .namespaces()
+            .iter()
+            .flatten()
+            .any(|ns| ns.typ() == LinuxNamespaceType::Cgroup));
+        assert!(mount_at(spec.mounts().as_deref().unwrap(), "/sys/fs/cgroup").is_none());
+        assert_eq!(
+            linux.resources(),
+            oci_spec::runtime::Linux::default().resources()
+        );
+    }
+
+    /// Box limits become OCI resources youki writes to `cpu.max` and
+    /// `memory.max`. A zero pids limit stays unset (`pids.max` = `max`); a
+    /// positive one, reserved for a later option, is applied.
+    #[test]
+    fn cgroup_limits_become_oci_resources() {
+        let limits = CgroupLimits {
+            cpu_quota_us: 200_000,
+            cpu_period_us: 100_000,
+            memory_limit_bytes: 3_221_225_472,
+            pids_limit: 0,
+        };
+        let devices = ContainerDevices::default();
+
+        let linux =
+            build_linux_spec("c", vec![], devices.as_slice(), Vec::new(), Some(limits)).unwrap();
+        let resources = linux.resources().as_ref().expect("resources");
+        let cpu = resources.cpu().as_ref().expect("cpu");
+        assert_eq!((cpu.quota(), cpu.period()), (Some(200_000), Some(100_000)));
+        assert_eq!(
+            resources.memory().as_ref().and_then(|m| m.limit()),
+            Some(3_221_225_472)
+        );
+        assert!(resources.memory().as_ref().unwrap().swap().is_none());
+        assert!(resources.pids().is_none());
+        assert_eq!(resources.devices().as_deref(), Some([].as_slice()));
+
+        let with_pids = CgroupLimits {
+            pids_limit: 128,
+            ..limits
+        };
+        let linux =
+            build_linux_spec("c", vec![], devices.as_slice(), Vec::new(), Some(with_pids)).unwrap();
+        let pids = linux.resources().as_ref().unwrap().pids().expect("pids");
+        assert_eq!(pids.limit(), 128);
+    }
+
+    /// An absent or all-zero message means "no limits"; a populated one is
+    /// carried through verbatim.
+    #[test]
+    fn cgroup_limits_from_proto() {
+        assert_eq!(ContainerCgroup::from_proto(true, None).limits, None);
+        let zero = ProtoContainerResources::default();
+        assert_eq!(ContainerCgroup::from_proto(true, Some(zero)).limits, None);
+
+        let cgroup = ContainerCgroup::from_proto(
+            true,
+            Some(ProtoContainerResources {
+                cpu_quota_us: 50_000,
+                cpu_period_us: 100_000,
+                memory_limit_bytes: 1 << 30,
+                pids_limit: 0,
+            }),
+        );
+        assert!(cgroup.namespace);
+        assert_eq!(
+            cgroup.limits,
+            Some(CgroupLimits {
+                cpu_quota_us: 50_000,
+                cpu_period_us: 100_000,
+                memory_limit_bytes: 1 << 30,
+                pids_limit: 0,
+            })
+        );
     }
 
     /// Capabilities and the OCI path/mount shape are separate knobs the host
@@ -1373,6 +1627,7 @@ mod tests {
                 &[],
                 false,
                 &ContainerDevices::default(),
+                ContainerCgroup::default(),
             )
             .expect("spec builds")
         };
@@ -1501,6 +1756,7 @@ mod tests {
             &user_mounts,
             false,
             &ContainerDevices::default(),
+            ContainerCgroup::default(),
         )
         .expect("spec builds");
 
