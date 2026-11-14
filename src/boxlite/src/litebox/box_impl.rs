@@ -1035,13 +1035,34 @@ impl BoxImpl {
             )
             .await?;
 
+        let extraction_destination = if opts.overwrite {
+            host_dst.to_path_buf()
+        } else {
+            let destination = host_dst.to_path_buf();
+            tokio::task::spawn_blocking(move || super::copy::host_copy_destination(&destination))
+                .await
+                .map_err(|e| {
+                    BoxliteError::Storage(format!("host copy resolution task failed: {e}"))
+                })?
+                .map_err(|e| {
+                    let message = format!("resolve host copy destination: {e}");
+                    if e.kind() == std::io::ErrorKind::NotADirectory {
+                        BoxliteError::AlreadyExists(message)
+                    } else {
+                        BoxliteError::Storage(message)
+                    }
+                })?
+        };
         boxlite_shared::tar::unpack(
             temp_tar.to_path_buf(),
-            host_dst.to_path_buf(),
+            extraction_destination,
             boxlite_shared::tar::UnpackContext {
                 overwrite: opts.overwrite,
                 mkdir_parents: true,
-                force_directory: false,
+                force_directory: {
+                    let raw = host_dst.as_os_str().to_string_lossy();
+                    raw.ends_with('/') || raw.ends_with("/.")
+                },
             },
         )
         .await?;

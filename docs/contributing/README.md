@@ -35,6 +35,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-11 · [Upload overwrite protection](investigations/2026-11-11-upload-overwrite-protection.md): per-entry conflict handling and compatible streaming options.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
 - 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.

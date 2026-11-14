@@ -7,7 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use boxlite::CopyOptions;
+use boxlite::{CopyOptions, CopySourceKind};
 
 use super::super::types::FileQuery;
 use super::super::{AppState, error_from_boxlite, error_response, get_or_resume_box};
@@ -23,41 +23,18 @@ pub(in crate::commands::serve) async fn upload_files(
         Err(resp) => return resp,
     };
 
-    // Extract tar to temp dir, then copy into container
-    let temp_dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create temp dir: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
-    };
-
-    let extract_dir = temp_dir.path().join("extracted");
-    if let Err(e) = std::fs::create_dir_all(&extract_dir) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to create extract dir: {e}"),
-            "InternalError",
-            "internal",
-        );
-    }
-
-    let mut archive = tar::Archive::new(&body[..]);
-    if let Err(e) = archive.unpack(&extract_dir) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            format!("failed to extract tar: {e}"),
-            "InvalidArgumentError",
-            "invalid_argument",
-        );
-    }
-
+    // Preserve entry order and duplicates so the guest enforces the policy
+    // against each original entry, including earlier writes in this upload.
     if let Err(e) = litebox
-        .copy_into(&extract_dir, &query.path, CopyOptions::default())
+        .copy_in_stream(
+            futures::stream::once(async move { Ok(body.to_vec()) }),
+            &query.path,
+            CopySourceKind::Unknown,
+            CopyOptions {
+                overwrite: query.overwrite.unwrap_or(true),
+                ..CopyOptions::default()
+            },
+        )
         .await
     {
         return error_from_boxlite(&e);

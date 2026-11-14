@@ -3671,6 +3671,72 @@ mod tests {
         (format!("http://127.0.0.1:{port}"), handle)
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires a real VM and alpine image"]
+    async fn upload_duplicate_entries_return_conflict() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
+            home_dir: home.path().join("boxlite"),
+            ..Default::default()
+        })
+        .unwrap();
+        let litebox = runtime
+            .create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        litebox.start().await.unwrap();
+        let id = litebox.id().to_string();
+        let state = Arc::new(AppState {
+            runtime: runtime.clone(),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+        });
+        let mut archive = tar::Builder::new(Vec::new());
+        for bytes in [b"first".as_slice(), b"second".as_slice()] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, "x.txt", bytes).unwrap();
+        }
+        let response = handlers::files::upload_files(
+            State(state),
+            axum::extract::Path(id.clone()),
+            axum::extract::Query(
+                serde_json::from_value(serde_json::json!({
+                    "path": "/root/", "overwrite": false
+                }))
+                .unwrap(),
+            ),
+            axum::body::Bytes::from(archive.into_inner().unwrap()),
+        )
+        .await;
+        let status = response.status();
+        if status != StatusCode::CONFLICT {
+            runtime.remove(&id, true).await.unwrap();
+            assert_eq!(status, StatusCode::CONFLICT);
+        }
+        let output = home.path().join("x.txt");
+        litebox
+            .copy_out("/root/x.txt", &output, Default::default())
+            .await
+            .unwrap();
+        let bytes = std::fs::read(output).unwrap();
+        runtime.remove(&id, true).await.unwrap();
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(bytes, b"first");
+    }
+
     /// `rt.images()` on a REST runtime pointed at `serve` reaches the cache of
     /// the runtime `serve` runs, each call on its own route.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3,15 +3,62 @@
 package boxlite
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestCopyInStreamOverwriteProtection(t *testing.T) {
+	rt := newTestRuntime(t)
+	box := createStartedBox(t, rt, "alpine:latest")
+	ctx := context.Background()
+	archive := func(content string) *bytes.Reader {
+		var data bytes.Buffer
+		writer := tar.NewWriter(&data)
+		for _, name := range []string{"new.txt", "keep.txt"} {
+			if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Write([]byte(content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return bytes.NewReader(data.Bytes())
+	}
+	if err := box.CopyInStream(ctx, "/root", CopySourceDir, archive("original")); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []CopySourceKind{CopySourceDir, CopySourceUnknown} {
+		// More than the bounded Go/C/portal buffers: rejection must retain
+		// its type when the producer observes the guest closing early.
+		err := box.CopyInStream(ctx, "/root", kind, archive(strings.Repeat("x", 16<<20)), WithCopyOverwrite(false))
+		var conflict *Error
+		if !errors.As(err, &conflict) || conflict.Code != ErrAlreadyExists {
+			t.Fatalf("conflict = %v", err)
+		}
+		out := filepath.Join(t.TempDir(), "keep.txt")
+		if err := box.CopyOut(ctx, "/root/keep.txt", out); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(out); err != nil || string(got) != "original" {
+			t.Fatalf("preserved bytes=%q err=%v", got, err)
+		}
+	}
+	if err := box.CopyInStream(ctx, "/root", CopySourceDir, archive("replacement"), WithCopyOverwrite(true)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type controlledBlockingWriter struct {
 	entered     chan struct{}

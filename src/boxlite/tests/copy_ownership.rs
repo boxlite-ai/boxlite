@@ -37,6 +37,213 @@ async fn exec_stdout(handle: &boxlite::LiteBox, cmd: BoxCommand) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn partial_upload_hands_new_files_to_box_user() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let bx = runtime
+        .create(
+            BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                user: Some(format!("{BOX_UID}:{BOX_GID}")),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    bx.start().await.unwrap();
+    for kind in [CopySourceKind::Dir, CopySourceKind::Unknown] {
+        let dest = format!("/srv/failed-hardlink-{kind:?}");
+        exec_stdout(
+            &bx,
+            BoxCommand::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "mkdir -p {dest}; printf original > {dest}/keep; chmod 600 {dest}/keep"
+                    ),
+                ])
+                .user("0:0"),
+        )
+        .await;
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Link);
+        header.set_link_name("missing-source").unwrap();
+        header.set_mode(0o600);
+        header.set_size(0);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "keep", std::io::empty())
+            .unwrap();
+        let result = bx
+            .copy_in_stream(
+                Box::pin(futures::stream::iter([Ok(archive.into_inner().unwrap())])),
+                &dest,
+                kind,
+                CopyOptions::default(),
+            )
+            .await;
+        assert!(result.is_err(), "missing hardlink source must fail");
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("cat")
+                    .arg(format!("{dest}/keep"))
+                    .user("0:0")
+            )
+            .await,
+            "original"
+        );
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("stat")
+                    .args(["-c", "%u:%g", &format!("{dest}/keep")])
+                    .user("0:0")
+            )
+            .await
+            .trim(),
+            "0:0",
+            "failed replacement must not change untouched ownership"
+        );
+    }
+    for kind in [CopySourceKind::Dir, CopySourceKind::Unknown] {
+        let dest = format!("/srv/partial-{kind:?}");
+        exec_stdout(
+            &bx,
+            BoxCommand::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "mkdir -p {dest}; printf original > {dest}/keep; chmod 600 {dest}/keep"
+                    ),
+                ])
+                .user("0:0"),
+        )
+        .await;
+        let mut archive = tar::Builder::new(Vec::new());
+        for (name, bytes) in [
+            ("newdir/new", b"readable".as_slice()),
+            ("keep", b"replacement".as_slice()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o600);
+            header.set_size(bytes.len() as u64);
+            header.set_cksum();
+            archive.append_data(&mut header, name, bytes).unwrap();
+        }
+        let bytes = archive.into_inner().unwrap();
+        let result = bx
+            .copy_in_stream(
+                Box::pin(futures::stream::iter([Ok(bytes)])),
+                &dest,
+                kind,
+                CopyOptions::default().no_overwrite(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(boxlite::BoxliteError::AlreadyExists(_))),
+            "{result:?}"
+        );
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("cat").arg(format!("{dest}/newdir/new"))
+            )
+            .await,
+            "readable"
+        );
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("stat")
+                    .args(["-c", "%u", &format!("{dest}/keep")])
+                    .user("0:0")
+            )
+            .await
+            .trim(),
+            "0"
+        );
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("cat")
+                    .arg(format!("{dest}/keep"))
+                    .user("0:0")
+            )
+            .await,
+            "original"
+        );
+    }
+    let empty = TempDir::new_in("/tmp").unwrap();
+    bx.copy_into(
+        &empty.path().join("."),
+        "/srv/empty-protected",
+        CopyOptions::default().no_overwrite(),
+    )
+    .await
+    .unwrap();
+    exec_stdout(
+        &bx,
+        BoxCommand::new("touch").arg("/srv/empty-protected/owned"),
+    )
+    .await;
+    for kind in [CopySourceKind::File, CopySourceKind::Unknown] {
+        let dest = format!("/srv/partial-{kind:?}-occupied");
+        exec_stdout(
+            &bx,
+            BoxCommand::new("sh")
+                .args(["-c", &format!("printf original > {dest}; chmod 600 {dest}")])
+                .user("0:0"),
+        )
+        .await;
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o600);
+        header.set_size(11);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "keep", b"replacement".as_slice())
+            .unwrap();
+        let result = bx
+            .copy_in_stream(
+                Box::pin(futures::stream::iter([Ok(archive.into_inner().unwrap())])),
+                &dest,
+                kind,
+                CopyOptions::default().no_overwrite(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(boxlite::BoxliteError::AlreadyExists(_))),
+            "{result:?}"
+        );
+        assert_eq!(
+            exec_stdout(
+                &bx,
+                BoxCommand::new("stat")
+                    .args(["-c", "%u", &dest])
+                    .user("0:0")
+            )
+            .await
+            .trim(),
+            "0",
+            "initial conflict must not change destination ownership"
+        );
+        assert_eq!(
+            exec_stdout(&bx, BoxCommand::new("cat").arg(&dest).user("0:0")).await,
+            "original"
+        );
+    }
+    bx.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn copy_in_hands_files_to_the_box_user() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {

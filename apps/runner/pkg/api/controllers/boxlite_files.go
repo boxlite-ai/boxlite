@@ -12,6 +12,15 @@ import (
 )
 
 func BoxliteFileUpload(ctx *gin.Context) {
+	overwrite := true
+	if raw, present := ctx.GetQuery("overwrite"); present {
+		var err error
+		overwrite, err = strconv.ParseBool(raw)
+		if err != nil {
+			respondError(ctx, http.StatusBadRequest, "overwrite must be a boolean", "InvalidArgumentError", "invalid_argument")
+			return
+		}
+	}
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		respondError(ctx, http.StatusInternalServerError, err.Error(), "InternalError", "internal")
@@ -29,7 +38,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	// we stream straight into the guest — hint=Unknown makes the guest peek
 	// the archive to decide (its pre-hint behavior). No runner-side staging.
 	kind := parseSourceIsDir(ctx.Query("source_is_dir"))
-	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, kind, ctx.Request.Body); err != nil {
+	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, kind, ctx.Request.Body, boxlite.WithCopyOverwrite(overwrite)); err != nil {
 		respondCopyError(ctx, err)
 		return
 	}
