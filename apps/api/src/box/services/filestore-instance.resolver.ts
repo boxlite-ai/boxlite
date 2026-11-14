@@ -1,0 +1,196 @@
+import { Injectable, Logger, Optional } from '@nestjs/common'
+import { createHash } from 'crypto'
+import { CloudFilestoreManagerClient } from '@google-cloud/filestore'
+import type { FilestoreInstanceConfig } from '../../config/filestore-instances'
+import { TypedConfigService } from '../../config/typed-config.service'
+import { BadRequestError } from '../../exceptions/bad-request.exception'
+import { ServiceUnavailableException } from '@nestjs/common'
+
+export interface ResolvedFilestoreInstance {
+  server: string
+  export: string
+}
+
+export type FilestoreLookupSource = 'request' | 'configured'
+
+interface FilestoreApiInstance {
+  state?: unknown
+  networks?: Array<{
+    ipAddresses?: Array<string | null | undefined> | null | undefined
+  }> | null
+  fileShares?: Array<{
+    name?: string | null | undefined
+  }> | null
+}
+
+export interface FilestoreInstanceLookup {
+  getInstance(request: { name: string }): Promise<[FilestoreApiInstance, unknown?, unknown?]>
+}
+
+const IPV4_PATTERN = /^(?:\d{1,3}\.){3}\d{1,3}$/
+const READY_FILESTORE_STATE = 2
+const CACHE_TTL_MS = 60_000
+const GCP_ERROR_NAMES: Record<number, string> = {
+  4: 'DEADLINE_EXCEEDED',
+  7: 'PERMISSION_DENIED',
+  9: 'FAILED_PRECONDITION',
+  14: 'UNAVAILABLE',
+  16: 'UNAUTHENTICATED',
+}
+
+@Injectable()
+export class FilestoreInstanceResolver {
+  private readonly logger = new Logger(FilestoreInstanceResolver.name)
+  private client?: FilestoreInstanceLookup
+  private readonly cache = new Map<string, { value: ResolvedFilestoreInstance; expiresAt: number }>()
+
+  constructor(
+    private readonly configService: TypedConfigService,
+    @Optional() private readonly clientFactory?: () => FilestoreInstanceLookup,
+  ) {}
+
+  select(volumeId: string): FilestoreInstanceConfig {
+    const instances = this.configService.getOrThrow('volume.filestoreInstances').instances
+    if (!instances.length) throw new ServiceUnavailableException('Filestore is not configured')
+
+    const sorted = [...instances].sort((left, right) =>
+      left.instance === right.instance ? 0 : left.instance < right.instance ? -1 : 1,
+    )
+    const digest = createHash('sha256').update(volumeId).digest()
+    return sorted[digest.readUInt32BE(0) % sorted.length]
+  }
+
+  async resolve(instanceName: string, source: FilestoreLookupSource): Promise<ResolvedFilestoreInstance> {
+    const config = this.configService.getOrThrow('volume.filestoreInstances')
+    const configured = config.instances.find((entry) => entry.instance === instanceName)
+    if (!configured) {
+      const reason = `unknown Filestore instance '${instanceName}'`
+      this.logResolutionFailure('FILESTORE_INSTANCE_UNKNOWN', instanceName, source, undefined, reason)
+      throw new BadRequestError(reason)
+    }
+
+    const resourceName = `projects/${configured.projectId}/locations/${configured.zone}/instances/${instanceName}`
+    const cached = this.cache.get(resourceName)
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value
+    }
+
+    const value = await this.lookup(resourceName, source, instanceName)
+    this.cache.set(resourceName, { value, expiresAt: Date.now() + CACHE_TTL_MS })
+    return value
+  }
+
+  private async lookup(
+    resourceName: string,
+    source: FilestoreLookupSource,
+    instanceName: string,
+  ): Promise<ResolvedFilestoreInstance> {
+    let instance: FilestoreApiInstance
+    try {
+      ;[instance] = await this.lookupClient().getInstance({ name: resourceName })
+    } catch (error) {
+      if (this.isNotFound(error)) {
+        throw source === 'request'
+          ? new BadRequestError(`Filestore instance '${resourceName}' was not found`, { cause: error })
+          : new ServiceUnavailableException(`Configured Filestore instance '${resourceName}' was not found`, {
+              cause: error,
+            })
+      }
+      this.logger.error({
+        event: 'filestore_lookup_failed',
+        instanceName,
+        resourceName,
+        source,
+        code: (error as { code?: number | string } | null)?.code,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      throw new ServiceUnavailableException(
+        `Could not look up Filestore instance '${instanceName}' (${resourceName}): ${this.gcpErrorDetail(error)}`,
+        {
+          cause: error,
+        },
+      )
+    }
+    return this.mountTarget(instance, source, resourceName)
+  }
+
+  private lookupClient(): FilestoreInstanceLookup {
+    if (!this.client) {
+      this.client = this.clientFactory?.() ?? new CloudFilestoreManagerClient()
+    }
+    return this.client
+  }
+
+  private mountTarget(
+    instance: FilestoreApiInstance,
+    source: FilestoreLookupSource,
+    resourceName: string,
+  ): ResolvedFilestoreInstance {
+    if (instance.state !== undefined && instance.state !== null && !this.isReadyState(instance.state)) {
+      throw this.notUsable(source, resourceName, 'is not ready')
+    }
+
+    const addresses = (instance.networks ?? [])
+      .flatMap((network) => network.ipAddresses ?? [])
+      .filter((address): address is string => Boolean(address) && IPV4_PATTERN.test(address))
+    const shares = (instance.fileShares ?? [])
+      .map((share) => share.name)
+      .filter((name): name is string => Boolean(name))
+
+    if (addresses.length !== 1 || shares.length !== 1) {
+      throw this.notUsable(source, resourceName, 'does not expose exactly one IPv4 address and one file share')
+    }
+
+    return { server: addresses[0], export: `/${shares[0]}` }
+  }
+
+  private notUsable(
+    source: FilestoreLookupSource,
+    resourceName: string,
+    reason: string,
+  ): ServiceUnavailableException | BadRequestError {
+    const message = `Filestore instance ${resourceName} ${reason}`
+    const instanceName = resourceName.split('/').at(-1) ?? resourceName
+    this.logResolutionFailure('FILESTORE_INSTANCE_UNUSABLE', instanceName, source, resourceName, message)
+    return source === 'request' ? new BadRequestError(message) : new ServiceUnavailableException(message)
+  }
+
+  private logResolutionFailure(
+    code: string,
+    instanceName: string,
+    source: FilestoreLookupSource,
+    resourceName: string | undefined,
+    reason: string,
+  ): void {
+    this.logger.error(
+      {
+        event: 'filestore_resolution_failed',
+        code,
+        instanceName,
+        source,
+        ...(resourceName ? { resourceName } : {}),
+        reason,
+      },
+      'Filestore resolution failed',
+    )
+  }
+
+  // The GCP client types `state` as `State | keyof typeof State`: protobuf
+  // decoding yields the number (READY = 2), JSON/REST yields the key name.
+  // Accept both shapes; a present-but-unready state stays unusable.
+  private isReadyState(state: unknown): boolean {
+    return state === READY_FILESTORE_STATE || state === 'READY'
+  }
+
+  private gcpErrorDetail(error: unknown): string {
+    const code = (error as { code?: number | string } | null)?.code
+    const status = GCP_ERROR_NAMES[Number(code)]
+    const message = error instanceof Error ? error.message : String(error)
+    return status ? `GCP ${status}: ${message.replace(/^\d+\s+[A-Z_]+:\s*/, '')}` : message
+  }
+
+  private isNotFound(error: unknown): boolean {
+    const code = (error as { code?: number | string } | null)?.code
+    return code === 5 || code === '5' || (error instanceof Error && /NOT_FOUND/i.test(error.message))
+  }
+}
