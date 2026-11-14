@@ -703,6 +703,10 @@ const configuration = {
     // Which object store backs volume buckets. Must match the runner's
     // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+    // Filestore is a GCP deployment feature. The deployment turns it off on
+    // other clouds; local APIs default to enabled so an explicit instance list
+    // keeps working without hosted deployment metadata.
+    filestoreSupported: process.env.FILESTORE_SUPPORTED !== 'false',
     // The Filestore instances a create may select or dispatch may resolve;
     // invalid configuration refuses to start the API.
     filestoreInstances: parseFilestoreInstances(),

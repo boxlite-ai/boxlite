@@ -23,7 +23,9 @@ export class BoxliteConfigController {
         checkpoints_enabled:
           this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
         object_storage_enabled: this.config ? isVolumeStorageConfigured(this.config) : false,
-        filestore_enabled: (this.config?.getOrThrow('volume.filestoreInstances').instances.length ?? 0) > 0,
+        filestore_enabled:
+          this.config?.get('volume.filestoreSupported') !== false &&
+          (this.config?.getOrThrow('volume.filestoreInstances').instances.length ?? 0) > 0,
         privileged_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,

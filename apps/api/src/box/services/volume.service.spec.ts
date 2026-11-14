@@ -2,6 +2,7 @@ import { Context } from '../../common/context/context'
 import {
   ForbiddenException,
   NotFoundException,
+  NotImplementedException,
   RequestTimeoutException,
   ServiceUnavailableException,
 } from '@nestjs/common'
@@ -237,6 +238,7 @@ describe('VolumeService filestore volumes', () => {
     filestoreInstances: Array<{ instance: string; projectId: string; zone: string }> = [
       { instance: 'ml-scratch', projectId: 'boxlite-dev', zone: 'asia-southeast1-b' },
     ],
+    filestoreSupported = true,
   ) {
     const volumeRepository = {
       findOne: jest.fn().mockResolvedValue(volume),
@@ -255,6 +257,10 @@ describe('VolumeService filestore volumes', () => {
     }
     const organizationService = { assertOrganizationIsNotSuspended: jest.fn() }
     const configService = {
+      get: jest.fn((key: string) => {
+        expect(key).toBe('volume.filestoreSupported')
+        return filestoreSupported
+      }),
       getOrThrow: jest.fn((key: string) => {
         expect(key).toBe('volume.filestoreInstances')
         return { instances: filestoreInstances }
@@ -354,6 +360,21 @@ describe('VolumeService filestore volumes', () => {
       ServiceUnavailableException,
     )
     expect(volumeRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('rejects Filestore creation on an unsupported deployment without persisting a row', async () => {
+    const { service, volumeRepository, filestoreInstanceResolver } = createService(null, [], [
+      { instance: 'ml-scratch', projectId: 'boxlite-dev', zone: 'asia-southeast1-b' },
+    ], false)
+
+    await expect(
+      service.create(organization, { name: 'nfs-data', storageBackend: 'filestore' }, Context.user()),
+    ).rejects.toMatchObject({
+      constructor: NotImplementedException,
+      response: { code: 'unsupported', message: expect.stringContaining('not supported') },
+    })
+    expect(volumeRepository.save).not.toHaveBeenCalled()
+    expect(filestoreInstanceResolver.resolve).not.toHaveBeenCalled()
   })
 
   it('rejects an explicit instance the resolver cannot find, without persisting a row', async () => {

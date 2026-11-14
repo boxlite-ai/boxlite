@@ -9,6 +9,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  NotImplementedException,
   RequestTimeoutException,
   ServiceUnavailableException,
 } from '@nestjs/common'
@@ -67,6 +68,12 @@ export class VolumeService {
     volumeId: string,
   ): Promise<Volume> {
     const isFilestore = createVolumeDto.storageBackend === 'filestore'
+    if (isFilestore && this.configService.get('volume.filestoreSupported') === false) {
+      throw new NotImplementedException({
+        message: 'Filestore volumes are not supported in this deployment',
+        code: 'unsupported',
+      })
+    }
     if (!isFilestore && createVolumeDto.instance !== undefined) {
       throw new BadRequestError('instance is valid only when storageBackend is "filestore"')
     }

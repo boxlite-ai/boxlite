@@ -49,7 +49,7 @@ for (const home of ['aws', 'gcp'] as const) {
 }
 
 for (const home of ['aws', 'gcp'] as const) {
-  test(`${home} delivers FILESTORE_INSTANCES through the stage API group`, () => {
+  test(`${home} sets Filestore support by cloud`, () => {
     // The runner reads the resolved server/export from its dispatch, so this
     // value is the deployment's own placement record for Filestore instances
     // (PR boxlite-ai/boxlite#2608): absent on stages without the feature, a
@@ -78,7 +78,9 @@ for (const home of ['aws', 'gcp'] as const) {
       stage: 'dev',
       home,
     })
-    assert.equal(environment.FILESTORE_INSTANCES, instances)
+    assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
+    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
+    if (home === 'gcp') assert.equal(environment.FILESTORE_INSTANCES, instances)
     assert.equal(Object.hasOwn(secrets, 'FILESTORE_INSTANCES'), false)
   })
 
@@ -104,6 +106,7 @@ for (const home of ['aws', 'gcp'] as const) {
       stage: 'dev',
       home,
     })
+    assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
     assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
     if (home === 'gcp') {
       assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [
@@ -324,12 +327,10 @@ test('the declared API group delivers the organization invitation lifetime on bo
   }
 })
 
-test('Filestore instance configuration distinguishes unset from explicit empty', () => {
-  const unset = assemble({ ...base, FILESTORE_INSTANCES: undefined })
-  assert.equal(Object.hasOwn(unset.environment, 'FILESTORE_INSTANCES'), false)
-
-  const disabled = assemble({ ...base, FILESTORE_INSTANCES: '   ' })
-  assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
+test('AWS never deploys Filestore instances from stage configuration', () => {
+  const configured = assemble({ ...base, FILESTORE_INSTANCES: '   ' })
+  assert.equal(configured.environment.FILESTORE_SUPPORTED, 'false')
+  assert.equal(Object.hasOwn(configured.environment, 'FILESTORE_INSTANCES'), false)
 })
 
 test('GCP materializes the default Filestore placement and derives its project', () => {
@@ -341,6 +342,7 @@ test('GCP materializes the default Filestore placement and derives its project',
     home: 'gcp',
   })
 
+  assert.equal(unset.environment.FILESTORE_SUPPORTED, 'true')
   assert.deepEqual(unset.filestoreProjects, ['boxlite-dev-project'])
   assert.deepEqual(JSON.parse(unset.environment.FILESTORE_INSTANCES), [
     { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
@@ -353,6 +355,7 @@ test('GCP materializes the default Filestore placement and derives its project',
     stage: 'dev',
     home: 'gcp',
   })
+  assert.equal(disabled.environment.FILESTORE_SUPPORTED, 'true')
   assert.deepEqual(disabled.filestoreProjects, [])
   assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
 })

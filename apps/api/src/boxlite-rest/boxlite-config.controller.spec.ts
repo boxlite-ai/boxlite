@@ -4,6 +4,7 @@ import { BoxliteConfigController } from './boxlite-config.controller'
 function createConfig(values: {
   checkpoint?: { archivePrefix?: string; enabled?: boolean }
   objectStorageConfigured?: boolean
+  filestoreSupported?: boolean
   filestoreInstanceCount?: number
 }) {
   return {
@@ -11,6 +12,7 @@ function createConfig(values: {
       if (key === 'checkpoint.enabled') return values.checkpoint?.enabled
       if (key === 'checkpoint.archivePrefix') return values.checkpoint?.archivePrefix
       if (key === 's3.endpoint') return values.objectStorageConfigured ? 'http://object-storage.test' : undefined
+      if (key === 'volume.filestoreSupported') return values.filestoreSupported ?? true
       return undefined
     },
     getOrThrow: (key: string) => {
@@ -45,10 +47,19 @@ describe('volume storage capability discovery', () => {
     { objectStorageConfigured: false, filestoreInstanceCount: 0, objectExpected: false, filestoreExpected: false },
     { objectStorageConfigured: true, filestoreInstanceCount: 0, objectExpected: true, filestoreExpected: false },
     { objectStorageConfigured: false, filestoreInstanceCount: 2, objectExpected: false, filestoreExpected: true },
+    {
+      objectStorageConfigured: false,
+      filestoreInstanceCount: 2,
+      filestoreSupported: false,
+      objectExpected: false,
+      filestoreExpected: false,
+    },
   ])(
     'advertises configured volume backends: %j',
-    ({ objectStorageConfigured, filestoreInstanceCount, objectExpected, filestoreExpected }) => {
-      const controller = new BoxliteConfigController(createConfig({ objectStorageConfigured, filestoreInstanceCount }))
+    ({ objectStorageConfigured, filestoreInstanceCount, filestoreSupported, objectExpected, filestoreExpected }) => {
+      const controller = new BoxliteConfigController(
+        createConfig({ objectStorageConfigured, filestoreInstanceCount, filestoreSupported }),
+      )
 
       expect(controller.getConfig().capabilities.object_storage_enabled).toBe(objectExpected)
       expect(controller.getConfig().capabilities.filestore_enabled).toBe(filestoreExpected)

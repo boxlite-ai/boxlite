@@ -398,6 +398,10 @@ export const apiEnvironmentFrom = ({
   validateCiChannels(values, addresses)
   const filestoreInstances = environment.FILESTORE_INSTANCES?.trim()
   const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
+  const apiValues =
+    home === 'gcp'
+      ? values
+      : Object.fromEntries(Object.entries(values).filter(([key]) => key !== 'FILESTORE_INSTANCES'))
 
   return {
     filestoreProjects,
@@ -442,11 +446,12 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
-      ...(home === 'gcp' && filestoreInstances === undefined
-        ? { FILESTORE_INSTANCES: DEFAULT_FILESTORE_INSTANCES }
-        : filestoreInstances !== undefined
-          ? { FILESTORE_INSTANCES: filestoreInstances }
-          : {}),
+      FILESTORE_SUPPORTED: home === 'gcp' ? 'true' : 'false',
+      ...(home === 'gcp'
+        ? filestoreInstances === undefined
+          ? { FILESTORE_INSTANCES: DEFAULT_FILESTORE_INSTANCES }
+          : { FILESTORE_INSTANCES: filestoreInstances }
+        : {}),
       // On unless the stage says otherwise, and it says so through the api
       // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
       // no second switch: an inverted one read here would come from whatever
@@ -489,7 +494,7 @@ export const apiEnvironmentFrom = ({
       // The API's own group, as values. Last, so a name the store holds wins
       // over a default composed above — and `stack/index.ts` refuses any name
       // that a module also decides.
-      ...values,
+      ...apiValues,
     },
     secrets: addresses,
   }
