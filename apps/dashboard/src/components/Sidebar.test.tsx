@@ -475,6 +475,17 @@ describe('Sidebar primary navigation', () => {
     expect(invitations).toBeNull()
   })
 
+  it('keeps API Keys reachable through the mobile navigation menu', async () => {
+    renderRoute('/dashboard/boxes')
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open navigation menu"]')!
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+    const link = document.querySelector<HTMLAnchorElement>('[role="menu"] a[href="/dashboard/keys"]')
+    expect(link).not.toBeNull()
+    expect(link?.textContent).toContain('API Keys')
+  })
+
   it('shows the global switcher with complete IDs and removes the profile organization list', async () => {
     organizationState.organizations = [
       { id: 'org-1', name: 'Default Organization', isDefaultForAuthenticatedUser: true },

@@ -591,15 +591,15 @@ an invitation ID redirects to the current organization's Member tab without acce
 
 The new selection is saved only after membership validation succeeds. If switching
 fails, acceptance still succeeds. The page explains that joining succeeded and
-asks the user to switch through the profile menu. The console keeps the previous
+asks the user to switch through the header organization switcher. The console keeps the previous
 organization both on screen and for the next reload.
 
-## The organization you pick is the one you come back to
+## Organization selection persists for the session
 
-A user in more than one organization switches between them from the profile
-menu, which marks the personal one. The pick is kept in `localStorage`, so the
-next login opens the same organization; if the user was removed from it in the
-meantime, the console falls back to their personal organization.
+Users switch organizations from the header switcher. The selection is kept in
+`sessionStorage` for the authenticated user. Reload and token renewal restore it,
+and explicit logout clears it. A new login does not treat the legacy `localStorage`
+ID as a confirmed selection. See [Organization context](#organization-context).
 
 ## New-user onboarding
 
@@ -1232,7 +1232,8 @@ verification URLs complete their existing scoped flow before this gate applies.
 
 The 64px Console header displays the active organization. Multiple memberships
 open a compact switcher showing names and complete IDs; search appears above five
-memberships. The profile menu contains account actions, not another organization list.
+memberships. The profile menu contains account actions, not another organization list. On mobile,
+API Keys remains available in the navigation menu while its header shortcut is hidden.
 
 Selection is stored in tab-local sessionStorage with the authenticated user ID.
 Reload and token renewal restore a valid confirmation; explicit logout clears it.

@@ -10,6 +10,7 @@ contain synthetic users, memberships, and resources from the existing MSW fixtur
 | After: global switcher, light theme | [Light](switcher-light.png) |
 | After: global switcher, dark theme | [Dark](switcher-dark.png) |
 | After: 390px viewport | [Mobile](mobile.png) |
+| Mobile navigation retains API Keys | [Mobile navigation](mobile-navigation.png) |
 
 The before capture uses Console application code at
 `30c8e674dcedca1e8516c4a2b8239f15becfed85` with the same synthetic multi-organization
@@ -26,6 +27,11 @@ mock fixtures used for the after captures. It does not include the new gate or h
 - Explicit logout followed by sign-in returned to the chooser with no session selection.
 - Mobile layout at 390px reported no document horizontal overflow; names and full
   IDs remained visible in the switcher.
+
+Initial login selection preserves a requested deep link; it is not a switch away
+from an already mounted organization. Box queries include the selected organization
+ID, and a missing Box shows the existing organization hint and Back to Boxes action.
+Global header switches discard old resource identifiers as described above.
 
 ## Automated verification
 

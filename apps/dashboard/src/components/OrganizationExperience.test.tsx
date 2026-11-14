@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { OrganizationGate } from './OrganizationExperience'
+import { OrganizationGate, OrganizationSwitcher } from './OrganizationExperience'
 import { ORGANIZATION_SESSION_KEY, readOrganizationSession, saveOrganizationSession } from '@/lib/organization-session'
 import { markJustLoggedOut } from '@/lib/auth-session'
 
@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   ],
   user: { profile: { sub: 'user-a', email: 'a@example.com' } },
   members: vi.fn(),
+}))
+vi.mock('@/hooks/useSelectedOrganization', () => ({
+  useSelectedOrganization: () => ({ selectedOrganization: mocks.organizations[0] }),
 }))
 vi.mock('@/hooks/useOrganizations', () => ({ useOrganizations: () => ({ organizations: mocks.organizations }) }))
 vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: mocks.user }) }))
@@ -37,6 +40,7 @@ afterEach(() => {
   act(() => root.unmount())
   host.remove()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 async function render(path = '/dashboard/boxes') {
   await act(async () =>
@@ -51,6 +55,18 @@ async function render(path = '/dashboard/boxes') {
 }
 async function choose() {
   await act(async () => host.querySelector<HTMLButtonElement>('main button')!.click())
+}
+function mockDocumentNavigation() {
+  const navigation = { assign: vi.fn(), reload: vi.fn() }
+  vi.stubGlobal(
+    'window',
+    new Proxy(window, {
+      get(target, key) {
+        return key === 'location' ? navigation : Reflect.get(target, key, target)
+      },
+    }),
+  )
+  return navigation
 }
 describe('Organization experience', () => {
   it('blocks multi-org business content until explicit membership-validated selection', async () => {
@@ -150,6 +166,115 @@ describe('Organization experience', () => {
     buttons[0].focus()
     await act(async () => buttons[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
     expect(document.activeElement).toBe(buttons[1])
+  })
+  it('keeps the current organization selected without another request', async () => {
+    await act(async () =>
+      root.render(
+        <MemoryRouter>
+          <OrganizationSwitcher />
+        </MemoryRouter>,
+      ),
+    )
+    await act(async () => host.querySelector<HTMLButtonElement>('button')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-current="true"]')!.click())
+    expect(mocks.members).not.toHaveBeenCalled()
+  })
+  it('cancels a switch from a terminal without touching membership or session', async () => {
+    saveOrganizationSession('user-a', 'a')
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes/box-a/terminal']}>
+          <OrganizationSwitcher />
+        </MemoryRouter>,
+      ),
+    )
+    await act(async () => host.querySelector<HTMLButtonElement>('button')!.click())
+    const choices = document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')
+    await act(async () => choices[1].click())
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(
+      (button) => button.textContent === 'Stay here',
+    )!
+    await act(async () => cancel.click())
+    expect(mocks.members).not.toHaveBeenCalled()
+    expect(readOrganizationSession('user-a')).toBe('a')
+  })
+  it('keeps the current session when a confirmed terminal switch is denied', async () => {
+    saveOrganizationSession('user-a', 'a')
+    mocks.members.mockResolvedValue({ data: [] })
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes/box-a/terminal']}>
+          <OrganizationSwitcher />
+        </MemoryRouter>,
+      ),
+    )
+    await act(async () => host.querySelector<HTMLButtonElement>('button')!.click())
+    await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')[1].click())
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(
+      (button) => button.textContent === 'Switch organization',
+    )!
+    await act(async () => confirm.click())
+    expect(mocks.members).toHaveBeenCalledExactlyOnceWith('b')
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    expect(readOrganizationSession('user-a')).toBe('a')
+  })
+  it('does not commit an in-flight selection after the chooser is unmounted', async () => {
+    let resolve!: (value: unknown) => void
+    mocks.members.mockReturnValue(
+      new Promise((r) => {
+        resolve = r
+      }),
+    )
+    await render()
+    await choose()
+    await act(async () => root.render(null))
+    await act(async () => resolve({ data: [{ userId: 'user-a' }] }))
+    expect(readOrganizationSession('user-a')).toBeNull()
+  })
+  it('preserves the requested deep link when selecting an organization at login', async () => {
+    function Destination() {
+      const location = useLocation()
+      return <output>{location.pathname + location.search + location.hash}</output>
+    }
+    const path = '/dashboard/boxes/box-a/terminal?view=logs#output'
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={[path]}>
+          <OrganizationGate>
+            <Destination />
+          </OrganizationGate>
+        </MemoryRouter>,
+      ),
+    )
+    expect(host.querySelector('output')).toBeNull()
+    await choose()
+    expect(host.querySelector('output')?.textContent).toBe(path)
+    expect(readOrganizationSession('user-a')).toBe('a')
+  })
+  it('commits the target session before full document navigation', async () => {
+    saveOrganizationSession('user-a', 'a')
+    await act(async () =>
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes?filter=old']}>
+          <OrganizationSwitcher />
+        </MemoryRouter>,
+      ),
+    )
+    await act(async () => host.querySelector<HTMLButtonElement>('button')!.click())
+    const navigation = mockDocumentNavigation()
+    navigation.assign.mockImplementation(() => expect(readOrganizationSession('user-a')).toBe('b'))
+    await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')[1].click())
+    expect(navigation.assign).toHaveBeenCalledExactlyOnceWith('/dashboard/boxes')
+  })
+  it('offers document reload and logout recovery with zero organizations', async () => {
+    mocks.organizations = []
+    await render()
+    const navigation = mockDocumentNavigation()
+    const buttons = host.querySelectorAll<HTMLButtonElement>('main button')
+    await act(async () => buttons[0].click())
+    expect(navigation.reload).toHaveBeenCalledTimes(1)
+    await act(async () => buttons[1].click())
+    expect(navigation.assign).toHaveBeenCalledWith('/logout')
   })
   it('clears confirmation on explicit logout', () => {
     saveOrganizationSession('user-a', 'a')

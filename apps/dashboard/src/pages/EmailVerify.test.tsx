@@ -11,6 +11,7 @@ import EmailVerify from './EmailVerify'
 import { RoutePath } from '@/enums/RoutePath'
 
 const mocks = vi.hoisted(() => ({
+  params: { organizationId: 'org-1', email: 'a@b.c', token: 'tok-1' },
   navigate: vi.fn(),
   verifyOrganizationEmail: vi.fn(),
   onSelectOrganization: vi.fn(),
@@ -18,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
-  useParams: () => ({ organizationId: 'org-1', email: 'a@b.c', token: 'tok-1' }),
+  useParams: () => mocks.params,
 }))
 
 vi.mock('@/hooks/useApi', () => ({
@@ -43,6 +44,7 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
+  mocks.params = { organizationId: 'org-1', email: 'a@b.c', token: 'tok-1' }
   vi.useFakeTimers()
   mocks.navigate.mockReset()
   mocks.onSelectOrganization.mockReset().mockResolvedValue(true)
@@ -73,6 +75,14 @@ async function flush() {
 }
 
 describe('EmailVerify', () => {
+  it('rejects a verification link without a token before issuing any requests', async () => {
+    mocks.params.token = ''
+    await act(async () => root.render(<EmailVerify />))
+    expect(container.textContent).toContain('Invalid verification link')
+    expect(mocks.verifyOrganizationEmail).not.toHaveBeenCalled()
+    expect(mocks.onSelectOrganization).not.toHaveBeenCalled()
+  })
+
   it('does not redirect when organization selection is denied', async () => {
     mocks.onSelectOrganization.mockResolvedValue(false)
     await act(async () => root.render(<EmailVerify />))

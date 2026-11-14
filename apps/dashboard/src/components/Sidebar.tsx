@@ -734,6 +734,12 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Management</DropdownMenuLabel>
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <Link to={RoutePath.KEYS}>
+                  <KeyRound className="size-4" />
+                  API Keys
+                </Link>
+              </DropdownMenuItem>
               {managementEntries}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>
