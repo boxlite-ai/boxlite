@@ -12,7 +12,7 @@ unified reverse proxy; see `_caddyfile()`.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import secrets
 from typing import Callable, Optional, TYPE_CHECKING
 
@@ -379,6 +379,12 @@ def _caddyfile(cfg) -> str:
     `:80` block below to `*.boxlite.test:443 { tls internal ... }` and add
     redir back.
     """
+    pgadmin_route = "" if cfg.external_stores else f"""\
+\thandle_path /pgadmin/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.pgadmin_host_port}
+\t}}
+"""
+    pgadmin_help = "" if cfg.external_stores else "  /pgadmin/        -> pgadmin\n"
     return f"""\
 {{
 \tauto_https off
@@ -396,10 +402,7 @@ def _caddyfile(cfg) -> str:
 \t\t\theader_up Host {{http.request.host}}
 \t\t}}
 \t}}
-\thandle_path /pgadmin/* {{
-\t\treverse_proxy {cfg.host_hub}:{cfg.pgadmin_host_port}
-\t}}
-\thandle_path /jaeger/* {{
+{pgadmin_route}\thandle_path /jaeger/* {{
 \t\treverse_proxy {cfg.host_hub}:{cfg.jaeger_host_port}
 \t}}
 \thandle /auth/* {{
@@ -425,8 +428,7 @@ def _caddyfile(cfg) -> str:
 \t\trespond `boxlite-local Caddy reverse proxy
 
 routes:
-  /pgadmin/        -> pgadmin
-  /jaeger/         -> jaeger
+{pgadmin_help}  /jaeger/         -> jaeger
   /auth/           -> rauthy (OIDC)
   /rustfs/         -> rustfs S3 API
   /rustfs-console/ -> rustfs console UI
@@ -484,3 +486,12 @@ SERVICES: dict[str, ServiceSpec] = {
     "otel":        SPEC_OTEL,
     "caddy":       SPEC_CADDY,
 }
+
+
+def local_services(cfg: InfraConfig) -> dict[str, ServiceSpec]:
+    if not cfg.external_stores:
+        return SERVICES
+    selected = {name: spec for name, spec in SERVICES.items()
+                if name not in {"postgres", "redis", "pgadmin"}}
+    selected["caddy"] = replace(SPEC_CADDY, depends_on=[n for n in SPEC_CADDY.depends_on if n in selected])
+    return selected

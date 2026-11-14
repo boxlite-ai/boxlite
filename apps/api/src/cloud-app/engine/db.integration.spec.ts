@@ -256,6 +256,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     context = buildCtx(
       {
         publicUrl: 'https://api.example.test/api/internal/apps',
+        supervisorUrl: 'https://guest-api.example.test/api/internal/apps',
         managementUrl: `https://api.example.test/api/v1/${orgA}`,
         artifactUrl: 'https://artifacts.example.test',
         sessionSecret: randomUUID(),

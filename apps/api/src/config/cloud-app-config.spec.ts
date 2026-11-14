@@ -31,4 +31,16 @@ describe('Cloud App deployment configuration', () => {
     expect(configured.runtimeImages.node).toBe('node-stable')
     expect(configured.processRole).toBe('worker')
   })
+
+  it('defaults guest callbacks to the public API and accepts a separate HTTP address for local Boxes', () => {
+    const cloud = cloudAppConfig(enabled)
+    expect(cloud.supervisorUrl).toBe(cloud.publicUrl)
+    const guest = 'http://host.boxlite.internal:3001/api/internal/apps'
+    const local = cloudAppConfig({ ...enabled, CLOUD_APP_SUPERVISOR_URL: guest + '/' })
+    expect(local.supervisorUrl).toBe(guest)
+    expect(local.publicUrl).toBe(cloud.publicUrl)
+    expect(() => cloudAppConfig({ ...enabled, CLOUD_APP_SUPERVISOR_URL: guest + '?token=foo' })).toThrow(
+      'CLOUD_APP_SUPERVISOR_URL',
+    )
+  })
 })

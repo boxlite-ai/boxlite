@@ -1,6 +1,7 @@
 /** Static deployment configuration supplied by the platform's typed configuration service. */
 export interface Config {
   publicUrl: string
+  supervisorUrl: string
   managementUrl: string
   artifactUrl: string
   sessionSecret: string
