@@ -118,7 +118,7 @@ export class BoxProvisioner {
           // Identity headers are honoured only on requests carrying the forwarding secret, which only
           // the CP holds (app code runs as another uid and cannot read it; contracts §2.1, F2/F3).
           env: {
-            BOXLITE_CP_URL: this.ctx.config.publicUrl,
+            BOXLITE_CP_URL: this.ctx.config.supervisorUrl,
             BOXLITE_BOX_TOKEN: token,
             BOXLITE_ENV_ID: env.id,
             SV_TRUST_USER_HEADERS: '1',

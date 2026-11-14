@@ -1,7 +1,16 @@
 import { createPrivateKey } from 'node:crypto'
 
+function apiBaseUrl(value: string | undefined, name: string) {
+  if (!value) return undefined
+  const url = new URL(value)
+  if (!['http:', 'https:'].includes(url.protocol) || url.search || url.hash || url.username || url.password) {
+    throw new Error(`${name} must be an HTTP API base URL`)
+  }
+  return value.replace(/\/+$/, '')
+}
+
 export function cloudAppConfig(env: NodeJS.ProcessEnv = process.env) {
-  const publicUrl = env.CLOUD_APP_PUBLIC_URL?.replace(/\/+$/, '')
+  const publicUrl = apiBaseUrl(env.CLOUD_APP_PUBLIC_URL, 'CLOUD_APP_PUBLIC_URL')
   const processRole = env.CLOUD_APP_PROCESS_ROLE || 'api'
   if (!['api', 'worker'].includes(processRole)) throw new Error('CLOUD_APP_PROCESS_ROLE must be api or worker')
   let oauth: Record<string, { clientId: string; clientSecret: string }>
@@ -18,10 +27,6 @@ export function cloudAppConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   const privateKey = env.CLOUD_APP_IDENTITY_PRIVATE_KEY?.replace(/\\n/g, '\n')
   if (publicUrl) {
-    const url = new URL(publicUrl)
-    if (!['http:', 'https:'].includes(url.protocol) || url.search || url.hash || url.username || url.password) {
-      throw new Error('CLOUD_APP_PUBLIC_URL must be an HTTP API base URL')
-    }
     for (const key of ['CLOUD_APP_SESSION_SECRET', 'CLOUD_APP_IDENTITY_PRIVATE_KEY', 'CLOUD_APP_SOURCE_BUCKET']) {
       if (!env[key]) throw new Error(`${key} is required for Cloud Apps`)
     }
@@ -35,6 +40,7 @@ export function cloudAppConfig(env: NodeJS.ProcessEnv = process.env) {
   }
   return {
     publicUrl,
+    supervisorUrl: apiBaseUrl(env.CLOUD_APP_SUPERVISOR_URL, 'CLOUD_APP_SUPERVISOR_URL') ?? publicUrl,
     processRole,
     domain: env.CLOUD_APP_DOMAIN || env.PROXY_APP_DOMAIN,
     sessionSecret: env.CLOUD_APP_SESSION_SECRET,

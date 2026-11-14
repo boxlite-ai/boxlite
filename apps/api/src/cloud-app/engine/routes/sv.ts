@@ -102,7 +102,7 @@ export function svRoutes(ctx: Ctx) {
       deployment: release,
       ...secrets,
       env: await ctx.resources.runtimeEnv(app, env, spec),
-      snapshot: snapId ? { id: snapId, url: `${ctx.config.publicUrl}/sv/v1/snapshots/${snapId}` } : null,
+      snapshot: snapId ? { id: snapId, url: `${ctx.config.supervisorUrl}/sv/v1/snapshots/${snapId}` } : null,
     })
   })
 
