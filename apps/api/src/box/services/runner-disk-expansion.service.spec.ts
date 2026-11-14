@@ -17,6 +17,7 @@ import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
 import {
+  BASELINE_READ_DEADLINE_MS,
   CONFIRM_TOLERANCE_RATIO,
   EXPANSION_ERROR,
   HYPERDISK_BALANCED_MAX_GIB,
@@ -155,6 +156,8 @@ function makeService(opts: {
   diskSnapshot?: GcpDiskSnapshot
   /** When set, getDisk rejects with this error. */
   getDiskError?: Error
+  /** When set, getDisk never settles: the deadline must win the race. */
+  diskReadNeverResolves?: boolean
   /** When set, resizeDisk rejects with this error (mapped through toExpansionClientError). */
   resizeError?: Error
   samples?: RunnerDiskUsageSample[]
@@ -212,9 +215,11 @@ function makeService(opts: {
     resizeDisk: opts.resizeError
       ? jest.fn(() => Promise.reject(opts.resizeError))
       : jest.fn(async () => ({ operation: 'op-1' })),
-    getDisk: opts.getDiskError
-      ? jest.fn(() => Promise.reject(opts.getDiskError))
-      : jest.fn(async () => opts.diskSnapshot ?? {}),
+    getDisk: opts.diskReadNeverResolves
+      ? jest.fn(() => new Promise<never>(() => {}))
+      : opts.getDiskError
+        ? jest.fn(() => Promise.reject(opts.getDiskError))
+        : jest.fn(async () => opts.diskSnapshot ?? {}),
     getZoneOperation: jest.fn(async () => opts.zoneOperation ?? { status: 'PENDING' as const }),
   }
 
@@ -969,6 +974,24 @@ describe('RunnerDiskExpansionService round', () => {
     await service.evaluateAndConfirm()
 
     expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+  })
+
+  it('still grows the disk when the baseline read hangs past the deadline', async () => {
+    // The SDK's default Get config is a 600s timeout with retries; the
+    // deadline races it so one black-holed read cannot stall the sequential
+    // round or outlive the 60s cron lease. Expiry takes the same size-only
+    // fallback as a failed read; the next cron round retries naturally.
+    jest.useFakeTimers()
+    try {
+      const { service, gcpDiskClient } = makeService({ diskReadNeverResolves: true })
+      const round = service.evaluateAndConfirm()
+      await jest.advanceTimersByTimeAsync(BASELINE_READ_DEADLINE_MS + 100)
+      await round
+      expect(gcpDiskClient.resizeDisk).toHaveBeenCalledTimes(1)
+      expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('marks performanceUpdated on a rejected performance-carrying attempt', async () => {
