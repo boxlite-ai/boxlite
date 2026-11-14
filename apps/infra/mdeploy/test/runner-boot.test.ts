@@ -64,7 +64,7 @@ test('cloud boot installs the NFS client filestore volumes mount with', () => {
   // a host without it fails the first filestore box with "unknown filesystem
   // type nfs", on an instance whose script nobody will read again.
   const script = render()
-  const installs = script.indexOf('nfs-common')
+  const installs = script.search(/^apt-get install -y .*nfs-common.*$/m)
   assert.notEqual(installs, -1, 'the NFS client package is not installed')
   assert.ok(installs < script.indexOf('systemctl start boxlite-runner'))
 })

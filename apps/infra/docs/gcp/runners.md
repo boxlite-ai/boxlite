@@ -44,7 +44,8 @@ completed operations proceed immediately. Deletion keeps the provider's default 
 Each assignment carries binary, unit-environment and NFS client package policies. An update converges
 the API address, volume backend, registry proxy host and `nfs-common`; the package policy also covers
 existing hosts whose startup script predates Filestore, without requiring SSH or a boot-script rerun.
-New hosts install the same package from their boot script. Existing hosts retain their disks, image
+`runner:update` preserves existing package policies but cannot add one to an older assignment; run
+mdeploy first to add `runner-nfs-client`. New hosts install the same package from their boot script. Existing hosts retain their disks, image
 caches and local box state; machine-type and boot-image/startup changes do not resize or replace them.
 New hosts use the current [runner sizing settings](../configuration.md#runner-sizing).
 
