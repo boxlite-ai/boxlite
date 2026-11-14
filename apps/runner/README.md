@@ -646,9 +646,9 @@ the configuration.
 - Host: NFS client package (`nfs-utils` on RHEL-family, `nfs-common` on
   Debian-family). No autofs; the runner mounts explicitly. The cloud boot
   script ([`runner-boot.ts`](../infra/mdeploy/stack/runner-boot.ts)) installs
-  `nfs-common` on fresh hosts automatically; hosts provisioned before the
-  feature landed, or deployments that bypass the boot scripts, still need it
-  by hand.
+  `nfs-common` on fresh hosts automatically. GCP deployments also declare the
+  package through OS Config, so existing runner hosts converge without SSH or
+  a rerun of the boot script.
 - **Deploy order: runners before the API.** The capability check refuses an
   old runner before dispatch. An API older than its runners simply dispatches
   no filestore volumes at all, which is harmless.
