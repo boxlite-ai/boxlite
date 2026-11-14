@@ -742,14 +742,14 @@ route remains highlighted when the whole sidebar collapses.
 
 The desktop sidebar spans the viewport height (minus any announcement). Its logo
 shows the full wordmark when expanded and the icon when compact. The right column
-contains a 48px header and route content; API Keys is separated from the account
-by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+contains a 64px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the header prioritizes organization context and the mobile menu.
 Welcome keeps its simplified header.
 
 Management is a primary disclosure after Applications, with Billing and Organization
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
-Organization switching, theme and logout remain in the account menu.
+Organization switching is in the header; theme and logout are in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
@@ -1253,7 +1253,9 @@ list-page modal editors already block access to the header.
 A failed membership request or session write leaves the current context intact and
 shows a retryable error. Failed invitation entry can be retried through the header.
 Email verification waits for organization selection and does not replay the token
-when React effects rerun.
+when React effects rerun. GitHub CI authorization callbacks save the authenticated
+user’s organization session before returning to Connects, including attempts started
+before the session selection rollout. Storage failure keeps a retry action on the callback.
 
 ### Local organization review
 

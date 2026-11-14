@@ -649,7 +649,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             <span className="hidden sm:inline">API Keys</span>
           </Link>
 
-          {/* profile menu (organization switcher tucked inside) */}
+          {/* Account actions and theme */}
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label="Open profile menu"
