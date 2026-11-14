@@ -988,4 +988,31 @@ describe('RunnerDiskExpansionService round', () => {
       }),
     )
   })
+
+  it('credits a performance-carrying throttle to the performance budget, not the capacity cooldown', async () => {
+    // A bundled PATCH that draws a GCP 429 cannot tell which budget tripped.
+    // performanceUpdated already opens the 4h performance cooldown; recording
+    // rate_limited would also freeze capacity for the whole rate-limit
+    // cooldown, which the design promises capacity is never subject to. The
+    // rejection is credited to performance and capacity goes size-only on the
+    // next round immediately; an actually capacity-caused throttle
+    // self-identifies when that size-only attempt records its own rate_limited.
+    const { service, expansions } = makeService({
+      diskSnapshot: { sizeGb: '200', provisionedIops: '3600', provisionedThroughput: '240' },
+      resizeError: GoogleError.parseHttpError({
+        error: { code: 429, message: 'rate', status: 'RESOURCE_EXHAUSTED' },
+      }),
+    })
+
+    await service.evaluateAndConfirm()
+
+    expect(expansions.update).toHaveBeenCalledWith(
+      'inserted-row',
+      expect.objectContaining({
+        status: RunnerDiskExpansionStatus.FAILED,
+        error: EXPANSION_ERROR.NOT_ACCEPTED,
+        performanceUpdated: true,
+      }),
+    )
+  })
 })

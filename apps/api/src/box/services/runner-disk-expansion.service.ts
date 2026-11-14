@@ -689,7 +689,16 @@ export class RunnerDiskExpansionService {
       // unclassified.
       const mapped = toExpansionClientError(e)
       const rateLimited = mapped instanceof GcpDiskRateLimitedError
-      const errorKey = rateLimited ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED
+      // A performance-carrying rejection is credited to the performance
+      // budget: performanceUpdated already opens the 4h performance cooldown,
+      // and recording rate_limited here would also freeze capacity for the
+      // whole rate-limit cooldown — the design promises capacity is never
+      // blocked by performance state. The 429 signal cannot tell which budget
+      // tripped, so if the throttle was actually capacity-caused, the next
+      // round's size-only attempt hits it again and records its own
+      // rate_limited then; the ambiguity costs at most one extra attempt.
+      const errorKey =
+        rateLimited && !performance?.fields ? EXPANSION_ERROR.RATE_LIMITED : EXPANSION_ERROR.NOT_ACCEPTED
       // Both exits mark performanceUpdated when the PATCH actually carried
       // performance fields: GCP budgets performance changes once per 4h per
       // disk and a rejected attempt also starts that cooldown, so the next
