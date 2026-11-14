@@ -298,6 +298,11 @@ export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 export BOXLITE_E2E_EXPANDED_DISK_RUNNER_ID=<runner-id>
 export BOXLITE_E2E_EXPANDED_DISK_TARGET_GIB=<new-size-in-gib>
 
+# The filestore case normally asks the API to auto-assign one of its
+# configured instances; exporting this pins one name for an API
+# compatibility check (see the Filestore section):
+# export FILESTORE_E2E_INSTANCE=other-instance-name
+
 # The private image case runs only with a real private image and its login,
 # written with its host and a tag or digest. The prefix defaults to the
 # image's namespace. It adds its own login and refuses to start while the
@@ -393,6 +398,50 @@ clear its domain binding. Inspect `boxlite domain ls` under the same profile;
 after confirming that the target is from the interrupted test, recover with
 `boxlite domain unbind "$BOXLITE_E2E_DOMAIN"` before rerunning. A binding that
 moves to another target during the test is left intact and reported as a failure.
+
+## Filestore volume cases
+
+`cases/test_filestore.py` covers **Filestore volumes** — Volume rows whose
+data directory lives on a Filestore NFS instance, created through
+`POST /volumes` with `storageBackend: "filestore"` and an optional
+`instance` field. They mount by box volume references that carry only
+`managed_volume`, exactly like bucket-backed volumes. Instances themselves are
+**ops-provisioned API env config** (`FILESTORE_INSTANCES`, a JSON object list
+of GCP instances the API resolves through Filestore), not API objects the suite
+can create.
+
+A module gate probes for an instance ONCE before any test runs (the config
+is deployment env with no listing API, so one volume create attempt is the
+only honest probe). The gate's outcome decides the whole file:
+
+- **Configured instance** → the probe box and volume are deleted and
+  four cases run: the unknown-instance refusal is pinned, the happy path
+  (write → stop → start → read back) runs on the proven instance, two boxes
+  prove data sharing (write in one, read in the other, read again after the
+  first is destroyed), and the lifecycle rules are pinned (in-use refusal →
+  409, free removal → 204, force re-delete → 204).
+- **No configured instance** → one warning —
+  `GCP FileStore instance=[auto-assignment] not available. Skip
+  test_filestore.py .` — and the entire module skips.
+
+An explicitly exported `FILESTORE_E2E_INSTANCE` only pins which name the
+gate probes; a missing or unknown instance skips the module the same way —
+the test instance can be recycled at any time, so its absence is never a
+broken run.
+
+Only unprovisioned-environment refusals skip: an instance that IS configured
+but unusable ("is not ready") fails the gate loudly instead, because that is a
+defect signal, not a precondition — keep the two classes apart when touching
+the gate's skip conditions.
+
+All cases skip when the API key cannot attach volumes (403 without
+READ_VOLUMES + WRITE_VOLUMES), like the managed-volume cases. None is marked
+`smoke` because a real GCP instance and mount are deployment dependencies, not
+unit-test fixtures.
+
+The gate normally omits `instance` and lets the API hash-assign one of its
+configured names; set `FILESTORE_E2E_INSTANCE` only when a run must exercise
+one particular instance name.
 
 ## The cloud legs (CI)
 
@@ -617,6 +666,7 @@ apps/e2e/
     ├── test_box_lifecycle_policy.py # auto_stop / auto_delete reaping
     ├── test_box_metrics.py          # Per-box metrics through the runner
     ├── test_volumes.py              # Managed volumes: CRUD + data reuse
+    ├── test_filestore.py            # Filestore volumes: loud refusal, data across stop/start, cross-box sharing, lifecycle
     ├── test_network_egress.py       # Outbound policy: block-all, allow_net
     ├── test_exec_*.py               # Exec stdout, attach, timeout
     ├── test_copy_roundtrip.py       # Copy in/out

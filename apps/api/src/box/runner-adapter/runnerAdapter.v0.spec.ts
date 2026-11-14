@@ -205,3 +205,33 @@ describe('RunnerAdapterV0 updateNetworkSettings', () => {
     expect(body).not.toHaveProperty('networkAllowList')
   })
 })
+
+describe('RunnerAdapterV0 filestore guard', () => {
+  const filestoreBox = {
+    id: 'box-fs',
+    image: 'base',
+    volumes: [
+      {
+        volumeId: 'volume-1',
+        mountPath: '/data',
+        filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+      },
+    ],
+  } as any
+
+  // Failing loudly is the point: stripping the reference would create a box
+  // whose volume silently never mounts on a v0 runner.
+  it('refuses createBox for a box referencing a Filestore volume', async () => {
+    const adapter = new RunnerAdapterV0()
+    await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
+
+    await expect(adapter.createBox(filestoreBox, 'base')).rejects.toThrow(/requires a v2 runner/)
+  })
+
+  it('refuses recoverBox for a box referencing a Filestore volume', async () => {
+    const adapter = new RunnerAdapterV0()
+    await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
+
+    await expect(adapter.recoverBox(filestoreBox)).rejects.toThrow(/requires a v2 runner/)
+  })
+})

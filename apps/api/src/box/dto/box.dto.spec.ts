@@ -21,6 +21,32 @@ describe('BoxDto public identity', () => {
   })
 })
 
+describe('BoxDto volume confidentiality', () => {
+  it('exposes only the logical Filestore instance, not its resolved NFS target', () => {
+    const box = new Box('us', 'filestore-box')
+    box.volumes = [
+      {
+        volumeId: 'volume-1',
+        mountPath: '/data',
+        filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+      },
+    ]
+
+    const dto = BoxDto.fromBox(box)
+
+    expect(dto.volumes).toEqual([
+      {
+        volumeId: 'volume-1',
+        mountPath: '/data',
+        subpath: undefined,
+        filestore: { instance: 'ml-scratch' },
+      },
+    ])
+    expect(JSON.stringify(dto.volumes)).not.toContain('10.0.0.7')
+    expect(JSON.stringify(dto.volumes)).not.toContain('/vol1')
+  })
+})
+
 describe('BoxDto main command exit code', () => {
   function box(): Box {
     const box = new Box('us', 'loader')

@@ -78,7 +78,7 @@ for (const home of ['aws', 'gcp'] as const) {
       stage: 'dev',
       home,
     })
-    assert.equal(environment.FILESTORE_SUPPORTED, 'false')
+    assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
     assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
     if (home === 'gcp') assert.equal(environment.FILESTORE_INSTANCES, instances)
     assert.equal(Object.hasOwn(secrets, 'FILESTORE_INSTANCES'), false)
@@ -106,7 +106,7 @@ for (const home of ['aws', 'gcp'] as const) {
       stage: 'dev',
       home,
     })
-    assert.equal(environment.FILESTORE_SUPPORTED, 'false')
+    assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
     assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
     if (home === 'gcp') {
       assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [
@@ -342,7 +342,7 @@ test('GCP materializes the default Filestore placement and derives its project',
     home: 'gcp',
   })
 
-  assert.equal(unset.environment.FILESTORE_SUPPORTED, 'false')
+  assert.equal(unset.environment.FILESTORE_SUPPORTED, 'true')
   assert.deepEqual(unset.filestoreProjects, ['boxlite-dev-project'])
   assert.deepEqual(JSON.parse(unset.environment.FILESTORE_INSTANCES), [
     { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
@@ -366,7 +366,7 @@ test('GCP materializes the default Filestore placement and derives its project',
     stage: 'dev',
     home: 'gcp',
   })
-  assert.equal(disabled.environment.FILESTORE_SUPPORTED, 'false')
+  assert.equal(disabled.environment.FILESTORE_SUPPORTED, 'true')
   assert.deepEqual(disabled.filestoreProjects, [])
   assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
 })

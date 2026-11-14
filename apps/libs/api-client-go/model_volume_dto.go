@@ -32,7 +32,7 @@ type VolumeDto struct {
 	// The storage backend that owns the volume
 	StorageBackend string `json:"storageBackend"`
 	// Filestore instance name; filestore volumes only
-	Instance *string `json:"instance,omitempty"`
+	Instance NullableString `json:"instance,omitempty"`
 	// Creation timestamp
 	CreatedAt string `json:"createdAt"`
 	// Last update timestamp
@@ -177,7 +177,7 @@ func (o *VolumeDto) GetStorageBackend() string {
 	return o.StorageBackend
 }
 
-// GetStorageBackendOk returns a tuple with the StorageBackend field value
+// GetStorageBackendOk returns a tuple with the StorageBackend field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *VolumeDto) GetStorageBackendOk() (*string, bool) {
 	if o == nil {
@@ -191,36 +191,47 @@ func (o *VolumeDto) SetStorageBackend(v string) {
 	o.StorageBackend = v
 }
 
-// GetInstance returns the Instance field value if set, zero value otherwise.
+// GetInstance returns the Instance field value if set, zero value otherwise (both if not set or set to explicit null).
 func (o *VolumeDto) GetInstance() string {
-	if o == nil || IsNil(o.Instance) {
+	if o == nil || IsNil(o.Instance.Get()) {
 		var ret string
 		return ret
 	}
-	return *o.Instance
+	return *o.Instance.Get()
 }
 
 // GetInstanceOk returns a tuple with the Instance field value if set, nil otherwise
 // and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *VolumeDto) GetInstanceOk() (*string, bool) {
-	if o == nil || IsNil(o.Instance) {
+	if o == nil {
 		return nil, false
 	}
-	return o.Instance, true
+	return o.Instance.Get(), o.Instance.IsSet()
 }
 
 // HasInstance returns a boolean if a field has been set.
 func (o *VolumeDto) HasInstance() bool {
-	if o != nil && !IsNil(o.Instance) {
+	if o != nil && o.Instance.IsSet() {
 		return true
 	}
 
 	return false
 }
 
-// SetInstance gets a reference to the given string and assigns it to the Instance field.
+// SetInstance gets a reference to the given NullableString and assigns it to the Instance field.
 func (o *VolumeDto) SetInstance(v string) {
-	o.Instance = &v
+	o.Instance.Set(&v)
+}
+
+// SetInstanceNil sets the value for Instance to be an explicit nil
+func (o *VolumeDto) SetInstanceNil() {
+	o.Instance.Set(nil)
+}
+
+// UnsetInstance ensures that no value is present for Instance, not even an explicit nil
+func (o *VolumeDto) UnsetInstance() {
+	o.Instance.Unset()
 }
 
 // GetCreatedAt returns the CreatedAt field value
@@ -354,8 +365,8 @@ func (o VolumeDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["state"] = o.State
 	toSerialize["storageBackend"] = o.StorageBackend
-	if !IsNil(o.Instance) {
-		toSerialize["instance"] = o.Instance
+	if o.Instance.IsSet() {
+		toSerialize["instance"] = o.Instance.Get()
 	}
 	toSerialize["createdAt"] = o.CreatedAt
 	toSerialize["updatedAt"] = o.UpdatedAt

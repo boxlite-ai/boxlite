@@ -7,6 +7,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **nestedVirtualizationEnabled** | **boolean** | Runner runtime authorizes nested virtualization | [optional] [default to undefined]
 **supportsPrivileged** | **boolean** | Runner preserves the guest privileged creation option | [optional] [default to undefined]
+**capabilities** | **string[]** | Capabilities the runner binary supports (e.g. "filestore"). Absent from runners predating capability reporting, which the API treats as supporting none of them | [optional] [default to undefined]
 **metrics** | [**RunnerHealthMetrics**](RunnerHealthMetrics.md) | Runner metrics | [optional] [default to undefined]
 **serviceHealth** | [**Array&lt;RunnerServiceHealth&gt;**](RunnerServiceHealth.md) | Health status of individual services on the runner | [optional] [default to undefined]
 **dataDiskRef** | [**RunnerDataDiskRef**](RunnerDataDiskRef.md) | Cloud identity of the runner data disk; absent when the runner has none (AWS or local) | [optional] [default to undefined]
@@ -23,6 +24,7 @@ import { RunnerHealthcheck } from './api';
 const instance: RunnerHealthcheck = {
     nestedVirtualizationEnabled,
     supportsPrivileged,
+    capabilities,
     metrics,
     serviceHealth,
     dataDiskRef,
