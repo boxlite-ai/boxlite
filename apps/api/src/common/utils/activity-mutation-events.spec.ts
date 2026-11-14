@@ -45,6 +45,7 @@ describe('Activity business events for mutations', () => {
       { assertOrganizationIsNotSuspended: jest.fn() } as never,
       { get: () => 'gcs' } as never,
       {} as never,
+      {} as never,
     )
     return { repository, query, service }
   }

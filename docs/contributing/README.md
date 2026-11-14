@@ -35,6 +35,8 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-13 · [Filestore lookup prerequisites](investigations/2026-11-13-filestore-lookup-prerequisites.md): automatic Filestore IAM and API prerequisites, cross-project configuration, and diagnostic error preservation.
+- 2026-11-13 · [Filestore instance discovery](investigations/2026-11-13-filestore-instance-discovery.md): API-resolved NFS targets, explicit backend selection, and deterministic instance assignment.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
 - 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.

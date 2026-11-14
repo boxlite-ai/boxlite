@@ -21,10 +21,12 @@ var _ MappedNullable = &BoxVolume{}
 
 // BoxVolume struct for BoxVolume
 type BoxVolume struct {
-	// The ID of the volume
+	// The ID of the volume (bucket-backed or Filestore-backed)
 	VolumeId string `json:"volumeId"`
 	// The mount path for the volume
 	MountPath string `json:"mountPath"`
+	// The Filestore instance reference; absent for bucket-backed volumes
+	Filestore *BoxVolumeFilestoreRef `json:"filestore,omitempty"`
 	// Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.
 	Subpath *string `json:"subpath,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -99,6 +101,38 @@ func (o *BoxVolume) SetMountPath(v string) {
 	o.MountPath = v
 }
 
+// GetFilestore returns the Filestore field value if set, zero value otherwise.
+func (o *BoxVolume) GetFilestore() BoxVolumeFilestoreRef {
+	if o == nil || IsNil(o.Filestore) {
+		var ret BoxVolumeFilestoreRef
+		return ret
+	}
+	return *o.Filestore
+}
+
+// GetFilestoreOk returns a tuple with the Filestore field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *BoxVolume) GetFilestoreOk() (*BoxVolumeFilestoreRef, bool) {
+	if o == nil || IsNil(o.Filestore) {
+		return nil, false
+	}
+	return o.Filestore, true
+}
+
+// HasFilestore returns a boolean if a field has been set.
+func (o *BoxVolume) HasFilestore() bool {
+	if o != nil && !IsNil(o.Filestore) {
+		return true
+	}
+
+	return false
+}
+
+// SetFilestore gets a reference to the given BoxVolumeFilestoreRef and assigns it to the Filestore field.
+func (o *BoxVolume) SetFilestore(v BoxVolumeFilestoreRef) {
+	o.Filestore = &v
+}
+
 // GetSubpath returns the Subpath field value if set, zero value otherwise.
 func (o *BoxVolume) GetSubpath() string {
 	if o == nil || IsNil(o.Subpath) {
@@ -143,6 +177,9 @@ func (o BoxVolume) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["volumeId"] = o.VolumeId
 	toSerialize["mountPath"] = o.MountPath
+	if !IsNil(o.Filestore) {
+		toSerialize["filestore"] = o.Filestore
+	}
 	if !IsNil(o.Subpath) {
 		toSerialize["subpath"] = o.Subpath
 	}
@@ -192,6 +229,7 @@ func (o *BoxVolume) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "volumeId")
 		delete(additionalProperties, "mountPath")
+		delete(additionalProperties, "filestore")
 		delete(additionalProperties, "subpath")
 		o.AdditionalProperties = additionalProperties
 	}
