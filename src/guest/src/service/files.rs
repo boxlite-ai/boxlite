@@ -6,6 +6,7 @@
 
 use crate::service::server::GuestServer;
 use crate::storage::attach::Attacher;
+use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
@@ -220,7 +221,13 @@ impl DestBefore {
     /// to the box user is a permission change nobody asked for. Files are
     /// always ours, existing or not: extraction just overwrote them.
     fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
-        let dest_is_dir = dest_root.is_dir();
+        let dest_is_dir = if self.dest_existed {
+            dest_root.is_dir()
+        } else {
+            dest_root
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir())
+        };
         let mut targets = self.created_dirs.clone();
         if !dest_is_dir || !self.dest_existed {
             targets.push(dest_root.to_path_buf());
@@ -484,10 +491,10 @@ impl Files for GuestServer {
         match source_is_dir {
             // Streaming path: unpack directly from the byte stream. The hint
             // carries the *source* shape, but the destination can still force
-            // directory mode — same as `detect_extraction_mode` in the legacy
-            // path. Fold the destination-side signals back in here so
-            // "single file → existing directory" keeps landing inside it
-            // (Unix cp semantics), not overwriting the directory path.
+            // directory mode — same as the staged path's `unpack`. Fold the
+            // destination-side signals back in here so "single file →
+            // existing directory" keeps landing inside it (Unix cp
+            // semantics), not overwriting the directory path.
             Some(source_is_dir) => {
                 let force_directory =
                     source_is_dir || dest_path.ends_with('/') || dest_root.is_dir();
@@ -528,7 +535,8 @@ impl Files for GuestServer {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                // An archive the landing refuses is the caller's to fix.
+                .map_err(BoxliteError::into_validation_status)?;
                 let boxlite_shared::tar::UnpackReport {
                     entry_paths,
                     preexisting_dirs,
@@ -599,15 +607,21 @@ impl Files for GuestServer {
                     .await
                     .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
 
+                // dest_path may have a trailing '/' indicating directory mode.
+                let force_directory = dest_path.ends_with('/');
+
                 // Names the archive carries, read once: the mount check below
                 // and the ownership hand-off afterwards must agree on what
                 // this copy wrote. Shared rather than cloned — an archive may
                 // carry a great many names.
-                let entry_paths: Arc<[PathBuf]> =
-                    boxlite_shared::tar::entry_paths(staged.path().to_path_buf())
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))?
-                        .into();
+                let entry_paths: Arc<[PathBuf]> = boxlite_shared::tar::entry_paths(
+                    staged.path().to_path_buf(),
+                    dest_root.clone(),
+                    force_directory,
+                )
+                .await
+                .map_err(BoxliteError::into_validation_status)?
+                .into();
 
                 // The root cleared the mount check, but individual entries may
                 // still land under one. Refuse before touching the rootfs — a
@@ -621,8 +635,6 @@ impl Files for GuestServer {
                 let before =
                     DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
 
-                // dest_path may have a trailing '/' indicating directory mode.
-                let force_directory = dest_path.ends_with('/');
                 boxlite_shared::tar::unpack(
                     staged.path().to_path_buf(),
                     dest_root.clone(),
@@ -633,7 +645,7 @@ impl Files for GuestServer {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .map_err(BoxliteError::into_validation_status)?;
 
                 // Hand the payload to the user the box actually runs as. tar
                 // preserves neither owner (it extracts as this process, root)
@@ -868,6 +880,7 @@ impl GuestServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite_shared::tar;
 
     /// `/etc` holds the `/etc/hosts` bind but is not itself a mount, so naming
     /// it is fine — only paths at or below a mount are unreachable.
@@ -1076,6 +1089,120 @@ mod tests {
         let created = before.created(&dest, &entries);
         assert!(!created.is_empty());
         assert!(created.iter().all(|target| target == &dest), "{created:?}");
+    }
+
+    async fn unpack_ownership_targets(
+        tar_path: &Path,
+        dest: &Path,
+        streamed: bool,
+    ) -> Vec<PathBuf> {
+        let opts = tar::UnpackContext {
+            overwrite: true,
+            mkdir_parents: true,
+            force_directory: false,
+        };
+        let (before, entries) = if streamed {
+            let dest_existed = dest.exists();
+            let created_dirs = missing_ancestors(dest);
+            let bytes = std::fs::read(tar_path).unwrap();
+            let report = tar::unpack_stream(
+                Box::pin(tokio_stream::iter([Ok(bytes)])),
+                dest.to_path_buf(),
+                opts,
+            )
+            .await
+            .unwrap();
+            let before = DestBefore::recorded(
+                created_dirs,
+                dest_existed,
+                report
+                    .preexisting_dirs
+                    .iter()
+                    .map(|rel| dest.join(rel))
+                    .collect(),
+            );
+            (before, report.entry_paths)
+        } else {
+            let entries = tar::entry_paths(tar_path.to_path_buf(), dest.to_path_buf(), false)
+                .await
+                .unwrap();
+            let before = DestBefore::sample_blocking(dest, &entries);
+            tar::unpack(tar_path.to_path_buf(), dest.to_path_buf(), opts)
+                .await
+                .unwrap();
+            (before, entries)
+        };
+        before.created(dest, &entries)
+    }
+
+    async fn assert_new_symlink_ownership(streamed: bool) {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir_all(rootfs.join("etc")).unwrap();
+        std::fs::write(rootfs.join("etc/passwd"), b"image-owned file").unwrap();
+        let source = tmp.path().join("passwd");
+        std::os::unix::fs::symlink("etc", &source).unwrap();
+        let archive = tmp.path().join("input.tar");
+        tar::pack(
+            source,
+            archive.clone(),
+            tar::PackContext {
+                follow_symlinks: false,
+                include_parent: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let dest = rootfs.join("link");
+        let targets = unpack_ownership_targets(&archive, &dest, streamed).await;
+        assert_eq!(std::fs::read_link(&dest).unwrap(), Path::new("etc"));
+        assert!(!targets.is_empty());
+        assert!(
+            targets.iter().all(|target| target == &dest),
+            "only the copied link may change owner, not link/passwd: {targets:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn staged_copy_owns_new_symlink_not_its_target() {
+        assert_new_symlink_ownership(false).await;
+    }
+
+    #[tokio::test]
+    async fn streamed_copy_owns_new_symlink_not_its_target() {
+        assert_new_symlink_ownership(true).await;
+    }
+
+    #[tokio::test]
+    async fn copy_into_existing_directory_symlink_owns_the_child() {
+        for streamed in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let rootfs = tmp.path().join("rootfs");
+            std::fs::create_dir_all(rootfs.join("usr/lib")).unwrap();
+            let dest = rootfs.join("lib");
+            std::os::unix::fs::symlink("usr/lib", &dest).unwrap();
+            let source = tmp.path().join("tool");
+            std::fs::write(&source, b"copied payload").unwrap();
+            let archive = tmp.path().join("input.tar");
+            tar::pack(
+                source,
+                archive.clone(),
+                tar::PackContext {
+                    follow_symlinks: false,
+                    include_parent: true,
+                },
+            )
+            .await
+            .unwrap();
+
+            let targets = unpack_ownership_targets(&archive, &dest, streamed).await;
+            assert_eq!(
+                std::fs::read(rootfs.join("usr/lib/tool")).unwrap(),
+                b"copied payload"
+            );
+            assert_eq!(targets, vec![dest.join("tool")]);
+        }
     }
 
     /// A symlinked directory the *image* shipped must still get the hand-off.
