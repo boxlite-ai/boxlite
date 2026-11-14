@@ -149,6 +149,7 @@ the server catalog on a REST runtime. Registry credentials are accessed through
 | `list` | One row per cached reference | Catalog alias and digest references |
 | `get` | Cached versions under the name | Catalog versions, aliases and history |
 | `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `delete` | Reclaims an untagged, box-independent local manifest | Unsupported |
 | `usage` | Unsupported | Image count, allowance and known bytes |
 | `create_alias` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
 | `delete_alias` | Unsupported | Removes only the named alias; absent names return NotFound |
@@ -179,6 +180,17 @@ images.create_alias(&detail.name, "verified", &detail.versions[0].digest).await?
 images.delete_alias(&detail.name, "verified").await?;
 let logins = images.registries()?.list().await?;
 ```
+
+`images.delete("1f8c03c8f5e5").await?` returns `ImageRemovalResult`
+with `image_id: String`, `removed_references: Vec<String>` and `reclaimed_bytes: u64`.
+`resolve_ids(&[String])` resolves a whole batch against one snapshot and returns one result per target.
+
+`AmbiguousImageId`, `ImageHasTags` and `ImageUsedByBoxes` distinguish deletion conflicts;
+dependency messages identify blocking tags or boxes.
+Unknown IDs return `NotFound`; busy cache consumers return `InvalidState` with retry guidance.
+A pulled `ImageObject` and detached extraction retain the home lock until released.
+Drop every clone before reopening the same home through another runtime.
+See [local removal semantics](../../concepts/images.md#removing-local-images) for retained data and byte accounting.
 
 ### RegistryHandle
 

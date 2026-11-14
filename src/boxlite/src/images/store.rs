@@ -132,6 +132,11 @@ impl ImageStore {
         Arc::clone(&self.inner.read().await.storage)
     }
 
+    pub(super) async fn removal_cache(&self) -> super::removal::RemovalCache {
+        let inner = self.inner.read().await;
+        super::removal::RemovalCache::new(inner.index.clone(), Arc::clone(&inner.storage))
+    }
+
     /// Compute cache directory for a local OCI bundle.
     ///
     /// Returns an isolated cache path based on bundle path and manifest digest.
@@ -1474,7 +1479,10 @@ fn build_platform_ref(reference: &Reference, platform_digest: &str) -> String {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    mod fixtures;
     use crate::db::Database;
+    pub(crate) use fixtures::seed_removable_build;
     use std::path::Path;
 
     fn test_registry_password() -> String {

@@ -4,7 +4,7 @@
 //! These disks contain only image content (no guest binary).
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -62,6 +62,51 @@ pub struct ImageDiskManager {
 }
 
 impl ImageDiskManager {
+    pub(super) fn cache_key<'a>(layers: impl IntoIterator<Item = &'a str>) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        for layer in layers {
+            hasher.update(layer.as_bytes());
+        }
+        format!("sha256:{}", hex::encode(hasher.finalize()))
+    }
+
+    /// Only complete cache filenames for this exact ordered layer key.
+    pub(super) fn cache_paths(cache_dir: &Path, layers: &[String]) -> BoxliteResult<Vec<PathBuf>> {
+        let prefix = format!(
+            "{}-r",
+            Self::cache_key(layers.iter().map(String::as_str)).replace(':', "-")
+        );
+        let entries = match fs::read_dir(cache_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(BoxliteError::Storage(format!(
+                    "list image disks {}: {error}",
+                    cache_dir.display()
+                )));
+            }
+        };
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| BoxliteError::Storage(format!("list image disks: {error}")))?;
+            let name = entry.file_name();
+            if name
+                .to_str()
+                .and_then(|name| name.strip_prefix(&prefix))
+                .and_then(|suffix| suffix.strip_suffix(".ext4"))
+                .is_some_and(|reserve| {
+                    !reserve.is_empty()
+                        && reserve.bytes().all(|b| b.is_ascii_digit())
+                        && reserve.parse::<u64>().is_ok()
+                })
+            {
+                paths.push(entry.path());
+            }
+        }
+        Ok(paths)
+    }
     pub fn new(cache_dir: PathBuf, temp_dir: PathBuf, reserve_bytes: u64) -> Self {
         Self {
             cache_dir,

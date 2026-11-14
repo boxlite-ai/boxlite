@@ -1333,6 +1333,9 @@ impl BoxImpl {
         use super::BoxBuilder;
         use std::sync::Arc;
 
+        // Includes disk construction and resolved-image persistence. Pulls
+        // inside the pipeline can take nested readers; deletion never waits.
+        let _cache_lease = self.runtime.image_manager.cache_lease().await;
         let state = self.state.read().clone();
         if !allow_start && state.status != BoxStatus::Running {
             return Err(BoxliteError::InvalidState(format!(

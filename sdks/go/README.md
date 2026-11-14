@@ -183,6 +183,22 @@ must explicitly remove it when it is no longer needed.
 
 ### Runtime Image Management
 
+To reclaim an untagged local image, call `images.Delete(ctx, "1f8c03c8f5e5")`.
+The returned `*ImageRemovalResult` contains `ImageID string`, `RemovedReferences []string`, and `ReclaimedBytes uint64`.
+The existing name-based `Remove` keeps its behavior.
+
+```go
+removed, err := images.Delete(ctx, "1f8c03c8f5e5")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(removed.ImageID, removed.RemovedReferences, removed.ReclaimedBytes)
+```
+
+Inspect `*boxlite.Error.Code` for `ErrAmbiguousImageID`, `ErrImageHasTags`,
+`ErrImageUsedByBoxes`, `ErrNotFound`, `ErrInvalidState` (busy), or `ErrUnsupported` (REST).
+See [local removal semantics and limits](../../docs/concepts/images.md#removing-local-images).
+
 `rt.Images()` holds the images a runtime can boot from: the local cache on a
 runtime from `NewRuntime`, the server's catalog on one from `NewRest`. `List`,
 `Get` and `Remove` run unchanged against either.
@@ -232,6 +248,7 @@ fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 | `List` | One row per cached reference | Catalog alias and digest references |
 | `Get` | The cache entries under the name | The catalog entry with its versions |
 | `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
+| `Delete` | Reclaims eligible local cache data | `ErrUnsupported` |
 | `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
 | `CreateAlias` | `ErrUnsupported` | Creates a new alias; existing names conflict |
 | `DeleteAlias` | `ErrUnsupported` | Removes only the named alias |
@@ -451,15 +468,31 @@ make dev:go
 # Run hosted unit and REST tests
 make test:unit:go
 
-# Run native archive import/export tests on a VM-capable host
+# Run native archive and image cache tests on a VM-capable host
 make test:integration:go
+
+# Run only image cache tests, including their coverage report
+make coverage:go:images
 ```
 
-Native archive import/export tests use the production runtime constructor and
+Native archive and image cache tests use the production runtime constructor and
 require a VM-capable host, even when the test does not start a VM.
 The Linux native-binding coverage job runs the no-VM import/export cases through
 `make coverage:go:checkpoint` and flushes the instrumented native counters before
 Go exits. Full VM archive round-trips remain in the integration suite.
+
+Hosted deletion tests check REST refusal, closed handles and callback receiver ownership,
+including missing, abandoned, and incompatible receivers.
+
+`integration/images` pulls from a loopback OCI registry and checks tag refusal,
+invalid IDs, deletion results, and the remaining cache through the public SDK.
+Hosted Go unit jobs exclude this package through the `boxlite_integration` tag.
+The Linux native-binding job runs it after enabling KVM access; initialization
+or deletion failures fail that job rather than skipping the test.
+
+With `BOXLITE_DEPS_STUB=1`, image coverage builds the C SDK through `dev:c`;
+the stub omits gvproxy's embedded Go runtime and needs no `llvm-objcopy`.
+Regular builds use `dev:go` to process the embedded Go runtime symbols.
 
 ## License
 

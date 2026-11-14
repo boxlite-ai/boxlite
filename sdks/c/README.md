@@ -46,6 +46,13 @@ export/import remains available.
 `boxlite_box_name` returns an owned name string, released with
 `boxlite_free_string`, or null for an unnamed Box.
 
+## Local image removal
+
+Local cache removal uses `boxlite_image_delete` with a full manifest ID or unique hex prefix.
+It refuses tagged or box-dependent images and returns an owned `CImageRemovalResult` through the drain-thread callback.
+Release it with `boxlite_free_image_removal_result`.
+See the [C image reference](../../docs/reference/c/README.md#images) for result fields, error codes, an example and ownership rules.
+
 ## Table of Contents
 
 - [Overview](#overview)

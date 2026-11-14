@@ -63,6 +63,12 @@ typedef enum BoxliteErrorCode {
   // Interactive execution session was reaped server-side after disconnect.
   // Reattach is no longer possible — start a new exec.
   SessionReaped = 21,
+  // A local image ID prefix matches more than one manifest.
+  AmbiguousImageId = 22,
+  // Tags still reference the local image.
+  ImageHasTags = 23,
+  // Existing boxes still depend on the local image.
+  ImageUsedByBoxes = 24,
 } BoxliteErrorCode;
 
 // Admission modes; zero-initialized options select queue.
@@ -536,6 +542,19 @@ typedef void (*CBoxImageGetCb)(struct CImageDetail*, CBoxliteError*, void*);
 // Image remove completion. The error pointer is borrowed for callback
 // dispatch only and no result allocation is produced.
 typedef void (*CBoxImageRemoveCb)(CBoxliteError*, void*);
+
+// Owned result of local image removal. Release it once with
+// `boxlite_free_image_removal_result`, including its nested strings.
+typedef struct CImageRemovalResult {
+  char *image_id;
+  char **removed_references;
+  int removed_references_count;
+  uint64_t reclaimed_bytes;
+} CImageRemovalResult;
+
+// Local image deletion completion. The callback owns a successful result,
+// freed with `boxlite_free_image_removal_result`. The error is borrowed.
+typedef void (*CBoxImageDeleteCb)(struct CImageRemovalResult*, CBoxliteError*, void*);
 
 // How much of its image allowance a REST runtime's caller holds.
 //
@@ -1520,6 +1539,19 @@ enum BoxliteErrorCode boxlite_image_remove(CBoxliteImageHandle *handle,
                                            void *user_data,
                                            CBoxliteError *out_error);
 
+// Delete an untagged local image by full manifest ID or unique hex prefix.
+// This posts a completion event; drain the runtime to dispatch it. On success
+// the callback owns the result. REST runtimes return Unsupported.
+//
+// # Safety
+// As for `boxlite_image_get`; `image_id` must point to a NUL-terminated UTF-8
+// string for the duration of this call. The callback must not be null.
+enum BoxliteErrorCode boxlite_image_delete(CBoxliteImageHandle *handle,
+                                           const char *image_id,
+                                           CBoxImageDeleteCb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
+
 // Queue a read of how many images are held against the allowance, with the
 // same dispatch contract as [`boxlite_image_get`]. REST runtimes only: on a
 // local runtime the callback receives `Unsupported`.
@@ -1588,6 +1620,13 @@ void boxlite_image_free(CBoxliteImageHandle *handle);
 void boxlite_free_image_info_list(struct CImageInfoList *list);
 
 void boxlite_free_image_pull_result(struct CImagePullResult *result);
+
+// Release an image-removal result, its strings and reference array.
+//
+// # Safety
+// `result` must be null or an owned result from the removal callback,
+// and must not have been freed before.
+void boxlite_free_image_removal_result(struct CImageRemovalResult *result);
 
 // Free a `CImageDetail` with its aliases, versions, and their strings.
 //
