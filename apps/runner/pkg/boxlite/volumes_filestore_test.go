@@ -6,6 +6,7 @@ package boxlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -119,6 +120,27 @@ func TestNfsMountCmdIsNotSystemdWrappedAndIsContextBound(t *testing.T) {
 	if cmd.WaitDelay != volumeMountWaitDelay {
 		t.Errorf("nfs mount command WaitDelay = %s, want %s (a hard mount parks mount(8) in D state; the kill lands late)",
 			cmd.WaitDelay, volumeMountWaitDelay)
+	}
+}
+
+func TestFilestoreMountFailureCarriesBoxAndVolumeContext(t *testing.T) {
+	c := filestoreTestClient(t)
+	useVolumeMountBasePath(t, t.TempDir())
+	c.probeRunner = func(context.Context, string) (bool, error) { return false, nil }
+	c.mountRunner = func(*exec.Cmd) error { return errors.New("exit status 32") }
+
+	_, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{{
+		VolumeId: "vol1",
+		MountPath: "/data",
+		Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+	}})
+	if err == nil {
+		t.Fatal("expected the mount failure")
+	}
+	for _, want := range []string{"FILESTORE_VOLUME_PREPARE_FAILED", "box1", "vol1", "ml-scratch", "exit status 32"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("mount error %q does not contain %q", err, want)
+		}
 	}
 }
 

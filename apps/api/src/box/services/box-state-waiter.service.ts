@@ -5,9 +5,8 @@
  */
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
-import { Injectable, Logger, OnModuleDestroy, RequestTimeoutException } from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, RequestTimeoutException } from '@nestjs/common'
 import Redis from 'ioredis'
-import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { BoxDto } from '../dto/box.dto'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
@@ -70,7 +69,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     const current = await this.boxService.findOneByIdOrName(boxId, organizationId)
     if (current.state === targetState) return this.boxService.toBoxDto(current)
     await this.ensureSubscribed()
-    this.assertNotFailed(current.state, current.errorReason)
+    this.assertNotFailed(current.id, current.state, current.errorReason)
 
     return new Promise<BoxDto>((resolve, reject) => {
       let finished = false
@@ -104,7 +103,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
           return
         }
         try {
-          this.assertNotFailed(event.box.state, event.box.errorReason)
+          this.assertNotFailed(event.box.id, event.box.state, event.box.errorReason)
         } catch (error) {
           fail(error)
         }
@@ -120,7 +119,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
         .findOneByIdOrName(boxId, organizationId)
         .then((box) => {
           if (box.state === targetState) return finish(box)
-          this.assertNotFailed(box.state, box.errorReason)
+          this.assertNotFailed(box.id, box.state, box.errorReason)
         })
         .catch(fail)
 
@@ -166,12 +165,16 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     return new RequestTimeoutException({ message, boxId })
   }
 
-  private assertNotFailed(state: BoxState, errorReason?: string | null) {
+  private assertNotFailed(boxId: string, state: BoxState, errorReason?: string | null) {
     if (state === BoxState.ERROR) {
-      throw new BadRequestError(`Box state transition failed: ${errorReason || 'Unknown error'}`)
+      throw new BadRequestException({
+        message: `Box state transition failed: ${errorReason || 'Unknown error'}`,
+        code: 'BOX_STATE_TRANSITION_FAILED',
+        boxId,
+      })
     }
     if (state === BoxState.DESTROYED || state === BoxState.DESTROYING) {
-      throw new BadRequestError('Box has been destroyed and cannot be resumed')
+      throw new BadRequestException('Box has been destroyed and cannot be resumed')
     }
   }
 }

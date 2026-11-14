@@ -609,7 +609,19 @@ upgrade a filestore volume can only land on an upgraded runner. Upgrade order
 that keeps filestore creates working: runners first, API second — an upgraded
 runner with the old API is idle for filestore (the old API never creates
 filestore volumes), while the reverse order would put filestore creates on
-runners the API does not yet trust.
+runners the API does not yet trust. The dispatch check re-reads the runner row
+instead of trusting an API replica's lookup cache. A rejection logs the Box ID,
+runner ID, runner version, declared capabilities and
+`FILESTORE_CAPABILITY_MISSING`; the create response carries the reason, Box ID
+and `BOX_STATE_TRANSITION_FAILED`, which the Dashboard displays with the HTTP
+status. The reason also reports whether the runner row exists, its state,
+protocol and binary versions, observed capabilities, last healthcheck time and
+age, and confirms that no create job was dispatched. A runner-side prepare
+failure adds `FILESTORE_VOLUME_PREPARE_FAILED`,
+Box/Volume/instance IDs and, when available, the mount process exit code. API
+job-insert failures similarly log `job.create.failed` with the job, runner,
+resource and database error code. Logs do not include Box environment
+variables, secrets, authorization headers or job payloads.
 
 ### Troubleshooting: box started but its filestore mountpoint is empty
 
@@ -637,11 +649,9 @@ the configuration.
   `nfs-common` on fresh hosts automatically; hosts provisioned before the
   feature landed, or deployments that bypass the boot scripts, still need it
   by hand.
-- **Deploy order: runners before the API.** An API upgraded ahead of its
-  runners can dispatch filestore volumes to a runner that predates the
-  feature; the old binary treats the reference as a bucket id and fails the
-  create with a confusing mount error. An API older than its runners simply
-  dispatches no filestore volumes at all, which is harmless.
+- **Deploy order: runners before the API.** The capability check refuses an
+  old runner before dispatch. An API older than its runners simply dispatches
+  no filestore volumes at all, which is harmless.
 
 ## Background services
 

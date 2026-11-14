@@ -46,6 +46,38 @@ describe('FilestoreInstanceResolver', () => {
     await expect(resolver.resolve('other', 'request')).rejects.toThrow("unknown Filestore instance 'other'")
   })
 
+  it('logs unknown and unusable instances with stable error codes', async () => {
+    const logError = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      const unknown = createResolver(jest.fn()).resolver
+      await expect(unknown.resolve('other', 'configured')).rejects.toThrow('unknown Filestore instance')
+      expect(logError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'filestore_resolution_failed',
+          code: 'FILESTORE_INSTANCE_UNKNOWN',
+          instanceName: 'other',
+          source: 'configured',
+        }),
+        'Filestore resolution failed',
+      )
+
+      const notReady = createResolver(jest.fn().mockResolvedValue([{ ...readyInstance, state: 1 }])).resolver
+      await expect(notReady.resolve('ml-scratch', 'configured')).rejects.toThrow('is not ready')
+      expect(logError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'filestore_resolution_failed',
+          code: 'FILESTORE_INSTANCE_UNUSABLE',
+          instanceName: 'ml-scratch',
+          source: 'configured',
+        }),
+        'Filestore resolution failed',
+      )
+    } finally {
+      logError.mockRestore()
+    }
+  })
+
   it('maps the instance response to the NFS mount target', async () => {
     const getInstance = jest.fn().mockResolvedValue([readyInstance])
     const { resolver } = createResolver(getInstance)

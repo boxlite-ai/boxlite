@@ -366,7 +366,8 @@ export class ApiClient {
       accessToken: accessToken,
     })
 
-    const axiosInstance = axios.create({ headers: activityHeaders })
+    const axiosInstance = axios.create({ baseURL: config.apiUrl, headers: activityHeaders })
+    axiosInstance.defaults.headers.common.Authorization = `Bearer ${accessToken}`
     axiosInstance.interceptors.request.use((request) => {
       request.headers?.delete?.('User-Agent')
       if (request.headers) {
@@ -404,12 +405,21 @@ export class ApiClient {
         // message is only for display. A rejection the API describes (say, an
         // unverified email) must not be flattened into an anonymous error here.
         const responseCode = error?.response?.data?.code
+        const responseBoxId = error?.response?.data?.boxId
+        const responseStatus = error?.response?.data?.statusCode
         const retryAfter = Number(error?.response?.headers?.['retry-after'])
 
         throw BoxliteError.fromString(String(errorMessage), {
           cause: error instanceof Error ? error : undefined,
           code: typeof responseCode === 'string' ? responseCode : undefined,
           retryAfterSeconds: Number.isSafeInteger(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+          statusCode:
+            typeof responseStatus === 'number'
+              ? responseStatus
+              : typeof error?.response?.status === 'number'
+                ? error.response.status
+                : undefined,
+          boxId: typeof responseBoxId === 'string' && responseBoxId.length > 0 ? responseBoxId : undefined,
         })
       },
     )
@@ -602,6 +612,7 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
+    this.http.defaults.headers.common.Authorization = `Bearer ${accessToken}`
   }
 
   public get boxApi() {
@@ -682,12 +693,6 @@ export class ApiClient {
   }
 
   public get axiosInstance() {
-    return axios.create({
-      baseURL: this.config.basePath,
-      headers: {
-        ...activityHeaders,
-        Authorization: `Bearer ${this.config.accessToken}`,
-      },
-    })
+    return this.http
   }
 }

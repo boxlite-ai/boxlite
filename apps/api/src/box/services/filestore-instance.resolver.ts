@@ -64,7 +64,9 @@ export class FilestoreInstanceResolver {
     const config = this.configService.getOrThrow('volume.filestoreInstances')
     const configured = config.instances.find((entry) => entry.instance === instanceName)
     if (!configured) {
-      throw new BadRequestError(`unknown Filestore instance '${instanceName}'`)
+      const reason = `unknown Filestore instance '${instanceName}'`
+      this.logResolutionFailure('FILESTORE_INSTANCE_UNKNOWN', instanceName, source, undefined, reason)
+      throw new BadRequestError(reason)
     }
 
     const resourceName = `projects/${configured.projectId}/locations/${configured.zone}/instances/${instanceName}`
@@ -125,7 +127,7 @@ export class FilestoreInstanceResolver {
     resourceName: string,
   ): ResolvedFilestoreInstance {
     if (instance.state !== undefined && instance.state !== null && !this.isReadyState(instance.state)) {
-      throw this.notUsable(source, `${resourceName} is not ready`)
+      throw this.notUsable(source, resourceName, 'is not ready')
     }
 
     const addresses = (instance.networks ?? [])
@@ -136,15 +138,41 @@ export class FilestoreInstanceResolver {
       .filter((name): name is string => Boolean(name))
 
     if (addresses.length !== 1 || shares.length !== 1) {
-      throw this.notUsable(source, `${resourceName} does not expose exactly one IPv4 address and one file share`)
+      throw this.notUsable(source, resourceName, 'does not expose exactly one IPv4 address and one file share')
     }
 
     return { server: addresses[0], export: `/${shares[0]}` }
   }
 
-  private notUsable(source: FilestoreLookupSource, reason: string): ServiceUnavailableException | BadRequestError {
-    const message = `Filestore instance ${reason}`
+  private notUsable(
+    source: FilestoreLookupSource,
+    resourceName: string,
+    reason: string,
+  ): ServiceUnavailableException | BadRequestError {
+    const message = `Filestore instance ${resourceName} ${reason}`
+    const instanceName = resourceName.split('/').at(-1) ?? resourceName
+    this.logResolutionFailure('FILESTORE_INSTANCE_UNUSABLE', instanceName, source, resourceName, message)
     return source === 'request' ? new BadRequestError(message) : new ServiceUnavailableException(message)
+  }
+
+  private logResolutionFailure(
+    code: string,
+    instanceName: string,
+    source: FilestoreLookupSource,
+    resourceName: string | undefined,
+    reason: string,
+  ): void {
+    this.logger.error(
+      {
+        event: 'filestore_resolution_failed',
+        code,
+        instanceName,
+        source,
+        ...(resourceName ? { resourceName } : {}),
+        reason,
+      },
+      'Filestore resolution failed',
+    )
   }
 
   // The GCP client types `state` as `State | keyof typeof State`: protobuf

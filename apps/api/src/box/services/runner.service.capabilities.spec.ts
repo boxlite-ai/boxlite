@@ -23,6 +23,16 @@ describe('Runner capability declarations', () => {
       await service.updateRunnerHealth('runner', undefined, undefined, undefined, undefined, undefined, 'dev', false, {
         capabilities,
       })
+      expect((service as any).logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'runner.health.persisted',
+          runnerId: 'runner',
+          appVersion: 'dev',
+          capabilities: capabilities ?? [],
+          infoFailed: false,
+        }),
+        'Runner health persisted',
+      )
       expect(write).toHaveBeenCalledWith(
         'runner',
         expect.objectContaining({

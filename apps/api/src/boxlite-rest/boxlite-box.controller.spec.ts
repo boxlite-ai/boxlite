@@ -328,6 +328,47 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   })
 })
 
+describe('BoxliteBoxController creation diagnostics', () => {
+  it('logs non-sensitive context when an admitted Box fails while starting', async () => {
+    const failure = new BadRequestException({
+      message: 'runner has not declared filestore',
+      code: 'BOX_STATE_TRANSITION_FAILED',
+      boxId: 'box-1',
+    })
+    const boxService = {
+      create: jest.fn().mockResolvedValue({ id: 'box-1', state: 'creating' }),
+    }
+    const boxStateWaiter = { waitForStarted: jest.fn().mockRejectedValue(failure) }
+    const controller = new BoxliteBoxController(
+      boxService as any,
+      boxStateWaiter as any,
+      { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) } as any,
+      {} as any,
+    )
+    const log = jest.spyOn((controller as any).logger, 'error').mockImplementation(() => undefined)
+    const auth = { role: 'admin', organization: { id: 'org-1' }, organizationId: 'org-1' } as any
+    const dto = { image: 'alpine:latest', volumes: [{ managed_volume: 'vol-1', guest_path: '/data' }] } as any
+
+    await expect(controller.createBox(auth, dto, Context.user())).rejects.toBe(failure)
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'box.create.failed',
+        boxId: 'box-1',
+        organizationId: 'org-1',
+        statusCode: 400,
+        code: 'BOX_STATE_TRANSITION_FAILED',
+        volumeCount: 1,
+        volumeIds: ['vol-1'],
+        mountPaths: ['/data'],
+        err: failure,
+      }),
+      'Box creation failed',
+    )
+    expect(log.mock.calls[0][0]).not.toHaveProperty('image')
+    expect(log.mock.calls[0][0]).not.toHaveProperty('env')
+  })
+})
+
 // The audit log for a visibility change must name the box and the mode asked
 // for, and nothing else from the body. Driven through the real interceptor
 // with the handler's own @Audit metadata, so a wrong extractor fails here.

@@ -157,7 +157,23 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 		if vol.Filestore != nil {
 			mount, err := c.filestoreVolumeMount(ctx, boxID, vol, filestoreEnsured)
 			if err != nil {
-				return nil, err
+				attrs := []any{
+					"code", "FILESTORE_VOLUME_PREPARE_FAILED",
+					"boxId", boxID,
+					"volumeId", vol.VolumeId,
+					"instance", vol.Filestore.Instance,
+					"mountPath", vol.MountPath,
+					"error", err,
+				}
+				var exitError *exec.ExitError
+				if errors.As(err, &exitError) {
+					attrs = append(attrs, "exitCode", exitError.ExitCode())
+				}
+				c.logger.ErrorContext(ctx, "Failed to prepare Filestore volume", attrs...)
+				return nil, fmt.Errorf(
+					"FILESTORE_VOLUME_PREPARE_FAILED: failed to prepare filestore volume %s on instance %s for box %s: %w",
+					vol.VolumeId, vol.Filestore.Instance, boxID, err,
+				)
 			}
 			volumeMounts = append(volumeMounts, mount)
 			continue

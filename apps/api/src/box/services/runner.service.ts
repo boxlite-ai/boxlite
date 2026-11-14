@@ -488,7 +488,16 @@ export class RunnerService {
     if (!(await this.updateRunnerUnlessDecommissioned(runnerId, updateData))) {
       return
     }
-    this.logger.debug(`Updated health for runner ${runnerId}`)
+    this.logger.debug(
+      {
+        event: 'runner.health.persisted',
+        runnerId,
+        appVersion: appVersion ?? runner.appVersion,
+        capabilities: context?.capabilities ?? [],
+        infoFailed: context?.infoFailed === true,
+      },
+      'Runner health persisted',
+    )
 
     this.eventEmitter.emit(
       RunnerEvents.STATE_UPDATED,

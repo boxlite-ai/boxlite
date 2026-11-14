@@ -102,6 +102,40 @@ async function makeClient(
   return new ApiClient(config, 'tok', onUnauthorized)
 }
 
+describe('ApiClient Box API errors', () => {
+  it('uses the current access token for Box API requests', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 201, { box_id: 'box-1' }, requests)
+    api.setAccessToken('renewed-token')
+    const cloud = await import('../lib/cloudBox')
+
+    await cloud.createBoxViaBoxApi(api, 'org-1', {})
+
+    expect(requests[0].headers.Authorization).toBe('Bearer renewed-token')
+  })
+
+  it('preserves the server reason, status, code and Box ID for create-box failures', async () => {
+    const api = await makeClient(vi.fn(), 400, {
+      message: 'runner has not declared filestore',
+      statusCode: 400,
+      code: 'BOX_STATE_TRANSITION_FAILED',
+      boxId: 'box-1',
+    })
+    const cloud = await import('../lib/cloudBox')
+    const { BoxliteError } = await import('./errors')
+
+    const error = await cloud.createBoxViaBoxApi(api, 'org-1', {}).catch((failure) => failure)
+
+    expect(error).toBeInstanceOf(BoxliteError)
+    expect(error).toMatchObject({
+      message: 'runner has not declared filestore',
+      statusCode: 400,
+      code: 'BOX_STATE_TRANSITION_FAILED',
+      boxId: 'box-1',
+    })
+  })
+})
+
 describe('ApiClient registration deadline', () => {
   let api: import('./apiClient').ApiClient
   let send: ReturnType<typeof vi.fn<import('axios').AxiosAdapter>>
@@ -540,7 +574,8 @@ describe('ApiClient terminal session', () => {
     const url = await api.terminalAttachUrl('org-1', 'box-1', 'exec-1')
 
     expect(requests[0].method).toBe('post')
-    expect(requests[0].url).toBe('http://api.test/api/box/box-1/attach-tickets')
+    expect(requests[0].url).toBe('/box/box-1/attach-tickets')
+    expect(requests[0].baseURL).toBe('http://api.test/api')
     expect(JSON.parse(requests[0].data ?? '')).toEqual({ executionId: 'exec-1' })
     expect(url).toBe('ws://api.test/api/v1/org-1/boxes/box-1/executions/exec-1/attach?ticket=tkt-1')
     expect(url).not.toContain('tok')

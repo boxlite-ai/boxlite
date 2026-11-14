@@ -14,10 +14,18 @@ interface HandleApiErrorOptions {
 
 export function handleApiError(error: unknown, message: string, options?: HandleApiErrorOptions) {
   const isBoxliteError = error instanceof BoxliteError
+  const description = isBoxliteError
+    ? [
+        error.message,
+        ...(error.statusCode ? [`HTTP ${error.statusCode}`] : []),
+        ...(error.code ? [`Code: ${error.code}`] : []),
+        ...(error.boxId ? [`Box ID: ${error.boxId}`] : []),
+      ].join(' · ')
+    : 'Please try again or check the console for more details'
 
   toast.error(message, {
     ...(options?.toastId ? { id: options.toastId } : {}),
-    description: isBoxliteError ? error.message : 'Please try again or check the console for more details',
+    description,
     action: options?.action,
   })
 
