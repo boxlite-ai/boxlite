@@ -29,38 +29,49 @@ export default function EmailVerify() {
   const { onSelectOrganization } = useSelectedOrganization()
   const { billingApi } = useApi()
 
-  const redirectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-
-  // Unmount only, which is why it is its own effect. The verify effect below re-runs whenever
-  // onSelectOrganization changes identity — and selecting an organization changes it, so
-  // clearing the timer in that effect's cleanup would cancel the redirect on the success path.
-  useEffect(() => () => clearTimeout(redirectTimer.current), [])
+  const attempts = useRef(new Map<string, Promise<boolean>>())
+  const verified = useRef(false)
 
   useEffect(() => {
-    const verifyEmail = async () => {
-      if (!organizationId || !email || !token) {
-        setVerificationStatus('error')
-        setErrorMessage('Invalid verification link')
-        return
-      }
-
-      try {
-        await billingApi.verifyOrganizationEmail(organizationId, email, token)
-        setVerificationStatus('success')
-        onSelectOrganization(organizationId)
-        // This effect re-runs whenever a dependency's identity changes, and each run reaches
-        // here, so drop the previous timer rather than orphaning it.
-        clearTimeout(redirectTimer.current)
-        redirectTimer.current = setTimeout(() => {
-          navigate(RoutePath.BILLING)
-        }, 1000)
-      } catch (error) {
-        setVerificationStatus('error')
-        setErrorMessage('An error occurred while verifying your email')
-      }
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (!organizationId || !email || !token) {
+      setVerificationStatus('error')
+      setErrorMessage('Invalid verification link')
+      return
     }
-
-    verifyEmail()
+    const key = JSON.stringify([organizationId, email, token])
+    // Share the one-time verification across effect replay and selection updates.
+    if (!attempts.current.has(key)) {
+      attempts.current.set(
+        key,
+        billingApi.verifyOrganizationEmail(organizationId, email, token).then(() => {
+          verified.current = true
+          return onSelectOrganization(organizationId)
+        }),
+      )
+    }
+    void attempts.current
+      .get(key)!
+      .then((selected) => {
+        if (cancelled) return
+        if (!selected) throw new Error('Organization selection failed')
+        setVerificationStatus('success')
+        timer = setTimeout(() => navigate(RoutePath.BILLING), 1000)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setVerificationStatus('error')
+        setErrorMessage(
+          verified.current
+            ? 'Email verified, but we could not open the organization. Continue to billing and select your organization.'
+            : 'An error occurred while verifying your email',
+        )
+      })
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [organizationId, email, token, billingApi, navigate, onSelectOrganization])
 
   return (

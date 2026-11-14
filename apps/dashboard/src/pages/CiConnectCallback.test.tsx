@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   completeCiConnect: vi.fn(async () => ({ status: 'connected', listener_status: 'provisioning' })),
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => api }))
+vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub: 'callback-user' } } }) }))
 it('CI callback performs one authenticated completion under real React StrictMode', async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const id = '12345678-1234-4234-8234-123456789abc',
@@ -43,6 +44,10 @@ it('CI callback performs one authenticated completion under real React StrictMod
     )
     expect(document.body.textContent).toContain('GitHub connected. Listener setup: provisioning.')
     expect(api.completeCiConnect).toHaveBeenCalledExactlyOnceWith(organization, id, { code: 'private-code', state })
+    expect(JSON.parse(sessionStorage.getItem('boxlite-organization-session') || 'null')).toEqual({
+      userId: 'callback-user',
+      organizationId: organization,
+    })
     expect(window.location.search).toBe('')
     expect(window.sessionStorage.getItem('boxlite.ci.connect')).toBeNull()
   } finally {
@@ -118,7 +123,8 @@ it.each(['modifier', 'storage'])('handles callback recovery: %s', async (scenari
   const root = createRoot(host)
   const original = Storage.prototype.setItem
   const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
-    if (scenario === 'storage' && this === localStorage) throw new DOMException('full', 'QuotaExceededError')
+    if (scenario === 'storage' && this === sessionStorage && key === 'boxlite-organization-session')
+      throw new DOMException('full', 'QuotaExceededError')
     return original.call(this, key, value)
   })
   try {
@@ -143,6 +149,14 @@ it.each(['modifier', 'storage'])('handles callback recovery: %s', async (scenari
       expect(host.textContent).toContain('GitHub connected')
       expect(host.querySelector('[role="alert"]')?.textContent).toContain('organization')
       expect(host.querySelector('button')?.textContent).toContain('Retry')
+      expect(sessionStorage.getItem('boxlite-organization-session')).toBeNull()
+      spy.mockRestore()
+      await act(async () => host.querySelector<HTMLButtonElement>('button')!.click())
+      expect(host.querySelector('[role=alert]')).toBeNull()
+      expect(JSON.parse(sessionStorage.getItem('boxlite-organization-session') || 'null')).toEqual({
+        userId: 'callback-user',
+        organizationId: organization,
+      })
     }
   } finally {
     await act(async () => root.unmount())
@@ -201,6 +215,10 @@ it.each(['retry', 'back', 'failed', 'install'])('keeps callback recovery actiona
       expect(api.getCiConnect).toHaveBeenCalledExactlyOnceWith(organization, id)
       expect(api.completeCiConnect).toHaveBeenCalledTimes(1)
       expect(host.textContent).toBe('Connects destination')
+      expect(JSON.parse(sessionStorage.getItem('boxlite-organization-session') || 'null')).toEqual({
+        userId: 'callback-user',
+        organizationId: organization,
+      })
     } else if (scenario === 'back') {
       await act(async () => host.querySelector<HTMLAnchorElement>('a')!.click())
       expect(api.cancelCiConnect).toHaveBeenCalledExactlyOnceWith(organization, id)

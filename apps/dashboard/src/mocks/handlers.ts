@@ -111,10 +111,27 @@ export const handlers = [
       createdAt: new Date(0).toISOString(),
     }),
   ),
-  http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations`, () =>
+    HttpResponse.json(
+      import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true'
+        ? [
+            { ...MOCK_ORGANIZATION, name: 'Personal organization' },
+            { ...MOCK_ORGANIZATION, id: 'demo-acme', name: 'Acme AI', isDefaultForAuthenticatedUser: false },
+            {
+              ...MOCK_ORGANIZATION,
+              id: 'demo-research',
+              name: 'Research Collective',
+              isDefaultForAuthenticatedUser: false,
+            },
+          ]
+        : [MOCK_ORGANIZATION],
+    ),
+  ),
   http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
-    params.organizationId === MOCK_ORGANIZATION.id
-      ? HttpResponse.json(MOCK_ORGANIZATION)
+    params.organizationId === MOCK_ORGANIZATION.id ||
+    (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
+      ['demo-acme', 'demo-research'].includes(String(params.organizationId)))
+      ? HttpResponse.json({ ...MOCK_ORGANIZATION, id: params.organizationId })
       : new HttpResponse(null, { status: 404 }),
   ),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {

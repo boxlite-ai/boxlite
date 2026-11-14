@@ -52,7 +52,10 @@ export function ciHandlers() {
     ],
   }
   const base = '*/v1/:organizationId/ci'
-  const own = (organizationId: unknown) => organizationId === MOCK_ORGANIZATION.id
+  const own = (organizationId: unknown) =>
+    organizationId === MOCK_ORGANIZATION.id ||
+    (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
+      ['demo-acme', 'demo-research'].includes(String(organizationId)))
   const missing = () => new HttpResponse(null, { status: 404 })
   const preview = () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview')
   const emptyPreview = () =>

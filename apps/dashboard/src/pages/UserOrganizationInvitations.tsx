@@ -79,7 +79,7 @@ const UserOrganizationInvitations: React.FC = () => {
         )}
         {status === 'switch-failed' && (
           <p role="alert" className="text-body text-destructive">
-            You joined the organization, but we could not open it. Use the profile menu to switch organizations.
+            You joined the organization, but we could not open it. Use the organization switcher in the header to enter it.
           </p>
         )}
       </PageContent>
