@@ -41,9 +41,11 @@ Each assignment has a 40-minute create/update timeout, covering convergence and 
 the initial migration from a whole-fleet assignment. This is an upper bound, not an added wait:
 completed operations proceed immediately. Deletion keeps the provider's default timeout.
 
-Each assignment carries both binary and unit-environment policies, so an update also converges the API
-address, volume backend and registry proxy host. Existing hosts retain their disks, image caches and
-local box state; machine-type and boot-image/startup changes do not resize or replace them.
+Each assignment carries binary, unit-environment and NFS client package policies. An update converges
+the API address, volume backend, registry proxy host and `nfs-common`; the package policy also covers
+existing hosts whose startup script predates Filestore, without requiring SSH or a boot-script rerun.
+New hosts install the same package from their boot script. Existing hosts retain their disks, image
+caches and local box state; machine-type and boot-image/startup changes do not resize or replace them.
 New hosts use the current [runner sizing settings](../configuration.md#runner-sizing).
 
 `runner:update` checks host stage labels and both assignments' exact stage-and-runner selectors before
