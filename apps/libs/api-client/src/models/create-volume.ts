@@ -12,25 +12,23 @@
  * Do not edit the class manually.
  */
 
-
-
 export interface CreateVolume {
-    'name'?: string;
-    /**
-     * The storage backend that owns the volume; defaults to object_storage
-     */
-    'storageBackend'?: CreateVolumeStorageBackendEnum;
-    /**
-     * The Filestore instance the volume stores its data on; filestore volumes only. Omit to assign from configured instances.
-     */
-    'instance'?: string;
+  name?: string
+  /**
+   * The storage backend that owns the volume; defaults to object_storage
+   */
+  storageBackend?: CreateVolumeStorageBackendEnum
+  /**
+   * The Filestore instance the volume stores its data on; filestore volumes only. Omit to assign from configured instances.
+   */
+  instance?: string
 }
 
 export const CreateVolumeStorageBackendEnum = {
-    OBJECT_STORAGE: 'object_storage',
-    FILESTORE: 'filestore',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
+  OBJECT_STORAGE: 'object_storage',
+  FILESTORE: 'filestore',
+  UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const
 
-export type CreateVolumeStorageBackendEnum = typeof CreateVolumeStorageBackendEnum[keyof typeof CreateVolumeStorageBackendEnum];
-
+export type CreateVolumeStorageBackendEnum =
+  (typeof CreateVolumeStorageBackendEnum)[keyof typeof CreateVolumeStorageBackendEnum]

@@ -449,7 +449,7 @@ export const apiEnvironmentFrom = ({
        * it, and every file a box touches becomes a cross-region read.
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
-      FILESTORE_SUPPORTED: 'false',
+      FILESTORE_SUPPORTED: home === 'gcp' ? 'true' : 'false',
       ...(home === 'gcp'
         ? filestoreInstances === undefined
           ? { FILESTORE_INSTANCES: defaultFilestoreInstances(stage) }

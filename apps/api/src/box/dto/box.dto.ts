@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiHideProperty, ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
 import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.constant'
@@ -16,6 +16,7 @@ import { NetworkInfoResponseDto } from './network-info.dto'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { reportedBoxState } from '../utils/box-state.util'
 import { upstreamRefOf } from '../../image/utils/image-ref.util'
+import { boxVolumeForPublic } from '../utils/box-volume.util'
 
 @ApiSchema({ name: 'BoxProgress' })
 export class BoxProgressDto {
@@ -35,10 +36,36 @@ export class BoxProgressDto {
   retryAfterMs: number
 }
 
+/**
+ * The filestore reference of a box volume. `instance` is the logical name the
+ * Volume row persists; `server`/`export` are what the API resolves from GCP at
+ * dispatch time. The address travels only inside internal dispatch and persisted
+ * volume metadata. Public responses expose only `instance`; every dispatch
+ * discovers the current address.
+ */
+@ApiSchema({ name: 'BoxVolumeFilestoreRef' })
+export class BoxVolumeFilestoreRef {
+  @ApiProperty({
+    description: 'Filestore instance logical name selected from the API configuration',
+    example: 'boxlite-dev-shared',
+  })
+  instance: string
+
+  @ApiHideProperty()
+  server: string
+
+  @ApiHideProperty()
+  export: string
+}
+
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
+  /**
+   * The volume's server-assigned id. Filestore volumes are Volume rows like
+   * any other and carry an id the same way.
+   */
   @ApiProperty({
-    description: 'The ID of the volume',
+    description: 'The ID of the volume (bucket-backed or Filestore-backed)',
     example: 'volume123',
   })
   volumeId: string
@@ -48,6 +75,16 @@ export class BoxVolume {
     example: '/data',
   })
   mountPath: string
+
+  /**
+   * Filestore-only. Present on a box volume whose Volume row carries an
+   * `instance`; absent for bucket-backed volumes.
+   */
+  @ApiPropertyOptional({
+    description: 'The Filestore instance reference; absent for bucket-backed volumes',
+    type: BoxVolumeFilestoreRef,
+  })
+  filestore?: BoxVolumeFilestoreRef
 
   @ApiPropertyOptional({
     description:
@@ -385,7 +422,7 @@ export class BoxDto {
       privileged: box.privileged,
       network: NetworkInfoResponseDto.fromBox(box),
       labels: box.labels,
-      volumes: box.volumes,
+      volumes: box.volumes?.map(boxVolumeForPublic),
       state,
       desiredState: box.desiredState,
       errorReason: box.errorReason,

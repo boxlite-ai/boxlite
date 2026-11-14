@@ -553,6 +553,107 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ---
 
+## GCP Filestore volumes
+
+A box mounts a **Filestore volume** — a Volume row whose data directory lives
+on a Filestore NFS instance, created through the volume API with
+`storageBackend: "filestore"` and an optional `instance` field. It is mounted
+by the same `managed_volume` selector as bucket-backed volumes. The reference
+carries the instance's **logical name**; the API resolves the address from GCP
+Filestore and dispatches it to the runner with the mount, so recreating an
+instance under the same name reuses the same logical identity without a change
+to historical boxes.
+
+### Instance configuration (API side)
+
+`FILESTORE_INSTANCES` is an environment variable of the **API** deployment —
+a JSON object list declaring which GCP Filestore instances a create may
+auto-assign to or a mount dispatch may resolve to:
+
+```bash
+FILESTORE_INSTANCES='[{"instance":"boxlite-filestore-stage","project_id":"boxlite-dev-project","zone":"us-east4-a"}]'
+```
+
+Validation runs when the API starts: invalid JSON, a duplicate instance, a name
+outside `^[a-z0-9][a-z0-9-]{0,62}$`, or invalid project/zone values refuse to
+start the API. Until removed, an unset variable temporarily defaults to
+`boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`; stage deployments
+instead default to `boxlite-filestore-stage`, zone `us-east4-a`. An explicit
+empty value disables Filestore. A volume create naming an instance outside the
+list fails loudly; the runner configures no instances of its own and mounts the
+resolved target the dispatch carries.
+
+### How it mounts
+
+- One mount per instance, shared by every box referencing it; created on
+  demand (`mount -t nfs -o vers=4.1,hard ...`), and reclaimed when no box
+  record references it anymore.
+- The box binds to the volume's data directory inside the export
+  (`/mnt/boxlite-filestore-<instance>/<volume_id>`), `chmod 0777` — NFS
+  permissions are real, unlike the FUSE backends' faked ones. The directory
+  is named by the volume id, so boxes sharing a volume share data, and a
+  destroyed box's data stays reachable by mounting the volume into a new box.
+- Destroy unbinds only: the data directory and its data survive, exactly as a
+  bucket survives a destroy — reachable again through the volume id.
+- Volume removal follows the same async path as bucket volumes — in-use
+  refusal, then PENDING_DELETE until the manager lands the row DELETED (the
+  name is released by the same `name-deleted` rename). The NFS data
+  directory itself is left in place for ops cleanup.
+
+### Runner/API version skew
+
+The runner declares `capabilities: ["filestore"]` in its healthcheck; the API
+persists the declaration on the runner row and refuses (loudly, at dispatch)
+to hand a filestore volume to a v2 runner that has not declared it. A runner
+binary predating capability reporting declares nothing, so during a rolling
+upgrade a filestore volume can only land on an upgraded runner. Upgrade order
+that keeps filestore creates working: runners first, API second — an upgraded
+runner with the old API is idle for filestore (the old API never creates
+filestore volumes), while the reverse order would put filestore creates on
+runners the API does not yet trust. The dispatch check re-reads the runner row
+instead of trusting an API replica's lookup cache. A rejection logs the Box ID,
+runner ID, runner version, declared capabilities and
+`FILESTORE_CAPABILITY_MISSING`; the create response carries the reason, Box ID
+and `BOX_STATE_TRANSITION_FAILED`, which the Dashboard displays with the HTTP
+status. The reason also reports whether the runner row exists, its state,
+protocol and binary versions, observed capabilities, last healthcheck time and
+age, and confirms that no create job was dispatched. A runner-side prepare
+failure adds `FILESTORE_VOLUME_PREPARE_FAILED`,
+Box/Volume/instance IDs and, when available, the mount process exit code. API
+job-insert failures similarly log `job.create.failed` with the job, runner,
+resource and database error code. Logs do not include Box environment
+variables, secrets, authorization headers or job payloads.
+
+### Troubleshooting: box started but its filestore mountpoint is empty
+
+Start re-mounts lost mounts (e.g. after a host reboot) and logs failures
+without failing the start — the same policy as the object-storage backends.
+A box that started while its NFS instance was unreachable therefore shows an
+**empty directory** at the guest path: stop the box, fix connectivity or the
+API's instance configuration, start again. NFS mounts are `hard`: with the network down, IO in
+the box hangs instead of erroring — by design, not a crash.
+
+Changing an instance's `server` in the API configuration does not touch an
+existing mount: the runner reuses whatever is already mounted at
+`/mnt/boxlite-filestore-<instance>`. A dead address therefore leaves a
+hard-mounted stale mount that times out every probe — unmount the old mount
+(`umount /mnt/boxlite-filestore-<instance>`) or reboot the host after editing
+the configuration.
+
+### Ops prerequisites
+
+- Filestore instance: zonal, NFSv4.1, 1 TiB minimum, same VPC as the runner,
+  port 2049 open. Capacity exhaustion shows up in the box as ENOSPC.
+- Host: NFS client package (`nfs-utils` on RHEL-family, `nfs-common` on
+  Debian-family). No autofs; the runner mounts explicitly. The cloud boot
+  script ([`runner-boot.ts`](../infra/mdeploy/stack/runner-boot.ts)) installs
+  `nfs-common` on fresh hosts automatically. GCP deployments also declare the
+  package through OS Config, so existing runner hosts converge without SSH or
+  a rerun of the boot script.
+- **Deploy order: runners before the API.** The capability check refuses an
+  old runner before dispatch. An API older than its runners simply dispatches
+  no filestore volumes at all, which is harmless.
+
 ## Background services
 
 ### Box state sync

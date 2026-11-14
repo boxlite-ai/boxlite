@@ -45,9 +45,9 @@ mdeploy:
 It is separate from runner access to the NFS server: granting the API role does not authorize a
 mount, and granting runner network access does not authorize instance lookup. An AWS deployment
 rejects `read-filestore-instances` and omits `FILESTORE_INSTANCES`, even if stage configuration
-supplies instances. Deployment exports `FILESTORE_SUPPORTED=false` until the box runtime slice
-is enabled; the API then hides the Filestore capability and answers a create request with HTTP 501 and the
-structured code `unsupported`. Local APIs default to supported so an explicitly configured
+supplies instances. Deployment also exports `FILESTORE_SUPPORTED=false` on AWS and `true` on GCP;
+the API hides the Filestore capability and answers a create request with HTTP 501 and the
+structured code `unsupported` only on unsupported deployments. Local APIs default to supported so an explicitly configured
 instance list remains usable.
 
 For a configured instance in a project other than the stage project, the deployer identity needs
