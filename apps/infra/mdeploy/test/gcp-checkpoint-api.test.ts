@@ -107,6 +107,7 @@ for (const checkpointAccess of [false, true]) {
     if (checkpointAccess && storage.checkpoints.active) {
       capabilities.push({ kind: 'manage-checkpoint-archives', checkpoints: storage.checkpoints })
     }
+    capabilities.push({ kind: 'read-filestore-instances', projects: ['other-project', 'test-project'] })
     const api = gcpApiProvider({
       dependencies,
       project: 'test-project',
@@ -142,5 +143,13 @@ for (const checkpointAccess of [false, true]) {
       resources.some(({ kind, args }) => kind === 'projects.IAMMember' && args.role === 'roles/storage.objectUser'),
       false,
     )
+    const filestoreGrants = resources.filter(
+      ({ kind, args }) => kind === 'projects.IAMMember' && args.role === 'roles/file.viewer',
+    )
+    assert.deepEqual(filestoreGrants.map(({ args }) => args.project).sort(), ['other-project', 'test-project'])
+    for (const grant of filestoreGrants) {
+      assert.equal(grant.args.member.value, 'serviceAccount:api@example.invalid')
+      assert.ok(api.ready.some((resource: any) => resource.id.value === `projects.IAMMember/${grant.name}`))
+    }
   })
 }
