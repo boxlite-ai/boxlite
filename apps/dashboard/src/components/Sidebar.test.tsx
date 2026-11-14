@@ -22,6 +22,8 @@ vi.mock('react-oidc-context', () => ({
   }),
 }))
 
+vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ organizationsApi: { listOrganizationMembers: vi.fn() } }) }))
+
 vi.mock('usehooks-ts', () => ({
   useCopyToClipboard: () => [undefined, vi.fn()],
 }))
@@ -37,7 +39,7 @@ const organizationState = vi.hoisted(() => {
 })
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: { id: 'org-1' },
+    selectedOrganization: organizationState.personal,
     onSelectOrganization: organizationState.onSelectOrganization,
   }),
 }))
@@ -473,7 +475,7 @@ describe('Sidebar primary navigation', () => {
     expect(invitations).toBeNull()
   })
 
-  it('lets a user in several organizations switch to another one from the profile menu', async () => {
+  it('shows the global switcher with complete IDs and removes the profile organization list', async () => {
     organizationState.organizations = [
       { id: 'org-1', name: 'Default Organization', isDefaultForAuthenticatedUser: true },
       { id: 'org-2', name: 'Acme', isDefaultForAuthenticatedUser: false },
@@ -496,9 +498,15 @@ describe('Sidebar primary navigation', () => {
     )
 
     const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    expect(items.find((item) => item.textContent?.includes('Default Organization'))?.textContent).toContain('Personal')
-
-    await act(async () => items.find((item) => item.textContent?.includes('Acme'))?.click())
-    expect(organizationState.onSelectOrganization).toHaveBeenCalledWith('org-2')
+    expect(items.some((item) => item.textContent?.includes('Acme'))).toBe(false)
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    const switcher = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Switch organization: Default Organization"]',
+    )!
+    await act(async () => switcher.click())
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('Default Organizationorg-1')
+    expect(dialog.textContent).toContain('Acmeorg-2')
+    expect(dialog.querySelector('[aria-current="true"]')?.textContent).toContain('org-1')
   })
 })

@@ -45,7 +45,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.useFakeTimers()
   mocks.navigate.mockReset()
-  mocks.onSelectOrganization.mockReset()
+  mocks.onSelectOrganization.mockReset().mockResolvedValue(true)
   // A verification token is spendable once, so only the first call succeeds. That is what makes
   // the re-run case below discriminating: cancel the pending redirect and there is no second
   // chance to arm another.
@@ -73,6 +73,16 @@ async function flush() {
 }
 
 describe('EmailVerify', () => {
+  it('does not redirect when organization selection is denied', async () => {
+    mocks.onSelectOrganization.mockResolvedValue(false)
+    await act(async () => root.render(<EmailVerify />))
+    await flush()
+    act(() => vi.advanceTimersByTime(1000))
+    expect(mocks.navigate).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Email verified, but')
+    expect(mocks.verifyOrganizationEmail).toHaveBeenCalledTimes(1)
+  })
+
   it('lets a failed verification return to billing with the action button', async () => {
     mocks.verifyOrganizationEmail.mockReset().mockRejectedValue(new Error('expired token'))
     await act(async () => root.render(<EmailVerify />))

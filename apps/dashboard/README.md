@@ -1222,3 +1222,47 @@ validation and actionable errors, lifecycle labels, and keyboard access to check
 and runner failure reasons. CI tests also cover repository disclosure without changing
 the selected account, missing runner metadata, and explicit retries that retain cached
 connections and runners. These tests use the existing frontend API contracts.
+
+## Organization context
+
+After authentication, users with multiple organizations select an organization before
+organization business providers mount. One organization enters directly; zero
+organizations offers refresh and another-account recovery. Invitation and email
+verification URLs complete their existing scoped flow before this gate applies.
+
+The 64px Console header displays the active organization. Multiple memberships
+open a compact switcher showing names and complete IDs; search appears above five
+memberships. The profile menu contains account actions, not another organization list.
+
+Selection is stored in tab-local sessionStorage with the authenticated user ID.
+Reload and token renewal restore a valid confirmation; explicit logout clears it.
+The legacy localStorage ID is a compatibility hint, not a login confirmation.
+A missing or removed selection returns multiple-membership users to the chooser.
+The server remains responsible for authorizing every organization API request.
+
+Switching validates membership without changing the current permission context,
+saves the session, then performs a full document navigation. This discards in-memory
+query state and connections. Resource lists retain their section without query/hash;
+Box and Image details return to their lists. Settings and billing switches land on
+Boxes, avoiding a destination that may require permissions the new member lacks.
+Non-list pages ask before discarding edits or terminal connections. Running Boxes
+continue running. This conservative route warning is not general form-dirty tracking;
+list-page modal editors already block access to the header.
+
+A failed membership request or session write leaves the current context intact and
+shows a retryable error. Failed invitation entry can be retried through the header.
+Email verification waits for organization selection and does not replay the token
+when React effects rerun.
+
+### Local organization review
+
+From `apps/`, run:
+
+```sh
+VITE_MOCK_MULTIPLE_ORGANIZATIONS=true node scripts/start-dashboard.mjs --target=mock --host 127.0.0.1 --port 3187
+```
+
+The existing MSW worker supplies three synthetic memberships. Without the flag,
+mock mode has one organization. Mock resource fixtures are shared: these previews
+verify navigation and UI, not backend resource isolation. Review with real accounts
+having distinct memberships and resources before production rollout.
