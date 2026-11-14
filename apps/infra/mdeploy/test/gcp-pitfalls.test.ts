@@ -1296,6 +1296,7 @@ test('the proxy is a GKE Deployment and no VM proxy host remains', () => {
 
   const cluster = sourceOf('cluster')
   assert.match(cluster, /new gcp\.container\.Cluster\(/)
+  assert.match(cluster, /resourceLabels: \{ stage: \$app\.stage \}/, 'the cluster needs its environment discovery label')
   // Autopilot owns the nodes, so there is no pool of ours to assert — the
   // guarantee moved to the flag that makes Google provision them.
   assert.match(cluster, /enableAutopilot: true/)

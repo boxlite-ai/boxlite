@@ -94,6 +94,7 @@ export const gcpClusterProvider =
      */
     const cluster = new gcp.container.Cluster('ProxyCluster', {
       name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' }),
+      resourceLabels: { stage: $app.stage },
       project,
       location: region,
       network: binding.network,
