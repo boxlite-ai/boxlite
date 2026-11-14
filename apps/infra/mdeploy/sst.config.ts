@@ -183,6 +183,7 @@ export default $config({
         userDomain: stackEnvironment.userDomain,
         runnerBinary,
         runnerFleet: stackEnvironment.runnerFleet,
+        filestoreProjects: stackEnvironment.filestoreProjects,
         apiEnvironment: stackEnvironment.apiEnvironment,
         apiSecrets: stackEnvironment.apiSecrets,
         proxyEnvironment: stackEnvironment.proxyEnvironment,

@@ -153,6 +153,20 @@ export class Runner {
   @Column({ default: false })
   nestedVirtualizationEnabled: boolean
 
+  /**
+   * Capabilities the runner binary declared in its latest healthcheck, e.g.
+   * `['filestore']`. Null when the binary predates capability reporting —
+   * dispatch then treats the runner as supporting nothing beyond the base
+   * protocol, so a pre-filestore v2 runner cannot be handed a filestore
+   * volume by mistake during a rolling upgrade.
+   */
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+    default: null,
+  })
+  capabilities: string[] | null
+
   @Column({
     nullable: true,
     type: 'timestamp with time zone',

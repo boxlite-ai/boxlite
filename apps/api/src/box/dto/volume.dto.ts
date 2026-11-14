@@ -6,8 +6,9 @@
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { IsEnum } from 'class-validator'
+import { VOLUME_STORAGE_BACKENDS, VolumeStorageBackend } from './create-volume.dto'
 import { VolumeState } from '../enums/volume-state.enum'
-import { Volume } from '../entities/volume.entity'
+import { isFilestoreVolume, Volume } from '../entities/volume.entity'
 
 export class VolumeDto {
   @ApiProperty({
@@ -36,6 +37,19 @@ export class VolumeDto {
   })
   @IsEnum(VolumeState)
   state: VolumeState
+
+  @ApiProperty({
+    description: 'The storage backend that owns the volume',
+    enum: VOLUME_STORAGE_BACKENDS,
+    example: 'object_storage',
+  })
+  storageBackend: VolumeStorageBackend
+
+  @ApiPropertyOptional({
+    description: 'Filestore instance name; filestore volumes only',
+    example: 'boxlite-dev-shared',
+  })
+  instance?: string
 
   @ApiProperty({
     description: 'Creation timestamp',
@@ -69,6 +83,8 @@ export class VolumeDto {
       name: volume.name,
       organizationId: volume.organizationId,
       state: volume.state,
+      storageBackend: isFilestoreVolume(volume) ? 'filestore' : 'object_storage',
+      instance: volume.instance || undefined,
       createdAt: volume.createdAt?.toISOString(),
       updatedAt: volume.updatedAt?.toISOString(),
       lastUsedAt: volume.lastUsedAt?.toISOString(),
