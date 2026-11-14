@@ -390,6 +390,9 @@ func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.SupportsPrivileged) {
 		toSerialize["supportsPrivileged"] = o.SupportsPrivileged
 	}
+	if !IsNil(o.Capabilities) {
+		toSerialize["capabilities"] = o.Capabilities
+	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
