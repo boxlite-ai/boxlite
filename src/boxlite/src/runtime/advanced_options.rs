@@ -1003,7 +1003,10 @@ impl AdvancedBoxOptions {
 
         Ok(ResolvedContainerSecurityConfig {
             capabilities,
-            linux: ResolvedLinuxSecurity { readonly_paths },
+            linux: ResolvedLinuxSecurity {
+                readonly_paths,
+                cgroup_namespace: !self.privileged,
+            },
             mount: ResolvedMountSecurity {
                 options: mount_options(self.privileged),
             },
@@ -1022,6 +1025,8 @@ fn default_readonly_paths() -> Vec<String> {
 /// Recursive: `/sys` is an rbind, and OCI's plain `ro` is applied without
 /// `AT_RECURSIVE`, which would leave the guest's cgroup2 submount writable
 /// inside the container — hence `rro`, not `ro`, for the non-privileged case.
+/// The non-privileged container's own read-only cgroup2 mount then covers
+/// that submount (see `ResolvedLinuxSecurity::cgroup_namespace`).
 fn mount_options(privileged: bool) -> Vec<String> {
     let mut options: Vec<String> = ["rbind", "nosuid", "noexec", "nodev"]
         .into_iter()
@@ -1042,12 +1047,12 @@ fn mount_options(privileged: bool) -> Vec<String> {
 /// guest, across the VM boundary, knows its own kernel's capability ceiling,
 /// so it stays as add/drop deltas the guest resolves itself.
 ///
-/// No masked-path field, no cgroup namespace, no allow-all device-cgroup
-/// rule: all three were tested and found unnecessary for DinD — nothing in
-/// the DinD workflow reads a masked path, the guest never enforced a
-/// restrictive device-cgroup default in the first place, and `dockerd`
-/// tolerated running without a private cgroup namespace view. The guest keeps
-/// applying its own oci-spec masked-path default unconditionally.
+/// No masked-path field and no allow-all device-cgroup rule: both were tested
+/// and found unnecessary for DinD — nothing in the DinD workflow reads a
+/// masked path, and the guest never enforced a restrictive device-cgroup
+/// default in the first place. The guest keeps applying its own oci-spec
+/// masked-path default unconditionally. `linux.cgroup_namespace` is off for
+/// privileged only: `dockerd` needs the writable guest cgroup tree.
 ///
 /// `linux`/`mount` are grouped the same way OCI runtime-spec groups the
 /// fields they resolve to — parallel top-level fields of one Spec — rather
@@ -1068,6 +1073,9 @@ pub(crate) struct ResolvedContainerSecurityConfig {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedLinuxSecurity {
     pub(crate) readonly_paths: Vec<String>,
+    /// Private, read-only cgroup view. Privileged keeps the guest's writable
+    /// tree, which `dockerd` needs to create its own cgroups.
+    pub(crate) cgroup_namespace: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1103,6 +1111,7 @@ mod resolved_security_tests {
             .map(String::from)
         );
         assert!(resolved.mount.options.contains(&"rro".to_string()));
+        assert!(resolved.linux.cgroup_namespace);
     }
 
     #[test]
@@ -1130,6 +1139,7 @@ mod resolved_security_tests {
 
         assert!(resolved.linux.readonly_paths.is_empty());
         assert!(!resolved.mount.options.contains(&"rro".to_string()));
+        assert!(!resolved.linux.cgroup_namespace);
         assert_eq!(resolved.capabilities.add, ["ALL"]);
     }
 

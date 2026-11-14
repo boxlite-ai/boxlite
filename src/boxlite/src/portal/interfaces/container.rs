@@ -5,8 +5,8 @@ use boxlite_shared::{
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
-    ContainerInitRequest, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions, OverlayRootfs,
-    RootfsInit, container_init_response,
+    ContainerInitRequest, ContainerResources, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions,
+    OverlayRootfs, RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
 
@@ -90,6 +90,8 @@ pub struct ContainerInitConfig {
     pub tty: bool,
     /// Guest device nodes to reproduce inside the OCI workload.
     pub devices: Vec<ContainerDevice>,
+    /// Box limits the guest writes to the container cgroup.
+    pub resources: ContainerResources,
     pub advanced: ContainerAdvancedConfig,
 }
 
@@ -136,6 +138,7 @@ impl ContainerInterface {
             ca_certs,
             tty,
             devices,
+            resources,
             advanced,
         } = config;
 
@@ -154,6 +157,7 @@ impl ContainerInterface {
                 }),
                 linux: Some(LinuxOptions {
                     readonly_paths: advanced.linux.readonly_paths,
+                    cgroup_namespace: advanced.linux.cgroup_namespace,
                 }),
                 mount: Some(MountOptions {
                     // The only guest-side mount host policy ever overrides
@@ -205,6 +209,7 @@ impl ContainerInterface {
             // it sent, instead of both sides separately hard-coding it.
             execution_id: container_id.clone(),
             devices,
+            resources: Some(resources),
         };
 
         let response = self
@@ -494,6 +499,12 @@ mod tests {
                     destination: "/dev/kvm".to_string(),
                     file_mode: Some(0o666),
                 }],
+                resources: ContainerResources {
+                    cpu_quota_us: 200_000,
+                    cpu_period_us: 100_000,
+                    memory_limit_bytes: 3 << 30,
+                    pids_limit: 0,
+                },
                 advanced: ContainerAdvancedConfig {
                     capabilities: crate::runtime::advanced_options::ContainerCapabilities {
                         add: vec!["ALL".into()],
@@ -501,6 +512,7 @@ mod tests {
                     },
                     linux: ResolvedLinuxSecurity {
                         readonly_paths: Vec::new(),
+                        cgroup_namespace: false,
                     },
                     mount: ResolvedMountSecurity {
                         options: vec![
@@ -521,6 +533,15 @@ mod tests {
         assert_eq!(request.devices[0].file_mode, Some(0o666));
         assert_eq!(request.container_id, "container-1");
         assert_eq!(request.execution_id, "container-1");
+        let resources = request.resources.expect("box limits on the wire");
+        assert_eq!(
+            (
+                resources.cpu_quota_us,
+                resources.cpu_period_us,
+                resources.memory_limit_bytes
+            ),
+            (200_000, 100_000, 3_221_225_472)
+        );
         let container_config = request.container_config.expect("process config");
         // Non-default, so it proves the field is threaded rather than defaulted.
         assert!(container_config.tty);
@@ -534,13 +555,10 @@ mod tests {
             advanced.capabilities.expect("capabilities").add,
             vec!["ALL".to_string()]
         );
-        assert!(
-            advanced
-                .linux
-                .expect("linux options")
-                .readonly_paths
-                .is_empty()
-        );
+        let linux = advanced.linux.expect("linux options");
+        assert!(linux.readonly_paths.is_empty());
+        // Privileged-shaped request: the resolved `false` reaches the wire.
+        assert!(!linux.cgroup_namespace);
         let mount = advanced.mount.expect("mount options");
         assert_eq!(mount.source, "/sys");
         assert_eq!(mount.destination, "/sys");

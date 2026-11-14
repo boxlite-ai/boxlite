@@ -16,6 +16,9 @@ The same guest agent bootstraps itself as native PID 1 or as a child of libkrun'
 
 Bootstrap mounts proc, devtmpfs, sysfs, cgroup2, devpts and `/dev/shm`, creates
 `/dev/fd -> /proc/self/fd`, then makes root propagation shared.
+Each container runs in its own cgroup, which holds the box CPU and memory limits. Non-privileged
+containers see that cgroup read-only at `/sys/fs/cgroup` through a cgroup namespace
+([resource limits guide](../../docs/guides/resource-limits.md#limits-visible-inside-the-container)).
 New system mounts match the pinned `init.krun` flags and use its default filesystem options;
 mount-point directories are created with mode `0755`, subject to umask.
 Devpts uses the kernel's default slave and ptmx permissions; `/dev/shm` uses its default mode without `nodev`.

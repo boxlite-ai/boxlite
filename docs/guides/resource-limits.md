@@ -191,7 +191,7 @@ boxlite.BoxOptions(
 
 **Range:** 128 to 65536 MiB (64 GiB)
 
-**Default:** 512 MiB
+**Default:** 1024 MiB
 
 **Behavior:**
 - Hard limit (box killed if exceeded)
@@ -209,6 +209,29 @@ print(f"Memory: {memory_mb:.2f} MB")
 - Box process is killed
 - Check stderr for OOM messages
 - Increase `memory_mib` if needed
+
+## Limits visible inside the container
+
+Runtimes such as the JDK and Go read their CPU and memory budget from cgroup v2 files.
+The guest writes the box size to the container's cgroup, so these files show it:
+
+| File | Value | Example: `cpus=2, memory_mib=3072` |
+| --- | --- | --- |
+| `/sys/fs/cgroup/cpu.max` | `cpus` × 100000 over a 100000 µs period, lowered by a tighter `max_cpu_time` | `200000 100000` |
+| `/sys/fs/cgroup/memory.max` | `memory_mib` in bytes | `3221225472` |
+| `/sys/fs/cgroup/pids.max` | No limit | `max` |
+
+Unset `cpus` and `memory_mib` show the VM defaults of 1 CPU and 1024 MiB.
+The VM size already enforces these limits. `memory.max` equals the VM memory, so the guest
+kernel's OOM killer normally acts first.
+
+| Container | Cgroup view |
+| --- | --- |
+| Default | A private cgroup namespace with a read-only cgroup2 mount. Any user can read the files; nobody, including container root, can change them. `/proc/self/cgroup` shows `0::/`. |
+| `privileged` | The writable guest cgroup tree, which `dockerd` needs. The limits sit under the container's own cgroup, `/sys/fs/cgroup$(cut -d: -f3- /proc/self/cgroup)`. Cgroups that `dockerd` creates are outside them. |
+
+A guest older than this feature ignores the limits, and `/sys/fs/cgroup` shows the guest root
+cgroup, which has none of these files.
 
 ## Disk configuration
 
