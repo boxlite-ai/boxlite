@@ -5,11 +5,10 @@ Provides a synchronous API for box operations.
 Async-only metadata retrieval is not exposed.
 """
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from ..exec import ExecResult
+from ..exec import ExecResult, _collect_exec_result
 from ._agents import SyncAgents
 
 if TYPE_CHECKING:
@@ -175,6 +174,8 @@ class SyncSimpleBox:
             user: User to run as (format: <name|uid>[:<group|gid>], like docker exec --user).
                   If None, uses the container's default user from image config.
             timeout: Execution timeout in seconds (default: no timeout).
+                     Output and exit status are collected for up to three
+                     additional seconds after a timed execution's deadline.
             cwd: Working directory inside the container (default: container's configured workdir).
 
         Returns:
@@ -200,62 +201,7 @@ class SyncSimpleBox:
                 cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
             )
 
-            stdout_lines = []
-            stderr_lines = []
-
-            try:
-                stdout_stream = execution.stdout()
-            except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stdout stream
-                logger.error(f"take stdout err: {e}")
-                stdout_stream = None
-
-            try:
-                stderr_stream = execution.stderr()
-            except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stderr stream
-                logger.error(f"take stderr err: {e}")
-                stderr_stream = None
-
-            async def collect_stdout():
-                if not stdout_stream:
-                    return
-                try:
-                    async for line in stdout_stream:
-                        if isinstance(line, bytes):
-                            stdout_lines.append(line.decode("utf-8", errors="replace"))
-                        else:
-                            stdout_lines.append(line)
-                except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
-                    logger.error(f"collecting stdout err: {e}")
-
-            async def collect_stderr():
-                if not stderr_stream:
-                    return
-                try:
-                    async for line in stderr_stream:
-                        if isinstance(line, bytes):
-                            stderr_lines.append(line.decode("utf-8", errors="replace"))
-                        else:
-                            stderr_lines.append(line)
-                except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
-                    logger.error(f"collecting stderr err: {e}")
-
-            await asyncio.gather(collect_stdout(), collect_stderr())
-
-            error_message = None
-            try:
-                exec_result = await execution.wait()
-                exit_code = exec_result.exit_code
-                error_message = exec_result.error_message
-            except Exception as e:  # noqa: BLE001 - native binding call; report failure via exit_code instead of raising
-                logger.error(f"failed to wait execution: {e}")
-                exit_code = -1
-
-            return ExecResult(
-                exit_code=exit_code,
-                stdout="".join(stdout_lines),
-                stderr="".join(stderr_lines),
-                error_message=error_message,
-            )
+            return await _collect_exec_result(execution, timeout, logger)
 
         return self._runtime._sync(_exec_and_collect())
 

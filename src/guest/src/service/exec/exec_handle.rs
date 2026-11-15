@@ -3,6 +3,7 @@
 //! Provides types for managing a running process.
 //! Works for both container and direct guest execution.
 
+use super::process_instance::ProcessGroup;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::stream::{Stream, StreamExt};
 use nix::sys::signal::Signal;
@@ -288,6 +289,7 @@ pub struct PtyMode {
 pub struct ExecHandle {
     /// Process ID
     pid: Pid,
+    timeout_group: Option<ProcessGroup>,
 
     /// Stdin writer (None if closed)
     stdin: Option<ExecStdin>,
@@ -332,6 +334,7 @@ impl ExecHandle {
         };
         Ok(Self {
             pid,
+            timeout_group: None,
             stdin: Some(ExecStdin::new(stdin)?),
             stdout: Some(stdout),
             // In PTY mode, stderr is None because stdout/stderr are merged
@@ -340,6 +343,15 @@ impl ExecHandle {
             pty_controller: None,
             pty_config: None,
         })
+    }
+
+    pub(crate) fn with_timeout_group(mut self, group: Option<ProcessGroup>) -> Self {
+        self.timeout_group = group;
+        self
+    }
+
+    pub(super) fn take_timeout_group(&mut self) -> Option<ProcessGroup> {
+        self.timeout_group.take()
     }
 
     /// Set PTY controller and config

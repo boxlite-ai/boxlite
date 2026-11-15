@@ -5,6 +5,7 @@
 
 use crate::container::{CommandRejection, Container, SpawnFailure};
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
+use crate::service::exec::process_instance::ProcessGroup;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::ExecRequest;
 use std::sync::Arc;
@@ -83,6 +84,9 @@ impl ContainerExecutor {
                 cmd = cmd.with_user(user.clone());
             }
 
+            if req.timeout_ms > 0 {
+                cmd = cmd.with_timeout_group();
+            }
             cmd.spawn_build().await?
             // container mutex dropped here
         };
@@ -195,10 +199,14 @@ fn working_directory_is_searchable(path: &str) -> bool {
 fn spawn_with_pipes(req: &ExecRequest) -> Result<ExecHandle, SpawnFailure> {
     use nix::unistd::Pid;
     use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let mut cmd = Command::new(&req.program);
     cmd.args(&req.args);
+    if req.timeout_ms > 0 {
+        cmd.process_group(0);
+    }
 
     for (k, v) in &req.env {
         cmd.env(k, v);
@@ -224,10 +232,7 @@ fn spawn_with_pipes(req: &ExecRequest) -> Result<ExecHandle, SpawnFailure> {
         cmd.stderr(std::process::Stdio::from_raw_fd(stderr_write.into_raw_fd()));
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| classify_spawn_error(&req.program, &req.workdir, error))?;
-
+    let (mut child, timeout_group) = spawn_guest_child(&mut cmd, req)?;
     let pid = child.id();
 
     // Non-PTY mode: stdout and stderr are separate pipes
@@ -237,7 +242,7 @@ fn spawn_with_pipes(req: &ExecRequest) -> Result<ExecHandle, SpawnFailure> {
         stdout_read,
         Some(stderr_read),
     ) {
-        Ok(handle) => Ok(handle),
+        Ok(handle) => Ok(handle.with_timeout_group(timeout_group)),
         Err(error) => {
             terminate_child(&mut child);
             Err(error.into())
@@ -311,10 +316,7 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> Result<ExecHandle, Sp
         });
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| classify_spawn_error(&req.program, &req.workdir, error))?;
-
+    let (mut child, timeout_group) = spawn_guest_child(&mut cmd, req)?;
     let pid = child.id();
 
     // Close original slave in parent (child has its dup'd copies after fork)
@@ -364,7 +366,22 @@ fn spawn_with_pty(req: &ExecRequest, config: PtyConfig) -> Result<ExecHandle, Sp
     };
     handle.set_pty(pty_controller, config);
 
-    Ok(handle)
+    Ok(handle.with_timeout_group(timeout_group))
+}
+
+fn spawn_guest_child(
+    cmd: &mut std::process::Command,
+    req: &ExecRequest,
+) -> Result<(std::process::Child, Option<ProcessGroup>), SpawnFailure> {
+    let timed = req.timeout_ms > 0;
+    let _fence = timed.then(crate::reaper::reap_fence);
+    let child = cmd
+        .spawn()
+        .map_err(|error| classify_spawn_error(&req.program, &req.workdir, error))?;
+    let group = timed
+        .then(|| ProcessGroup::capture(nix::unistd::Pid::from_raw(child.id() as i32)))
+        .flatten();
+    Ok((child, group))
 }
 
 fn terminate_child(child: &mut std::process::Child) {

@@ -7,6 +7,7 @@ use super::capabilities::CapabilitySet;
 use super::zygote::{self, BuildSpec};
 use super::SpawnFailure;
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
+use crate::service::exec::process_instance::ProcessGroup;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::unistd::Pid;
 use std::collections::HashMap;
@@ -71,6 +72,8 @@ pub struct ContainerCommand {
     /// PTY configuration (set via with_pty())
     pty_config: Option<PtyConfig>,
 
+    capture_timeout_group: bool,
+
     /// Trusted in-process workload selection. Public exec arguments never set
     /// this field, even if argv[0] matches the internal placeholder.
     ssh_workload: Option<crate::service::ssh::SshWorkload>,
@@ -100,10 +103,16 @@ impl ContainerCommand {
             cwd: None,
             console_socket: None,
             pty_config: None,
+            capture_timeout_group: false,
             ssh_workload: None,
             id,
             state_root,
         }
+    }
+
+    pub(crate) fn with_timeout_group(mut self) -> Self {
+        self.capture_timeout_group = true;
+        self
     }
 
     /// Enable PTY mode with configuration
@@ -304,12 +313,12 @@ impl ContainerCommand {
         tracing::debug!(container_id = %self.id, "spawning with pipes");
 
         let pipes = Some((stdin_read, stdout_write, stderr_write));
-        let pid = self.build_and_spawn(pipes).await?;
+        let (pid, timeout_group) = self.build_and_spawn(pipes).await?;
 
         tracing::debug!(pid = pid.as_raw(), "spawned with pipes");
         // Non-PTY mode: stdout and stderr are separate pipes
         match ExecHandle::new(pid, stdin_write, stdout_read, Some(stderr_read)) {
-            Ok(handle) => Ok(handle),
+            Ok(handle) => Ok(handle.with_timeout_group(timeout_group)),
             Err(error) => {
                 terminate_process(pid);
                 Err(error.into())
@@ -335,12 +344,13 @@ impl ContainerCommand {
         );
 
         self.console_socket = Some(socket.path().to_string());
-        let pid = self.build_and_spawn(None).await?;
+        let (pid, timeout_group) = self.build_and_spawn(None).await?;
 
         Ok(SpawnResult::PtyPending(SpawnedPty {
             pid,
             socket,
             config,
+            timeout_group,
         }))
     }
 
@@ -377,7 +387,7 @@ impl ContainerCommand {
     async fn build_and_spawn(
         &self,
         pipes: Option<(OwnedFd, OwnedFd, OwnedFd)>,
-    ) -> Result<Pid, SpawnFailure> {
+    ) -> Result<(Pid, Option<ProcessGroup>), SpawnFailure> {
         let program = self.program.clone().unwrap_or_default();
         let mut container_args = vec![program.clone()];
         container_args.extend_from_slice(self.args.as_slice());
@@ -409,6 +419,7 @@ impl ContainerCommand {
             "exec: build starting"
         );
 
+        let timed = self.capture_timeout_group;
         let spec = BuildSpec {
             container_id: self.id.clone(),
             state_root: self.state_root.clone(),
@@ -421,12 +432,13 @@ impl ContainerCommand {
             uid,
             gid,
             capabilities: self.capabilities.clone(),
+            capture_timeout_group: timed,
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
         // pipes must live until sendmsg duplicates them via SCM_RIGHTS,
         // then drop to close the parent's copies (so pipe readers see EOF).
-        let pid = tokio::task::spawn_blocking(move || {
+        let (pid, timeout_group) = tokio::task::spawn_blocking(move || {
             let raw_fds = pipes
                 .as_ref()
                 .map(|(a, b, c)| [a.as_raw_fd(), b.as_raw_fd(), c.as_raw_fd()]);
@@ -459,7 +471,7 @@ impl ContainerCommand {
             "exec: build completed"
         );
 
-        Ok(pid)
+        Ok((pid, timeout_group))
     }
 }
 
@@ -486,6 +498,7 @@ pub(crate) struct SpawnedPty {
     pid: Pid,
     socket: super::console_socket::ConsoleSocket,
     config: PtyConfig,
+    timeout_group: Option<ProcessGroup>,
 }
 
 impl SpawnedPty {
@@ -505,6 +518,7 @@ impl SpawnedPty {
             }
         };
         create_pty_child(self.pid, pty_master, self.config)
+            .map(|handle| handle.with_timeout_group(self.timeout_group))
     }
 }
 

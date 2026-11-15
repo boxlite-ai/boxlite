@@ -4,13 +4,12 @@ SimpleBox - Foundation for specialized container types.
 Provides common functionality for all specialized boxes (CodeBox, BrowserBox, etc.)
 """
 
-import asyncio
 import logging
 from enum import IntEnum
 from typing import TYPE_CHECKING, Optional
 
 from .agents import Agents
-from .exec import ExecResult
+from .exec import ExecResult, _collect_exec_result
 
 if TYPE_CHECKING:
     from .boxlite import (
@@ -335,6 +334,8 @@ class SimpleBox:
             user: User to run as (format: <name|uid>[:<group|gid>], like docker exec --user).
                   If None, uses the container's default user from image config.
             timeout: Execution timeout in seconds (default: no timeout).
+                     Output and exit status are collected for up to three
+                     additional seconds after a timed execution's deadline.
             cwd: Working directory inside the container (default: container's configured workdir).
 
         Returns:
@@ -368,73 +369,7 @@ class SimpleBox:
             cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
         )
 
-        # Get streams from Rust execution
-        try:
-            stdout = execution.stdout()
-        except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stdout stream
-            logger.error(f"take stdout err: {e}")
-            stdout = None
-
-        try:
-            stderr = execution.stderr()
-        except Exception as e:  # noqa: BLE001 - native binding call; fall back to no stderr stream
-            logger.error(f"take stderr err: {e}")
-            stderr = None
-
-        # Collect stdout and stderr concurrently to avoid deadlock.
-        # Sequential reads can deadlock when a process fills one pipe buffer
-        # while the SDK is blocked reading the other.
-        stdout_lines = []
-        stderr_lines = []
-
-        async def collect_stdout():
-            if not stdout:
-                return
-            logger.debug("collecting stdout")
-            try:
-                async for line in stdout:
-                    if isinstance(line, bytes):
-                        stdout_lines.append(line.decode("utf-8", errors="replace"))
-                    else:
-                        stdout_lines.append(line)
-            except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
-                logger.error(f"collecting stdout err: {e}")
-
-        async def collect_stderr():
-            if not stderr:
-                return
-            logger.debug("collecting stderr")
-            try:
-                async for line in stderr:
-                    if isinstance(line, bytes):
-                        stderr_lines.append(line.decode("utf-8", errors="replace"))
-                    else:
-                        stderr_lines.append(line)
-            except Exception as e:  # noqa: BLE001 - stream collection must not crash exec(); partial output is acceptable
-                logger.error(f"collecting stderr err: {e}")
-
-        await asyncio.gather(collect_stdout(), collect_stderr())
-
-        stdout = "".join(stdout_lines)
-        stderr = "".join(stderr_lines)
-
-        error_message = None
-        try:
-            exec_result = await execution.wait()
-            exit_code = exec_result.exit_code
-            error_message = exec_result.error_message
-        except Exception as e:  # noqa: BLE001 - native binding call; report failure via exit_code instead of raising
-            logger.error(f"failed to wait execution: {e}")
-            exit_code = -1
-
-        logger.debug(f"exec finish, exit_code: {exit_code}")
-
-        return ExecResult(
-            exit_code=exit_code,
-            stdout=stdout,
-            stderr=stderr,
-            error_message=error_message,
-        )
+        return await _collect_exec_result(execution, timeout, logger)
 
     async def tunnel(
         self,

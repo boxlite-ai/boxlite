@@ -47,7 +47,7 @@ fn tenant_build_missing_state_closes_fds_for_both_executors() {
             let mut spec = tenant_spec_named("missing-container");
             spec.state_root = state_root.path().into();
             spec.ssh_workload = ssh_workload;
-            let result = do_build(spec, Some(fds));
+            let result = do_build(spec, Some(fds), None);
             assert!(
                 matches!(&result, BuildResult::Failed { error } if error == "build failed: container state directory does not exist"),
                 "{result:?}"

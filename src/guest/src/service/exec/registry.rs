@@ -558,7 +558,7 @@ impl ExecutionRegistry {
         tokio::spawn(async move {
             registry.ensure_lifecycle_manager().await;
             let exit = state.wait_exit(&execution_id).await;
-            state.cancel_timeout_task().await;
+            state.finish_timeout_task().await;
             let output = state.wait_terminal_output_summary().await;
             let snapshot = TerminalSnapshot { exit, output };
             let retained_bytes = state.retained_output_bytes().await;
@@ -696,6 +696,7 @@ mod release_tests {
     use crate::service::exec::exec_handle::{ExecHandle, ExitStatus};
     use crate::service::exec::output::{OutputStreamSummary, OutputTerminalSummary};
     use crate::service::exec::state::{ExecutionExit, TerminalSnapshot};
+    use crate::service::exec::timeout::TimeoutTask;
     use nix::unistd::{pipe, Pid};
     use std::os::unix::process::ExitStatusExt;
     use std::time::Instant;
@@ -958,7 +959,9 @@ mod release_tests {
         );
         let timeout_task = tokio::spawn(std::future::pending());
         let timeout_abort = timeout_task.abort_handle();
-        state.set_timeout_task(timeout_task).await;
+        state
+            .set_timeout_task(TimeoutTask::without_group_for_test(timeout_task))
+            .await;
 
         registry
             .register("leader-exited-pipe-open".into(), state)
