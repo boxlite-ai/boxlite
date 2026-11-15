@@ -33,6 +33,10 @@ export interface RunnerHealthcheck {
      */
     'supportsPrivileged'?: boolean;
     /**
+     * Capabilities the runner binary supports (e.g. "filestore"). Absent from runners predating capability reporting, which the API treats as supporting none of them
+     */
+    'capabilities'?: string[];
+    /**
      * Runner metrics
      */
     'metrics'?: RunnerHealthMetrics;

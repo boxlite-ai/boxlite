@@ -36,6 +36,9 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 
 - Checkpoint archives use the dedicated `<app>-<stage>-checkpoints` bucket with uniform access and public access prevention. API and runner `roles/storage.objectUser` grants name that bucket alone; they do not grant access to volume or infrastructure-state buckets.
 
+- For Filestore instance lookup or `roles/file.viewer`, see
+  [API runtime IAM capabilities](../api-runtime-iam.md). Deployment derives the API read grant from
+  configured instances; runner NFS network access is separate.
 
 Runner updates converge through [OS Config](runners.md); host protection does not establish rollout health.
 

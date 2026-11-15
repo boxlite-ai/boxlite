@@ -76,6 +76,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any, // boxActivityService
       {} as any, // curatedImagePins
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -89,6 +90,83 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
     }
     expect(result).toBe(SYNC_AGAIN)
     expect(updatedFields.some((u) => u.state === BoxState.STARTING)).toBe(true)
+  })
+
+  it('re-resolves the filestore target in the start metadata of a restarted box', async () => {
+    const ownRunnerId = 'runner-own-1'
+
+    const box = new Box('region-1', 'my-box')
+    box.runnerId = ownRunnerId
+    box.state = BoxState.STOPPED
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+    box.volumes = [
+      {
+        volumeId: 'volume-1',
+        mountPath: '/data',
+        filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+      },
+    ] as any
+
+    const ownRunner = { id: ownRunnerId, state: RunnerState.READY } as Runner
+    const runnerService = {
+      findOneOrFail: jest.fn(async (id: string) => {
+        if (id !== ownRunnerId) {
+          throw new Error(`unexpected runner lookup: ${id}`)
+        }
+        return ownRunner
+      }),
+    }
+
+    const startBox = jest.fn(async (_boxId: string, _token: string, _metadata: Record<string, string>) => undefined)
+    const runnerAdapterFactory = {
+      create: jest.fn(async () => ({ startBox }) as any),
+    }
+
+    const lockCode = new LockCode('lock-1')
+    const updatedFields: Partial<Box>[] = []
+    const boxRepository = {
+      update: jest.fn(async (_id: string, opts: { updateData: Partial<Box> }) => {
+        updatedFields.push(opts.updateData)
+        return box
+      }),
+    }
+    const redisLockProvider = {
+      getCode: jest.fn(async () => lockCode),
+    }
+    const organizationService = {
+      findOne: jest.fn(async () => ({ boxMetadata: {} })),
+    }
+
+    const action = new BoxStartAction(
+      runnerService as any,
+      runnerAdapterFactory as any,
+      boxRepository as any,
+      organizationService as any,
+      { getOrThrow: () => 1 } as any, // configService
+      redisLockProvider as any,
+      {} as any, // boxActivityService
+      {} as any, // curatedImagePins
+      {} as any,
+    )
+    const filestoreInstanceResolver = {
+      resolve: jest.fn().mockResolvedValue({ server: '10.0.0.9', export: '/vol2' }),
+    }
+    Object.assign(action, { filestoreInstanceResolver })
+
+    await (action as BoxAction).run(box, lockCode)
+
+    expect(filestoreInstanceResolver.resolve).toHaveBeenCalledWith('ml-scratch', 'configured')
+    const metadata = startBox.mock.calls[0][2] as { volumes: string }
+    const volumes = JSON.parse(metadata['volumes'])
+    expect(volumes).toEqual([
+      {
+        volumeId: 'volume-1',
+        mountPath: '/data',
+        subpath: undefined,
+        filestore: { instance: 'ml-scratch', server: '10.0.0.9', export: '/vol2' },
+      },
+    ])
   })
 
   it('moves a stopped box with no runner to ERROR (cross-runner recovery is not supported)', async () => {
@@ -121,6 +199,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       organizationService as any,
       { getOrThrow: () => 1 } as any,
       redisLockProvider as any,
+      {} as any,
       {} as any,
       {} as any,
     )
@@ -174,6 +253,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any,
       {} as any,
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -221,6 +301,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       redisLockProvider as any,
       {} as any,
       {} as any,
+      {} as any,
     )
 
     await (action as BoxAction).run(box, lockCode)
@@ -257,6 +338,7 @@ describe('BoxStartAction image dispatch', () => {
       { getCode: jest.fn(async () => lockCode) } as any,
       {} as any,
       curatedImagePins as any,
+      {} as any,
     )
 
     await (action as BoxAction).run(box, lockCode)

@@ -191,6 +191,9 @@ class IsNotHostPathConstraint implements ValidatorConstraintInterface {
 export class VolumeSpecDto {
   /**
    * The volume's server-assigned id or its name - the server resolves either.
+   * This includes Filestore volumes: they are Volume rows like any other
+   * (their `instance` column names the NFS instance holding the data
+   * directory), and they are referenced exactly like bucket-backed ones.
    *
    * IsNotEmpty (not just IsString) so an explicit `managed_volume: ''` is a
    * validation error on its own rather than reaching the mapper as a lookup
@@ -205,9 +208,9 @@ export class VolumeSpecDto {
   guest_path: string
 
   /**
-   * Read-only managed mounts are not implemented yet. Rejected rather than
-   * silently downgraded to read-write, which would hand the caller a writable
-   * mount they believe is protected.
+   * Read-only mounts are not implemented yet. Rejected rather than silently
+   * downgraded to read-write, which would hand the caller a writable mount
+   * they believe is protected.
    */
   @ValidateIf((_, value) => value !== undefined)
   @IsIn([false])

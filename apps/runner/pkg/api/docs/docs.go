@@ -996,6 +996,17 @@ const docTemplate = `{
                 }
             }
         },
+        "dto.FilestoreRef": {
+            "type": "object",
+            "required": [
+                "instance"
+            ],
+            "properties": {
+                "instance": {
+                    "type": "string"
+                }
+            }
+        },
         "dto.SecretDTO": {
             "type": "object",
             "required": [
@@ -1030,6 +1041,9 @@ const docTemplate = `{
         "dto.VolumeDTO": {
             "type": "object",
             "properties": {
+                "filestore": {
+                    "$ref": "#/definitions/dto.FilestoreRef"
+                },
                 "mountPath": {
                     "type": "string"
                 },

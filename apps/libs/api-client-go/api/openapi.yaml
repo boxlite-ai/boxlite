@@ -6002,20 +6002,35 @@ components:
       - stopped
       - resized
       type: string
+    BoxVolumeFilestoreRef:
+      properties:
+        instance:
+          description: Filestore instance logical name selected from the API configuration
+          example: boxlite-dev-shared
+          type: string
+      required:
+      - instance
+      type: object
     BoxVolume:
       example:
         volumeId: volume123
         mountPath: /data
+        filestore: ""
         subpath: users/alice
       properties:
         volumeId:
-          description: The ID of the volume
+          description: The ID of the volume (bucket-backed or Filestore-backed)
           example: volume123
           type: string
         mountPath:
           description: The mount path for the volume
           example: /data
           type: string
+        filestore:
+          allOf:
+          - $ref: "#/components/schemas/BoxVolumeFilestoreRef"
+          description: The Filestore instance reference; absent for bucket-backed
+            volumes
         subpath:
           description: "Optional subpath within the volume to mount. When specified,\
             \ only this S3 prefix will be accessible. When omitted, the entire volume\
@@ -6075,9 +6090,11 @@ components:
         volumes:
         - volumeId: volume123
           mountPath: /data
+          filestore: ""
           subpath: users/alice
         - volumeId: volume123
           mountPath: /data
+          filestore: ""
           subpath: users/alice
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
@@ -6273,9 +6290,11 @@ components:
           volumes:
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
@@ -6311,9 +6330,11 @@ components:
           volumes:
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
@@ -6937,6 +6958,13 @@ components:
         supportsPrivileged:
           description: Runner preserves the guest privileged creation option
           type: boolean
+        capabilities:
+          description: Capabilities the runner binary supports (e.g. "filestore"). Absent
+            from runners predating capability reporting, which the API treats as supporting
+            none of them
+          items:
+            type: string
+          type: array
         metrics:
           allOf:
           - $ref: "#/components/schemas/RunnerHealthMetrics"
@@ -7009,6 +7037,18 @@ components:
           - $ref: "#/components/schemas/VolumeState"
           description: Volume state
           example: ready
+        storageBackend:
+          description: The storage backend that owns the volume
+          enum:
+          - object_storage
+          - filestore
+          example: object_storage
+          type: string
+        instance:
+          description: Filestore instance name; filestore volumes only
+          example: boxlite-dev-shared
+          nullable: true
+          type: string
         createdAt:
           description: Creation timestamp
           example: 2023-01-01T00:00:00.000Z
@@ -7034,14 +7074,29 @@ components:
       - name
       - organizationId
       - state
+      - storageBackend
       - updatedAt
       type: object
     CreateVolume:
       example:
         name: my-data
+        storageBackend: filestore
+        instance: boxlite-dev-shared
       properties:
         name:
           example: my-data
+          type: string
+        storageBackend:
+          description: The storage backend that owns the volume; defaults to object_storage
+          enum:
+          - object_storage
+          - filestore
+          example: filestore
+          type: string
+        instance:
+          description: The Filestore instance the volume stores its data on; filestore
+            volumes only. Omit to assign from configured instances.
+          example: boxlite-dev-shared
           type: string
       type: object
     JobStatus:

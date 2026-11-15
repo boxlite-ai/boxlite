@@ -29,6 +29,10 @@ type VolumeDto struct {
 	OrganizationId string `json:"organizationId"`
 	// Volume state
 	State VolumeState `json:"state"`
+	// The storage backend that owns the volume
+	StorageBackend string `json:"storageBackend"`
+	// Filestore instance name; filestore volumes only
+	Instance NullableString `json:"instance,omitempty"`
 	// Creation timestamp
 	CreatedAt string `json:"createdAt"`
 	// Last update timestamp
@@ -46,12 +50,13 @@ type _VolumeDto VolumeDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewVolumeDto(id string, name string, organizationId string, state VolumeState, createdAt string, updatedAt string, errorReason NullableString) *VolumeDto {
+func NewVolumeDto(id string, name string, organizationId string, state VolumeState, storageBackend string, createdAt string, updatedAt string, errorReason NullableString) *VolumeDto {
 	this := VolumeDto{}
 	this.Id = id
 	this.Name = name
 	this.OrganizationId = organizationId
 	this.State = state
+	this.StorageBackend = storageBackend
 	this.CreatedAt = createdAt
 	this.UpdatedAt = updatedAt
 	this.ErrorReason = errorReason
@@ -160,6 +165,73 @@ func (o *VolumeDto) GetStateOk() (*VolumeState, bool) {
 // SetState sets field value
 func (o *VolumeDto) SetState(v VolumeState) {
 	o.State = v
+}
+
+// GetStorageBackend returns the StorageBackend field value
+func (o *VolumeDto) GetStorageBackend() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.StorageBackend
+}
+
+// GetStorageBackendOk returns a tuple with the StorageBackend field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *VolumeDto) GetStorageBackendOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.StorageBackend, true
+}
+
+// SetStorageBackend sets field value
+func (o *VolumeDto) SetStorageBackend(v string) {
+	o.StorageBackend = v
+}
+
+// GetInstance returns the Instance field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *VolumeDto) GetInstance() string {
+	if o == nil || IsNil(o.Instance.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.Instance.Get()
+}
+
+// GetInstanceOk returns a tuple with the Instance field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *VolumeDto) GetInstanceOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Instance.Get(), o.Instance.IsSet()
+}
+
+// HasInstance returns a boolean if a field has been set.
+func (o *VolumeDto) HasInstance() bool {
+	if o != nil && o.Instance.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetInstance gets a reference to the given NullableString and assigns it to the Instance field.
+func (o *VolumeDto) SetInstance(v string) {
+	o.Instance.Set(&v)
+}
+
+// SetInstanceNil sets the value for Instance to be an explicit nil
+func (o *VolumeDto) SetInstanceNil() {
+	o.Instance.Set(nil)
+}
+
+// UnsetInstance ensures that no value is present for Instance, not even an explicit nil
+func (o *VolumeDto) UnsetInstance() {
+	o.Instance.Unset()
 }
 
 // GetCreatedAt returns the CreatedAt field value
@@ -292,6 +364,10 @@ func (o VolumeDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["state"] = o.State
+	toSerialize["storageBackend"] = o.StorageBackend
+	if o.Instance.IsSet() {
+		toSerialize["instance"] = o.Instance.Get()
+	}
 	toSerialize["createdAt"] = o.CreatedAt
 	toSerialize["updatedAt"] = o.UpdatedAt
 	if o.LastUsedAt.IsSet() {
@@ -315,6 +391,7 @@ func (o *VolumeDto) UnmarshalJSON(data []byte) (err error) {
 		"name",
 		"organizationId",
 		"state",
+		"storageBackend",
 		"createdAt",
 		"updatedAt",
 		"errorReason",
@@ -351,6 +428,8 @@ func (o *VolumeDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "state")
+		delete(additionalProperties, "storageBackend")
+		delete(additionalProperties, "instance")
 		delete(additionalProperties, "createdAt")
 		delete(additionalProperties, "updatedAt")
 		delete(additionalProperties, "lastUsedAt")

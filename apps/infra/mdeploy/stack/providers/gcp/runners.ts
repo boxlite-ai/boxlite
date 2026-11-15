@@ -669,7 +669,22 @@ udevadm trigger --name-match=kvm || true`,
                 },
               ],
             },
-            // Keep both policies in the same assignment: each can restart its host.
+            {
+              id: 'runner-nfs-client',
+              mode: 'ENFORCEMENT',
+              resourceGroups: [
+                {
+                  resources: [
+                    {
+                      id: 'install-nfs-common',
+                      pkg: { desiredState: 'INSTALLED', apt: { name: 'nfs-common' } },
+                    },
+                  ],
+                },
+              ],
+            },
+            // The binary and environment policies can restart the runner; the NFS package
+            // is independent so a current binary cannot skip installation on an older host.
             {
               id: 'runner-unit-env',
               mode: 'ENFORCEMENT',

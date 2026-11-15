@@ -251,12 +251,17 @@ export const handlers = [
     HttpResponse.json(globalThis.localStorage?.getItem('desktop-review-empty') === '1' ? [] : MOCK_VOLUMES),
   ),
   http.post(`${API_URL}/volumes`, async ({ request }) => {
-    const body = (await request.json()) as { name?: string }
+    const body = (await request.json()) as {
+      name?: string
+      storageBackend?: 'object_storage' | 'filestore'
+    }
     const created = {
       id: `vol-${Math.abs(Date.now() % 100000000)}`,
       name: body?.name || 'unnamed-volume',
       organizationId: MOCK_ORGANIZATION.id,
-      state: 'creating',
+      storageBackend: body?.storageBackend || 'object_storage',
+      instance: body?.storageBackend === 'filestore' ? 'boxlite-dev-shared' : undefined,
+      state: body?.storageBackend === 'filestore' ? 'ready' : 'creating',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }

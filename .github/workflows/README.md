@@ -73,6 +73,10 @@ own.
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
 
+`mdeploy-all` pins the deploy checkout to `needs.resolve.outputs.sha`, keeping infrastructure and
+container images on the same resolved merge commit. Do not remove that `ref`: a branch-tip checkout
+can otherwise omit newer IAM and configuration changes while the image contains them.
+
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,10 @@ import (
 )
 
 const volumeMountPrefix = "boxlite-volume-"
+const filestoreMountPrefix = "boxlite-filestore-"
 const volumeMountRecordDir = ".boxlite-volume-mounts"
+
+var filestoreInstanceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // How long a mount command may run before it is killed. The request context
 // cannot serve as this bound: Create is handed an undeadlined gin request
@@ -34,6 +38,16 @@ const volumeMountTimeout = 90 * time.Second
 // Bound for the local mount probes and teardown. A wedged FUSE mount blocks
 // stat and umount indefinitely, which is exactly the state these run in.
 const volumeProbeTimeout = 10 * time.Second
+
+// Bound on how long Run may wait for a mount process past its context
+// deadline. A hard mount to an unreachable server parks mount(8) in
+// uninterruptible kernel sleep: SIGKILL does not land until the kernel
+// returns the syscall, so without this bound Run would block until the
+// kernel gives up -- minutes, on a blackholed server -- after the 90s
+// deadline has already fired. Past the delay the wait returns, the
+// lingering process is abandoned to the kernel, and the eventual mount
+// still lands or fails on its own.
+const volumeMountWaitDelay = 5 * time.Second
 
 // Bound for the readiness loop as a whole. It has to be a deadline rather than
 // a retry count: each probe can now burn volumeProbeTimeout against a wedged
@@ -51,26 +65,120 @@ type volumeMount struct {
 	hostPath  string
 	mountPath string
 	rootPath  string
+	// backend labels what mounts rootPath; "s3"/"gcs" for object storage, and
+	// "filestore" for an NFS mount. Records keep the label for humans and for
+	// debugging; the reclaimer keys off rootPath regardless of backend.
+	backend string
+	// filestore-only fields. dataDir is the box's own directory inside the NFS
+	// export — the bind source for this volume and the thing that survives a
+	// destroy (destroy unbinds, never deletes data).
+	dataDir           string
+	filestoreInstance string
+}
+
+// boxVolumeMountEntry is one volume of one box in the box's mount record.
+// The reclaimer counts a mount root as referenced when ANY entry names it, so
+// a box mixing an object-storage volume and a filestore volume (allowed) lands
+// as two entries with different backends in one record.
+type boxVolumeMountEntry struct {
+	Backend           string `json:"backend"`
+	RootPath          string `json:"rootPath"`
+	FilestoreInstance string `json:"filestoreInstance,omitempty"`
+	// DataDir is filestore-only: the box's own directory inside the NFS
+	// export, kept for troubleshooting. The reclaimer counts rootPath, never
+	// dataDir — destroy leaves the data behind by design.
+	DataDir string `json:"dataDir,omitempty"`
 }
 
 type boxVolumeMountRecord struct {
-	BoxID string   `json:"boxId"`
-	Paths []string `json:"paths"`
+	BoxID   string                `json:"boxId"`
+	Entries []boxVolumeMountEntry `json:"entries"`
+
+	// Paths is the legacy record shape ({boxId, paths}). Records still carry
+	// it for one release cycle so a runner binary rolled back to the
+	// pre-entries version keeps seeing the references (its reader ignores
+	// entries and would otherwise count zero references and reclaim live
+	// mounts). entries and paths hold the same deduped rootPath set; new
+	// readers fold both shapes and the reclaimer's map dedups the overlap.
+	// Remove the field and the double-write once rolling back to a
+	// pre-entries binary is no longer possible.
+	Paths []string `json:"paths,omitempty"`
 }
 
+// UnmarshalJSON folds the legacy bare-paths shape into entries, so every
+// reader sees one shape. A record from before filestore has no backend field:
+// those paths are object-storage mounts by definition (filestore did not
+// exist), and the backend label is inert for reading anyway — the reclaimer
+// keys off rootPath.
+func (r *boxVolumeMountRecord) UnmarshalJSON(data []byte) error {
+	type recordAlias struct {
+		BoxID   string                `json:"boxId"`
+		Paths   []string              `json:"paths"`
+		Entries []boxVolumeMountEntry `json:"entries"`
+	}
+	var alias recordAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	r.BoxID = alias.BoxID
+	for _, path := range alias.Paths {
+		r.Entries = append(r.Entries, boxVolumeMountEntry{Backend: volumeBackendS3, RootPath: path})
+	}
+	r.Entries = append(r.Entries, alias.Entries...)
+	return nil
+}
+
+// volumeMountBasePathOverride lets a test point every volume mount path —
+// mount roots, data dirs, record files — at a temp dir. Empty in production,
+// where the environment decides between /mnt and /tmp. Same test-replacement
+// pattern as client.go's currentUser.
+var volumeMountBasePathOverride string
+
 func getVolumeMountBasePath() string {
+	if volumeMountBasePathOverride != "" {
+		return volumeMountBasePathOverride
+	}
 	if config.GetEnvironment() == "development" {
 		return "/tmp"
 	}
 	return "/mnt"
 }
 
-func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) ([]volumeMount, error) {
+func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dto.VolumeDTO) ([]volumeMount, error) {
 	volumeMounts := make([]volumeMount, 0, len(volumes))
 
 	fuseMountedVolumes := make(map[string]bool)
+	// Per-call dedup so two volumes on the same Filestore instance run the
+	// ensure-mount once; the per-instance mutex covers cross-request races.
+	filestoreEnsured := make(map[string]bool)
 
 	for _, vol := range volumes {
+		if vol.Filestore != nil {
+			mount, err := c.filestoreVolumeMount(ctx, boxID, vol, filestoreEnsured)
+			if err != nil {
+				attrs := []any{
+					"code", "FILESTORE_VOLUME_PREPARE_FAILED",
+					"boxId", boxID,
+					"volumeId", vol.VolumeId,
+					"instance", vol.Filestore.Instance,
+					"mountPath", vol.MountPath,
+					"error", err,
+				}
+				var exitError *exec.ExitError
+				if errors.As(err, &exitError) {
+					attrs = append(attrs, "exitCode", exitError.ExitCode())
+				}
+				c.logger.ErrorContext(ctx, "Failed to prepare Filestore volume", attrs...)
+				return nil, fmt.Errorf(
+					"FILESTORE_VOLUME_PREPARE_FAILED: failed to prepare filestore volume %s on instance %s for box %s: %w",
+					vol.VolumeId, vol.Filestore.Instance, boxID, err,
+				)
+			}
+			volumeMounts = append(volumeMounts, mount)
+			continue
+		}
+
 		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
 		baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
 
@@ -104,10 +212,104 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 			hostPath:  bindSource,
 			mountPath: vol.MountPath,
 			rootPath:  baseMountPath,
+			backend:   c.volumeBackend,
 		})
 	}
 
 	return volumeMounts, nil
+}
+
+// filestoreVolumeMount prepares one filestore volume reference for binding:
+// under the instance's mutex it ensures the NFS mount exists (once per call),
+// creates the volume's data directory and writes the referencing record. The data directory is named by the volume's
+// id, not the box's: boxes sharing a volume share the directory (the
+// bucket-alignment contract), and a destroyed box's data stays reachable by
+// mounting the volume into a new box. `ensured` dedups
+// the ensure within one call; `priorMounts` are the mounts prepared earlier in
+// this call.
+//
+// Holding the lock across the whole sequence is what makes the reclaim's
+// in-lock record rescan sound: reclaim counts references from records under
+// the same per-instance mutex, so a mount cannot be reclaimed in the window
+// between "usable" and "referenced" (design §4.5).
+func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto.VolumeDTO, ensured map[string]bool) (volumeMount, error) {
+	// The volume id names a data directory under the instance's mount root.
+	// The control plane mints uuids, which cannot carry separators or '..',
+	// but this boundary must not lean on that — the same posture as the box
+	// id guard in client.go: a traversal-shaped or empty id is rejected
+	// before any path is derived. An empty id is refused outright because
+	// filestoreDataDir(root, "") would name the mount root itself, putting
+	// every volume of the instance behind one box's bind mount.
+	if vol.VolumeId == "" || strings.ContainsAny(vol.VolumeId, "/\\") || strings.Contains(vol.VolumeId, "..") {
+		return volumeMount{}, fmt.Errorf(
+			"invalid filestore volume id %q: must be a bare identifier without path separators or '..'",
+			vol.VolumeId,
+		)
+	}
+	ref := vol.Filestore
+	if !filestoreInstanceNamePattern.MatchString(ref.Instance) {
+		return volumeMount{}, fmt.Errorf("invalid filestore instance %q: must match %s", ref.Instance, filestoreInstanceNamePattern)
+	}
+	if vol.Subpath != nil && *vol.Subpath != "" {
+		return volumeMount{}, fmt.Errorf("subpath is not supported for filestore volumes")
+	}
+
+	rootPath := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+ref.Instance)
+
+	mutex := c.volumeMutexFor(filestoreMountPrefix + ref.Instance)
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if !ensured[ref.Instance] {
+		if err := c.ensureFilestoreMounted(ctx, ref, rootPath); err != nil {
+			return volumeMount{}, err
+		}
+		ensured[ref.Instance] = true
+	}
+
+	dataDir := filestoreDataDir(rootPath, vol.VolumeId)
+
+	// NFS permissions are real (unlike the FUSE backends' --dir-mode
+	// fakes), so the directory needs an explicit chmod after mkdir — plain
+	// MkdirAll is masked by umask, and 0777 matches the posture the FUSE
+	// backends reach for with --dir-mode 0777.
+	if err := os.MkdirAll(dataDir, 0777); err != nil {
+		return volumeMount{}, fmt.Errorf("failed to create filestore data directory %s: %s", dataDir, err)
+	}
+	if err := os.Chmod(dataDir, 0777); err != nil {
+		return volumeMount{}, fmt.Errorf("failed to chmod filestore data directory %s: %s", dataDir, err)
+	}
+
+	mount := volumeMount{
+		hostPath:          dataDir,
+		mountPath:         vol.MountPath,
+		rootPath:          rootPath,
+		backend:           volumeBackendFilestore,
+		dataDir:           dataDir,
+		filestoreInstance: ref.Instance,
+	}
+
+	// The referencing record is written inside the same critical section —
+	// this is what design §4.5.2 pins: reclaim rescans records under this
+	// instance's mutex, so the reference must become visible while the mount
+	// is still protected. The entry is merged into the record instead of
+	// replacing it: the record stays authoritative for a running box, and an
+	// in-lock replacement would publish just the processed prefix — a
+	// Start whose later volume failed would leave the record truncated while
+	// the box kept every mount, handing the orphan reclaimer live references.
+	if err := c.mergeBoxVolumeMountRecord(ctx, boxID, []volumeMount{mount}); err != nil {
+		return volumeMount{}, err
+	}
+
+	return mount, nil
+}
+
+// filestoreDataDir derives the volume's data directory inside an instance's
+// NFS export: {mount root}/{volume_id}. Volumes are shared resources — boxes
+// mounting the same volume land in the same directory, and a destroyed box's
+// data stays reachable through the volume id.
+func filestoreDataDir(rootPath string, volumeId string) string {
+	return filepath.Join(rootPath, volumeId)
 }
 
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
@@ -128,7 +330,7 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 		return nil
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, volumes)
+	volumeMounts, err := c.getVolumeMounts(ctx, boxID, volumes)
 	if err != nil {
 		return err
 	}
@@ -137,18 +339,11 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 }
 
 func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {
-	c.volumeMutexesMutex.Lock()
-	volumeMutex, exists := c.volumeMutexes[volumeId]
-	if !exists {
-		volumeMutex = &sync.Mutex{}
-		c.volumeMutexes[volumeId] = volumeMutex
-	}
-	c.volumeMutexesMutex.Unlock()
-
+	volumeMutex := c.volumeMutexFor(volumeId)
 	volumeMutex.Lock()
 	defer volumeMutex.Unlock()
 
-	mounted, err := c.isDirectoryMounted(ctx, mountPath)
+	mounted, err := c.probeMounted(ctx, mountPath)
 	if err != nil {
 		// Guessing here is what makes a stale mount look absent: we would mount
 		// over it, then treat the directory as pre-existing and tear it down.
@@ -184,6 +379,92 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 
 	c.logger.InfoContext(ctx, "mounted volume", "volumeId", volumeId, "mountPath", mountPath, "backend", c.volumeBackend)
 	return nil
+}
+
+// ensureFilestoreMounted is the NFS twin of ensureVolumeFuseMounted, with two
+// deliberate differences. No systemd-run scope: NFS is a kernel mount with no
+// daemon, so there is nothing that dies with the runner service's cgroup. And
+// no backend flag — the protocol is pinned to NFSv4.1 (the only version the
+// Zonal/Regional tiers serve), hard, on the kernel defaults for timeo/retrans.
+// Everything else is the same contract: the is-mounted probe, the 90s mount
+// timeout (a hard mount to an unreachable server retries forever in the
+// foreground — the timeout is what ends it), the readiness wait, and the
+// failure cleanup. Unlike its FUSE twin it takes no lock of its own: the
+// caller holds the instance mutex so that probing, mounting, preparing the
+// data directory and writing the referencing record form ONE critical section
+// against reclaim (design §4.5).
+func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreRef, mountRoot string) error {
+	mounted, err := c.probeMounted(ctx, mountRoot)
+	if err != nil {
+		// Same reasoning as the FUSE twin: guessing here is what makes a stale
+		// mount look absent, and mounting over a live NFS mount wedges both.
+		return fmt.Errorf("cannot determine whether filestore %s is already mounted: %w", ref.Instance, err)
+	}
+	if mounted {
+		c.logger.DebugContext(ctx, "filestore already mounted", "instance", ref.Instance, "mountRoot", mountRoot)
+		return nil
+	}
+
+	_, statErr := os.Stat(mountRoot)
+	dirExisted := statErr == nil
+
+	if err = os.MkdirAll(mountRoot, 0755); err != nil {
+		return fmt.Errorf("failed to create filestore mount root %s: %s", mountRoot, err)
+	}
+
+	c.logger.InfoContext(ctx, "mounting filestore instance", "instance", ref.Instance, "server", ref.Server, "export", ref.Export, "mountRoot", mountRoot)
+
+	mountCtx, cancelMount := context.WithTimeout(ctx, volumeMountTimeout)
+	defer cancelMount()
+
+	cmd := c.getNfsMountCmd(mountCtx, ref, mountRoot)
+	if err = c.runMount(cmd); err != nil {
+		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
+		return fmt.Errorf("failed to mount filestore %s to %s: %s", ref.Instance, mountRoot, err)
+	}
+
+	if err = c.waitForMountReady(ctx, mountRoot); err != nil {
+		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
+		return fmt.Errorf("mount %s not ready after mounting: %s", mountRoot, err)
+	}
+
+	c.logger.InfoContext(ctx, "mounted filestore instance", "instance", ref.Instance, "mountRoot", mountRoot)
+	return nil
+}
+
+// nfsMountArgs builds the argv for one mount(8) invocation: NFSv4.1 and hard,
+// with kernel defaults for timeo/retrans. A pure function so a test can pin
+// the argv — the protocol and retry posture are design-pinned and are the
+// contract with the API's Filestore discovery.
+func nfsMountArgs(ref *dto.FilestoreRef, path string) []string {
+	opts := "vers=4.1,hard"
+	return []string{"-t", "nfs", "-o", opts, ref.Server + ":" + ref.Export, path}
+}
+
+// getNfsMountCmd wraps nfsMountArgs in the command to run. No systemd-run
+// scope here, unlike the FUSE backends: NFS is a kernel mount with no daemon,
+// so nothing dies with the runner service's cgroup and the plain
+// context-bound exec is the whole story. Output goes to the same log writers
+// the FUSE mounts use, so a failing mount shows up in the runner's logs.
+func (c *Client) getNfsMountCmd(ctx context.Context, ref *dto.FilestoreRef, path string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "mount", nfsMountArgs(ref, path)...)
+	cmd.Env = os.Environ()
+	// The deadline kills a wedged mount; this bounds the wait when the kill
+	// itself is delayed by the kernel (see volumeMountWaitDelay).
+	cmd.WaitDelay = volumeMountWaitDelay
+	cmd.Stderr = io.Writer(&log.ErrorLogWriter{})
+	cmd.Stdout = io.Writer(&log.InfoLogWriter{})
+	return cmd
+}
+
+// runMount executes a mount command, through the injectable runner when a
+// test installed one. This is the concurrency test's seam: counting real
+// mounts would need a real NFS server; counting invocations here needs none.
+func (c *Client) runMount(cmd *exec.Cmd) error {
+	if c.mountRunner != nil {
+		return c.mountRunner(cmd)
+	}
+	return cmd.Run()
 }
 
 // mountProbeCmd and umountCmd exist as separate builders so a test can assert
@@ -297,6 +578,38 @@ func (c *Client) umountPath(ctx context.Context, path string) error {
 	return umountCmd(umountCtx, path).Run()
 }
 
+// probeMounted answers whether path is a mountpoint, through the injectable
+// probe when a test installed one. The mount seam alone cannot make the
+// concurrency test decidable on every host: the readiness wait reads a host
+// binary (`mountpoint`), which a dev machine may not have. Production keeps
+// the real probe — NewClient sets neither seam.
+func (c *Client) probeMounted(ctx context.Context, path string) (bool, error) {
+	if c.probeRunner != nil {
+		return c.probeRunner(ctx, path)
+	}
+	return c.isDirectoryMounted(ctx, path)
+}
+
+// volumeMutexFor returns the per-key mutex for a mount key, creating it on
+// first use. The key was the volume id for object storage; it generalizes to
+// the prefixed instance name for filestore, so one instance's ensure-mount,
+// reclaim decision and in-lock record rescan all serialize on one lock.
+func (c *Client) volumeMutexFor(key string) *sync.Mutex {
+	c.volumeMutexesMutex.Lock()
+	defer c.volumeMutexesMutex.Unlock()
+	// Tests construct Clients without the map; lazily create it so every
+	// lock-taking path is safe on any Client. NewClient still initializes it.
+	if c.volumeMutexes == nil {
+		c.volumeMutexes = make(map[string]*sync.Mutex)
+	}
+	volumeMutex, exists := c.volumeMutexes[key]
+	if !exists {
+		volumeMutex = &sync.Mutex{}
+		c.volumeMutexes[key] = volumeMutex
+	}
+	return volumeMutex
+}
+
 // readable answers whether the mountpoint can be listed, without inheriting a
 // hang if it cannot. os.Stat and os.ReadDir are uninterruptible on a FUSE mount
 // whose daemon has attached and then wedged — exactly the state this readiness
@@ -342,7 +655,7 @@ func (c *Client) waitForMountReady(ctx context.Context, path string) error {
 	defer cancel()
 
 	for attempt := 1; ; attempt++ {
-		mounted, err := c.isDirectoryMounted(readyCtx, path)
+		mounted, err := c.probeMounted(readyCtx, path)
 		if err != nil {
 			return notReadyError(ctx, readyCtx)
 		}
@@ -375,6 +688,10 @@ func (c *Client) waitForMountReady(ctx context.Context, path string) error {
 const (
 	volumeBackendS3  = "s3"
 	volumeBackendGCS = "gcs"
+	// filestore is not selectable by VOLUME_STORAGE_BACKEND — that flag
+	// chooses the bucket backend, and a Filestore mount is chosen per volume
+	// reference instead. The label only ever appears in mount records.
+	volumeBackendFilestore = "filestore"
 )
 
 // The permission bits both mounts present. Paired with allow_other, they are
@@ -498,24 +815,161 @@ func (c *Client) wrapMountCmd(ctx context.Context, spec mountSpec) *exec.Cmd {
 	return cmd
 }
 
+// readBoxVolumeMountRecord reads a box's record from disk. A missing record is
+// not an error: it means no create or replay ever wrote one for the box, which
+// is the empty record — a caller merging into it starts from nothing rather
+// than failing the merge.
+//
+// Parsed through a neutral alias rather than the record's own UnmarshalJSON.
+// That reader folds the legacy paths into entries unconditionally, and a
+// read-modify-write cycle through it (the merge) would copy the folded
+// duplicates back into the file's entries on every write — the record would
+// grow by its paths count per merge. The two shapes are distinguished instead:
+// a record with entries carries its content in entries (paths is the derived
+// legacy mirror every writer emits alongside them), and only a pre-entries
+// record keeps its references in paths, folded here into s3 entries exactly as
+// the compat reader folds them.
+func (c *Client) readBoxVolumeMountRecord(boxID string) (*boxVolumeMountRecord, error) {
+	path := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &boxVolumeMountRecord{BoxID: boxID}, nil
+		}
+		return nil, err
+	}
+
+	var alias struct {
+		BoxID   string                `json:"boxId"`
+		Paths   []string              `json:"paths"`
+		Entries []boxVolumeMountEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return nil, err
+	}
+
+	record := &boxVolumeMountRecord{BoxID: alias.BoxID, Entries: alias.Entries}
+	if len(alias.Entries) == 0 {
+		for _, legacyPath := range alias.Paths {
+			record.Entries = append(record.Entries, boxVolumeMountEntry{Backend: volumeBackendS3, RootPath: legacyPath})
+		}
+	}
+	if record.BoxID == "" {
+		record.BoxID = boxID
+	}
+	return record, nil
+}
+
+// mergeBoxVolumeMountRecord adds mounts' entries to the box's existing record
+// and rewrites it, keeping every entry already on disk. It is the in-lock
+// write of filestoreVolumeMount, where an in-lock replacement would publish
+// just the processed prefix: a volume list whose later volume fails would
+// leave the record truncated while the box kept every mount, handing the
+// orphan reclaimer live references. The full rewrite that ends a successful
+// volume list (recordBoxVolumeMounts) is what makes the record exact again.
+func (c *Client) mergeBoxVolumeMountRecord(ctx context.Context, boxID string, mounts []volumeMount) error {
+	if boxID == "" || len(mounts) == 0 {
+		return nil
+	}
+
+	record, err := c.readBoxVolumeMountRecord(boxID)
+	if err != nil {
+		return err
+	}
+
+	// boxVolumeMountEntry is comparable, so it keys the seen-set directly: an
+	// entry already on disk (or repeated within this call) is kept as-is, not
+	// duplicated.
+	seen := make(map[boxVolumeMountEntry]bool, len(record.Entries)+len(mounts))
+	for _, entry := range record.Entries {
+		seen[entry] = true
+	}
+	for _, mount := range mounts {
+		entry := boxVolumeMountEntry{
+			Backend:           mount.backend,
+			RootPath:          normalizeVolumePath(mount.rootPath),
+			FilestoreInstance: mount.filestoreInstance,
+		}
+		// dataDir is filestore-only; an empty one stays absent rather than
+		// normalized into a meaningless "."
+		if mount.dataDir != "" {
+			entry.DataDir = normalizeVolumePath(mount.dataDir)
+		}
+		if !seen[entry] {
+			seen[entry] = true
+			record.Entries = append(record.Entries, entry)
+		}
+	}
+
+	// paths (legacy) is rebuilt from the merged entries under the same deduped
+	// rootPath rule recordBoxVolumeMounts writes, so both record readers keep
+	// seeing the same reference set.
+	record.Paths = dedupedRootPaths(record.Entries)
+
+	return c.writeBoxVolumeMountRecord(ctx, boxID, *record)
+}
+
 func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts []volumeMount) error {
 	if boxID == "" || len(mounts) == 0 {
 		return nil
 	}
 
-	pathsByRoot := make(map[string]struct{})
+	// One entry per declared volume. The reclaimer dedups by rootPath, so a
+	// box mounting the same instance twice keeps both data directories on
+	// record while counting the mount root once.
+	entries := make([]boxVolumeMountEntry, 0, len(mounts))
 	for _, mount := range mounts {
-		pathsByRoot[normalizeVolumePath(mount.rootPath)] = struct{}{}
-	}
-
-	paths := make([]string, 0, len(pathsByRoot))
-	for path := range pathsByRoot {
-		paths = append(paths, path)
+		entry := boxVolumeMountEntry{
+			Backend:           mount.backend,
+			RootPath:          normalizeVolumePath(mount.rootPath),
+			FilestoreInstance: mount.filestoreInstance,
+		}
+		// dataDir is filestore-only; an empty one stays absent rather than
+		// normalized into a meaningless "."
+		if mount.dataDir != "" {
+			entry.DataDir = normalizeVolumePath(mount.dataDir)
+		}
+		entries = append(entries, entry)
 	}
 
 	record := boxVolumeMountRecord{
-		BoxID: boxID,
-		Paths: paths,
+		BoxID:   boxID,
+		Entries: entries,
+		Paths:   dedupedRootPaths(entries),
+	}
+
+	return c.writeBoxVolumeMountRecord(ctx, boxID, record)
+}
+
+// dedupedRootPaths builds the legacy Paths field from entries: the deduped
+// rootPath set, in entry order.
+//
+// paths is written alongside entries for one release cycle: a runner binary
+// rolled back to the pre-entries version reads only Paths, and an entries-only
+// record would read as zero references — its cleanup would then reclaim live
+// mounts. The deduped rootPath set serves both readers. Stop writing it once a
+// rollback to a pre-entries binary is no longer possible (remove this helper
+// and the struct's Paths field).
+func dedupedRootPaths(entries []boxVolumeMountEntry) []string {
+	paths := make([]string, 0, len(entries))
+	seenRoot := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if !seenRoot[entry.RootPath] {
+			seenRoot[entry.RootPath] = true
+			paths = append(paths, entry.RootPath)
+		}
+	}
+	return paths
+}
+
+// writeBoxVolumeMountRecord persists one box's record: marshal, ensure the
+// record directory, write a uniquely named temp sibling, rename over the
+// record. Every writer of a record — the full rewrite and the in-lock merge —
+// goes through here, so the seam check sits at the top of this function and
+// covers them both.
+func (c *Client) writeBoxVolumeMountRecord(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+	if c.writeRecordSeam != nil {
+		return c.writeRecordSeam(ctx, boxID, record)
 	}
 
 	data, err := json.Marshal(record)
@@ -529,11 +983,32 @@ func (c *Client) recordBoxVolumeMounts(ctx context.Context, boxID string, mounts
 	}
 
 	path := filepath.Join(dir, boxID+".json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write volume mount record %s: %w", path, err)
+	// Write to a uniquely named sibling temp file and rename. A reader
+	// mid-file (the orphan reclaimer scans every record) must see the old
+	// content or the new content, never a torn half of both; rename is atomic
+	// on the same filesystem. The unique name keeps two concurrent writers of
+	// the same box's record (create replay) from truncating each other's temp
+	// file, and it never ends in .json, so the scanner skips it.
+	tmp, err := os.CreateTemp(dir, boxID+".json.*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp volume mount record in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write volume mount record %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to close volume mount record %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace volume mount record %s: %w", path, err)
 	}
 
-	c.logger.DebugContext(ctx, "recorded box volume mounts", "box", boxID, "paths", paths)
+	c.logger.DebugContext(ctx, "recorded box volume mounts", "box", boxID, "entries", len(record.Entries))
 	return nil
 }
 
@@ -550,6 +1025,100 @@ func (c *Client) removeBoxVolumeMountRecord(ctx context.Context, boxID string) e
 
 	c.logger.DebugContext(ctx, "removed box volume mount record", "box", boxID)
 	return nil
+}
+
+// removeBoxVolumeMountRecordLocked deletes a box's record under each
+// referenced filestore instance's mutex, in turn. A reclaim decision for an
+// instance runs under that instance's lock; deleting the record under the
+// same lock means the deletion cannot interleave with an in-flight "is this
+// mount referenced?" decision for any of the instances the box used (design
+// §4.5.3). The file is deleted once — the call is idempotent for the
+// remaining instances. Without filestore instances the plain unlocked delete
+// keeps the object-storage behavior exactly as it was.
+func (c *Client) removeBoxVolumeMountRecordLocked(ctx context.Context, boxID string, instances []string) error {
+	locked := make(map[string]bool, len(instances))
+	var firstErr error
+	for _, instance := range instances {
+		if locked[instance] {
+			continue
+		}
+		locked[instance] = true
+
+		mutex := c.volumeMutexFor(filestoreMountPrefix + instance)
+		mutex.Lock()
+		err := c.removeBoxVolumeMountRecord(ctx, boxID)
+		mutex.Unlock()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if len(locked) == 0 {
+		return c.removeBoxVolumeMountRecord(ctx, boxID)
+	}
+	return firstErr
+}
+
+// hasFilestoreRef answers whether the box declares any Filestore volume.
+// Only a filestore volume writes its record entry inside the instance
+// critical section -- before the volume list completes -- so it is the only
+// kind that can leave a partial record behind a getVolumeMounts failure; an
+// object-storage-only list writes its record only after the list succeeds.
+func hasFilestoreRef(volumes []dto.VolumeDTO) bool {
+	for _, vol := range volumes {
+		if vol.Filestore != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// rollbackVolumeMountRecord removes a box's record after a failed create.
+// Filestore volumes write their record entries inside the instance critical
+// section, so a failure later in the same volume list -- or after the list --
+// leaves an earlier entry already on disk. Without deletion no box ever
+// exists to destroy, the dangling entry counts a reference forever, and the
+// reclaimer never reclaims the NFS mount. Deleting a record that was never
+// written is a no-op; the call sites guard on a volume list that could have
+// written one.
+func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, volumes []dto.VolumeDTO) {
+	var filestoreInstances []string
+	for _, vol := range volumes {
+		if vol.Filestore != nil {
+			filestoreInstances = append(filestoreInstances, vol.Filestore.Instance)
+		}
+	}
+	if err := c.removeBoxVolumeMountRecordLocked(ctx, boxID, filestoreInstances); err != nil {
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxID, "error", err)
+	}
+}
+
+// readFilestoreInstancesFromRecord parses a box's record and returns the
+// distinct filestore instance names it references. A missing record is not an
+// error — the box had no volumes, so there is nothing to lock.
+func (c *Client) readFilestoreInstancesFromRecord(boxID string) ([]string, error) {
+	path := filepath.Join(getVolumeMountRecordDir(), boxID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var record boxVolumeMountRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool)
+	var instances []string
+	for _, entry := range record.Entries {
+		if entry.FilestoreInstance != "" && !seen[entry.FilestoreInstance] {
+			seen[entry.FilestoreInstance] = true
+			instances = append(instances, entry.FilestoreInstance)
+		}
+	}
+	return instances, nil
 }
 
 func getVolumeMountRecordDir() string {
@@ -570,7 +1139,11 @@ func (c *Client) CleanupOrphanedVolumeMounts(ctx context.Context) {
 	}
 	c.lastVolumeCleanup = time.Now()
 
-	mountDirs, err := filepath.Glob(filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"*"))
+	// Both mount families live directly under the base: object-storage bucket
+	// mounts (`boxlite-volume-*`) and filestore NFS mounts
+	// (`boxlite-filestore-*`). Scanning only one family would leave the other
+	// family's orphans on the host forever.
+	mountDirs, err := c.globOrphanCandidates()
 	if err != nil || len(mountDirs) == 0 {
 		return
 	}
@@ -594,9 +1167,60 @@ func (c *Client) CleanupOrphanedVolumeMounts(ctx context.Context) {
 			c.logger.InfoContext(ctx, "[DRY-RUN] would clean orphaned volume mount", "path", dir)
 			continue
 		}
+
+		if strings.HasPrefix(filepath.Base(dir), filestoreMountPrefix) {
+			c.logger.InfoContext(ctx, "cleaning orphaned filestore mount", "path", dir)
+			c.reclaimFilestoreMount(ctx, dir)
+			continue
+		}
+
 		c.logger.InfoContext(ctx, "cleaning orphaned volume mount", "path", dir)
 		c.unmountAndRemoveDir(ctx, dir)
 	}
+}
+
+// globOrphanCandidates lists the mount roots of both volume families.
+func (c *Client) globOrphanCandidates() ([]string, error) {
+	base := getVolumeMountBasePath()
+	var dirs []string
+	for _, prefix := range []string{volumeMountPrefix, filestoreMountPrefix} {
+		matches, err := filepath.Glob(filepath.Join(base, prefix+"*"))
+		if err != nil {
+			return nil, err
+		}
+		dirs = append(dirs, matches...)
+	}
+	return dirs, nil
+}
+
+// reclaimFilestoreMount tears down one instance's NFS mount root after
+// re-checking the records under the instance's own mutex. The outer cleanup
+// loop decided "orphaned" from a scan that is stale the moment it finishes.
+// The rescan alone would not close that window: a create between the outer
+// scan and this lock would still have its record unwritten. It closes because
+// the other side holds this same lock — filestoreVolumeMount keeps the
+// instance mutex across mount + data-dir + record write (design §4.5.2), so a
+// reference either predates this lock (the rescan sees it) or can only arrive
+// after it is released. A mount that reads unreferenced here is genuinely
+// unreferenced.
+func (c *Client) reclaimFilestoreMount(ctx context.Context, dir string) {
+	mutex := c.volumeMutexFor(filepath.Base(dir))
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	inUse, err := c.getRecordedVolumeMounts()
+	if err != nil {
+		// The reclaimer only ever acts on what the records prove. A record
+		// read that fails proves nothing, so the mount survives this round.
+		c.logger.WarnContext(ctx, "skipping filestore reclaim, records unreadable", "path", dir, "error", err)
+		return
+	}
+	if inUse[normalizeVolumePath(dir)] {
+		c.logger.InfoContext(ctx, "filestore mount became referenced during cleanup, keeping it", "path", dir)
+		return
+	}
+
+	c.unmountAndRemoveDir(ctx, dir)
 }
 
 func (c *Client) getRecordedVolumeMounts() (map[string]bool, error) {
@@ -626,9 +1250,9 @@ func (c *Client) getRecordedVolumeMounts() (map[string]bool, error) {
 			return nil, err
 		}
 
-		for _, path := range record.Paths {
-			cleanPath := normalizeVolumePath(path)
-			if strings.HasPrefix(cleanPath, filepath.Join(getVolumeMountBasePath(), volumeMountPrefix)) {
+		for _, mountEntry := range record.Entries {
+			cleanPath := normalizeVolumePath(mountEntry.RootPath)
+			if isOwnedMountPath(cleanPath) {
 				inUse[cleanPath] = true
 			}
 		}
@@ -637,15 +1261,34 @@ func (c *Client) getRecordedVolumeMounts() (map[string]bool, error) {
 	return inUse, nil
 }
 
+// isOwnedMountPath answers whether a path sits under one of the prefixes the
+// runner mounts volumes at — object storage (`boxlite-volume-`) and filestore
+// (`boxlite-filestore-`). The reclaimer checks this in three places: the
+// directory scan, the in-use filter, and the unmount guard. All three must
+// accept the same set of paths; a guard that misses filestore roots would
+// either reclaim a referenced NFS mount (destroying dataDir visibility) or
+// never reclaim an orphaned one.
+func isOwnedMountPath(path string) bool {
+	base := getVolumeMountBasePath()
+	for _, prefix := range []string{
+		filepath.Join(base, volumeMountPrefix),
+		filepath.Join(base, filestoreMountPrefix),
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) unmountAndRemoveDir(ctx context.Context, path string) {
 	mountBasePath := getVolumeMountBasePath()
-	volumeMountPath := filepath.Join(mountBasePath, volumeMountPrefix)
 	cleanPath := normalizeVolumePath(path)
-	if !strings.HasPrefix(cleanPath, volumeMountPath) {
+	if !isOwnedMountPath(cleanPath) {
 		return
 	}
 
-	mounted, probeErr := c.isDirectoryMounted(ctx, cleanPath)
+	mounted, probeErr := c.probeMounted(ctx, cleanPath)
 	if probeErr != nil {
 		// The reclaimer runs again; deleting a path we cannot prove is unmounted
 		// would strand the mount under it.

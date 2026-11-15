@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 
+import { BoxliteError } from '@/api/errors'
 import { isAxiosError } from 'axios'
 
 type SshPreferences = { keyPath?: string; hostPublicKey?: string }
@@ -29,10 +30,18 @@ export function rememberSshPreferences(key: string | undefined, update: SshPrefe
 
 /** Classify actionable failures without interpreting partial diagnostics as permission to replace keys. */
 export function sshFailureReason(error: unknown): 'missing-config' | 'authentication' | 'permission' | 'unknown' {
-  if (!isAxiosError(error)) return 'unknown'
-  if (error.response?.status === 401) return 'authentication'
-  if (error.response?.status === 403) return 'permission'
-  const data = error.response?.data
+  let status: number | undefined
+  let data: any
+  if (error instanceof BoxliteError) {
+    status = error.statusCode
+    data = { message: error.message }
+  } else {
+    if (!isAxiosError(error)) return 'unknown'
+    status = error.response?.status
+    data = error.response?.data
+  }
+  if (status === 401) return 'authentication'
+  if (status === 403) return 'permission'
   let message = data?.error?.message ?? data?.message
   if (typeof message !== 'string') return 'unknown'
   // map_tonic_err adds the operation and tonic's Display envelope to guest errors.

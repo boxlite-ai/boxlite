@@ -127,13 +127,13 @@ describe('useCreateBoxMutation startup timeout recovery', () => {
 
   it.each([undefined, '', 123, { id: 'box-1' }])('does not recover a 408 without a valid Box ID: %p', async (boxId) => {
     postBody = { message: 'Timed out waiting for box box-1 to reach started', boxId }
-    await expect(submit()).rejects.toMatchObject({ response: { status: 408 } })
+    await expect(submit()).rejects.toMatchObject({ statusCode: 408 })
     expect(requests.map(({ method }) => method)).toEqual(['POST'])
   })
 
   it.each([400, 403, 409, 429, 502, 504])('preserves HTTP %s failures even if an ID is present', async (status) => {
     postStatus = status
-    await expect(submit()).rejects.toMatchObject({ response: { status } })
+    await expect(submit()).rejects.toMatchObject({ statusCode: status })
     expect(requests.map(({ method }) => method)).toEqual(['POST'])
   })
 
