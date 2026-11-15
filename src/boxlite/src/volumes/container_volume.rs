@@ -30,6 +30,8 @@ pub struct ContainerMount {
     /// For a single-file mount, the file name to bind-mount from the staged
     /// share dir; `None` for a whole-directory mount.
     pub subpath: Option<String>,
+    /// Relative directory inside a managed volume, pinned by the guest.
+    pub volume_sub_path: Option<String>,
 }
 
 /// Manages container-level volume configuration.
@@ -80,6 +82,7 @@ impl<'a> ContainerVolumeManager<'a> {
         owner_uid: u32,
         owner_gid: u32,
         subpath: Option<String>,
+        volume_sub_path: Option<String>,
     ) {
         // Add virtiofs share to guest with container_id
         // Guest will mount at convention path: /run/boxlite/shared/containers/{container_id}/volumes/{tag}
@@ -99,6 +102,7 @@ impl<'a> ContainerVolumeManager<'a> {
             owner_uid,
             owner_gid,
             subpath,
+            volume_sub_path,
         });
     }
 
@@ -114,6 +118,7 @@ impl<'a> ContainerVolumeManager<'a> {
             owner_uid: 0,
             owner_gid: 0,
             subpath: None,
+            volume_sub_path: None,
         });
     }
 
@@ -141,6 +146,7 @@ mod tests {
             0,
             0,
             Some("app.conf".to_string()),
+            None,
         );
 
         let mounts = mgr.build_container_mounts();

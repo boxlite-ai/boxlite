@@ -393,6 +393,9 @@ message BindMount {
   // guest bind-mounts {volume_dir}/{subpath} rather than the whole dir. Empty
   // for a whole-directory mount.
   string subpath = 6;
+  // Managed-volume relative directory, resolved and pinned by the guest before
+  // creating the OCI container. Empty mounts the whole payload directory.
+  string volume_sub_path = 7;
 }
 
 message ContainerInitResponse {
@@ -410,6 +413,8 @@ enum ContainerInitErrorKind {
   // Zero keeps errors from older guests, which omit this field, internal.
   CONTAINER_INIT_ERROR_KIND_INTERNAL = 0;
   CONTAINER_INIT_ERROR_KIND_UNSUPPORTED = 1;
+  CONTAINER_INIT_ERROR_KIND_INVALID_ARGUMENT = 2;
+  CONTAINER_INIT_ERROR_KIND_NOT_FOUND = 3;
 }
 
 message ContainerInitError {

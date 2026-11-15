@@ -1783,8 +1783,8 @@ void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
 // name — the server resolves either.
 //
 // `managed_volume` is the volume's id or name (`"my-data"`, `"vol_01K2…"`).
-// Managed volumes need a REST runtime; the local runtime has no volume backend
-// and rejects one at create.
+// LocalRuntime resolves managed volumes through `LocalVolumeStore`; REST
+// runtimes resolve them on the server.
 //
 // A NULL `opts`, `managed_volume`, or `guest_path` is ignored, matching
 // [`boxlite_options_add_bind_mount`].

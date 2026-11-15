@@ -100,14 +100,6 @@ fn options_from_manifest(
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
-    // The local runtime shares no typed mounts yet(TODO), so an archive that
-    // carries one is refused rather than stored and dropped at boot.
-    if !options.mounts.is_empty() {
-        return Err(BoxliteError::Unsupported(
-            "typed mounts are not supported by the local runtime yet".to_string(),
-        ));
-    }
-
     if policy == ArchiveImportPolicy::Trusted {
         return Ok(options);
     }
@@ -131,7 +123,7 @@ fn options_from_manifest(
     }
     // Every mount, not just a host bind: a managed volume reference in an
     // uploaded archive would also select storage the uploader does not own.
-    if !options.volumes.is_empty() {
+    if !options.volumes.is_empty() || !options.mounts.is_empty() {
         return Err(rejected_upload("volume mounts"));
     }
     options.advanced.security = SecurityOptions::default();
@@ -466,28 +458,30 @@ mod tests {
         assert!(error.to_string().contains("volume mounts"));
     }
 
-    /// The local runtime shares no typed mounts yet, so an archive that carries
-    /// one is refused whoever imports it, rather than stored and later dropped.
     #[test]
-    fn import_refuses_typed_mounts_until_the_local_runtime_shares_them() {
+    fn import_typed_mount_policy_depends_on_trust() {
         use crate::runtime::options::MountSpec;
 
-        for policy in [
-            ArchiveImportPolicy::Trusted,
-            ArchiveImportPolicy::UntrustedRemote,
+        let trusted = BoxOptions {
+            mounts: vec![MountSpec::bind_mount("/srv/data", "/data")],
+            ..Default::default()
+        };
+        options_from_manifest(&v3_manifest(trusted), ArchiveImportPolicy::Trusted)
+            .expect("trusted archives may carry typed mounts");
+
+        for mount in [
+            MountSpec::bind_mount("/srv/data", "/data"),
+            MountSpec::volume_mount("workspace", "/workspace"),
         ] {
             let options = BoxOptions {
-                mounts: vec![MountSpec::bind_mount("/srv/data", "/data")],
+                mounts: vec![mount],
                 ..Default::default()
             };
-
-            let error = options_from_manifest(&v3_manifest(options), policy)
-                .expect_err("the local runtime shares no typed mounts yet");
-
-            assert!(
-                error.to_string().contains("typed mounts"),
-                "{policy:?}: {error}"
-            );
+            let error =
+                options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                    .expect_err("untrusted archives must not select server storage");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert!(error.to_string().contains("volume mounts"), "{error}");
         }
     }
 
@@ -668,7 +662,7 @@ mod tests {
             std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
             build_zstd_tar_archive(&archive_path, &manifest_path, &container_path, 1).unwrap();
             let result = extract_and_validate(&archive_path, &layout);
-            if version > 6 {
+            if version > crate::litebox::archive::MAX_SUPPORTED_VERSION {
                 let error = result.unwrap_err();
                 assert!(error.to_string().contains(&format!("version {version}")));
             } else {
@@ -794,5 +788,57 @@ mod required_import_safety_tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn trusted_import_rejects_missing_canonical_volume_without_leaking_box() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let disk = home.path().join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk, None);
+        let missing_id = uuid::Uuid::new_v4().to_string();
+        let manifest = ArchiveManifest {
+            version: crate::litebox::archive::MANAGED_MOUNTS_ARCHIVE_VERSION,
+            box_name: None,
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions {
+                mounts: vec![crate::runtime::options::MountSpec::volume_mount(
+                    &missing_id,
+                    "/workspace",
+                )],
+                ..Default::default()
+            }),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: sha256_file(&disk).unwrap(),
+            exported_at: "2026-11-15T00:00:00Z".into(),
+        };
+        let manifest_path = home.path().join("manifest.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let path = home.path().join("saved.boxlite");
+        crate::litebox::archive::build_zstd_tar_archive(&path, &manifest_path, &disk, 1).unwrap();
+
+        let error = import_box(&runtime, BoxArchive::new(&path), None)
+            .await
+            .err()
+            .expect("an archive must not acquire a missing canonical volume");
+        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+        assert!(error.to_string().contains(&missing_id));
+        assert!(runtime.list_info().await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.temp_dir())
+                .unwrap()
+                .count(),
+            0
+        );
     }
 }

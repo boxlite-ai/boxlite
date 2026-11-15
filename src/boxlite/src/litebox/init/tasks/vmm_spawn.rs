@@ -152,7 +152,17 @@ async fn build_config(
     let transport = BoxTransport::unix(layout.socket_path());
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
-    let user_volumes = resolve_user_volumes(&options.volumes)?;
+    let volume_store = runtime.volume_store.clone();
+    let volume_options = options.clone();
+    let user_volumes = tokio::task::spawn_blocking(move || {
+        resolve_user_volumes(
+            &volume_options.volumes,
+            &volume_options.mounts,
+            &volume_store,
+        )
+    })
+    .await
+    .map_err(|error| BoxliteError::Internal(format!("volume resolution task failed: {error}")))??;
 
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());
@@ -195,13 +205,13 @@ async fn build_config(
         // Single-file volume: stage the file into a dedicated dir under the box's
         // shared tree (already granted to the VMM sandbox) and share that dir, so
         // virtio-fs never exposes the file's host siblings. Directories share as-is.
-        let share_dir = match &vol.subpath {
-            None => vol.host_path.clone(),
-            Some(file_name) => {
+        let share_dir = match &vol.kind {
+            crate::litebox::init::types::ResolvedShareKind::SingleFile { file_name } => {
                 let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
                 stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
                 staging_dir
             }
+            _ => vol.host_path.clone(),
         };
         container_mgr.add_volume(
             container_id.as_str(),
@@ -212,7 +222,18 @@ async fn build_config(
             vol.read_only,
             vol.owner_uid,
             vol.owner_gid,
-            vol.subpath.clone(),
+            match &vol.kind {
+                crate::litebox::init::types::ResolvedShareKind::SingleFile { file_name } => {
+                    Some(file_name.clone())
+                }
+                _ => None,
+            },
+            match &vol.kind {
+                crate::litebox::init::types::ResolvedShareKind::ManagedDirectory { sub_path } => {
+                    sub_path.clone()
+                }
+                _ => None,
+            },
         );
     }
     let container_mounts = container_mgr.build_container_mounts();
@@ -241,6 +262,20 @@ async fn build_config(
         build_network_backend(options, layout, runtime, outbound_policy.as_ref())?;
     let network_backend_spec = network_backend.as_ref().map(|backend| backend.spec());
 
+    let volume_access = user_volumes
+        .iter()
+        .filter(|volume| {
+            matches!(
+                volume.kind,
+                crate::litebox::init::types::ResolvedShareKind::ManagedDirectory { .. }
+            )
+        })
+        .map(|volume| crate::jailer::PathAccess {
+            path: volume.host_path.clone(),
+            writable: !volume.read_only,
+        })
+        .collect();
+
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
         engine: *engine_kind,
@@ -254,6 +289,7 @@ async fn build_config(
         kernel: prepared_kernel.clone(),
         // Filesystem and devices
         fs_shares: vmm_config.fs_shares,
+        volume_access,
         block_devices: vmm_config.block_devices,
         guest_entrypoint,
         transport: transport.clone(),

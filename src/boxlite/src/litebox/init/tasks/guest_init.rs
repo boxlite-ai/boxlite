@@ -37,6 +37,8 @@ const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::
 /// capabilities above: an earlier guest drops the field and starts the workload
 /// with no `/dev/kvm` while the caller believes nesting was granted.
 const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
+const MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion =
+    (0, 13, 2);
 
 pub struct GuestInitTask;
 
@@ -167,6 +169,16 @@ async fn run_guest_init(
     if !bootstrap.container.devices.is_empty() {
         guest_interface
             .require_min_version(MIN_DEVICE_GUEST_VERSION)
+            .await?;
+    }
+    if bootstrap.container.mounts.iter().any(|mount| {
+        mount
+            .volume_sub_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+    }) {
+        guest_interface
+            .require_min_version(MIN_SAFE_VOLUME_SUB_PATH_GUEST_VERSION)
             .await?;
     }
     guest_interface.init(bootstrap.guest).await?;

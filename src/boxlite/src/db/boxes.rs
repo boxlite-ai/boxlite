@@ -235,6 +235,22 @@ impl BoxStore {
         }
     }
 
+    /// List every persisted box configuration without requiring a state row.
+    pub fn list_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        let conn = self.db.conn();
+        let mut stmt = db_err!(conn.prepare("SELECT json FROM box_config"))?;
+        let rows = db_err!(stmt.query_map([], |row| row.get::<_, String>(0)))?;
+        let mut configs = Vec::new();
+        for row in rows {
+            let json = db_err!(row)?;
+            let config = serde_json::from_str(&json).map_err(|error| {
+                BoxliteError::Database(format!("Failed to deserialize config: {error}"))
+            })?;
+            configs.push(config);
+        }
+        Ok(configs)
+    }
+
     /// List all boxes as (config, state) pairs.
     ///
     /// Returns boxes sorted by creation time (newest first).

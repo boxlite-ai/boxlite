@@ -37,6 +37,8 @@ fn internal_init_error(reason: impl Into<String>) -> ContainerInitError {
 fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
     let kind = match error {
         BoxliteError::Unsupported(_) => ContainerInitErrorKind::Unsupported,
+        BoxliteError::InvalidArgument(_) => ContainerInitErrorKind::InvalidArgument,
+        BoxliteError::NotFound(_) => ContainerInitErrorKind::NotFound,
         _ => ContainerInitErrorKind::Internal,
     };
     ContainerInitError {
@@ -328,26 +330,43 @@ impl ContainerService for GuestServer {
         // container's volume folder in the share: <shared>/containers/{id}/volumes/{name}
         let container_layout = self.layout.shared().container(&container_id);
 
-        let user_mounts: Vec<UserMount> = init_req
-            .mounts
-            .iter()
-            .map(|m| {
-                let volume_dir = container_layout.volume_dir(&m.volume_name);
-                // Single-file mount: bind just the one file within the shared dir.
-                let source = if m.subpath.is_empty() {
-                    volume_dir
-                } else {
-                    volume_dir.join(&m.subpath)
-                };
-                UserMount {
-                    source: source.to_string_lossy().to_string(),
-                    destination: m.destination.clone(),
-                    read_only: m.read_only,
-                    owner_uid: m.owner_uid,
-                    owner_gid: m.owner_gid,
+        let mut resolved_mounts = Vec::new();
+        let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
+        for m in &init_req.mounts {
+            let volume_dir = container_layout.volume_dir(&m.volume_name);
+            let source = if !m.volume_sub_path.is_empty() {
+                match crate::storage::resolved_mount::ResolvedMount::pin(
+                    &volume_dir,
+                    &m.volume_sub_path,
+                    m.read_only,
+                ) {
+                    Ok(mount) => {
+                        let path = mount.path().to_path_buf();
+                        resolved_mounts.push(mount);
+                        path
+                    }
+                    Err(error) => {
+                        return Ok(Response::new(ContainerInitResponse {
+                            result: Some(container_init_response::Result::Error(init_error(
+                                "resolve managed volume sub_path",
+                                &error,
+                            ))),
+                        }));
+                    }
                 }
-            })
-            .collect();
+            } else if m.subpath.is_empty() {
+                volume_dir
+            } else {
+                volume_dir.join(&m.subpath)
+            };
+            user_mounts.push(UserMount {
+                source: source.to_string_lossy().to_string(),
+                destination: m.destination.clone(),
+                read_only: m.read_only,
+                owner_uid: m.owner_uid,
+                owner_gid: m.owner_gid,
+            });
+        }
 
         debug!(
             entrypoint = ?config.entrypoint,
@@ -393,7 +412,7 @@ impl ContainerService for GuestServer {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        match Container::start(
+        let container_result = Container::start(
             &container_id,
             &bundle_rootfs,
             config.entrypoint,
@@ -407,7 +426,9 @@ impl ContainerService for GuestServer {
             mount_override,
             devices,
             cgroup,
-        ) {
+        );
+        drop(resolved_mounts);
+        match container_result {
             Ok(mut container) => {
                 // Init is created, not yet running — Init never runs it; the
                 // host calls Container.Start for that. That its pid and stdio

@@ -1185,9 +1185,8 @@ BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 0.0.0.0
 
 **Synopsis:** `boxlite volume <create|ls|get|rm>`
 
-Manage managed persistent volumes. Volumes are a REST-runtime capability — the
-local runtime has no volume backend, so every subcommand returns
-`named volumes are not supported yet` against it. See
+Manage persistent volumes. LocalRuntime stores them under its home directory;
+REST runtimes use the selected server's volume API. See
 [Connecting to the cloud](#connecting-to-the-cloud).
 
 | Subcommand | Synopsis | Notes |
@@ -1201,9 +1200,9 @@ local runtime has no volume backend, so every subcommand returns
 wants without knowing the id:
 
 ```bash
-boxlite volume create --name my-data       # prints e.g. vol_01K2EXAMPLE
+boxlite volume create --name my-data       # prints a canonical UUID
 boxlite run -v my-data:/data alpine        # by name
-boxlite run -v vol_01K2EXAMPLE:/data alpine # or by id
+boxlite run -v <volume-uuid>:/data alpine  # or by id
 ```
 
 Names must be at least two characters of `[a-zA-Z0-9][a-zA-Z0-9_.-]` — Docker's
@@ -1341,6 +1340,11 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--volume VOLUME` | `-v` | Mount a volume; repeatable (see [Volume Mount Syntax](#volume-mount-syntax)) |
+| `--mount type=volume,source=NAME,target=PATH[,readonly][,sub_path=DIR]` | — | Typed managed-volume mount; mutually exclusive with `-v` |
+
+`sub_path` selects an existing directory inside the volume and rejects absolute paths, `..`, and
+symlinks. Reusing the same canonical volume id twice in one box is rejected; use a different box or
+volume for each mount declaration.
 
 ### `NetworkFlags`
 

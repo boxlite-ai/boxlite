@@ -46,6 +46,7 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    volume_access: Vec<PathAccess>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,6 +62,7 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            volume_access: Vec::new(),
         }
     }
 
@@ -96,6 +98,11 @@ impl<'a> ShimSpawner<'a> {
         self
     }
 
+    pub fn with_volume_access(mut self, paths: Vec<PathAccess>) -> Self {
+        self.volume_access = paths;
+        self
+    }
+
     /// Host files this shim's VM request needs to read. Empty unless the box
     /// asked for nesting, so an ordinary box widens its sandbox by nothing.
     fn required_probe_paths(&self) -> &'static [&'static str] {
@@ -117,6 +124,7 @@ impl<'a> ShimSpawner<'a> {
                 path,
                 writable: false,
             })
+            .chain(self.volume_access.clone())
             .collect()
     }
 
@@ -377,6 +385,27 @@ mod tests {
                 "must not grant anything outside the probe set: {grant:?}"
             );
         }
+    }
+
+    #[test]
+    fn managed_volume_grants_include_only_the_payload() {
+        let layout = test_layout();
+        let options = BoxOptions::default();
+        let volume_root = PathBuf::from("/home/test/volumes/volume-id");
+        let payload = volume_root.join("_data");
+        let spawner = ShimSpawner::new(Path::new("/bin/true"), &layout, "box", &options)
+            .with_volume_access(vec![PathAccess {
+                path: payload.clone(),
+                writable: false,
+            }]);
+
+        let paths = spawner.additional_path_access();
+        assert!(
+            paths
+                .iter()
+                .any(|entry| entry.path == payload && !entry.writable)
+        );
+        assert!(!paths.iter().any(|entry| entry.path == volume_root));
     }
 
     #[test]

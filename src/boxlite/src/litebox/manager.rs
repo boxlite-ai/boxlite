@@ -156,6 +156,11 @@ impl BoxManager {
         self.store.list_all()
     }
 
+    /// Get every persisted configuration, including records with no state row.
+    pub fn all_box_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        self.store.list_configs()
+    }
+
     /// Save box state to the database.
     ///
     /// Reads state from the provided BoxState and persists to DB.

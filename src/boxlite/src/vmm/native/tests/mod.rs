@@ -87,6 +87,7 @@ impl TestBox {
             memory_mib: Some(256),
             kernel,
             fs_shares: FsShares::new(),
+            volume_access: Vec::new(),
             block_devices: BlockDevices::new(),
             guest_entrypoint: Entrypoint {
                 executable: "/init".to_string(),

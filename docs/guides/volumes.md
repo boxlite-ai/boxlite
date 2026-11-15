@@ -1,117 +1,126 @@
 # Mounting volumes
 
-Mount host directories into boxes for data input/output.
+BoxLite supports host bind mounts and named local volumes. Both use virtio-fs to share a host
+directory with the guest.
 
-## Mount types
+## Host bind mounts
 
-**virtiofs (Default):**
-- High-performance file sharing
-- Low overhead
-- Real-time host-guest synchronization
-
-**QCOW2 (container disk):**
-- Block device
-- Survives stop only when the box is kept (`auto_delete=0`)
-- Copy-on-write
-
-## Read-only vs read-write
-
-**Read-Only Mount (Data Input):**
-
-```python
-volumes=[
-    ("/host/config", "/etc/app/config", True),
-    ("/host/datasets", "/mnt/data", True),
-]
-```
-
-**Read-Write Mount (Data Output):**
-
-```python
-volumes=[
-    ("/host/output", "/mnt/output", False),
-    ("/host/logs", "/var/log/app", False),
-]
-```
-
-## Common use cases
-
-### 1. Configuration files
+A bind mount exposes a host directory or file at a path inside the box. Use a tuple for host paths:
 
 ```python
 import os
 import boxlite
 
-# Mount config directory
 async with boxlite.SimpleBox(
     image="python:slim",
     volumes=[
-        (os.path.expanduser("~/.config/myapp"), "/etc/myapp", True)
-    ]
+        (os.path.expanduser("~/.config/myapp"), "/etc/myapp", True),
+        (os.path.join(os.getcwd(), "output"), "/output", False),
+    ],
+    working_dir="/output",
 ) as box:
-    result = await box.exec("cat", "/etc/myapp/config.yaml")
+    result = await box.exec("python", "process.py", "--input", "/etc/myapp/config")
     print(result.stdout)
 ```
 
-### 2. Data processing
+The third tuple element is `read_only`: `True` makes the mount read-only, `False` makes it
+read-write. Bind mounts are appropriate when the caller chooses the host path directly.
 
-```python
-# Input data (read-only), output results (read-write)
-async with boxlite.SimpleBox(
-    image="python:slim",
-    volumes=[
-        ("/data/input", "/mnt/input", True),
-        ("/data/output", "/mnt/output", False),
-    ]
-) as box:
-    await box.exec("python", "process.py", "--input", "/mnt/input", "--output", "/mnt/output")
+## Named local volumes
+
+A named local volume is managed by BoxLite rather than by a host path in box configuration. Its
+payload survives box deletion and can be mounted by multiple boxes.
+
+Create and inspect volumes with the CLI:
+
+```bash
+boxlite volume create --name workspace
+boxlite volume ls
+boxlite volume get <volume-id>
 ```
 
-### 3. Source code development
+The create command prints a UUID. The name is optional and defaults to that UUID. Get and remove
+accept only the canonical id; mount accepts either the id or the name.
 
-```python
-# Mount source code for live development
-async with boxlite.SimpleBox(
-    image="python:slim",
-    volumes=[
-        (os.getcwd(), "/workspace", False)
-    ],
-    working_dir="/workspace"
-) as box:
-    # Run tests in isolated environment
-    await box.exec("pytest", "tests/")
+Mount by name with the existing shorthand:
+
+```bash
+boxlite run --rm -v workspace:/workspace alpine:latest \
+  sh -c 'echo hello > /workspace/result.txt'
+boxlite run --rm -v workspace:/workspace:ro alpine:latest \
+  sh -c 'cat /workspace/result.txt; echo change > /workspace/result.txt'
 ```
 
-### 4. Persistent storage with QCOW2
+The second box can read the file written by the first. Its read-only mount rejects the attempted
+write. Multiple boxes may mount the same volume read-write, but BoxLite does not provide
+application-level transactions, write-conflict resolution, or locking for their workloads.
+
+### Typed volume mounts and subdirectories
+
+`--mount` provides the typed form, including `readonly` and `sub_path`:
+
+```bash
+boxlite run --rm \
+  --mount type=volume,source=workspace,target=/workspace,readonly,sub_path=team/backend \
+  alpine:latest
+```
+
+`sub_path` must name an existing directory inside the volume. It cannot be absolute, contain `.` or
+`..`, or contain a symlink. Only that subdirectory is visible at the mount target; sibling
+directories are not mounted. A missing directory returns `NotFound` and is not created implicitly.
+
+The legacy `-v` syntax supports read-only mounts but not `sub_path`. CLI typed mounts support only
+`type=volume`; host binds continue to use `-v`.
+
+A single box cannot mount the same canonical volume id more than once, even under different names,
+targets, or read-only modes. This is rejected with `InvalidArgument`. Different boxes may still
+mount the same id independently.
+
+### Lifecycle, clone, and import
+
+Every persisted box configuration that references a volume prevents its deletion, including
+configured, failed, stopped, and running boxes. `boxlite volume rm --force` ignores a missing volume
+but does not bypass this protection.
+
+After the last referencing box is removed:
+
+```bash
+boxlite volume rm <volume-id>
+```
+
+Deleting a box does not delete volume data. Cloning a box or importing a box archive on the same
+machine retains the canonical volume id and shares the same payload; it does not copy the data. An
+import fails with `NotFound` if the target machine has no volume with that id. Archives do not
+create empty replacement volumes or migrate payload automatically.
+
+The CLI's existing anonymous bind directories under `volumes/anonymous/` are unchanged and are not
+listed as named volumes.
+
+`size_bytes` is currently unset because BoxLite does not recursively scan volume payload during
+CRUD operations.
+
+## QCOW2 container disks
+
+The container rootfs uses a separate QCOW2 disk, not a named volume. It is private to the box and
+uses copy-on-write layers shared with image and clone bases. It survives stop only when the box is
+kept (`auto_delete=0`).
 
 ```python
-# Create a box that keeps its disk after stop
 box = await runtime.create(boxlite.BoxOptions(
     image="postgres:latest",
-    disk_size_gb=20,  # 20 GB disk
-    env=[("POSTGRES_PASSWORD", "secret")],
-    auto_delete=0,  # keep the box after stop
+    disk_size_gb=10,
+    auto_delete=0,
 ))
-
-# Data survives stop/restart
 await box.stop()
-# ... later ...
-box = await runtime.get(box.id)  # Disk still intact
+box = await runtime.get(box.id)
 ```
+
+Use named local volumes for independent, shared data resources; use the QCOW2 rootfs for the box's
+private container filesystem.
 
 ## Performance considerations
 
-**virtiofs Performance:**
-- Fast for small files
-- Slight overhead for large files
-- Real-time synchronization
-
-**QCOW2 Performance:**
-- Block-level access (faster for large files)
-- Copy-on-write overhead
-- No real-time sync with host
-
-**Best Practices:**
-- Use read-only mounts when possible (lower overhead)
-- Mount specific directories, not entire filesystem
-- For large datasets, consider QCOW2 disk
+- virtio-fs shares host files directly and reflects host/guest changes in real time.
+- Metadata-heavy workloads may perform differently from the QCOW2 block-device rootfs.
+- Use read-only mounts when possible.
+- Mount only the required host directory or volume `sub_path`.
