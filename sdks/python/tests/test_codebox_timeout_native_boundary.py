@@ -29,6 +29,9 @@ from boxlite.codebox import CodeBox
 class _FakeExecution:
     """Stands in for the PyO3 ``Execution`` handle returned by Rust."""
 
+    def stdin(self):
+        raise RuntimeError("stdin stream not available")
+
     def stdout(self):
         return None
 

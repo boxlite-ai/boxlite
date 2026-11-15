@@ -10,7 +10,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING, Optional
 
 from .agents import Agents
-from .exec import ExecResult
+from .exec import ExecResult, _close_exec_stdin
 
 if TYPE_CHECKING:
     from .boxlite import (
@@ -367,6 +367,8 @@ class SimpleBox:
         execution = await self._box.exec(
             cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
         )
+
+        await _close_exec_stdin(execution)
 
         # Get streams from Rust execution
         try:
