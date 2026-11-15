@@ -320,6 +320,19 @@ message ContainerInitRequest {
 
   // Device nodes to reproduce from the guest VM inside the OCI workload.
   repeated ContainerDevice devices = 7;
+
+  // Box limits written to the container cgroup. Absent from an older host.
+  ContainerResources resources = 8;
+}
+
+// Literal cgroup v2 limits, host-computed from box options. 0 means unset,
+// which leaves the controller file at the kernel default ("max").
+message ContainerResources {
+  int64 cpu_quota_us = 1;
+  uint64 cpu_period_us = 2;
+  int64 memory_limit_bytes = 3;
+  // Reserved for a future user option; the host sends 0 today.
+  int64 pids_limit = 4;
 }
 
 message ContainerStartRequest {
@@ -457,6 +470,9 @@ message ContainerAdvancedOptions {
 message LinuxOptions {
   // OCI read-only-path list, host-resolved. Empty means unconfined.
   repeated string readonly_paths = 1;
+  // Unshare a cgroup namespace and mount cgroup2 read-only at /sys/fs/cgroup,
+  // so the workload reads its own limits. Host-resolved: false for privileged.
+  bool cgroup_namespace = 2;
 }
 
 message MountOptions {

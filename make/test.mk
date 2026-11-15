@@ -890,7 +890,7 @@ test\:unit\:plugins: plugin-boxlite-force
 PHONY_TARGETS += test\:integration\:vmm\:m2 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m2\:list
 PHONY_TARGETS += test\:integration\:vmm\:m3 test\:integration\:vmm\:m3\:run test\:integration\:vmm\:m3\:list
 M2_TEST_SUITES := lifecycle shutdown detach recovery exec_options exec_user run_main_command resize_tty zygote_integration copy snapshot clone_export_import network gvproxy_backend network_spec copy_ownership execution_shutdown
-M3_TEST_SUITES := copy_ownership mount_security secret_substitution security_enforcement network_spec volume_matrix
+M3_TEST_SUITES := copy_ownership mount_security secret_substitution security_enforcement network_spec volume_matrix container_cgroup_limits
 ENGINE ?= native
 test\:integration\:vmm\:m2: MATRIX = m2
 test\:integration\:vmm\:m3: MATRIX = m3
