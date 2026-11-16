@@ -1,5 +1,6 @@
 """Validate examples and boundaries in the agent OpenAPI contract."""
 import copy
+import json
 import re
 import unittest
 from pathlib import Path
@@ -28,6 +29,18 @@ def dereference(value):
 
 
 class AgentSpecTest(unittest.TestCase):
+    def test_all_agent_operations_present(self):
+        operations = {
+            operation["operationId"]
+            for path, item in SPEC["paths"].items() if "/agents" in path
+            for method, operation in item.items()
+            if method in ("get", "post", "put", "delete", "patch")
+        }
+        self.assertEqual(operations, {
+            "createAgent", "getAgent", "getAgentTurn", "closeAgent", "sendAgentTurn",
+            "getAgentEvents", "respondAgentRequest", "steerAgentTurn", "interruptAgentTurn",
+        })
+
     def test_agent_examples(self):
         count = 0
         for path, item in SPEC["paths"].items():
@@ -91,6 +104,34 @@ class AgentSpecTest(unittest.TestCase):
         for value in ("", "x" * 257, "é", "a b", "x\n"):
             self.assertFalse(validator.is_valid(value), value)
         self.assertTrue(validator.is_valid("x" * 256))
+
+    def test_turn_request_boundaries(self):
+        for schema, body in (
+            ("AgentSendRequest", {"text": "", "options": {"mode": "queue", "data": {"zero": 0, "empty": [], "null": None}}}),
+            ("AgentRespondRequest", {"response": {"type": "permission", "approved": False}}),
+            ("AgentRespondRequest", {"response": {"type": "answer", "text": "ok", "data": {}}}),
+            ("AgentSteerRequest", {"text": "focus"}),
+            ("AgentEmptyRequest", {}),
+        ):
+            with self.subTest(schema=schema):
+                validate(schema, body)
+
+        for schema, body in (
+            ("AgentSendRequest", {"text": "x", "options": None}),
+            ("AgentSendRequest", {"text": "x", "options": {"mode": "unknown"}}),
+            ("AgentRespondRequest", {"response": {"type": "permission", "approved": None}}),
+            ("AgentRespondRequest", {"response": {"type": "unknown"}}),
+            ("AgentSteerRequest", {"text": "x", "extra": True}),
+            ("AgentEmptyRequest", {"extra": True}),
+        ):
+            with self.subTest(schema=schema, body=body), self.assertRaises(jsonschema.ValidationError):
+                validate(schema, body)
+
+    def test_stream_event_example(self):
+        path = "/{prefix}/boxes/{box_id}/agents/{agent_id}/events"
+        example = SPEC["paths"][path]["get"]["responses"]["200"]["content"]["text/event-stream"]["example"]
+        data = next(line[6:] for line in example.splitlines() if line.startswith("data: "))
+        validate("AgentEvent", json.loads(data))
 
     def test_record_fields_and_fractional_retention(self):
         records = (ROOT / "src/cli/src/commands/agent/records.rs").read_text()

@@ -173,7 +173,9 @@ TypeScript types are exported from the package; Go types use the `Agent` prefix.
 - Agent/turn snapshots include an optional opaque cursor, requests and steering receipts; the cursor is absent when the adapter cannot resume events after it. Capability limits are optional: absent means unknown or unsupported, never zero. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
 - Unknown execution and steering states are representable. Accepted and applied steering are distinct; a question outcome is distinct from a final answer.
 
-These records define SDK data types. The [Box OpenAPI contract](../../openapi/box.openapi.yaml) declares agent creation and snapshot reads. With `B = /v1/{prefix}/boxes/{box_id}`, `POST B/agents` creates an agent, `GET B/agents/{agent_id}` reads it, and `GET B/agents/{agent_id}/turns/{turn_id}` reads a turn. An empty prefix removes the segment, as in `/v1/boxes/box_1/agents`.
+These records define SDK data types. The [Box OpenAPI contract](../../openapi/box.openapi.yaml) declares nine agent operations for creation, reads, messaging, event streaming, replies, steering, interruption and closing. An empty prefix removes the segment, as in `/v1/boxes/box_1/agents`.
+
+For example, open the events stream before sending text to an OpenCode agent, then read its turn snapshot. The server sends stream headers after the adapter connects; cursor replay and retry keys work only when the adapter supports them.
 
 The agent `Idempotency-Key` is forwarded to the adapter; it must be 1–256 visible ASCII bytes. BoxLite stores no retry results. Adapters advertise retention in `capabilities.idempotency_retention_seconds` and reject unsupported keys.
 

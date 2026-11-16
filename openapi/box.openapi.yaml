@@ -229,6 +229,195 @@ paths:
         "404": {$ref: "#/components/responses/AgentNotFound"}
         "503": {$ref: "#/components/responses/AgentUnavailable"}
 
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/close:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    post:
+      operationId: closeAgent
+      summary: Close an agent
+      description: Success means the adapter confirmed the agent loop stopped.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentEmptyRequest"}
+            example: {}
+      responses:
+        "200":
+          description: Closed agent snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentResource"}
+              example:
+                id: agent_01
+                agent: example
+                state: {id: agent_01, status: closed, cursor: null, active_turn_id: null, queued_turn_ids: [], requests: [], steering: []}
+                config: {tools: [], mcp: []}
+                capabilities: {operations: [agent.close], input_kinds: [text], max_queued_turns: null, max_pending_steering: null, idempotency_retention_seconds: null}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    post:
+      operationId: sendAgentTurn
+      summary: Send text to an agent
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentSendRequest"}
+            example: {text: Review the change, options: {mode: queue}}
+      responses:
+        "201":
+          description: Turn accepted
+          headers:
+            Location:
+              description: URL of the created turn
+              schema: {type: string}
+              example: /v1/boxes/box_1/agents/ses_01/turns/msg_01
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: &turnExample {id: msg_01, agent_id: ses_01, status: queued, cursor: null, result: null, requests: [], steering: []}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "429": {$ref: "#/components/responses/AgentExhausted"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    get:
+      operationId: getAgentEvents
+      summary: Stream agent events
+      description: |
+        Send 200 headers only after the adapter stream connects. Last-Event-ID
+        takes precedence over after. Adapters without cursor or turn event
+        support reject those options with 400. Emit an SSE id only for a
+        non-null cursor. After opening, stream errors as an error event and close.
+      parameters:
+        - {name: turn_id, in: query, schema: {type: string}, example: msg_01}
+        - {name: after, in: query, schema: {type: string}, example: cursor_1}
+        - {name: Last-Event-ID, in: header, schema: {type: string}, example: cursor_1}
+      responses:
+        "200":
+          description: Connected event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: "event: agent\ndata: {\"cursor\":null,\"agent_id\":\"ses_01\",\"turn_id\":\"msg_01\",\"kind\":\"session.status\",\"data\":{\"status\":\"busy\"}}\n\n"
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/requests/{request_id}/respond:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - {name: request_id, in: path, required: true, schema: {type: string, minLength: 1}, example: req_01}
+    post:
+      operationId: respondAgentRequest
+      summary: Respond to an agent request
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentRespondRequest"}
+            example: {response: {type: permission, approved: false}}
+      responses:
+        "200":
+          description: Resulting turn snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: *turnExample
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/steer:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    post:
+      operationId: steerAgentTurn
+      summary: Steer a running turn
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentSteerRequest"}
+            example: {text: Focus on correctness}
+      responses:
+        "200":
+          description: Steering receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentSteeringReceipt"}
+              example: {id: steer_01, turn_id: msg_01, status: accepted}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "429": {$ref: "#/components/responses/AgentExhausted"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/interrupt:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    post:
+      operationId: interruptAgentTurn
+      summary: Interrupt a turn
+      description: Success means the adapter confirmed the stop.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentEmptyRequest"}
+            example: {}
+      responses:
+        "200":
+          description: Interrupted turn snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: {id: turn_01, agent_id: agent_01, status: cancelled, cursor: null, result: null, requests: [], steering: []}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
   /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2357,6 +2546,51 @@ components:
   # Schemas
   # -------------------------------------------------------------------------
   schemas:
+    AgentEmptyRequest:
+      type: object
+      additionalProperties: false
+
+    AgentSendRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string}
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            mode: {type: string, enum: [queue, reject]}
+            data: {}
+
+    AgentSteerRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string}
+
+    AgentRespondRequest:
+      type: object
+      additionalProperties: false
+      required: [response]
+      properties:
+        response:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [type, text]
+              properties:
+                type: {const: answer}
+                text: {type: string}
+                data: {}
+            - type: object
+              additionalProperties: false
+              required: [type, approved]
+              properties:
+                type: {const: permission}
+                approved: {type: boolean}
+
     AgentCreateRequest:
       type: object
       additionalProperties: false
