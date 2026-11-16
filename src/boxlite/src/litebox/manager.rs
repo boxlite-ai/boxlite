@@ -179,6 +179,23 @@ impl BoxManager {
         self.store.update_outbound(id.as_str(), policy)
     }
 
+    pub(crate) fn outbound_control(
+        &self,
+        id: &BoxID,
+    ) -> BoxliteResult<Option<super::box_impl::outbound::OutboundControl>> {
+        self.store.outbound_control(id.as_str())
+    }
+
+    pub(crate) fn save_outbound_control(
+        &self,
+        id: &BoxID,
+        control: Option<&super::box_impl::outbound::OutboundControl>,
+        policy: Option<&crate::runtime::options::OutboundNetworkConfig>,
+    ) -> BoxliteResult<()> {
+        self.store
+            .save_outbound_control(id.as_str(), control, policy)
+    }
+
     /// Load box state from the database.
     ///
     /// Returns the latest state from DB.

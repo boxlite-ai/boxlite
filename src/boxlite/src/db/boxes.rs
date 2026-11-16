@@ -149,7 +149,8 @@ impl BoxStore {
 
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, \
-             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy')) \
+             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
+             '$.outbound_control', json_extract(json, '$.outbound_control')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -183,6 +184,61 @@ impl BoxStore {
     // ========================================================================
     // Combined operations
     // ========================================================================
+
+    pub(crate) fn outbound_control(
+        &self,
+        box_id: &str,
+    ) -> BoxliteResult<Option<crate::litebox::box_impl::outbound::OutboundControl>> {
+        let body: Option<String> =
+            db_err!(self.db.conn().query_row(
+            "SELECT json_extract(json, '$.outbound_control') FROM box_state WHERE id = ?1",
+            params![box_id], |row| row.get(0),
+        ).optional())?
+            .ok_or_else(|| BoxliteError::NotFound(box_id.into()))?;
+        body.map(|body| {
+            let control: crate::litebox::box_impl::outbound::OutboundControl =
+                serde_json::from_str(&body).map_err(|e| {
+                    BoxliteError::Database(format!("invalid outbound control for {box_id}: {e}"))
+                })?;
+            if let Some(pending) = &control.pending {
+                crate::net::OutboundReplacement::new(
+                    pending.expected.clone(),
+                    pending.candidate.clone(),
+                )
+                .map_err(|e| {
+                    BoxliteError::Database(format!(
+                        "invalid pending outbound control for {box_id}: {e}"
+                    ))
+                })?;
+            }
+            Ok(control)
+        })
+        .transpose()
+    }
+
+    pub(crate) fn save_outbound_control(
+        &self,
+        box_id: &str,
+        control: Option<&crate::litebox::box_impl::outbound::OutboundControl>,
+        policy: Option<&crate::runtime::options::OutboundNetworkConfig>,
+    ) -> BoxliteResult<()> {
+        let control =
+            serde_json::to_string(&control).map_err(|e| BoxliteError::Database(e.to_string()))?;
+        let policy = policy
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| BoxliteError::Database(e.to_string()))?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(\
+             CASE WHEN ?1 IS NULL THEN json ELSE json_set(json, '$.outbound_policy', json(?1)) END, \
+             '$.outbound_control', json(?2)) WHERE id = ?3",
+            params![policy, control, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
+    }
 
     /// Save both config and initial state atomically.
     ///

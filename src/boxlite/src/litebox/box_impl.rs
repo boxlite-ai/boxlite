@@ -37,6 +37,7 @@ use crate::vmm::controller::VmmHandler;
 use crate::{BoxID, BoxInfo};
 
 mod operations;
+pub(crate) mod outbound;
 pub(crate) use operations::{BoxEvent, BoxRun};
 use operations::{StopCommit, StopReason};
 
@@ -1887,34 +1888,38 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
+        self.with_operation(async { self.persisted_outbound() })
+            .await
+    }
+
+    async fn replace_outbound_snapshot(
+        &self,
+        replacement: crate::net::OutboundReplacement,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        self.replace_outbound_control(
+            replacement.candidate().clone(),
+            Some(replacement.expected().clone()),
+        )
+        .await
+    }
+
     async fn update_outbound(
         &self,
         policy: crate::runtime::options::OutboundNetworkConfig,
     ) -> BoxliteResult<()> {
-        self.with_operation(async {
-            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
-                return Err(BoxliteError::InvalidState(
-                    "outbound policy updates require a running box".into(),
-                ));
+        let candidate = crate::net::OutboundSnapshot {
+            policy,
+            revision: crate::net::OutboundRevision::fresh(),
+        };
+        match self.replace_outbound_control(candidate, None).await? {
+            crate::net::OutboundReplaceOutcome::Applied => Ok(()),
+            crate::net::OutboundReplaceOutcome::PreconditionFailed => {
+                Err(BoxliteError::InvalidState(
+                    "outbound backend revision changed; retry the complete update".into(),
+                ))
             }
-            let live = self.ensure_booted_locked().await?;
-            let backend = live.network.as_deref().ok_or_else(|| {
-                BoxliteError::Unsupported("box networking is disabled".into())
-            })?;
-            let previous = backend.outbound().await?;
-            backend.set_outbound(&policy).await?;
-            if let Err(error) = self.runtime.box_manager.save_outbound(&self.config.id, &policy) {
-                if let Err(rollback) = backend.set_outbound(&previous).await {
-                    return Err(BoxliteError::InvalidState(format!(
-                        "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the complete update"
-                    )));
-                }
-                return Err(error);
-            }
-            self.state.write().outbound_policy = Some(policy);
-            Ok(())
-        })
-        .await
+        }
     }
 
     async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel> {
@@ -1967,6 +1972,7 @@ mod tests {
 
     mod execution_recovery;
     mod operation_lock;
+    mod outbound_revision;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

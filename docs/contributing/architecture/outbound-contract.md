@@ -187,6 +187,35 @@ The existing setters and public configuration structs retain their signatures an
 Backends inherit unsupported defaults for the added methods, so an existing custom implementation still compiles.
 These methods verify the Runtime-to-gvproxy control boundary, independently of durable recovery or Cloud/Runner propagation.
 
+### Runtime pending attempts and persistence
+
+Runtime replacement uses the existing Box operation lock, including its disk refresh and VM-handle identity checks.
+Control metadata lives under `outbound_control` in the stored state JSON; public `BoxState` and user policy structs keep their existing fields.
+Records without control metadata use the initial token `initial`.
+Lifecycle state writes preserve both the latest policy and its control metadata, including when a handle holds an older state copy.
+
+Before contacting the backend, Runtime durably records the expected live revision and the complete candidate.
+Only a matching ACK or a matching `confirmed` readback permits policy and revision to be committed together.
+For example, after an ambiguous attempt from `rev-a` to `rev-b`, observing `rev-a` does not clear the pending attempt.
+Observing `rev-b` while pending does not confirm completion either.
+A later mutating operation may finish persistence once `rev-b` and its policy are confirmed; a persisted-policy read performs no such reconciliation.
+
+If confirmed application succeeds but persistence fails, restoration compares against the applied candidate and uses a fresh identity.
+Restoring the old policy as `rev-c` never makes a stale `If-Match: "rev-a"` valid again.
+A rejected restoration or failed restoration persistence leaves explicit uncertainty and the durable pending evidence.
+An ambiguous timeout never causes an unchecked replay or compensation.
+A newly requested unconditional complete replacement may use the observed revision for a fresh CAS, fencing a queued older request once acknowledged.
+
+`NetworkHandle::outbound_snapshot` reads persisted policy and identity without claiming live confirmation.
+`replace_outbound_snapshot` applies a trusted coordinator's validated candidate and returns the explicit precondition outcome.
+The existing unconditional setter retains its old-backend path only while no versioned control metadata exists.
+A versioned call, or a Box already using versioned state, cannot silently fall back to that path.
+
+Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
+They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
+These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
+Private startup revision propagation and the full live/persisted status resource require their own completed verification before claiming Runtime recovery is complete.
+
 Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
 Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.
 

@@ -11,6 +11,14 @@ use crate::runtime::options::OutboundNetworkConfig;
 pub struct OutboundRevision(String);
 
 impl OutboundRevision {
+    pub(crate) fn initial() -> Self {
+        Self("initial".into())
+    }
+
+    pub(crate) fn fresh() -> Self {
+        Self(uuid::Uuid::new_v4().simple().to_string())
+    }
+
     /// Parse the bounded ASCII token used by the outbound control protocol.
     pub fn parse(value: impl Into<String>) -> BoxliteResult<Self> {
         let value = value.into();
