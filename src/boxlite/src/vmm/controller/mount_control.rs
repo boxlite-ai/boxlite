@@ -12,9 +12,13 @@
 //! control plane is low-volume and the filesystem performs its own locking.
 
 use std::fs::File;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+use std::io::Write;
 use std::mem::size_of;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+use std::os::fd::FromRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 
