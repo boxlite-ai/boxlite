@@ -82,6 +82,31 @@ Enum-backed varchar columns need an explicit SQL type: `Checkpoint.sourceState`
 uses `@Column('varchar')` because production compilation can emit `Object` metadata
 for the imported `BoxState` enum even when source-level Jest tests pass.
 
+## Organization role authorization
+
+The organization-role routes require OWNER membership, including listing roles.
+OrganizationActionGuard reads method requirements before controller requirements;
+a controller-level OWNER requirement applies to methods without an override.
+System administrator exemptions and API-key capability checks retain their own rules.
+
+Role update and delete carry the authorized organization ID into the service.
+Custom-role lookup requires both that organization ID and the requested role ID;
+a foreign or unknown custom role returns 404 without changing stored data.
+Missing organization or role IDs are rejected before querying. Global roles remain
+visible in role listings and reject update or delete with 403.
+
+For example, an OWNER of A can edit A's custom role, but using B's role ID through
+A's route returns 404. A MEMBER of A receives 403 on all four role routes.
+Updated permissions apply to assigned members when their membership is reloaded;
+OrganizationAccessGuard caches memberships for up to ten seconds.
+
+Run `make test:apps:api TEST_FILES='organization-action.guard.spec|organization-role.authorization'`
+with `DB_HOST=127.0.0.1`, `DB_PORT`, `DB_USERNAME`, `DB_DATABASE`, and any required
+`DB_PASSWORD` for a disposable PostgreSQL database. The HTTP/storage suite creates
+and drops a unique schema, requires a loopback database host, and skips without
+`DB_HOST`. It exercises the production authorization guard and repository queries;
+JWT identity setup, rate limiting, and Redis transport use test doubles.
+
 ## Registration configuration
 
 Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
