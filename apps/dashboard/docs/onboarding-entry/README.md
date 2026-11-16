@@ -5,7 +5,9 @@
 An account that still needs setup stays outside the Console navigation until its
 next destination is known. Verification, account confirmation, organization
 preparation, and retry share the same header and content layout. Existing accounts
-enter Boxes; explicit resource links retain their destination. The existing owner,
+enter Boxes; explicit resource links retain their destination and admit the Console
+for later navigation within the same user and organization. Entry matching follows
+the router's case-insensitive and trailing-slash semantics. The existing owner,
 resource-presence, and local-dismissal policy determines whether to open Welcome.
 
 The entry decision is scoped to user and organization. A newly mounted decision

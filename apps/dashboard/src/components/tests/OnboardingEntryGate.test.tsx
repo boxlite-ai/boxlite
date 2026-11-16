@@ -60,6 +60,7 @@ async function mount(path = '/dashboard/boxes') {
           { path: 'boxes', element: <h1>Boxes content</h1> },
           { path: 'welcome', element: <h1>Welcome content</h1> },
           { path: 'keys', element: <h1>Keys content</h1> },
+          { path: 'quickstart', element: <h1>Quickstart content</h1> },
         ],
       },
     ],
@@ -79,23 +80,26 @@ async function flush() {
     await new Promise((resolve) => setTimeout(resolve, 25))
   })
 }
-it('setup entry never mounts Console while the account decision is pending', async () => {
-  let resolve!: (value: { data: { total: number } }) => void
-  api.boxApi.listBoxesPaginated.mockImplementation(
-    () =>
-      new Promise((done) => {
-        resolve = done
-      }),
-  )
-  const router = await mount()
-  await flush()
-  expect(document.querySelector('nav')).toBeNull()
-  expect(document.body.textContent).not.toContain('Boxes content')
-  await act(async () => resolve({ data: { total: 0 } }))
-  await flush()
-  expect(router.state.location.pathname).toBe('/dashboard/welcome')
-  expect(document.querySelector('nav')).toBeNull()
-})
+it.each(['/dashboard/boxes', '/dashboard/boxes/', '/DASHBOARD/BOXES', '/dashboard/', '/DASHBOARD'])(
+  'setup entry %s never mounts Console while the account decision is pending',
+  async (path) => {
+    let resolve!: (value: { data: { total: number } }) => void
+    api.boxApi.listBoxesPaginated.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        }),
+    )
+    const router = await mount(path)
+    await flush()
+    expect(document.querySelector('nav')).toBeNull()
+    expect(document.body.textContent).not.toContain('Boxes content')
+    await act(async () => resolve({ data: { total: 0 } }))
+    await flush()
+    expect(router.state.location.pathname).toBe('/dashboard/welcome')
+    expect(document.querySelector('nav')).toBeNull()
+  },
+)
 it('setup entry keeps read failures recoverable without showing Console', async () => {
   api.boxApi.listBoxesPaginated.mockRejectedValueOnce(new Error('offline'))
   await mount()
@@ -113,6 +117,37 @@ it('setup entry preserves explicit deep links', async () => {
   await mount('/dashboard/keys')
   expect(document.body.textContent).toContain('Keys content')
   expect(api.organizationsApi.listOrganizationMembers).not.toHaveBeenCalled()
+})
+
+it('setup entry keeps navigation mounted when a deep link leads to Boxes', async () => {
+  const router = await mount('/dashboard/keys')
+  const nav = document.querySelector('nav')
+  expect(nav).not.toBeNull()
+  await act(async () => {
+    await router.navigate('/dashboard/boxes')
+  })
+  await flush()
+  expect(document.querySelector('nav')).toBe(nav)
+  expect(document.body.textContent).toContain('Boxes content')
+  expect(api.organizationsApi.listOrganizationMembers).not.toHaveBeenCalled()
+})
+
+it('setup entry keeps an explicit onboarding request after deep-link admission', async () => {
+  const router = await mount('/dashboard/keys')
+  await act(async () => {
+    await router.navigate('/dashboard/boxes?onboarding=1')
+  })
+  expect(document.body.textContent).toContain('Quickstart content')
+})
+
+it('setup entry does not admit Console just because Welcome was opened', async () => {
+  const router = await mount('/dashboard/welcome')
+  api.boxApi.listBoxesPaginated.mockImplementation(() => new Promise(() => {}))
+  await act(async () => {
+    await router.navigate('/dashboard/boxes')
+  })
+  expect(document.querySelector('nav')).toBeNull()
+  expect(document.body.textContent).toContain('Preparing your organization')
 })
 
 it('setup entry admits non-owner members without owner-only reads', async () => {

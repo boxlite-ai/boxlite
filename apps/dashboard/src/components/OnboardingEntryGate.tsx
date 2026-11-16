@@ -2,7 +2,7 @@
 import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
-import { Navigate, useLocation } from 'react-router-dom'
+import { matchPath, Navigate, useLocation } from 'react-router-dom'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -24,7 +24,8 @@ export function OnboardingEntryGate({ children }: { children: ReactNode }) {
       key={`${user.profile.sub}:${selectedOrganization.id}`}
       userId={user.profile.sub}
       orgId={selectedOrganization.id}
-      checkEntry={pathname === RoutePath.DASHBOARD || pathname === RoutePath.BOXES}
+      checkEntry={Boolean(matchPath(RoutePath.DASHBOARD, pathname) || matchPath(RoutePath.BOXES, pathname))}
+      isWelcome={Boolean(matchPath(RoutePath.WELCOME, pathname))}
       requested={new URLSearchParams(search).get('onboarding') === '1'}
     >
       {children}
@@ -36,12 +37,14 @@ function AccountEntry({
   userId,
   orgId,
   checkEntry,
+  isWelcome,
   requested,
   children,
 }: {
   userId: string
   orgId: string
   checkEntry: boolean
+  isWelcome: boolean
   requested: boolean
   children: ReactNode
 }) {
@@ -75,7 +78,11 @@ function AccountEntry({
       })
     },
   })
-  if (!checkEntry) return children
+  if (!checkEntry) {
+    // A resource deep link already exposes Console; keep that navigation mounted.
+    if (!isWelcome && !requested && !admitted) setAdmitted(true)
+    return children
+  }
   if (requested) return <Navigate to={RoutePath.QUICKSTART} replace />
   if (dismissed || admitted) return children
   if (decision.isPending || decision.isFetching || !decision.isFetchedAfterMount) return <SetupPending />
