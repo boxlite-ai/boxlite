@@ -38,7 +38,7 @@ on:
           - stage
           - prod
       components:
-        description: GCP API or Runner update, or full-stack deployment (api+runner; also supports AWS)
+        description: Components to deploy
         required: true
         default: api+runner
         type: choice
