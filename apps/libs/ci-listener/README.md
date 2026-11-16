@@ -433,9 +433,15 @@ not cap runners represented by one counter or replace organization quota.
 
 Retirement uses the complete authoritative label aggregate, including counters
 outside the rotating reservation window. It cancels undispatched surplus first.
-An online, nonbusy runner with confirmed JIT delivery becomes a candidate only
-after 300 seconds from registration. This is a startup grace, not evidence of
-continuous idle time. Busy workers and capacity still needed by the queue remain.
+An online, nonbusy runner whose JIT delivery is `requested` or `done` becomes a
+candidate only after 300 seconds from registration. This is a startup grace, not
+evidence of continuous idle time. Busy workers and capacity still needed by the
+queue remain.
+
+A lost JIT upload acknowledgement can leave an online runner at `requested`,
+including after restart. That delivery state remains unchanged: the scheduler
+neither fabricates an acknowledgement nor repeats JIT delivery. Confirmed surplus
+can enter the same retirement protocol below.
 
 Before unregistering, the scheduler persists a distinct `runner-retire` intent
 under the original allocation, identity and execution lease. `retireIdle()` reads

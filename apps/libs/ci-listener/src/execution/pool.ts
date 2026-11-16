@@ -294,7 +294,7 @@ export class WorkerPool {
         if (
           row.value.box.phase === 'none' ||
           (runner?.status === 'online' &&
-            row.value.delivery === 'done' &&
+            (row.value.delivery === 'done' || row.value.delivery === 'requested') &&
             Date.now() - (row.value.runner.registeredAt ?? row.value.createdAt) >= RUNNER_BOOTSTRAP_SECONDS * 1000 &&
             (this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now())
         ) {

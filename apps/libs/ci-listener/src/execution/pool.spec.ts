@@ -263,6 +263,47 @@ describe('CI shared worker lifecycle', () => {
     expect(await journal.hasCapacity(lease, key, limits)).toBe(true)
     expect((await rows()).allocations.size).toBe(0)
   })
+  it('recovers surplus idle capacity after a lost JIT acknowledgement and restart', async () => {
+    supplyInventory()
+    const retire = idleRetirement()
+    loseDelivery = true
+    await pool.balance(lease, limits, countedDemand(), undefined, true)
+    expect((await allocation()).value.delivery).toBe('requested')
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({ errorType: 'Error' }))
+    await ageRunners()
+    await pool.close()
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+    const unverified = await pool.balance(lease, limits, []).catch((error) => error)
+    expect(retire).not.toHaveBeenCalled()
+    await pool.balance(lease, limits, [], undefined, true)
+    expect(retire).toHaveBeenCalledTimes(1)
+    expect(unverified).toBeInstanceOf(DemandUncertain)
+    expect((await allocation()).value).toMatchObject({ delivery: 'requested', closing: true })
+    expect(backend.workers.stop).toHaveBeenCalledTimes(1)
+    expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
+    await pool.balance(lease, limits, [], undefined, true)
+    await pool.balance(lease, limits, [], undefined, true)
+    expect(await journal.used(definition.organization)).toBe(0)
+    expect((await rows()).allocations.size).toBe(0)
+    expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+  })
+  it('preserves startup, busy and queue protections after a lost JIT acknowledgement', async () => {
+    const busy = new Set<string>()
+    supplyInventory(busy)
+    const retire = idleRetirement()
+    loseDelivery = true
+    await pool.balance(lease, limits, countedDemand(), undefined, true)
+    expect((await allocation()).value.delivery).toBe('requested')
+    await pool.balance(lease, limits, [], undefined, true)
+    await ageRunners()
+    await pool.balance(lease, limits, countedDemand(), undefined, true)
+    busy.add((await allocation()).value.name)
+    await pool.balance(lease, limits, [], undefined, true)
+    expect(retire).not.toHaveBeenCalled()
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+    expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
+  })
   it('keeps new, busy and still-needed runners out of idle retirement', async () => {
     const busy = new Set<string>()
     supplyInventory(busy)
@@ -298,10 +339,16 @@ describe('CI shared worker lifecycle', () => {
     expect(backend.workers.stop).not.toHaveBeenCalled()
     expect(await journal.used(definition.organization)).toBe(3)
   })
-  it.each([false, new Error('lost unregister response')])(
-    'preserves an unconfirmed idle retirement across restart: %s',
-    async (result) => {
+  it.each([
+    [false, false],
+    [false, true],
+    [new Error('lost unregister response'), false],
+    [new Error('lost unregister response'), true],
+  ] as const)(
+    'preserves an unconfirmed idle retirement across restart: %s, lost JIT acknowledgement: %s',
+    async (result, lostJitAcknowledgement) => {
       supplyInventory()
+      loseDelivery = lostJitAcknowledgement
       const retire = idleRetirement(result)
       await pool.balance(lease, limits, countedDemand(), undefined, true)
       await ageRunners()
@@ -368,26 +415,30 @@ describe('CI shared worker lifecycle', () => {
     expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
     expect(observe).toHaveBeenCalledWith(expect.objectContaining({ errorType: 'StateConflict' }))
   })
-  it('does not stop a Box when persisting successful idle retirement loses its confirmation', async () => {
-    supplyInventory()
-    idleRetirement()
-    await pool.balance(lease, limits, countedDemand(), undefined, true)
-    await ageRunners()
-    const advance = journal.advance.bind(journal)
-    const write = jest.spyOn(journal, 'advance').mockImplementation(async (...args) => {
-      if (args[3].runner?.phase === 'absent' && args[3].closing) throw new Error('confirmation write lost')
-      return advance(...args)
-    })
-    await pool.balance(lease, limits, [], undefined, true)
-    write.mockRestore()
-    expect(runners.size).toBe(0)
-    expect((await allocation()).value.effect?.kind).toBe('runner-retire')
-    await pool.close()
-    pool = new WorkerPool(journal, key, async () => backend, settings, observe)
-    await pool.balance(lease, limits, [], undefined, true)
-    expect(backend.workers.stop).not.toHaveBeenCalled()
-    expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
-  })
+  it.each([false, true])(
+    'does not stop a Box when persisting successful idle retirement loses its confirmation, lost JIT acknowledgement: %s',
+    async (lostJitAcknowledgement) => {
+      supplyInventory()
+      loseDelivery = lostJitAcknowledgement
+      idleRetirement()
+      await pool.balance(lease, limits, countedDemand(), undefined, true)
+      await ageRunners()
+      const advance = journal.advance.bind(journal)
+      const write = jest.spyOn(journal, 'advance').mockImplementation(async (...args) => {
+        if (args[3].runner?.phase === 'absent' && args[3].closing) throw new Error('confirmation write lost')
+        return advance(...args)
+      })
+      await pool.balance(lease, limits, [], undefined, true)
+      write.mockRestore()
+      expect(runners.size).toBe(0)
+      expect((await allocation()).value.effect?.kind).toBe('runner-retire')
+      await pool.close()
+      pool = new WorkerPool(journal, key, async () => backend, settings, observe)
+      await pool.balance(lease, limits, [], undefined, true)
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect(await journal.hasCapacity(lease, key, limits)).toBe(false)
+    },
+  )
   it('refreshes demand before creating a recovered reservation and cancels it for an empty queue', async () => {
     supplyInventory()
     const reserved = await journal.reserve(lease, key, demand, limits, { labels: settings.labels })
