@@ -497,18 +497,47 @@ their message through the shared interceptor. Panel tests cover the masked
 secret and its cleanup on close, prefix completion, the `?connect=` link,
 duplicates, updates with fixed scope, write permissions, and refusals named by box.
 
-## Console API keys include member access
+## Console API key permissions and expiration
 
-The key dialog creates a key with the user's available permissions. An owner's
-new key includes `read:members` and `write:members`, displayed in the Members
-permission group. A non-owner's key can include assigned member read access,
-but never member write. Existing keys receive no additional permissions.
+**New API key** defaults to **Operate boxes** (`write:boxes`) and **30 days**.
+The Access selector offers Operate boxes, Manage box lifecycle (adds Box deletion),
+and Use boxes with volumes (adds Volume read and write). A preset requires every
+scope in its bundle; unavailable presets explain the missing capabilities.
+Adjust permissions opens resource groups for independent choices within the
+signed-in member's available scopes. Manual changes mark the choice Custom access;
+technical scope identifiers live in expandable details. Deleting Boxes and member management require explicit selection. Without
+Box-write permission the form starts with no selection; empty or revoked selections
+cannot be submitted. Permission loading and failures block creation and failures
+provide refresh. Permissions apply across the selected organization, not a single Box.
+Box reading is implicit and cannot be disabled in this form. Managing image aliases
+includes alias deletion; using an image does not automatically require catalog access.
 
-Create restricted keys through the API or SDK by supplying an explicit
-`permissions` array; see [API key delegation and member scopes](../../docs/contributing/architecture/platform/api.md).
-The scopes are independent, and an API key can only create keys with the same
-or fewer permissions. Invitation acceptance in the console continues to use
-the signed-in user's JWT.
+Users can explicitly select **No expiration**, 90 days or one year. Existing keys
+and Quickstart defaults are unchanged. A successful creation displays the returned
+permissions and expiration with a one-time secret. Copy is explicit and does not
+close the result. Closing the dialog or switching organization discards the secret
+and ignores late responses. Unavailable selected permissions remain visible until
+removed; permission changes invalidate in-flight results. Background membership refreshes
+preserve the open draft and completed secret when the granted scopes remain unchanged.
+Overlapping membership requests apply only the latest response or failure. Known request failures
+retain the draft; uncertain network/server outcomes require checking the list
+before creating another key.
+
+The list uses the same permission labels and preserves unknown API scopes. Expired
+keys are marked **Expired**; permanent keys show **No expiration**. The backend
+continues to validate grants and expiration; frontend options are not authorization.
+The API/SDK can also supply an explicit permissions array. A non-owner can select
+assigned member-read permission, but the Console does not offer member-write.
+
+The mock preview uses synthetic, organization-scoped keys held only in memory.
+Create, list, duplicate-name refusal and revoke are supported; reload resets them.
+Mock results do not verify live authorization or expiration enforcement.
+
+Visual review: [before](../../docs/contributing/investigations/assets/api-key-access/before.png),
+[default form](../../docs/contributing/investigations/assets/api-key-access/after.png), and
+[access presets](../../docs/contributing/investigations/assets/api-key-access/presets.png).
+These captures use synthetic mock data. Open API Keys → New API key, enter a name,
+choose Access, and expand Adjust permissions only when a preset does not fit.
 
 ## Every invitee joins as an owner
 
