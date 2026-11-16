@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,7 +51,7 @@ type guestTap struct {
 }
 
 // startNetwork builds the same virtual network gvproxy_create builds
-// (buildTapConfig → virtualnetwork.New → installAllowNetHandlers) and
+// (buildTapConfig → virtualnetwork.New → installOutboundHandlers) and
 // attaches a test-driven guest link to it.
 func startNetwork(t *testing.T, allowNet []string) *guestTap {
 	t.Helper()
@@ -94,7 +93,7 @@ func refuseDial(_ context.Context, network, addr string) (net.Conn, error) {
 
 // startNetworkWithSeams is startNetworkWith's body with the seams exposed. It
 // mirrors gvproxy_create: buildTapConfig → virtualnetwork.New →
-// installAllowNetHandlers with the same filter and dialer a box gets.
+// installOutboundHandlers with the same filter and dialer a box gets.
 func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) *guestTap {
 	t.Helper()
 
@@ -126,26 +125,13 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 		t.Fatal(err)
 	}
 
-	var filter *AllowNetFilter
-	if len(cfg.AllowNet) > 0 {
-		filter = newAllowNetFilter(cfg)
-	}
-	dialer, err := newEgressDialer(filter, cfg.Subnet)
-	if err != nil {
-		t.Fatalf("newEgressDialer: %v", err)
-	}
-	dialer.resolve = seams.resolve
-	dialer.dial = seams.dial
-	dialer.connect = seams.connect
-	if len(cfg.AllowNet) > 0 || seams.secretMatcher != nil {
-		if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, filter, dialer, seams.ca, seams.secretMatcher); err != nil {
-			t.Fatalf("installAllowNetHandlers: %v", err)
-		}
-	} else {
-		var natLock sync.Mutex
-		forwarder := TCPWithFilter(policy.stack, natTable(tapConfig), &natLock, tapConfig.Ec2MetadataAccess, nil, dialer, seams.ca, seams.secretMatcher)
-		policy.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, forwarder.HandlePacket)
-	}
+	// Configure test-owned seams before attaching the guest, then publish the
+	// complete snapshot consumed by the already-installed stable handlers.
+	snapshot := *policy.active.Load()
+	dialer := *snapshot.dialer
+	dialer.resolve, dialer.dial, dialer.connect = seams.resolve, seams.dial, seams.connect
+	snapshot.dialer = &dialer
+	policy.publish(&snapshot, "confirmed")
 
 	guestSide, stackSide := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -565,7 +551,7 @@ func TestStartupPerformsNoDNSLookups(t *testing.T) {
 	// (startNetworkWithSeams) rather than calling it, so a resolution added
 	// directly to gvproxy_create is outside what any test in this package
 	// sees. The pieces it does build — newAllowNetFilter, newEgressDialer,
-	// installAllowNetHandlers — are where such a resolution would naturally
+	// installOutboundHandlers — are where such a resolution would naturally
 	// go, and those are covered.
 	restore := systemResolve
 	systemResolve = counting

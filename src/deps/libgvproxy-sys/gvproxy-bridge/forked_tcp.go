@@ -145,10 +145,16 @@ func decideTCPInspectRoute(hostname string, destIP net.IP, destPort uint16,
 }
 
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, ec2MetadataAccess bool, filter *AllowNetFilter,
-	dialer *egressDialer, ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
+	natLock *sync.Mutex, ec2MetadataAccess bool, snapshot snapshotSource,
+	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
+		current := snapshot()
+		if current.policy.Mode == "disabled" {
+			r.Complete(true)
+			return
+		}
+		filter, dialer := current.filter, current.dialer
 		localAddress := r.ID().LocalAddress
 
 		if !ec2MetadataAccess && linkLocalSubnet.Contains(localAddress) {

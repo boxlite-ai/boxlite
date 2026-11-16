@@ -51,7 +51,7 @@ The selected `connectFunc` receives this target after the applicable checks.
 Its error is returned without selecting the direct socket dialer; an unset connector selects the existing direct transport.
 Configure resolver and transport seams before installing the forwarder.
 
-Initial unrestricted TCP also installs this boundary; initial unrestricted UDP retains its upstream handler.
+Initial unrestricted TCP also installs this boundary; unrestricted UDP delegates to the upstream forwarder.
 Address setup and controlled hostname resolution each use a bounded setup context, including candidate retries and MITM redials.
 The typed connector does not implement proxy registration or a proxy protocol, and this step does not implement revisioned snapshot publication.
 
@@ -116,6 +116,22 @@ An update carrying stale `If-Match: "rev-a"` receives 412 without application.
 Reuse the current Box update lock, Runtime persistence operation, and Cloud row-lock transaction.
 All complete replacements, including future proxy rotation, share this ownership boundary.
 Validate and compile the entire candidate before publishing it for new flows.
+
+### Bridge snapshot publication
+
+The bridge installs its TCP and UDP handlers once, before attaching the guest.
+An atomic pointer publishes the complete immutable policy, filter, dialer, and application state; a TCP flow keeps the snapshot captured at entry, including while resolution is paused.
+The gVisor IPv4 input/forward gate reads the same snapshot before registered endpoint delivery.
+Enabled traffic continues through the existing filter-table chains, including the embedded DNS service.
+
+Disabling publishes a rejecting snapshot before NIC suspension; enabling retains that gate until the NIC has enabled successfully.
+NIC errors retain the disabled gate and mark application uncertain.
+Policy GET returns 503 while application is pending or uncertain, and successful GET/PUT retain the existing policy JSON shape.
+The separate revision/status protocol is an implementation target for the following control-plane step.
+
+The registered-DNS regression fixture binds native gVisor UDP/TCP endpoints on port 5353 and forwards received DNS messages to a test-owned host listener.
+It exercises endpoint demultiplexing without replacing the global mode gate, and includes a new query on an established TCP DNS connection.
+Controlled NIC pauses separately verify the interval before suspension and the interval after enabling but before policy publication.
 
 Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
 Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.
