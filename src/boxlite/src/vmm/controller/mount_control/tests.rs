@@ -228,3 +228,48 @@ fn oversized_frames_cut_the_connection() {
 // Keep the socket name import honest: the Box layout and the client derive
 // the same path from this constant.
 const _: &str = MOUNT_CONTROL_SOCKET;
+
+#[test]
+fn truncated_descriptor_delivery_closes_every_received_descriptor() {
+    let data = BoxDir::new();
+    let descriptors: Vec<File> = (0..8).map(|_| File::open(&data.0).unwrap()).collect();
+    let before = fds_into(&data.0);
+    let (sender, mut receiver) = UnixStream::pair().unwrap();
+    let payload = 1u32.to_le_bytes();
+    let mut iov = libc::iovec {
+        iov_base: payload.as_ptr().cast_mut().cast(),
+        iov_len: payload.len(),
+    };
+    let mut control = vec![0usize; 16];
+    // SAFETY: msghdr is initialized below with live buffers and descriptors.
+    let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen =
+        unsafe { libc::CMSG_SPACE((8 * std::mem::size_of::<RawFd>()) as u32) } as _;
+    // SAFETY: the aligned buffer holds the header and all eight descriptors.
+    unsafe {
+        let header = libc::CMSG_FIRSTHDR(&message);
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN((8 * std::mem::size_of::<RawFd>()) as u32) as _;
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            libc::CMSG_DATA(header)
+                .cast::<RawFd>()
+                .add(index)
+                .write(descriptor.as_raw_fd());
+        }
+        assert_eq!(
+            libc::sendmsg(sender.as_raw_fd(), &message, libc::MSG_NOSIGNAL),
+            4
+        );
+    }
+    let error = super::receive_frame(&mut receiver).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EPROTO));
+    assert_eq!(
+        fds_into(&data.0),
+        before,
+        "rejected ancillary data leaked descriptors"
+    );
+}

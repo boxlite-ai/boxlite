@@ -59,18 +59,17 @@ enum MountSource {
     },
 }
 
+fn one_component(value: &str) -> bool {
+    let mut components = Path::new(value).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
 /// Check a `Container.Mount` request: legacy delivery stays read-only with a
 /// source that is one share folder name so it stays inside
 /// `containers/<id>/volumes/`; aggregate delivery requires an export key and
 /// device tag instead. Returns the checked destination.
 #[allow(clippy::result_large_err)]
 fn checked_mount(request: &ContainerMountRequest) -> Result<(MountSource, PathBuf), Status> {
-    let one_component = |value: &str| {
-        matches!(
-            Path::new(value).components().collect::<Vec<_>>()[..],
-            [Component::Normal(_)]
-        )
-    };
     let source = if request.export_key.is_empty() {
         if !request.read_only {
             return Err(Status::invalid_argument(
@@ -776,22 +775,37 @@ impl ContainerService for GuestServer {
         };
         let read_only = request.read_only;
         let mount_point = destination.clone();
+        let export_key = request.export_key;
         // Attach and record in a task of their own, so a caller that gives up
         // cannot leave a mount the container does not know about. The write
         // lock is held until the mount is recorded: a copy waits for both.
         let attach = tokio::spawn(async move {
             let mut attacher = attacher.write_owned().await;
             let attacher = tokio::task::spawn_blocking(move || {
-                attacher.attach(&source, &target, &mount_point, read_only)?;
-                Ok::<_, BoxliteError>(attacher)
+                let added = if export_key.is_empty() {
+                    attacher.attach(&source, &target, &mount_point, read_only)?;
+                    true
+                } else {
+                    attacher.attach_runtime(
+                        &export_key,
+                        &source,
+                        &target,
+                        &mount_point,
+                        read_only,
+                    )?
+                };
+                Ok::<_, BoxliteError>((attacher, added))
             })
             .await
             .map_err(|error| Status::internal(format!("attach task failed: {error}")))?
             .map_err(mount_status)?;
-            container_arc
-                .lock()
-                .await
-                .record_mount_destination(destination);
+            let (attacher, added) = attacher;
+            if added {
+                container_arc
+                    .lock()
+                    .await
+                    .record_mount_destination(destination);
+            }
             drop(attacher);
             Ok::<_, Status>(())
         });
@@ -809,6 +823,11 @@ impl ContainerService for GuestServer {
         let request = request.into_inner();
         let destination = PathBuf::from(&request.destination);
         validate_destination(&destination).map_err(BoxliteError::into_validation_status)?;
+        if request.export_key.is_empty() || !one_component(&request.export_key) {
+            return Err(Status::invalid_argument(
+                "detach requires a runtime export_key",
+            ));
+        }
 
         let container_id = request.container_id;
         let Some(container_arc) = self.containers.lock().await.get(&container_id).cloned() else {
@@ -832,17 +851,33 @@ impl ContainerService for GuestServer {
         let recorded = destination.clone();
         let detach = tokio::spawn(async move {
             let mut attacher = attacher.write_owned().await;
+            if attacher.runtime_attached(&request.export_key)
+                && container_arc
+                    .lock()
+                    .await
+                    .mount_destinations()
+                    .iter()
+                    .any(|mount| mount != &destination && mount.starts_with(&destination))
+            {
+                return Err(Status::failed_precondition(
+                    "detach descendant mounts first",
+                ));
+            }
             let attacher = tokio::task::spawn_blocking(move || {
-                attacher.detach(&target, &destination)?;
-                Ok::<_, BoxliteError>(attacher)
+                let removed =
+                    attacher.detach_runtime(&request.export_key, &target, &destination)?;
+                Ok::<_, BoxliteError>((attacher, removed))
             })
             .await
             .map_err(|error| Status::internal(format!("detach task failed: {error}")))?
             .map_err(mount_status)?;
-            container_arc
-                .lock()
-                .await
-                .remove_mount_destination(&recorded);
+            let (attacher, removed) = attacher;
+            if removed {
+                container_arc
+                    .lock()
+                    .await
+                    .remove_mount_destination(&recorded);
+            }
             drop(attacher);
             Ok::<_, Status>(())
         });

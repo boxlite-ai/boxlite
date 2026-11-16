@@ -42,6 +42,7 @@ pub struct Share {
 struct Export {
     name: CString,
     root: u64,
+    identity: u64,
     backend: Arc<PassthroughFs>,
     read_only: bool,
 }
@@ -198,7 +199,7 @@ impl AggregateFs {
             }),
             state: Mutex::new(State {
                 next_node: ROOT + 1,
-                next_identity: shares.len() as u64 + 2,
+                next_identity: ROOT + 1,
                 next_handle: 1,
                 ..State::default()
             }),
@@ -243,9 +244,11 @@ impl AggregateFs {
         }
         let mut state = self.state.lock().unwrap();
         let root = allocate(&mut state.next_node)?;
+        let identity = allocate(&mut state.next_identity)?;
         let export = Arc::new(Export {
             name,
             root,
+            identity,
             backend,
             read_only,
         });
@@ -253,7 +256,7 @@ impl AggregateFs {
         state.nodes.entry(root).or_insert_with(|| NodeRecord {
             node: Arc::new(Node {
                 global: root,
-                identity: root,
+                identity,
                 export: export.clone(),
                 local: ROOT,
                 root: true,
@@ -310,7 +313,7 @@ impl AggregateFs {
                 .or_insert_with(|| NodeRecord {
                     node: Arc::new(Node {
                         global: export.root,
-                        identity: export.root,
+                        identity: export.identity,
                         export: export.clone(),
                         local: ROOT,
                         root: true,
@@ -635,11 +638,11 @@ impl AggregateFs {
             .collect();
         for export in &exports {
             let (mut attr, _) = export.backend.getattr(ctx, ROOT, None)?;
-            attr.st_ino = export.root;
+            attr.st_ino = export.identity;
             let entry = entry_from_attr(export.root, attr);
             if add(
                 DirEntry {
-                    ino: export.root,
+                    ino: export.identity,
                     offset: export.root + 1,
                     type_: libc::DT_DIR as u32,
                     name: export.name.to_bytes(),

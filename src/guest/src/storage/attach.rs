@@ -19,12 +19,13 @@
 //! the agent answers go, which the agent does only within [`ATTACH_DEADLINE`];
 //! past that the agent kills it, so a late child never mounts.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -87,6 +88,15 @@ fn bad_destination(destination: &Path) -> BoxliteError {
 pub(crate) struct Attacher {
     /// Pidfd of a killed child that had not exited yet.
     straggler: Option<OwnedFd>,
+    runtime: HashMap<String, RuntimeMount>,
+}
+
+#[derive(Debug)]
+struct RuntimeMount {
+    source: PathBuf,
+    destination: PathBuf,
+    read_only: bool,
+    attached: bool,
 }
 
 /// The mount namespace of a process in the container, opened at once so the
@@ -111,6 +121,99 @@ impl Target {
 }
 
 impl Attacher {
+    pub(crate) fn runtime_attached(&self, key: &str) -> bool {
+        self.runtime.get(key).is_some_and(|record| record.attached)
+    }
+    /// The caller holds the container's attacher write lock across the syscall
+    /// and its metadata update. Tombstones outlive canceled RPC callers.
+    pub(crate) fn attach_runtime(
+        &mut self,
+        key: &str,
+        source: &Path,
+        target: &Target,
+        destination: &Path,
+        read_only: bool,
+    ) -> BoxliteResult<bool> {
+        if let Some(record) = self.runtime.get(key) {
+            if record.destination != destination
+                || (record.attached && (record.source != source || record.read_only != read_only))
+            {
+                return Err(BoxliteError::InvalidArgument(
+                    "mount incarnation does not match request".into(),
+                ));
+            }
+            if !record.attached {
+                return Err(BoxliteError::InvalidState(
+                    "mount incarnation has been detached".into(),
+                ));
+            }
+            return Ok(false);
+        }
+        if self
+            .runtime
+            .values()
+            .any(|record| record.attached && record.destination == destination)
+        {
+            return Err(BoxliteError::InvalidState(
+                "destination already has a runtime mount".into(),
+            ));
+        }
+        self.attach(source, target, destination, read_only)?;
+        self.runtime.insert(
+            key.to_owned(),
+            RuntimeMount {
+                source: source.to_owned(),
+                destination: destination.to_owned(),
+                read_only,
+                attached: true,
+            },
+        );
+        Ok(true)
+    }
+
+    pub(crate) fn detach_runtime(
+        &mut self,
+        key: &str,
+        target: &Target,
+        destination: &Path,
+    ) -> BoxliteResult<bool> {
+        if let Some(record) = self.runtime.get(key) {
+            if record.destination != destination {
+                return Err(BoxliteError::InvalidArgument(
+                    "mount incarnation destination mismatch".into(),
+                ));
+            }
+            if !record.attached {
+                return Ok(false);
+            }
+        } else {
+            self.runtime.insert(
+                key.to_owned(),
+                RuntimeMount {
+                    source: PathBuf::new(),
+                    destination: destination.to_owned(),
+                    read_only: false,
+                    attached: false,
+                },
+            );
+            return Ok(false);
+        }
+        if self.runtime.values().any(|record| {
+            record.attached
+                && record.destination != destination
+                && record.destination.starts_with(destination)
+        }) {
+            return Err(BoxliteError::InvalidState(
+                "detach runtime descendants first".into(),
+            ));
+        }
+        self.detach(target, destination)?;
+        self.runtime
+            .get_mut(key)
+            .expect("checked incarnation")
+            .attached = false;
+        Ok(true)
+    }
     /// Bind `source` at `destination` inside the mount namespace of `target`.
     /// A missing destination is created; one with entries, or one reached
     /// through a link, is refused. `read_only` gates the guest bind mode:
@@ -125,6 +228,15 @@ impl Attacher {
         read_only: bool,
     ) -> BoxliteResult<()> {
         validate_destination(destination)?;
+        if self
+            .runtime
+            .values()
+            .any(|record| record.attached && record.destination.starts_with(destination))
+        {
+            return Err(BoxliteError::InvalidState(
+                "destination would cover a runtime mount".into(),
+            ));
+        }
         self.reap_straggler()?;
         let tree = clone_detached(source, read_only)?;
         let components = components(destination)?;
@@ -161,21 +273,12 @@ impl Attacher {
         validate_destination(destination)?;
         self.reap_straggler()?;
         let components = components(destination)?;
-        let path = CString::new(
-            destination
-                .components()
-                .skip(1)
-                .map(|component| component.as_os_str().as_bytes())
-                .collect::<Vec<_>>()
-                .join(&b'/'),
-        )
-        .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
         let child = Child::spawn(
             &target.namespace,
             None,
             &components,
             Stall::No,
-            Mode::Detach(&path),
+            Mode::Detach,
         )?;
         let report = match child.report_within(ATTACH_DEADLINE) {
             Some(report) if report.stage == Some(Stage::Ready) => child.go(),
@@ -312,7 +415,7 @@ impl Child {
         tree: Option<&OwnedFd>,
         components: &[CString],
         stall: Stall,
-        mode: Mode<'_>,
+        mode: Mode,
     ) -> BoxliteResult<Self> {
         let pipe = || {
             nix::unistd::pipe2(OFlag::O_CLOEXEC)
@@ -455,13 +558,11 @@ fn reap(pidfd: &OwnedFd) {
 }
 
 /// What the cloned child does once the agent says go.
-enum Mode<'a> {
+enum Mode {
     /// Move the prepared tree onto the checked mount point.
     Attach,
-    /// Detach the checked mount point with `MNT_DETACH`, addressed by the
-    /// destination path (the container's /proc shows only its own PID
-    /// namespace, so the /proc/self/fd route would resolve to nothing).
-    Detach(&'a CString),
+    /// Detach through the pinned directory, without resolving ancestors again.
+    Detach,
 }
 
 /// Runs in the cloned child and never returns.
@@ -470,7 +571,7 @@ fn run_child(
     fds: &ChildFds,
     components: &[CString],
     stall: Stall,
-    mode: &Mode<'_>,
+    mode: &Mode,
 ) -> ! {
     if let Some(report) = attach_in_child(keep, fds, components, stall, mode) {
         report.send(fds.reports);
@@ -490,7 +591,7 @@ fn attach_in_child(
     fds: &ChildFds,
     components: &[CString],
     stall: Stall,
-    mode: &Mode<'_>,
+    mode: &Mode,
 ) -> Option<Report> {
     let errno = || io::Error::last_os_error().raw_os_error().unwrap_or(0);
     // SAFETY: system calls on descriptors and buffers prepared before the clone.
@@ -536,12 +637,13 @@ fn attach_in_child(
                     Err(error) => Report::new(Stage::Attach, error.raw_os_error().unwrap_or(0)),
                 },
             ),
-            Mode::Detach(path) => {
-                // The open above validated the destination at this instant;
-                // the umount addresses it by path because the container's
-                // /proc only shows its own PID namespace. MNT_DETACH is
-                // lazy: descriptors opened before keep working after it.
-                let unmounted = libc::umount2(path.as_ptr(), libc::MNT_DETACH);
+            Mode::Detach => {
+                // cwd pins the checked mount even if an ancestor is renamed.
+                if libc::fchdir(directory) != 0 {
+                    return Some(Report::new(Stage::Detach, errno()));
+                }
+                let unmounted =
+                    libc::umount2(c".".as_ptr(), libc::MNT_DETACH | libc::UMOUNT_NOFOLLOW);
                 if unmounted == 0 {
                     Some(Report::new(Stage::Detached, 0))
                 } else {
@@ -826,9 +928,8 @@ mod tests {
     #[test]
     fn an_attach_is_refused_while_an_earlier_child_still_runs() {
         let child = stalled_child();
-        let mut attacher = Attacher {
-            straggler: Some(child.pidfd),
-        };
+        let mut attacher = Attacher::default();
+        attacher.straggler = Some(child.pidfd);
 
         let error = attacher.reap_straggler().unwrap_err();
         assert!(matches!(error, BoxliteError::InvalidState(_)), "{error}");
@@ -909,6 +1010,114 @@ mod tests {
             drop(self.release.take());
             let _ = waitpid(self.pid, None);
         }
+    }
+
+    #[test]
+    fn canceled_incarnation_never_attaches_or_detaches_another_mount() {
+        let target = Target::open(nix::unistd::getpid()).unwrap();
+        let mut attacher = Attacher::default();
+        let destination = Path::new("/runtime-mount");
+        assert!(!attacher
+            .detach_runtime("canceled", &target, destination)
+            .unwrap());
+        assert!(!attacher
+            .detach_runtime("canceled", &target, destination)
+            .unwrap());
+        assert!(attacher
+            .attach_runtime(
+                "canceled",
+                Path::new("/missing"),
+                &target,
+                destination,
+                false
+            )
+            .is_err());
+        assert!(attacher
+            .detach_runtime("canceled", &target, Path::new("/different"))
+            .is_err());
+    }
+
+    #[test]
+    #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
+    fn privileged_incarnation_replay_and_replacement_are_safe() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("marker"), b"runtime").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("mount");
+        let holder = NamespaceHolder::spawn();
+        let target = Target::open(holder.pid).unwrap();
+        let mut attacher = Attacher::default();
+        let blocked = root.path().join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("image"), b"preserve").unwrap();
+        assert!(attacher
+            .attach_runtime("failed", source.path(), &target, &blocked, false)
+            .is_err());
+        assert!(!attacher.runtime.contains_key("failed"));
+        assert!(attacher
+            .attach_runtime("old", source.path(), &target, &destination, false)
+            .unwrap());
+        assert!(!attacher
+            .attach_runtime("old", source.path(), &target, &destination, false)
+            .unwrap());
+        assert!(attacher
+            .attach_runtime("old", source.path(), &target, &destination, true)
+            .is_err());
+        assert!(attacher
+            .detach_runtime("old", &target, &destination)
+            .unwrap());
+        assert!(!holder.view(&destination).join("marker").exists());
+        assert!(attacher
+            .attach_runtime("new", source.path(), &target, &destination, false)
+            .unwrap());
+        assert!(!attacher
+            .detach_runtime("old", &target, &destination)
+            .unwrap());
+        assert_eq!(
+            fs::read(holder.view(&destination).join("marker")).unwrap(),
+            b"runtime"
+        );
+        let nested = destination.join("nested");
+        assert!(attacher
+            .attach_runtime("child", source.path(), &target, &nested, false)
+            .unwrap());
+        assert!(attacher
+            .detach_runtime("new", &target, &destination)
+            .is_err());
+        assert!(attacher.runtime_attached("new"));
+        assert!(attacher.detach_runtime("child", &target, &nested).unwrap());
+        assert!(attacher
+            .detach_runtime("new", &target, &destination)
+            .unwrap());
+        assert!(!holder.view(&destination).join("marker").exists());
+    }
+
+    #[test]
+    #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
+    fn privileged_detach_pins_mount_across_ancestor_rename() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("marker"), b"original").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let ancestor = root.path().join("parent");
+        let destination = ancestor.join("mount");
+        let holder = NamespaceHolder::spawn();
+        let target = Target::open(holder.pid).unwrap();
+        Attacher::default()
+            .attach(source.path(), &target, &destination, false)
+            .unwrap();
+        let parts = components(&destination).unwrap();
+        let child = Child::spawn(&target.namespace, None, &parts, Stall::No, Mode::Detach).unwrap();
+        assert_eq!(
+            child.report_within(ATTACH_DEADLINE).unwrap().stage,
+            Some(Stage::Ready)
+        );
+        let renamed = root.path().join("renamed");
+        fs::rename(&ancestor, &renamed).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("replacement"), b"keep").unwrap();
+        child.go().into_result(holder.pid, &destination).unwrap();
+        assert!(!holder.view(&renamed.join("mount")).join("marker").exists());
+        assert_eq!(fs::read(destination.join("replacement")).unwrap(), b"keep");
     }
 
     #[test]

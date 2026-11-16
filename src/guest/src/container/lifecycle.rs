@@ -370,11 +370,15 @@ impl Container {
         self.mount_destinations.push(destination);
     }
 
-    /// Forget a runtime mount that left the container (`Container.Detach`).
-    /// Unknown destinations are ignored: the mount table is the truth.
+    /// Remove only the runtime layer, retaining any underlying OCI mount.
     pub fn remove_mount_destination(&mut self, destination: &Path) {
-        self.mount_destinations
-            .retain(|recorded| recorded != destination);
+        if let Some(index) = self
+            .mount_destinations
+            .iter()
+            .rposition(|recorded| recorded == destination)
+        {
+            self.mount_destinations.remove(index);
+        }
     }
 
     /// The attacher, behind the lock that orders mounts and copies (see the

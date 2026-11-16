@@ -1350,3 +1350,22 @@ fn register_fd_publishes_a_delivered_directory_descriptor() {
     fs.register_fd("strict".into(), read_only_ok, true).unwrap();
     fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
 }
+
+#[test]
+fn runtime_export_roots_and_children_have_distinct_inode_identities() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("child"), b"data").unwrap();
+    let fs = AggregateFs::new(Vec::new()).unwrap();
+    let first = fs
+        .register_fd("first".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let root = fs.lookup(ctx(), 1, c"first").unwrap();
+    let child = fs.lookup(ctx(), first, c"child").unwrap();
+    let second = fs
+        .register_fd("second".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let other = fs.getattr(ctx(), second, None).unwrap().0;
+    assert_ne!(root.attr.st_ino, child.attr.st_ino);
+    assert_ne!(root.attr.st_ino, other.st_ino);
+    assert_ne!(child.attr.st_ino, other.st_ino);
+}

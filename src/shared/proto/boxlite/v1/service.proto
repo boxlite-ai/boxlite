@@ -376,6 +376,8 @@ message ContainerDetachRequest {
   string container_id = 1;
   // Absolute path inside the container of a runtime-mounted directory.
   string destination = 2;
+  // Runtime mount incarnation; retries never detach a replacement.
+  string export_key = 3;
 }
 
 message ContainerDetachResponse {}

@@ -343,11 +343,17 @@ impl ContainerInterface {
     /// Lazily detach the runtime mount at `destination`: the destination
     /// leaves the container mount table while descriptors opened before the
     /// detach keep working.
-    pub async fn detach(&mut self, container_id: &str, destination: &str) -> BoxliteResult<()> {
+    pub async fn detach(
+        &mut self,
+        container_id: &str,
+        destination: &str,
+        export_key: &str,
+    ) -> BoxliteResult<()> {
         self.client
             .detach(boxlite_shared::ContainerDetachRequest {
                 container_id: container_id.to_string(),
                 destination: destination.to_string(),
+                export_key: export_key.to_string(),
             })
             .await?;
         Ok(())

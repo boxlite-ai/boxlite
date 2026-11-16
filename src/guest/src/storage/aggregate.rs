@@ -18,14 +18,6 @@ use super::volume::{mount_volume, resolve_mount_point};
 static ROOTS: LazyLock<Mutex<BTreeMap<String, PathBuf>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-/// Records a mounted aggregate root under its device tag.
-fn remember_root(tag: &str, root: &Path) {
-    ROOTS
-        .lock()
-        .unwrap()
-        .insert(tag.to_string(), root.to_path_buf());
-}
-
 /// The registered root of an aggregate device, for runtime export delivery.
 pub(crate) fn aggregate_root(tag: &str) -> Option<PathBuf> {
     ROOTS.lock().unwrap().get(tag).cloned()
@@ -127,16 +119,24 @@ fn plan(volumes: &[Volume]) -> BoxliteResult<Vec<Mount>> {
 }
 
 /// Rolls aggregate mounts back if a later guest initialization step fails.
-pub(crate) struct MountedVolumes(Vec<PathBuf>);
+pub(crate) struct MountedVolumes(Vec<PathBuf>, Vec<(String, PathBuf)>);
 
 impl MountedVolumes {
     pub(crate) fn commit(mut self) {
         self.0.clear();
+        self.1.clear();
     }
 }
 
 impl Drop for MountedVolumes {
     fn drop(&mut self) {
+        let mut roots = ROOTS.lock().unwrap();
+        for (tag, root) in &self.1 {
+            if roots.get(tag) == Some(root) {
+                roots.remove(tag);
+            }
+        }
+        drop(roots);
         for path in self.0.iter().rev() {
             if let Err(error) = unmount(path) {
                 tracing::error!(%error, "Aggregate mount rollback failed");
@@ -189,15 +189,15 @@ pub(crate) fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<MountedVolumes>
     });
     if !aggregate {
         super::mount_volumes(volumes)?;
-        return Ok(MountedVolumes(Vec::new()));
+        return Ok(MountedVolumes(Vec::new(), Vec::new()));
     }
-    execute(
-        &plan(volumes)?,
+    let mounts = plan(volumes)?;
+    let owned = execute(
+        &mounts,
         |operation| match operation {
             Mount::Root { tag, target } => {
                 prepare_destination(target)?;
                 VirtiofsMount::mount(tag, target, false)?;
-                remember_root(tag, target);
                 Ok(())
             }
             Mount::Bind {
@@ -208,8 +208,16 @@ pub(crate) fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<MountedVolumes>
             Mount::Legacy { index, .. } => mount_volume(&volumes[*index]),
         },
         unmount,
-    )
-    .map(MountedVolumes)
+    )?;
+    let published: Vec<_> = mounts
+        .iter()
+        .filter_map(|operation| match operation {
+            Mount::Root { tag, target } => Some((tag.clone(), target.clone())),
+            _ => None,
+        })
+        .collect();
+    ROOTS.lock().unwrap().extend(published.iter().cloned());
+    Ok(MountedVolumes(owned, published))
 }
 
 fn prepare_destination(target: &Path) -> BoxliteResult<()> {
@@ -281,6 +289,29 @@ fn unmount(path: &Path) -> BoxliteResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initialization_guard_removes_only_its_registry_entries() {
+        let tag = "rollback-registry-test".to_string();
+        let root = PathBuf::from("/registry-test-root");
+        ROOTS.lock().unwrap().insert(tag.clone(), root.clone());
+        drop(MountedVolumes(
+            Vec::new(),
+            vec![(tag.clone(), root.clone())],
+        ));
+        assert_eq!(aggregate_root(&tag), None);
+        ROOTS.lock().unwrap().insert(tag.clone(), root.clone());
+        MountedVolumes(Vec::new(), vec![(tag.clone(), root.clone())]).commit();
+        assert_eq!(aggregate_root(&tag), Some(root.clone()));
+        let replacement = PathBuf::from("/registry-replacement");
+        ROOTS
+            .lock()
+            .unwrap()
+            .insert(tag.clone(), replacement.clone());
+        drop(MountedVolumes(Vec::new(), vec![(tag.clone(), root)]));
+        assert_eq!(aggregate_root(&tag), Some(replacement));
+        ROOTS.lock().unwrap().remove(&tag);
+    }
 
     fn share(tag: &str, key: &str, target: &str) -> Volume {
         Volume {
@@ -482,14 +513,14 @@ mod tests {
         std::fs::write(target.join("file"), b"guest bytes").unwrap();
         assert_eq!(std::fs::read(source.join("file")).unwrap(), b"guest bytes");
         {
-            let _initializing = MountedVolumes(vec![target.clone()]);
+            let _initializing = MountedVolumes(vec![target.clone()], Vec::new());
         }
         assert!(
             !target.join("file").exists(),
             "later init failure drops aggregate ownership"
         );
         bind(&source, &target, false).unwrap();
-        MountedVolumes(vec![target.clone()]).commit();
+        MountedVolumes(vec![target.clone()], Vec::new()).commit();
         assert!(
             target.join("file").exists(),
             "successful init retains the mount"
@@ -542,7 +573,7 @@ mod tests {
             std::fs::read(nested.join("marker")).unwrap(),
             b"child export"
         );
-        drop(MountedVolumes(owned));
+        drop(MountedVolumes(owned, Vec::new()));
         assert!(!nested.join("marker").exists());
     }
 

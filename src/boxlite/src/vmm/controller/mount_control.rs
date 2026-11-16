@@ -22,10 +22,19 @@ use serde::{Deserialize, Serialize};
 
 use boxlite_shared::constants::mount_tags::MOUNT_CONTROL_SOCKET;
 
-#[cfg(feature = "native")]
+use crate::litebox::mounts::MountInfo;
+
+/// One mount incarnation, retained by the shim for this VM run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlMount {
+    pub export: String,
+    pub info: MountInfo,
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 use std::sync::Arc;
 
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 use boxlite_vmm::AggregateFs;
 
 /// Largest accepted frame payload. Requests carry only names and flags.
@@ -35,19 +44,36 @@ const MAX_FRAME: u32 = 64 * 1024;
 pub enum MountRequest {
     /// Publish a delivered directory beneath `name`. Requires exactly one
     /// attached descriptor.
-    Register { name: String, read_only: bool },
+    Register {
+        name: String,
+        read_only: bool,
+    },
     /// Retire the export published under `name`.
-    Remove { name: String },
+    Remove {
+        name: String,
+    },
+    /// Hold mutation admission until this connection closes.
+    Begin,
+    List,
+    Record {
+        mount: ControlMount,
+    },
+    Forget {
+        export: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MountResponse {
     Registered { root: u64 },
     Removed,
+    Ready,
+    Mounts { mounts: Vec<ControlMount> },
     Error { code: i32, message: String },
 }
 
 impl MountResponse {
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     fn from_error(error: &io::Error) -> Self {
         MountResponse::Error {
             code: error.raw_os_error().unwrap_or(libc::EIO),
@@ -111,7 +137,11 @@ fn send_frame(stream: &UnixStream, payload: &[u8], fd: Option<RawFd>) -> io::Res
         }
     }
     // SAFETY: the message header and both buffers remain valid for the call.
-    let sent = unsafe { libc::sendmsg(stream.as_raw_fd(), &message, 0) };
+    #[cfg(target_os = "linux")]
+    let flags = libc::MSG_NOSIGNAL;
+    #[cfg(not(target_os = "linux"))]
+    let flags = 0;
+    let sent = unsafe { libc::sendmsg(stream.as_raw_fd(), &message, flags) };
     if sent < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -126,6 +156,7 @@ fn send_frame(stream: &UnixStream, payload: &[u8], fd: Option<RawFd>) -> io::Res
 /// Returns `Ok(None)` for a clean EOF at a frame boundary. Framing errors
 /// and descriptor attachment never coexist: a received descriptor is closed
 /// before the error returns.
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn receive_frame(stream: &mut UnixStream) -> io::Result<Option<(Vec<u8>, Option<File>)>> {
     let mut len = [0u8; 4];
     let mut control = vec![0u8; unsafe { libc::CMSG_SPACE(size_of::<RawFd>() as u32) } as usize];
@@ -145,41 +176,42 @@ fn receive_frame(stream: &mut UnixStream) -> io::Result<Option<(Vec<u8>, Option<
     };
     // SAFETY: header, buffers and the control buffer remain valid; the kernel
     // marks received descriptors close-on-exec with MSG_CMSG_CLOEXEC.
-    let received =
-        unsafe { libc::recvmsg(stream.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) };
+    #[cfg(target_os = "linux")]
+    let flags = libc::MSG_CMSG_CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let flags = 0;
+    let received = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut message, flags) };
     if received < 0 {
         return Err(io::Error::last_os_error());
     }
     if received == 0 {
         return Ok(None);
     }
-    if message.msg_flags & libc::MSG_CTRUNC != 0 {
-        // The peer tried to pass more than this protocol accepts. Reject the
-        // connection rather than guessing at the remaining bytes.
-        return Err(io::Error::from_raw_os_error(libc::EPROTO));
-    }
     let mut attached = None;
-    // SAFETY: the header was produced by recvmsg into our control buffer;
-    // CMSG_NEXT stops at the null-terminated header chain.
+    let mut descriptors = 0;
+    // SAFETY: recvmsg initialized the ancillary chain. Own all delivered
+    // descriptors before validating the frame, including truncated messages.
     unsafe {
         let mut header = libc::CMSG_FIRSTHDR(&message);
         while !header.is_null() {
-            let current = &mut *header;
+            let current = &*header;
             if current.cmsg_level == libc::SOL_SOCKET && current.cmsg_type == libc::SCM_RIGHTS {
-                let data = libc::CMSG_DATA(current).cast::<RawFd>();
+                let data = libc::CMSG_DATA(header).cast::<RawFd>();
                 let count =
                     (current.cmsg_len as usize - libc::CMSG_LEN(0) as usize) / size_of::<RawFd>();
-                // Only the first descriptor belongs to this protocol level;
-                // extras indicate a peer protocol violation and are closed.
-                for extra in 1..count {
-                    libc::close(*data.add(extra));
-                }
-                if count >= 1 {
-                    attached = Some(File::from_raw_fd(*data));
+                for index in 0..count {
+                    let file = File::from_raw_fd(data.add(index).read_unaligned());
+                    descriptors += 1;
+                    if attached.is_none() {
+                        attached = Some(file);
+                    }
                 }
             }
             header = libc::CMSG_NXTHDR(&message, header);
         }
+    }
+    if message.msg_flags & libc::MSG_CTRUNC != 0 || descriptors > 1 {
+        return Err(io::Error::from_raw_os_error(libc::EPROTO));
     }
     let fail = |attached: Option<File>, code: i32| {
         drop(attached);
@@ -205,7 +237,7 @@ fn receive_frame(stream: &mut UnixStream) -> io::Result<Option<(Vec<u8>, Option<
 // Server (requires the native VMM: the filesystem handle lives in its device)
 // ============================================================================
 
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn same_user(stream: &UnixStream) -> bool {
     let mut credential = libc::ucred {
         pid: 0,
@@ -226,7 +258,7 @@ fn same_user(stream: &UnixStream) -> bool {
     ok == 0 && credential.uid == unsafe { libc::geteuid() }
 }
 
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn handle_request(
     filesystem: &Arc<AggregateFs>,
     request: MountRequest,
@@ -252,11 +284,23 @@ fn handle_request(
                 message: "Remove must not carry a descriptor".into(),
             }
         }
+        _ => MountResponse::Error {
+            code: libc::EINVAL,
+            message: "request requires mutation admission and no descriptors".into(),
+        },
     }
 }
 
-#[cfg(feature = "native")]
-fn serve_connection(stream: &mut UnixStream, tag: &str) {
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+#[derive(Default)]
+struct MountRegistry {
+    operation: std::sync::Mutex<()>,
+    mounts: std::sync::Mutex<Vec<ControlMount>>,
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+fn serve_connection(stream: &mut UnixStream, tag: &str, registry: &MountRegistry) {
+    let mut admission = None;
     loop {
         let (payload, descriptor) = match receive_frame(stream) {
             Ok(Some(frame)) => frame,
@@ -276,6 +320,29 @@ fn serve_connection(stream: &mut UnixStream, tag: &str) {
             }
         };
         let response = match serde_json::from_slice::<MountRequest>(&payload) {
+            Ok(MountRequest::Begin) if descriptor.is_none() => {
+                if admission.is_none() {
+                    admission = Some(registry.operation.lock().unwrap());
+                }
+                MountResponse::Ready
+            }
+            Ok(MountRequest::List) if descriptor.is_none() => MountResponse::Mounts {
+                mounts: registry.mounts.lock().unwrap().clone(),
+            },
+            Ok(MountRequest::Record { mount }) if descriptor.is_none() && admission.is_some() => {
+                let mut mounts = registry.mounts.lock().unwrap();
+                mounts.retain(|entry| entry.export != mount.export);
+                mounts.push(mount);
+                MountResponse::Ready
+            }
+            Ok(MountRequest::Forget { export }) if descriptor.is_none() && admission.is_some() => {
+                registry
+                    .mounts
+                    .lock()
+                    .unwrap()
+                    .retain(|entry| entry.export != export);
+                MountResponse::Ready
+            }
             Ok(request) => handle_request(&filesystem, request, descriptor),
             Err(error) => {
                 drop(descriptor);
@@ -291,6 +358,7 @@ fn serve_connection(stream: &mut UnixStream, tag: &str) {
     }
 }
 
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn write_response(stream: &mut UnixStream, response: MountResponse) -> io::Result<()> {
     let payload = serde_json::to_vec(&response)?;
     let bytes = frame_bytes(&payload);
@@ -302,8 +370,9 @@ fn write_response(stream: &mut UnixStream, response: MountResponse) -> io::Resul
 /// Accepts mount-control connections until the process exits. Each accepted
 /// connection is verified as the owning user and then served serially; a
 /// misbehaving peer only costs its own connection.
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub fn serve(listener: UnixListener, tag: String) {
+    let registry = Arc::new(MountRegistry::default());
     // Clients hold persistent connections; each gets its own thread so one
     // idle client cannot queue out the next one.
     for stream in listener.incoming() {
@@ -312,9 +381,10 @@ pub fn serve(listener: UnixListener, tag: String) {
             continue;
         }
         let tag = tag.clone();
+        let registry = Arc::clone(&registry);
         std::thread::spawn(move || {
             let mut stream = stream;
-            serve_connection(&mut stream, &tag);
+            serve_connection(&mut stream, &tag, &registry);
         });
     }
 }
@@ -352,7 +422,45 @@ pub struct MountControlClient {
 impl MountControlClient {
     pub fn connect(box_dir: &Path) -> io::Result<Self> {
         let stream = UnixStream::connect(mount_control_socket(box_dir))?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(90)))?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(90)))?;
         Ok(Self { stream })
+    }
+
+    /// A second handle over the same connection, for blocking calls that
+    /// need an owned client without giving up the original.
+    pub(crate) fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            stream: self.stream.try_clone()?,
+        })
+    }
+
+    pub(crate) fn begin(&mut self) -> io::Result<()> {
+        self.ack(MountRequest::Begin)
+    }
+
+    pub(crate) fn list(&mut self) -> io::Result<Vec<ControlMount>> {
+        match self.call(&MountRequest::List, None)? {
+            MountResponse::Mounts { mounts } => Ok(mounts),
+            MountResponse::Error { code, .. } => Err(io::Error::from_raw_os_error(code)),
+            _ => Err(io::Error::from_raw_os_error(libc::EPROTO)),
+        }
+    }
+
+    pub(crate) fn record(&mut self, mount: ControlMount) -> io::Result<()> {
+        self.ack(MountRequest::Record { mount })
+    }
+
+    pub(crate) fn forget(&mut self, export: String) -> io::Result<()> {
+        self.ack(MountRequest::Forget { export })
+    }
+
+    fn ack(&mut self, request: MountRequest) -> io::Result<()> {
+        match self.call(&request, None)? {
+            MountResponse::Ready => Ok(()),
+            MountResponse::Error { code, .. } => Err(io::Error::from_raw_os_error(code)),
+            _ => Err(io::Error::from_raw_os_error(libc::EPROTO)),
+        }
     }
 
     pub fn register(
@@ -388,5 +496,5 @@ impl MountControlClient {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod tests;

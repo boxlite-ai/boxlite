@@ -109,6 +109,19 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
         ))
     }
 
+    /// Deliver an already-pinned host directory descriptor into the running
+    /// container. The caller owns source authorization; the descriptor moves
+    /// into the registration. Default unsupported, like [`Self::mounts_add`].
+    async fn mounts_add_pinned(
+        &self,
+        _request: crate::litebox::mounts::MountRequest,
+        _source: std::fs::File,
+    ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
+        Err(BoxliteError::Unsupported(
+            "runtime directory delivery requires a local native VM".into(),
+        ))
+    }
+
     /// Lazily detach the runtime mount at `target`.
     async fn mounts_remove(&self, _target: &Path) -> BoxliteResult<()> {
         Err(BoxliteError::Unsupported(
