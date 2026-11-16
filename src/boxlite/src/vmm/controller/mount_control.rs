@@ -391,17 +391,18 @@ pub fn serve(listener: UnixListener, tag: String) {
     }
 }
 
-/// Binds the Box-directory control socket with owner-only permissions.
-/// Returns the listener; the caller serves it on its own thread.
-pub fn bind(box_dir: &Path) -> io::Result<UnixListener> {
+/// Binds the control socket at an explicit path (the short-binding
+/// authority's `mount.sock`, see `BoxSockets::mount_control_sock`) with
+/// owner-only permissions. Returns the listener; the caller serves it on
+/// its own thread.
+pub fn bind_at(path: &Path) -> io::Result<UnixListener> {
     use std::os::unix::fs::PermissionsExt;
-    let path = mount_control_socket(box_dir);
     // A previous shim on this Box directory leaves the socket behind.
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
+    let _ = std::fs::remove_file(path);
+    let listener = UnixListener::bind(path)?;
     // fchmod on the listener sets the socket inode mode; the path-based chmod
     // is outside the shim seccomp profile.
-    let mut mode = std::fs::metadata(&path)?.permissions();
+    let mut mode = std::fs::metadata(path)?.permissions();
     mode.set_mode(0o600);
     // SAFETY: the descriptor and mode value remain valid for the call.
     let mode_value = mode.mode();
@@ -409,6 +410,12 @@ pub fn bind(box_dir: &Path) -> io::Result<UnixListener> {
         return Err(io::Error::last_os_error());
     }
     Ok(listener)
+}
+
+/// Binds the control socket inside a Box directory (tests, non-authority
+/// callers). Production binds through [`bind_at`].
+pub fn bind(box_dir: &Path) -> io::Result<UnixListener> {
+    bind_at(&mount_control_socket(box_dir))
 }
 
 // ============================================================================
@@ -423,7 +430,13 @@ pub struct MountControlClient {
 
 impl MountControlClient {
     pub fn connect(box_dir: &Path) -> io::Result<Self> {
-        let stream = UnixStream::connect(mount_control_socket(box_dir))?;
+        Self::connect_at(&mount_control_socket(box_dir))
+    }
+
+    /// Connects to a control socket at an explicit path — the short-binding
+    /// authority's `mount.sock` in production (see `BoxSockets`).
+    pub fn connect_at(path: &Path) -> io::Result<Self> {
+        let stream = UnixStream::connect(path)?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(90)))?;
         stream.set_write_timeout(Some(std::time::Duration::from_secs(90)))?;
         Ok(Self { stream })

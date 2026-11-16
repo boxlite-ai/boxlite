@@ -207,9 +207,16 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
+        let box_id = config.box_id.clone();
         let sockets_dir = box_dir.join("sockets");
         std::fs::create_dir_all(&sockets_dir).ok();
-        match boxlite::vmm::controller::mount_control::bind(&sockets_dir) {
+        // Bind through the short socket-path authority (see `BoxSockets`):
+        // a deep BOXLITE_HOME would otherwise silently disable delivery.
+        let binding = boxlite::net::socket_path::BoxSockets::new(box_id, &sockets_dir);
+        match binding.ensure().and_then(|()| {
+            boxlite::vmm::controller::mount_control::bind_at(&binding.mount_control_sock())
+                .map_err(|error| BoxliteError::Storage(error.to_string()))
+        }) {
             Ok(listener) => {
                 let tag = boxlite_shared::constants::mount_tags::AGGREGATE.to_string();
                 std::thread::Builder::new()

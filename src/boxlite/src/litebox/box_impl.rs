@@ -727,6 +727,22 @@ impl BoxImpl {
             .await
     }
 
+    /// One control connection through the same short-binding path the shim
+    /// bound (see `BoxSockets::mount_control_sock`).
+    fn mount_control_client(
+        &self,
+    ) -> BoxliteResult<crate::vmm::controller::mount_control::MountControlClient> {
+        self.layout.sockets().ensure()?;
+        crate::vmm::controller::mount_control::MountControlClient::connect_at(
+            &self.layout.sockets().mount_control_sock(),
+        )
+        .map_err(|error| {
+            BoxliteError::Unsupported(format!(
+                "runtime directory delivery socket unavailable: {error}"
+            ))
+        })
+    }
+
     /// Shared mount precondition: native engine opt-in, a live VM (never an
     /// implicit start), and recovery of the shim's mount records so a fresh
     /// handle sees mounts another client added.
@@ -738,14 +754,7 @@ impl BoxImpl {
             )));
         }
         let live = self.existing_live_state().await?;
-        let mut control = crate::vmm::controller::mount_control::MountControlClient::connect(
-            &self.layout.sockets_dir(),
-        )
-        .map_err(|error| {
-            BoxliteError::Unsupported(format!(
-                "runtime directory delivery socket unavailable: {error}"
-            ))
-        })?;
+        let mut control = self.mount_control_client()?;
         live.mounts.recover(&mut control).await?;
         Ok(live)
     }
@@ -1726,14 +1735,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
         let live = self.mount_live_state().await?;
         let container_id = self.container_id().to_string();
-        let control = crate::vmm::controller::mount_control::MountControlClient::connect(
-            &self.layout.sockets_dir(),
-        )
-        .map_err(|error| {
-            BoxliteError::Unsupported(format!(
-                "runtime directory delivery socket unavailable: {error}"
-            ))
-        })?;
+        let control = self.mount_control_client()?;
         let guest = live.guest_session.container().await?;
         live.mounts
             .clone()
@@ -1748,14 +1750,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
         let live = self.mount_live_state().await?;
         let container_id = self.container_id().to_string();
-        let control = crate::vmm::controller::mount_control::MountControlClient::connect(
-            &self.layout.sockets_dir(),
-        )
-        .map_err(|error| {
-            BoxliteError::Unsupported(format!(
-                "runtime directory delivery socket unavailable: {error}"
-            ))
-        })?;
+        let control = self.mount_control_client()?;
         let guest = live.guest_session.container().await?;
         live.mounts
             .clone()
@@ -1766,14 +1761,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     async fn mounts_remove(&self, target: &Path) -> BoxliteResult<()> {
         let live = self.mount_live_state().await?;
         let container_id = self.container_id().to_string();
-        let control = crate::vmm::controller::mount_control::MountControlClient::connect(
-            &self.layout.sockets_dir(),
-        )
-        .map_err(|error| {
-            BoxliteError::Unsupported(format!(
-                "runtime directory delivery socket unavailable: {error}"
-            ))
-        })?;
+        let control = self.mount_control_client()?;
         let guest = live.guest_session.container().await?;
         live.mounts
             .clone()

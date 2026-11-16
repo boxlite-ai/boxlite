@@ -33,6 +33,7 @@ const INTERNAL: Context = Context {
     pid: 0,
 };
 
+#[derive(Debug)]
 pub struct Share {
     pub name: String,
     pub path: PathBuf,
@@ -143,6 +144,20 @@ pub struct AggregateFs {
 
 fn errno(code: i32) -> io::Error {
     io::Error::from_raw_os_error(code)
+}
+
+// Manual Debug: the registry and state hold backend descriptors and large
+// maps that would make a derived dump unreadable; counts are what matters.
+impl std::fmt::Debug for AggregateFs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (registry, state) = (self.registry.lock().unwrap(), self.state.lock().unwrap());
+        f.debug_struct("AggregateFs")
+            .field("exports", &registry.exports.len())
+            .field("alive", &registry.alive)
+            .field("nodes", &state.nodes.len())
+            .field("handles", &state.handles.len())
+            .finish()
+    }
 }
 
 fn allocate(next: &mut u64) -> io::Result<u64> {
