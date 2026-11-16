@@ -99,6 +99,92 @@ async fn lifecycle_start_waits_for_entity_lock() {
 }
 
 #[tokio::test]
+async fn execution_discovery_rechecks_state_after_admission() {
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = &fixture.box_impl;
+    let locker = bx
+        .runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let guard = LockGuard::new(locker.as_ref());
+    let mut discovery = Box::pin(bx.list_executions());
+    assert!(
+        futures::poll!(&mut discovery).is_pending(),
+        "execution discovery bypassed lifecycle admission"
+    );
+
+    // Another admitted operation stops this run while discovery is queued.
+    let mut stopped = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    stopped.force_status(BoxStatus::Stopped);
+    bx.runtime.box_manager.save_box(bx.id(), &stopped).unwrap();
+    drop(guard);
+
+    let error = tokio::time::timeout(Duration::from_secs(1), discovery)
+        .await
+        .expect("execution discovery stalled after admission")
+        .expect_err("discovery must reject the run stopped while it waited");
+    assert!(
+        matches!(error, BoxliteError::InvalidState(ref message) if message.contains("is not running")),
+        "discovery used the cached guest after the run stopped: {error}"
+    );
+}
+
+#[tokio::test]
+async fn quiesced_disk_work_waits_for_entity_lock() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let handle = runtime
+        .create(
+            BoxOptions {
+                detach: true,
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let bx = handle
+        .box_backend
+        .clone()
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .ok()
+        .unwrap();
+    let locker = runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let guard = LockGuard::new(locker.as_ref());
+    let marker = home.path().join("disk-work");
+    let mut work = Box::pin(bx.with_quiesce_async(async {
+        std::fs::write(&marker, b"snapshot").unwrap();
+        Ok(())
+    }));
+    assert!(
+        futures::poll!(&mut work).is_pending(),
+        "quiesced disk work bypassed lifecycle admission"
+    );
+    assert!(!marker.exists(), "disk work ran before lifecycle admission");
+    drop(guard);
+
+    tokio::time::timeout(Duration::from_secs(1), work)
+        .await
+        .expect("quiesced disk work stalled after admission")
+        .unwrap();
+    assert!(marker.exists(), "admitted disk work did not execute");
+    assert!(
+        LockGuard::try_new(locker.as_ref()).is_some(),
+        "quiesced disk work retained lifecycle admission after returning"
+    );
+}
+
+#[tokio::test]
 async fn lifecycle_stop_waits_before_cancelling() {
     let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
     let box_impl = &fixture.box_impl;
