@@ -884,6 +884,9 @@ impl BoxImpl {
             let exit_file = self.layout.container_exit_file(self.container_id());
             match reason {
                 StopReason::Requested => {
+                    // Only transition to Stopped if we were Running (or another active
+                    // state). A Configured box (never started) stays Configured so the
+                    // next start() triggers full initialization (creating disks).
                     if !state.status.is_configured() {
                         crate::runtime::rt_impl::record_main_command_exit(&mut state, &exit_file);
                     }
