@@ -237,15 +237,13 @@ export const BASELINE_READ_DEADLINE_MS = 5_000
  * an unhandled rejection behind.
  */
 function raceDeadline<T>(promise: Promise<T>): Promise<T> {
+  let timer!: ReturnType<typeof setTimeout>
   const timeout = new Promise<never>((_, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`baseline read exceeded ${BASELINE_READ_DEADLINE_MS}ms`)),
-      BASELINE_READ_DEADLINE_MS,
-    )
+    timer = setTimeout(() => reject(new Error(`baseline read exceeded ${BASELINE_READ_DEADLINE_MS}ms`)), BASELINE_READ_DEADLINE_MS)
     timer.unref?.()
   })
   timeout.catch(() => {})
-  return Promise.race([promise, timeout])
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 /** Hyperdisk Balanced per-disk provisioned-performance ceilings (GCP docs). */
@@ -310,7 +308,11 @@ export function performanceTarget(
   const iopsUpped = Math.max(iopsSlopeTarget, iops)
   const iopsTarget = Math.min(iopsUpped, iopsMax)
 
-  const tputMax = Math.min(PERF_THROUGHPUT_CEILING_MIBPS, iopsTarget / 4)
+  // The coupling ceiling P/4 can be fractional (iopsTarget % 4 != 0) and the
+  // wire field is int64: floor the bound so an in-ceiling clipped value is
+  // always a legal integer. A fractional string like "937.5" would be
+  // rejected outright and take the bundled capacity change down with it.
+  const tputMax = Math.min(PERF_THROUGHPUT_CEILING_MIBPS, Math.floor(iopsTarget / 4))
   const tputSlopeTarget = Math.round((tput / size) * newGiB)
   const tputUpped = Math.max(tputSlopeTarget, tput)
   const tputTarget = Math.min(tputUpped, tputMax)
@@ -783,9 +785,20 @@ export class RunnerDiskExpansionService {
     now: Date,
   ): Promise<{ fields: GcpDiskPerformanceFields | undefined; attributes: Record<string, string | number> }> {
     const cooldownStart = new Date(now.getTime() - PERFORMANCE_COOLDOWN_MS)
-    const perfCooldownActive = await this.expansions.exist({
-      where: { runnerId: runner.id, performanceUpdated: true, requestedAt: MoreThan(cooldownStart) },
-    })
+    let perfCooldownActive = false
+    try {
+      perfCooldownActive = await this.expansions.exist({
+        where: { runnerId: runner.id, performanceUpdated: true, requestedAt: MoreThan(cooldownStart) },
+      })
+    } catch (e) {
+      // A transient DB failure in this gate must not park the capacity
+      // expansion in the 10-minute unconfirmed lot: degrade to size-only —
+      // performance lags at most one 4h window; capacity never waits.
+      this.logger.warn(`Runner ${runner.id} performance cooldown gate query failed, expanding size only: ${errorMessage(e)}`, {
+        ...expansionLogBase(runner, ref),
+        'disk.expansion_result': 'perf_gate_query_failed',
+      })
+    }
     if (perfCooldownActive) {
       return { fields: undefined, attributes: {} }
     }
@@ -804,6 +817,15 @@ export class RunnerDiskExpansionService {
     }
     const target = performanceTarget(disk.provisionedIops, disk.provisionedThroughput, disk.sizeGb, toGiB)
     if (!target) {
+      // The snapshot exists but lacks provisioned values (legacy disks,
+      // non-hyperdisk types): performance can never ride until a baseline
+      // appears, and a silent size-only would be indistinguishable from the
+      // cooldown window in the requested logs.
+      this.logger.warn(`Runner ${runner.id} disk snapshot lacks provisioned performance values, expanding size only`, {
+        ...expansionLogBase(runner, ref),
+        'disk.expansion_result': 'perf_baseline_missing',
+        'disk.perf_baseline_size_gib': String(disk.sizeGb ?? ''),
+      })
       return { fields: undefined, attributes: {} }
     }
 

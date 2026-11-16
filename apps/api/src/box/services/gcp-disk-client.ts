@@ -31,7 +31,7 @@ export interface GcpDiskSnapshot {
  * The provisioned-performance fields a PATCH will carry. A field is present
  * only when its proportional target differs from the disk's current value —
  * sending a same-value field is unreliable (the sibling size field has proof
- * GCP 400s on "must be larger"), so the client builds `paths` from exactly
+ * GCP 400s on "must be larger"), so the client builds `updateMask` from exactly
  * these.
  */
 export interface GcpDiskPerformanceFields {
