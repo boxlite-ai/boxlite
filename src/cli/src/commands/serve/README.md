@@ -144,7 +144,7 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 | POST   | `/v1/boxes/{box_id}/ssh`   | `ssh::configure_ssh` | Replace SSH configuration; returns status    |
 | POST   | `/v1/boxes/{box_id}/ssh/enable` | `ssh::enable_ssh` | Enable saved configuration on a running box |
 | GET    | `/v1/boxes/{box_id}/ssh`   | `ssh::status_ssh`    | Read SSH status without starting the box     |
-| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently without starting it |
+| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently on a running box; otherwise `409 invalid_state`; never starts it |
 
 `POST /ssh` takes the direct `SshConfig` JSON body (not a wrapper) with
 `Content-Type: application/json` and answers with `SshStatus`; every accepted
@@ -186,6 +186,11 @@ client on an attached main session gets 409, same as for an exec.
 |--------|--------------------------------------|------------------------|-----------------------------------|
 | PUT    | `/v1/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
 | GET    | `/v1/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
+
+Downloads preserve symbolic links as link entries rather than reading their
+targets. A guest chooses the target, so dereferencing it on the host could read
+host files into the response; clients extracting the downloaded tar must apply
+the usual safeguards for untrusted archives.
 
 ### Metrics
 

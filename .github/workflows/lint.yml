@@ -130,6 +130,12 @@ jobs:
         with:
           components: clippy
 
+      # `make clippy` builds sdks/python, whose PyO3 build script refuses an
+      # interpreter newer than its supported maximum (3.14). Pin the same
+      # interpreter the rust test job uses instead of the runner image's
+      # `python`, which moves with the macOS image.
+      - uses: ./.github/actions/setup-python
+
       - name: Install guest cross target (macOS)
         if: runner.os == 'macOS'
         run: rustup target add "$(bash scripts/util.sh --target)"

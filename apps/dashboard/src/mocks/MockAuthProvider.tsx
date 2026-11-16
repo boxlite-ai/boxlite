@@ -3,84 +3,73 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
-
-// Drop-in replacement for react-oidc-context's <AuthProvider> used only by the
-// MSW mock target. It reports an authenticated session so the dashboard renders
-// without a real OIDC server. Sign-out/sign-in are simulated via a localStorage
-// flag + reload so the login screen is reachable in the mock target for review;
-// tokens are never sent anywhere (MSW intercepts requests).
-
+import { AsciiButton } from '@/components/ascii'
 import { RoutePath } from '@/enums/RoutePath'
-import type { ReactNode } from 'react'
+import { completeSignIn, safeReturnTo } from '@/lib/auth-session'
+import { useState, type ReactNode } from 'react'
 import { AuthContext, type AuthContextProps } from 'react-oidc-context'
-import type { User } from 'oidc-client-ts'
-import { MOCK_USER } from './fixtures'
+import type { SigninRedirectArgs, User } from 'oidc-client-ts'
+import { MOCK_ACCOUNTS, MOCK_USER } from './fixtures'
 
 const SIGNED_OUT_KEY = 'mock-signed-out'
-
-function isSignedOut(): boolean {
-  try {
-    return localStorage.getItem(SIGNED_OUT_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-const mockUser = {
-  access_token: 'mock-access-token',
-  token_type: 'Bearer',
-  profile: {
-    sub: MOCK_USER.sub,
-    name: MOCK_USER.name,
-    email: MOCK_USER.email,
-    email_verified: true,
-    picture: MOCK_USER.picture,
-  },
-  expired: false,
-  scopes: ['openid', 'profile', 'email'],
-} as unknown as User
-
 const noop = async () => undefined
 
-// Simulated login: clear the signed-out flag and return to the dashboard.
-const mockSignIn = async () => {
-  try {
-    localStorage.removeItem(SIGNED_OUT_KEY)
-  } catch {
-    /* localStorage may be unavailable */
-  }
-  window.location.assign(RoutePath.DASHBOARD)
+function finishSignIn(index: number, returnTo: string) {
+  sessionStorage.setItem('mock-account', String(index))
+  localStorage.removeItem(SIGNED_OUT_KEY)
+  completeSignIn()
+  window.location.replace(returnTo)
 }
 
-// Simulated logout: set the flag and return to the landing/login screen.
-const mockSignOut = async () => {
-  try {
-    localStorage.setItem(SIGNED_OUT_KEY, '1')
-  } catch {
-    /* localStorage may be unavailable */
-  }
-  window.location.assign(RoutePath.LANDING)
-}
-
+// Development only: fixture identity selection is a debug tool, not a hosted login UI.
 export function MockAuthProvider({ children }: { children: ReactNode }) {
-  const signedOut = isSignedOut()
-
+  const [signedOut, setSignedOut] = useState(() => localStorage.getItem(SIGNED_OUT_KEY) === '1')
+  const [debugEnabled] = useState(() => new URLSearchParams(window.location.search).get('authDebug') === '1')
+  const [debugOpen, setDebugOpen] = useState(false)
+  const [error, setError] = useState<Error>()
+  const removeUser = async () => {
+    localStorage.setItem(SIGNED_OUT_KEY, '1')
+    setSignedOut(true)
+  }
+  const signinRedirect = async (args?: SigninRedirectArgs) => {
+    const returnTo = safeReturnTo((args?.state as { returnTo?: string })?.returnTo)
+    if (args?.prompt) {
+      setError(
+        Object.assign(new Error('Real authentication required'), { innerError: { error: 'mock_auth_unavailable' } }),
+      )
+      return null
+    }
+    // No provider UI is simulated. The debug panel can explicitly select a fixture.
+    finishSignIn(debugEnabled ? MOCK_ACCOUNTS.indexOf(MOCK_USER) : 0, returnTo)
+  }
+  const signoutRedirect = async () => {
+    await removeUser()
+    window.location.replace(RoutePath.LANDING)
+  }
   const mockAuth = {
     isAuthenticated: !signedOut,
     isLoading: false,
     activeNavigator: undefined,
-    error: undefined,
-    user: signedOut ? undefined : mockUser,
+    error,
+    user: signedOut
+      ? undefined
+      : ({
+          access_token: 'mock-access-token',
+          token_type: 'Bearer',
+          profile: { ...MOCK_USER, email_verified: true },
+          expired: false,
+          scopes: ['openid', 'profile', 'email'],
+        } as unknown as User),
     settings: {},
     events: {},
-    signinRedirect: mockSignIn,
-    signinSilent: mockSignIn,
-    signinPopup: mockSignIn,
-    signinResourceOwnerCredentials: mockSignIn,
-    signoutRedirect: mockSignOut,
-    signoutPopup: mockSignOut,
-    signoutSilent: mockSignOut,
-    removeUser: mockSignOut,
+    signinRedirect,
+    signinSilent: signinRedirect,
+    signinPopup: signinRedirect,
+    signinResourceOwnerCredentials: signinRedirect,
+    signoutRedirect,
+    signoutPopup: signoutRedirect,
+    signoutSilent: signoutRedirect,
+    removeUser,
     revokeTokens: noop,
     startSilentRenew: () => undefined,
     stopSilentRenew: () => undefined,
@@ -88,5 +77,35 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     querySessionStatus: noop,
   } as unknown as AuthContextProps
 
-  return <AuthContext.Provider value={mockAuth}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={mockAuth}>
+      {children}
+      <aside aria-label="Preview environment" className="fixed bottom-4 left-4 z-50 text-meta text-muted-foreground">
+        {debugEnabled ? (
+          <div className="border border-border bg-background p-3">
+            <AsciiButton variant="quiet" size="sm" aria-expanded={debugOpen} onClick={() => setDebugOpen(!debugOpen)}>
+              Developer fixtures
+            </AsciiButton>
+            {debugOpen && (
+              <div className="mt-2 space-y-2">
+                <p>Mock identity — not saved login accounts</p>
+                {MOCK_ACCOUNTS.map((account, index) => (
+                  <AsciiButton
+                    key={account.sub}
+                    size="sm"
+                    className="block w-full"
+                    onClick={() => finishSignIn(index, RoutePath.DASHBOARD)}
+                  >
+                    Load fixture: {account.email}
+                  </AsciiButton>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <span>Preview</span>
+        )}
+      </aside>
+    </AuthContext.Provider>
+  )
 }

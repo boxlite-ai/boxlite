@@ -6,12 +6,11 @@
 
 import { ResourceFilterEmptyState, ResourceEmptyState, ResourceIdentity } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
-import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
+import { ApiKeyPermissionsSummary } from './ApiKeyPermissionsSummary'
+import { apiKeyExpirationLabel, apiKeyExpirationDate } from '@/lib/api-key-permissions'
 import { getRelativeTimeString } from '@/lib/utils'
-import { ApiKeyList, ApiKeyListPermissionsEnum } from '@boxlite-ai/api-client'
+import { ApiKeyList } from '@boxlite-ai/api-client'
 import { KeyRound, Loader2, Trash2 } from '@/components/ui/icon'
-import { useMemo } from 'react'
-import { Badge } from './ui/badge'
 import {
   Dialog,
   DialogClose,
@@ -22,8 +21,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from './ui/dialog'
-import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Button } from './ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 interface DataTableProps {
   data: ApiKeyList[]
@@ -33,7 +32,7 @@ interface DataTableProps {
   onClearFilter?: () => void
 }
 
-const GRID = 'grid-cols-[minmax(0,1.4fr)_minmax(0,1.6fr)_84px_repeat(3,82px)_28px] gap-x-4'
+const GRID = 'grid-cols-[minmax(0,1.4fr)_minmax(0,1.6fr)_minmax(150px,1fr)_repeat(3,100px)_28px] gap-x-4'
 
 /**
  * Lists API keys with a confirmation step before calling the owner's revoke handler.
@@ -92,7 +91,7 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilt
                       {key.value}
                     </span>
                     <span>
-                      <PermissionsTooltip permissions={key.permissions} />
+                      <ApiKeyPermissionsSummary permissions={key.permissions} />
                     </span>
                     <span className="font-mono text-meta text-muted-foreground">
                       {getRelativeTimeString(key.createdAt).relativeTimeString}
@@ -101,7 +100,16 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilt
                       {key.lastUsedAt ? getRelativeTimeString(key.lastUsedAt).relativeTimeString : 'Never'}
                     </span>
                     <span className="font-mono text-meta text-muted-foreground">
-                      {key.expiresAt ? getRelativeTimeString(key.expiresAt).relativeTimeString : 'Never'}
+                      {key.expiresAt ? (
+                        <Popover>
+                          <PopoverTrigger className="text-left underline decoration-dotted underline-offset-4 focus-visible:outline focus-visible:outline-2">
+                            {apiKeyExpirationLabel(key.expiresAt)}
+                          </PopoverTrigger>
+                          <PopoverContent className="text-body">{apiKeyExpirationDate(key.expiresAt)}</PopoverContent>
+                        </Popover>
+                      ) : (
+                        'No expiration'
+                      )}
                     </span>
                     <span className="flex justify-end">
                       <Dialog>
@@ -157,58 +165,5 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilt
         </div>
       )}
     </div>
-  )
-}
-
-const visiblePermissions = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
-const IMPLICIT_READ_RESOURCES = ['Boxes']
-
-function PermissionsTooltip({ permissions }: { permissions: ApiKeyListPermissionsEnum[] }) {
-  const isFullAccess = visiblePermissions.every((permission) => permissions.includes(permission))
-  const isSingleResourceAccess = CREATE_API_KEY_PERMISSIONS_GROUPS.find(
-    (group) =>
-      group.permissions.length === permissions.length && group.permissions.every((p) => permissions.includes(p)),
-  )
-
-  const availableGroups = useMemo(
-    () => CREATE_API_KEY_PERMISSIONS_GROUPS.filter((group) => group.permissions.length > 0),
-    [],
-  )
-
-  const badgeText = isSingleResourceAccess ? isSingleResourceAccess.name : isFullAccess ? 'Full' : 'Restricted'
-
-  return (
-    <Popover>
-      <PopoverTrigger className="border-b border-dotted border-border-selected text-meta text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground">
-        {badgeText}
-      </PopoverTrigger>
-      <PopoverContent className="p-0">
-        <p className="border-b border-border p-2 text-meta font-medium text-muted-foreground">Permissions</p>
-        <div className="flex flex-col">
-          {availableGroups.map((group) => {
-            const selectedPermissions = group.permissions.filter((p) => permissions.includes(p))
-            const hasImplicitRead = IMPLICIT_READ_RESOURCES.includes(group.name)
-            if (selectedPermissions.length === 0 && !hasImplicitRead) return null
-            return (
-              <div key={group.name} className="flex justify-between gap-3 border-b border-border p-2 last:border-b-0">
-                <h3 className="text-body">{group.name}</h3>
-                <div className="flex flex-wrap justify-end gap-2">
-                  {hasImplicitRead && (
-                    <Badge variant="outline" className="capitalize">
-                      Read
-                    </Badge>
-                  )}
-                  {selectedPermissions.map((p) => (
-                    <Badge key={p} variant="outline" className="capitalize">
-                      {p.split(':')[0]}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </PopoverContent>
-    </Popover>
   )
 }

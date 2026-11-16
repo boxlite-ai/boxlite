@@ -31,12 +31,28 @@ import {
   VolumeState,
 } from '@boxlite-ai/api-client'
 
-export const MOCK_USER = {
-  sub: 'mock-user-00000000',
-  name: 'Mock User',
-  email: 'mock@boxlite.dev',
-  picture: undefined as string | undefined,
+export const MOCK_ACCOUNTS = [
+  {
+    sub: 'mock-user-00000000',
+    name: 'Jordan Lee',
+    email: 'jordan@example.test',
+    picture: undefined as string | undefined,
+  },
+  {
+    sub: 'mock-user-00000001',
+    name: 'Alex Chen',
+    email: 'alex@example.test',
+    picture: undefined as string | undefined,
+  },
+]
+function mockAccountIndex() {
+  try {
+    return sessionStorage.getItem('mock-account') === '1' ? 1 : 0
+  } catch {
+    return 0
+  }
 }
+export const MOCK_USER = MOCK_ACCOUNTS[mockAccountIndex()]
 
 export const MOCK_ORGANIZATION_ID = 'mock-org-00000000'
 
@@ -144,6 +160,9 @@ export const MOCK_BOXES: Box[] = [
   buildBox({
     id: 'mock-box-running',
     name: 'web-api',
+    autoStop: 900,
+    autoDelete: 4500,
+    autoResume: true,
     state: BoxState.STARTED,
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: ['api.openai.com', '10.0.0.0/8'] },
@@ -158,6 +177,9 @@ export const MOCK_BOXES: Box[] = [
   buildBox({
     id: 'mock-box-stopped',
     name: 'batch-worker',
+    autoStop: 0,
+    autoDelete: 0,
+    autoResume: false,
     state: BoxState.STOPPED,
     createdAt: daysAgo(5),
     desiredState: BoxDesiredState.STOPPED,

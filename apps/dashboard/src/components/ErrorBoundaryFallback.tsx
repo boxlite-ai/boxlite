@@ -8,14 +8,10 @@ import { RegistrationEmailError } from '@/api/errors'
 import { Dialog, DialogHeader, DialogDescription, DialogTitle, DialogContent } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
+import { accountSwitchPath } from '@/lib/auth-session'
 import { FallbackProps } from 'react-error-boundary'
 
-/**
- * Signing out is the recovery: it ends the IdP session, so the next sign-in can
- * pick another account. This boundary sits outside the router and the auth
- * provider (see main.tsx), so it navigates the whole page rather than reaching
- * for useNavigate/useAuth.
- */
+/** Account recovery uses a document navigation because this boundary is outside the router/auth provider. */
 function RegistrationEmailRejected({ error }: { error: RegistrationEmailError }) {
   const messages = {
     disposable_email:
@@ -34,7 +30,11 @@ function RegistrationEmailRejected({ error }: { error: RegistrationEmailError })
           <DialogDescription>{messages[error.code]}</DialogDescription>
         </DialogHeader>
         <div className="flex justify-end">
-          <Button onClick={() => window.location.assign(RoutePath.LOGOUT)}>Sign out and use another email</Button>
+          <Button
+            onClick={() => window.location.assign(accountSwitchPath(window.location.pathname + window.location.search))}
+          >
+            Use another account
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

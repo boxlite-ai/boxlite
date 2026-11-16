@@ -10,6 +10,7 @@ import { createContext } from 'react'
 
 export interface ISelectedOrganizationContext {
   selectedOrganization: Organization | null
+  organizationMembersStatus?: 'loading' | 'ready' | 'error'
   organizationMembers: OrganizationUser[]
   refreshOrganizationMembers: () => Promise<OrganizationUser[]>
   authenticatedUserOrganizationMember: OrganizationUser | null
