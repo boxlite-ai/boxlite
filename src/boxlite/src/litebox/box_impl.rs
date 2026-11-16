@@ -142,9 +142,6 @@ pub(crate) struct BoxImpl {
     /// Cancellation token for this box (child of runtime's token).
     /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
     pub(crate) shutdown_token: CancellationToken,
-    /// Serializes disk-mutating snapshot/clone/export operations.
-    /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
-    pub(crate) disk_ops: tokio::sync::Mutex<()>,
     auto_removed: AtomicBool,
 
     /// Event listeners (from runtime options).
@@ -204,7 +201,6 @@ impl BoxImpl {
             runtime,
             layout,
             shutdown_token,
-            disk_ops: tokio::sync::Mutex::new(()),
             auto_removed: AtomicBool::new(false),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
@@ -264,6 +260,27 @@ impl BoxImpl {
 
     pub(crate) fn id(&self) -> &BoxID {
         &self.config.id
+    }
+
+    /// Resolve disk admission without holding state while waiting for it.
+    pub(crate) fn disk_locker(&self) -> BoxliteResult<Arc<dyn crate::lock::Locker>> {
+        let lock_id = self.state.read().lock_id.ok_or_else(|| {
+            BoxliteError::Internal(format!("box {} is missing lock_id", self.id()))
+        })?;
+        self.runtime.disk_lock_manager.retrieve(lock_id)
+    }
+
+    /// A waiter can retain an unlinked lock's FD after removal and ID reuse.
+    /// Recheck persisted ownership after admission, before any disk side effects.
+    pub(crate) fn validate_disk_owner(&self, lock_id: crate::lock::LockId) -> BoxliteResult<()> {
+        let current = self.runtime.box_manager.update_box(self.id())?;
+        if current.lock_id != Some(lock_id) {
+            return Err(BoxliteError::InvalidState(format!(
+                "box {} disk lock identity changed",
+                self.id()
+            )));
+        }
+        Ok(())
     }
 
     pub(crate) fn container_id(&self) -> &str {
@@ -783,9 +800,10 @@ impl BoxImpl {
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
         match self.with_operation(self.stop_inner()).await {
             Err(BoxliteError::NotFound(_))
-                if self.auto_removed.load(Ordering::Acquire)
+                if (self.auto_removed.load(Ordering::Acquire)
                     || (self.shutdown_token.is_cancelled()
-                        && self.state.read().status == BoxStatus::Stopped) =>
+                        && self.state.read().status == BoxStatus::Stopped))
+                    && self.runtime.box_manager.box_by_id(self.id())?.is_none() =>
             {
                 Ok(())
             }
@@ -800,6 +818,10 @@ impl BoxImpl {
         // Note: We check status, not shutdown_token, because the token may be cancelled
         // by runtime.shutdown() before stop() is called on each box.
         if self.state.read().status == BoxStatus::Stopped {
+            if self.config.options.removes_on_stop() && !self.auto_removed.load(Ordering::Acquire) {
+                self.runtime.remove_box_locked(self.id(), false)?;
+                self.auto_removed.store(true, Ordering::Release);
+            }
             return Ok(());
         }
 
@@ -2154,7 +2176,12 @@ mod tests {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.mark_started();
-        state.set_lock_id(runtime.lock_manager.allocate().expect("allocate lock"));
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
+        state.set_lock_id(lock_id);
         runtime
             .box_manager
             .add_box(&config, &state)
@@ -2422,6 +2449,10 @@ mod tests {
         state.status = BoxStatus::Running;
         state.pid = Some(pid);
         let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
         state.set_lock_id(lock_id);
 
         std::fs::create_dir_all(&box_home).expect("create box dir");
@@ -2507,7 +2538,12 @@ mod tests {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = Some(pid);
-        state.set_lock_id(runtime.lock_manager.allocate().expect("allocate lock"));
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        runtime
+            .disk_lock_manager
+            .allocate_and_retrieve(lock_id)
+            .unwrap();
+        state.set_lock_id(lock_id);
 
         std::fs::create_dir_all(&box_home).expect("create box dir");
         let st = crate::util::process_start_time(pid).expect("OS reports start_time");

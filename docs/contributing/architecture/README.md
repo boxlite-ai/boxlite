@@ -167,28 +167,34 @@ cannot hold lifecycle admission and prevent stop. Returning live resources relea
 admission before subsequent executions, streams, or tunnels; metadata reads retain
 their short state lock.
 
-Explicit removal uses a nonblocking lifecycle write attempt and returns
-`InvalidState` when busy. Synchronous shutdown skips detached boxes and defers busy
-cleanup or lock-retrieval failures, including a missing lock file. A missing box row
-is already gone; a missing lock is not proof of completed cleanup. Async shutdown
-marks cleanup pending before awaiting stops and clears it only after every stop
-succeeds. Timeout, failure, or cancellation leaves a later synchronous shutdown or
-runtime Drop able to retry.
+Explicit removal uses nonblocking lifecycle and disk write attempts and returns
+`InvalidState` when either is busy; callers can retry `remove()` after the operation
+finishes. If automatic removal during `stop()` fails, a subsequent `stop()` or
+`remove()` can complete deletion. A missing disk lock returns `InvalidState`;
+restore the lock or restart the runtime for recovery before retrying removal.
+`stop()` treats `NotFound` as completed cleanup only after confirming that the box
+row is absent.
 
-Disk APIs retain their existing **per-handle `disk_ops` mutex**, not a disk-lock
-registry. The quiesce bracket also takes lifecycle write admission through
-freeze, pause, disk work, resume, and thaw. The order is `disk_ops` → lifecycle →
-state; lifecycle entrypoints never acquire `disk_ops`. Final archive writing
-releases lifecycle admission but retains disk exclusion while its caller awaits it.
+Synchronous shutdown skips detached boxes and defers busy cleanup or lock-retrieval
+failures, including a missing lock file. A missing box row is already gone; a missing
+lock is not proof of completed cleanup. Async shutdown marks cleanup pending before
+awaiting stops and clears it only after every stop succeeds. Timeout, failure, or
+cancellation leaves a later synchronous shutdown or runtime Drop able to retry.
 
-Disk operations still execute in the caller's future. Cancelling that future does
-not guarantee completion of disk work or resume/thaw cleanup: a blocking worker
-may continue after the caller drops its guards. Cancellation-safe owner tasks are
-a separate change, not a guarantee provided by lifecycle admission.
-
-Stopped-disk operations retain their existing coordination limits. There is no
-cross-handle disk registry or lifecycle-read/disk-write composition yet; complete
-snapshot/clone/export lock migration is separate work.
+Disk APIs use the runtime's shared lock manager with persisted box lock IDs in
+an independent `<home>/locks/disk/` namespace, serializing operations across handles.
+Blocking acquisition follows disk → lifecycle → short state guard order, with
+persisted ownership rechecked after disk admission and before disk side effects.
+The quiesce bracket holds lifecycle write admission through freeze, pause, disk
+work, resume, and thaw.
+Removal already holding lifecycle admission only tries disk admission and returns
+`InvalidState` when busy, allowing retry without a deadlock.
+Final archive writing releases lifecycle admission but retains disk exclusion
+while its caller awaits it.
+Disk operations execute in the caller's future, so cancellation does not guarantee
+completion of disk work or resume/thaw cleanup: a blocking worker may continue
+after the caller drops its guards.
+Lifecycle-read/disk-write composition is not provided.
 
 Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` for host
 admission and cleanup checks. Stand-in processes and loopback guest RPCs are not

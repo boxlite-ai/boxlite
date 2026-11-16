@@ -529,3 +529,386 @@ async fn implicit_job_rechecks_after_admission() {
         "implicit metrics reran the user's main command after refreshing Stopped"
     );
 }
+
+#[tokio::test]
+async fn disk_lock_serializes_snapshot_markers_across_handles() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let a = runtime
+        .create(
+            BoxOptions {
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    a.stop().await.unwrap();
+    let b = runtime.get(a.id().as_str()).await.unwrap().unwrap();
+    assert!(!Arc::ptr_eq(&a.box_backend, &b.box_backend));
+    let bx = Arc::clone(&a.box_backend)
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .ok()
+        .unwrap();
+    std::fs::create_dir_all(&bx.config.box_home).unwrap();
+    let locker = runtime
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let lifecycle = LockGuard::new(locker.as_ref());
+    let snapshots_a = a.snapshots();
+    let snapshots_b = b.snapshots();
+    let mut first = Box::pin(snapshots_a.create(Default::default(), "first"));
+    let mut second = Box::pin(snapshots_b.create(Default::default(), "second"));
+    assert!(futures::poll!(&mut first).is_pending());
+    let marker_path = bx.config.box_home.join(".snapshot_pending");
+    let read_marker = || -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap()
+    };
+    let expected = bx.config.box_home.join("snapshots/first");
+    assert_eq!(
+        read_marker()["snapshot_dir"],
+        expected.to_string_lossy().as_ref()
+    );
+    assert!(futures::poll!(&mut second).is_pending());
+    let marker = read_marker();
+    // Cancel both waiters before releasing lifecycle admission, even on failure.
+    drop(first);
+    drop(second);
+    drop(lifecycle);
+    assert_eq!(marker["snapshot_dir"], expected.to_string_lossy().as_ref());
+}
+
+fn disk_test_backend(handle: &crate::LiteBox) -> Arc<BoxImpl> {
+    Arc::clone(&handle.box_backend)
+        .as_any_arc()
+        .downcast::<BoxImpl>()
+        .ok()
+        .unwrap()
+}
+
+async fn persistent_disk_test_box(runtime: &Arc<RuntimeImpl>) -> crate::LiteBox {
+    runtime
+        .create(
+            BoxOptions {
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn disk_lock_memory_namespaces_cancellation_and_error_release() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let mut runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let inner = Arc::get_mut(&mut runtime).unwrap();
+    inner.lock_manager = Arc::new(crate::lock::InMemoryLockManager::new(16));
+    inner.disk_lock_manager = Arc::new(crate::lock::InMemoryLockManager::new(16));
+    let a = persistent_disk_test_box(&runtime).await;
+    let b = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&a);
+    let other = disk_test_backend(&b);
+    assert_eq!(runtime.lock_manager.allocated_count().unwrap(), 2);
+    assert_eq!(runtime.disk_lock_manager.allocated_count().unwrap(), 2);
+    let owner = bx.disk_locker().unwrap();
+    let waiter = bx.disk_locker().unwrap();
+    let different = other.disk_locker().unwrap();
+    let lifecycle = runtime.lock_manager.retrieve(owner.id()).unwrap();
+    let held = LockGuard::new_async(owner.as_ref()).await;
+    assert!(LockGuard::try_new(waiter.as_ref()).is_none());
+    assert!(LockGuard::try_new(different.as_ref()).is_some());
+    assert!(LockGuard::try_new(lifecycle.as_ref()).is_some());
+    let mut waiting = Box::pin(LockGuard::new_async(waiter.as_ref()));
+    assert!(futures::poll!(&mut waiting).is_pending());
+    drop(waiting);
+    drop(held);
+    assert!(LockGuard::try_new(waiter.as_ref()).is_some());
+    // The real disk API errors on missing disks; its admission must be released.
+    assert!(a.clone_box(Default::default(), None).await.is_err());
+    assert!(LockGuard::try_new(waiter.as_ref()).is_some());
+}
+
+#[tokio::test]
+async fn disk_lock_remove_busy_preserves_files_and_auto_delete_never_waits() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let handle = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&handle);
+    std::fs::create_dir_all(&bx.config.box_home).unwrap();
+    let evidence = bx.config.box_home.join("keep");
+    std::fs::write(&evidence, b"retained").unwrap();
+    let locker = bx.disk_locker().unwrap();
+    let guard = LockGuard::new_async(locker.as_ref()).await;
+    assert!(matches!(
+        runtime.remove_box(bx.id(), true),
+        Err(BoxliteError::InvalidState(_))
+    ));
+    assert!(runtime.box_manager.box_by_id(bx.id()).unwrap().is_some());
+    assert!(evidence.exists());
+    let paths = [
+        runtime.layout.locks_dir().join(locker.id().to_string()),
+        runtime
+            .layout
+            .disk_locks_dir()
+            .join(locker.id().to_string()),
+    ];
+    assert!(paths.iter().all(|p| p.exists()));
+    drop(guard);
+    runtime.remove_box(bx.id(), false).unwrap();
+    assert!(!bx.config.box_home.exists());
+    assert!(paths.iter().all(|p| !p.exists()));
+
+    let ephemeral = runtime
+        .create(
+            BoxOptions {
+                auto_delete: Some(1),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let bx = disk_test_backend(&ephemeral);
+    let disk = bx.disk_locker().unwrap();
+    let guard = LockGuard::new_async(disk.as_ref()).await;
+    // stop holds lifecycle admission when it attempts automatic removal.
+    let mut stop = Box::pin(ephemeral.stop());
+    assert!(matches!(
+        futures::poll!(&mut stop),
+        std::task::Poll::Ready(Err(BoxliteError::InvalidState(_)))
+    ));
+    drop(stop);
+    assert!(runtime.box_manager.box_by_id(bx.id()).unwrap().is_some());
+    drop(guard);
+    runtime.remove_box(bx.id(), false).unwrap();
+}
+
+#[tokio::test]
+async fn disk_lock_unlinked_waiter_rejects_removed_owner_after_id_reuse() {
+    use std::os::unix::fs::MetadataExt;
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let a = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&a);
+    let old = bx.disk_locker().unwrap();
+    let path = runtime.layout.disk_locks_dir().join(old.id().to_string());
+    let old_inode = std::fs::metadata(&path).unwrap().ino();
+    // Retrieve before deletion, but defer admission until after removal wins.
+    let (resume, ready) = tokio::sync::oneshot::channel::<()>();
+    let mut waiter = Box::pin(async {
+        ready.await.unwrap();
+        let _guard = LockGuard::new_async(old.as_ref()).await;
+        bx.validate_disk_owner(old.id())
+    });
+    assert!(futures::poll!(&mut waiter).is_pending());
+    runtime.remove_box(bx.id(), false).unwrap();
+    assert!(matches!(
+        runtime.disk_lock_manager.retrieve(old.id()),
+        Err(BoxliteError::NotFound(_))
+    ));
+    let b = persistent_disk_test_box(&runtime).await;
+    let replacement = disk_test_backend(&b).disk_locker().unwrap();
+    assert_eq!(old.id(), replacement.id());
+    assert_ne!(old_inode, std::fs::metadata(&path).unwrap().ino());
+    let replacement_guard = LockGuard::new_async(replacement.as_ref()).await;
+    resume.send(()).unwrap();
+    assert!(matches!(waiter.await, Err(BoxliteError::NotFound(_))));
+    drop(replacement_guard);
+    assert!(matches!(
+        a.snapshots().create(Default::default(), "stale").await,
+        Err(BoxliteError::NotFound(_))
+    ));
+    assert!(!bx.config.box_home.join(".snapshot_pending").exists());
+}
+
+#[tokio::test]
+async fn disk_lock_owner_identity_mismatch_precedes_snapshot_marker() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let a = persistent_disk_test_box(&runtime).await;
+    let b = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&a);
+    std::fs::create_dir_all(&bx.config.box_home).unwrap();
+    let original = runtime.box_manager.update_box(a.id()).unwrap();
+    let mut changed = original.clone();
+    changed.lock_id = runtime.box_manager.update_box(b.id()).unwrap().lock_id;
+    runtime.box_manager.save_box(a.id(), &changed).unwrap();
+    let result = a
+        .snapshots()
+        .create(Default::default(), "wrong-owner")
+        .await;
+    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+    assert!(!bx.config.box_home.join(".snapshot_pending").exists());
+    runtime.box_manager.save_box(a.id(), &original).unwrap();
+    assert!(LockGuard::try_new(bx.disk_locker().unwrap().as_ref()).is_some());
+}
+
+#[tokio::test]
+async fn disk_lock_b1_running_auto_delete_stop_retries_busy_removal() {
+    let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = Arc::get_mut(&mut fixture.box_impl).unwrap();
+    bx.config.options.auto_delete = Some(1);
+    bx.config.options.detach = false;
+    bx.runtime.box_manager.remove_box(bx.id()).unwrap();
+    bx.runtime
+        .box_manager
+        .add_box(&bx.config, &bx.state.read())
+        .unwrap();
+    assert_eq!(bx.state.read().status, BoxStatus::Running);
+    let disk_dir = bx.config.box_home.join("disks");
+    std::fs::create_dir_all(&disk_dir).unwrap();
+    let evidence = disk_dir.join("retained-disk");
+    std::fs::write(&evidence, b"disk contents").unwrap();
+    let disk = bx.disk_locker().unwrap();
+    let paths = [
+        bx.runtime.layout.locks_dir().join(disk.id().to_string()),
+        bx.runtime
+            .layout
+            .disk_locks_dir()
+            .join(disk.id().to_string()),
+    ];
+    let guard = LockGuard::new_async(disk.as_ref()).await;
+    assert!(matches!(
+        bx.stop().await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    assert_eq!(
+        bx.runtime.box_manager.update_box(bx.id()).unwrap().status,
+        BoxStatus::Stopped
+    );
+    assert!(evidence.exists());
+    assert!(paths.iter().all(|path| path.is_file()));
+    drop(guard);
+    bx.stop().await.unwrap();
+    assert!(
+        bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_none(),
+        "second stop returned Ok without completing auto-delete"
+    );
+    assert!(!bx.config.box_home.exists());
+    assert!(paths.iter().all(|path| !path.exists()));
+    assert!(bx.auto_removed.load(Ordering::Acquire));
+    bx.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn disk_lock_c1_auto_delete_missing_lock_is_not_completed_removal() {
+    let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = Arc::get_mut(&mut fixture.box_impl).unwrap();
+    bx.config.options.auto_delete = Some(1);
+    bx.config.options.detach = false;
+    bx.runtime.box_manager.remove_box(bx.id()).unwrap();
+    bx.runtime
+        .box_manager
+        .add_box(&bx.config, &bx.state.read())
+        .unwrap();
+    std::fs::create_dir_all(&bx.config.box_home).unwrap();
+    let evidence = bx.config.box_home.join("retained-disk");
+    std::fs::write(&evidence, b"disk contents").unwrap();
+    let disk = bx.disk_locker().unwrap();
+    let disk_path = bx
+        .runtime
+        .layout
+        .disk_locks_dir()
+        .join(disk.id().to_string());
+    let lifecycle_path = bx.runtime.layout.locks_dir().join(disk.id().to_string());
+    let guard = LockGuard::new_async(disk.as_ref()).await;
+    assert!(matches!(
+        bx.stop().await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    drop(guard);
+    std::fs::remove_file(&disk_path).unwrap();
+    let result = bx.stop().await;
+    assert!(bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_some());
+    assert!(evidence.exists());
+    assert!(!bx.auto_removed.load(Ordering::Acquire));
+    assert!(
+        matches!(result, Err(BoxliteError::InvalidState(_))),
+        "missing disk lock must not report completed removal: {result:?}"
+    );
+    assert!(matches!(&result, Err(BoxliteError::InvalidState(message))
+        if message.contains("disk lock") && message.contains("missing") && message.contains("retry")));
+    assert!(matches!(
+        bx.runtime.remove_box(bx.id(), false),
+        Err(BoxliteError::InvalidState(_))
+    ));
+
+    // A missing lifecycle lock must not be mistaken for a missing box row either.
+    std::fs::write(&disk_path, b"").unwrap();
+    std::fs::remove_file(&lifecycle_path).unwrap();
+    assert!(matches!(bx.stop().await, Err(BoxliteError::NotFound(_))));
+    assert!(bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_some());
+    std::fs::write(&lifecycle_path, b"").unwrap();
+    bx.stop().await.unwrap();
+    assert!(bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_none());
+    assert!(!evidence.exists());
+    bx.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn disk_lock_snapshot_waiter_rechecks_identity_after_admission() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let a = persistent_disk_test_box(&runtime).await;
+    let b = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&a);
+    std::fs::create_dir_all(&bx.config.box_home).unwrap();
+    let disk = bx.disk_locker().unwrap();
+    let owner = LockGuard::new_async(disk.as_ref()).await;
+    let snapshots = a.snapshots();
+    let mut waiter = Box::pin(snapshots.create(Default::default(), "queued"));
+    assert!(futures::poll!(&mut waiter).is_pending());
+    // A queued waiter prevents real removal, even after its disk owner releases.
+    drop(owner);
+    assert!(matches!(
+        runtime.remove_box(a.id(), false),
+        Err(BoxliteError::InvalidState(_))
+    ));
+    let original = runtime.box_manager.update_box(a.id()).unwrap();
+    let mut changed = original.clone();
+    changed.lock_id = runtime.box_manager.update_box(b.id()).unwrap().lock_id;
+    runtime.box_manager.save_box(a.id(), &changed).unwrap();
+    let result = waiter.await;
+    runtime.box_manager.save_box(a.id(), &original).unwrap();
+    assert!(
+        matches!(result, Err(BoxliteError::InvalidState(_))),
+        "snapshot waiter used stale ownership: {result:?}"
+    );
+    assert!(!bx.config.box_home.join(".snapshot_pending").exists());
+    assert!(
+        !disk_test_backend(&b)
+            .config
+            .box_home
+            .join(".snapshot_pending")
+            .exists()
+    );
+}

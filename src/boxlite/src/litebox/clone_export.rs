@@ -9,6 +9,7 @@ use super::box_impl::BoxImpl;
 use crate::disk::BaseDiskKind;
 use crate::disk::constants::filenames as disk_filenames;
 use crate::disk::{BackingFormat, Qcow2Helper};
+use crate::lock::LockGuard;
 use crate::runtime::types::BoxStatus;
 
 // ============================================================================
@@ -68,7 +69,9 @@ impl BoxImpl {
         }
 
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        let locker = self.disk_locker()?;
+        let _lock = LockGuard::new_async(locker.as_ref()).await;
+        self.validate_disk_owner(locker.id())?;
 
         let rt = Arc::clone(&self.runtime);
         let src_disks = self.config.box_home.join("disks");
@@ -194,7 +197,9 @@ impl BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        let locker = self.disk_locker()?;
+        let _lock = LockGuard::new_async(locker.as_ref()).await;
+        self.validate_disk_owner(locker.id())?;
 
         let box_home = self.config.box_home.clone();
         let runtime_layout = self.runtime.layout.clone();

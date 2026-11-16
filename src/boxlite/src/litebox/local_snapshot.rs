@@ -12,6 +12,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::box_impl::BoxImpl;
 use crate::litebox::snapshot_mgr::{SnapshotInfo, validate_snapshot_name};
+use crate::lock::LockGuard;
 use crate::runtime::options::SnapshotOptions;
 
 pub(crate) struct LocalSnapshotBackend {
@@ -30,7 +31,9 @@ impl LocalSnapshotBackend {
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
-        let _lock = self.inner.disk_ops.lock().await;
+        let locker = self.inner.disk_locker()?;
+        let _lock = LockGuard::new_async(locker.as_ref()).await;
+        self.inner.validate_disk_owner(locker.id())?;
 
         let box_id = self.inner.id().as_str();
         let snap_mgr = &self.inner.runtime.snapshot_mgr;
@@ -92,7 +95,9 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let _lock = self.inner.disk_ops.lock().await;
+        let locker = self.inner.disk_locker()?;
+        let _lock = LockGuard::new_async(locker.as_ref()).await;
+        self.inner.validate_disk_owner(locker.id())?;
 
         let box_id = self.inner.id().as_str();
         let container_disk = self
@@ -131,7 +136,9 @@ impl LocalSnapshotBackend {
             }
         }
 
-        let _lock = self.inner.disk_ops.lock().await;
+        let locker = self.inner.disk_locker()?;
+        let _lock = LockGuard::new_async(locker.as_ref()).await;
+        self.inner.validate_disk_owner(locker.id())?;
 
         let box_id = self.inner.id().as_str();
         let disks_dir = self.inner.config.box_home.join("disks");
