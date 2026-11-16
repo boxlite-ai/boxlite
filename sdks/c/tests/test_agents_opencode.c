@@ -99,8 +99,12 @@ static void drain_until(CBoxliteRuntime *rt, const int *done) {
 }
 static void wait_ok(CBoxliteRuntime *rt, Seen *s) {
   drain_until(rt, &s->done);
-  if (s->code != Ok)
-    fprintf(stderr, "callback failed: %d %s\n", s->code, s->message);
+  if (s->code != Ok) {
+    char diagnostic[sizeof(s->message) + 64];
+    snprintf(diagnostic, sizeof(diagnostic), "callback failed: %d %s\n",
+             s->code, s->message);
+    fputs(diagnostic, stderr);
+  }
   assert(s->code == Ok);
   s->done = 0;
 }
@@ -210,8 +214,8 @@ int main(int argc, char **argv) {
   const char *id_end = strchr(id_start, '"');
   assert(id_end && id_end > id_start && (size_t)(id_end - id_start) < 128);
   char turn_id[128];
-  memcpy(turn_id, id_start, (size_t)(id_end - id_start));
-  turn_id[id_end - id_start] = '\0';
+  snprintf(turn_id, sizeof(turn_id), "%.*s", (int)(id_end - id_start),
+           id_start);
   boxlite_free_string(json);
   json = NULL;
   /* Wait for the live stream to show this turn has started before freeing it.
