@@ -65,12 +65,6 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
-// Admission modes; zero-initialized options select queue.
-typedef enum CAgentSendMode {
-  AgentSendQueue = 0,
-  AgentSendReject = 1,
-} CAgentSendMode;
-
 // Network mode exposed by [`CNetworkInfo`].
 typedef enum BoxliteNetworkMode {
   BoxliteNetworkModeEnabled = 0,
@@ -104,6 +98,12 @@ typedef enum BoxliteDomainTargetType {
   BoxliteDomainTargetBox = 0,
   BoxliteDomainTargetApp = 1,
 } BoxliteDomainTargetType;
+
+// Admission modes; zero-initialized options select queue.
+typedef enum CAgentSendMode {
+  AgentSendQueue = 0,
+  AgentSendReject = 1,
+} CAgentSendMode;
 
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
@@ -235,7 +235,7 @@ typedef void (*CAgentDoneCb)(const CBoxliteError*, void*);
 
 // Optional JSON accompanies positional message text.
 typedef struct CAgentSendOptions {
-  enum CAgentSendMode mode;
+  int32_t mode;
   const char *data_json;
   const char *idempotency_key;
 } CAgentSendOptions;

@@ -143,6 +143,54 @@ fn c_calls_and_getters_reach_core_through_drain() {
         );
         seen.done = false;
         let text = CString::new("hello").unwrap();
+        #[repr(C)]
+        struct RawSendOptions {
+            mode: std::ffi::c_int,
+            data_json: *const c_char,
+            idempotency_key: *const c_char,
+        }
+        for mode in [-1, 2] {
+            let invalid_options = RawSendOptions {
+                mode,
+                data_json: ptr::null(),
+                idempotency_key: ptr::null(),
+            };
+            assert_eq!(
+                boxlite_agent_send(
+                    agent,
+                    text.as_ptr(),
+                    (&invalid_options as *const RawSendOptions).cast(),
+                    Some(turn_cb),
+                    data,
+                    ptr::null_mut()
+                ),
+                BoxliteErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                crate::boxlite_runtime_drain(runtime_ptr, 0, ptr::null_mut()),
+                0
+            );
+            assert!(!seen.done);
+        }
+        let reject_options = CAgentSendOptions {
+            mode: 1,
+            data_json: ptr::null(),
+            idempotency_key: ptr::null(),
+        };
+        assert_eq!(
+            boxlite_agent_send(
+                agent,
+                text.as_ptr(),
+                &reject_options,
+                Some(turn_cb),
+                data,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::Ok
+        );
+        drain(runtime_ptr, &mut seen);
+        boxlite_agent_turn_free(seen.turn);
+        seen.done = false;
         assert_eq!(
             boxlite_agent_send(
                 agent,

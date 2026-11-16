@@ -254,6 +254,9 @@ array of request records; wait/steer callbacks carry a result/receipt respective
 
 A synchronous error means no callback will run. State/config/capability getters
 clear `out_json` on error.
+
+Send mode accepts `AgentSendQueue` or `AgentSendReject`; other values return
+`InvalidArgument` synchronously without scheduling a callback.
 Output/error pointers must be null or writable.
 
 Errors written to `out_error` belong to the caller; release their messages with

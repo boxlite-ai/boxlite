@@ -72,7 +72,7 @@ pub enum CAgentSendMode {
 #[repr(C)]
 #[derive(Debug)]
 pub struct CAgentSendOptions {
-    pub mode: CAgentSendMode,
+    pub mode: i32,
     pub data_json: *const c_char,
     pub idempotency_key: *const c_char,
 }
@@ -413,10 +413,14 @@ pub unsafe extern "C" fn boxlite_agent_send(
         let text = checked!(required_string(text_arg, "text"), out_error);
         let mut options = boxlite::agents::AgentSendOptions::default();
         if let Some(input) = options_arg.as_ref() {
-            options.mode = match input.mode {
-                CAgentSendMode::AgentSendQueue => boxlite::agents::AgentSendMode::Queue,
-                CAgentSendMode::AgentSendReject => boxlite::agents::AgentSendMode::Reject,
-            };
+            options.mode = checked!(
+                match input.mode {
+                    0 => Ok(boxlite::agents::AgentSendMode::Queue),
+                    1 => Ok(boxlite::agents::AgentSendMode::Reject),
+                    _ => Err(BoxliteError::InvalidArgument("invalid send mode".into())),
+                },
+                out_error
+            );
             options.idempotency_key = checked!(
                 optional_string(input.idempotency_key, "idempotency_key"),
                 out_error
