@@ -20,6 +20,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { ApiKeyList, CreateApiKeyPermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { useAuth } from 'react-oidc-context'
 import { ApiKeyTable } from '../components/ApiKeyTable'
 import { usePageTitle } from '@/hooks/usePageTitle'
 
@@ -28,6 +29,7 @@ const DEFAULT_API_KEY_PERMISSIONS = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((g
 /** Lists the selected organization’s keys and limits creation options to the member’s assigned permissions. */
 const Keys: React.FC = () => {
   usePageTitle('API keys')
+  const { user } = useAuth()
   const { apiUrl } = useConfig()
   const [loadingKeys, setLoadingKeys] = useState<Record<string, boolean>>({})
   const [filter, setFilter] = useState('')
@@ -111,7 +113,7 @@ const Keys: React.FC = () => {
         />
         <div className="flex-1" />
         <CreateApiKeyDialog
-          key={`${selectedOrganization?.id}:${authenticatedUserOrganizationMember?.userId}`}
+          key={`${selectedOrganization?.id}:${user?.profile.sub}`}
           organizationName={selectedOrganization?.name}
           permissionsStatus={organizationMembersStatus ?? (authenticatedUserOrganizationMember ? 'ready' : 'loading')}
           onRetryPermissions={async () => {

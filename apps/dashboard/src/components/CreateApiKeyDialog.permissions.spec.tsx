@@ -207,3 +207,17 @@ describe('API key access presets', () => {
     expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
   })
 })
+
+it('preserves the completed secret during a membership refresh', async () => {
+  await render()
+  await open()
+  await submit()
+  await act(async () =>
+    root.render(
+      <CreateApiKeyDialog organizationId="org-1" apiUrl="" availablePermissions={all} permissionsStatus="loading" />,
+    ),
+  )
+  expect(document.body.textContent).toContain('test-secret')
+  await render()
+  expect(document.body.textContent).toContain('test-secret')
+})

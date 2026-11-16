@@ -98,49 +98,41 @@ export function SelectedOrganizationProvider(props: Props) {
     organizationId: string | null
     status: 'loading' | 'ready' | 'error'
   }>({ organizationId: null, status: 'loading' })
+  const membersRequest = useRef(0)
   const currentOrganizationId = useRef(selectedOrganizationId)
   currentOrganizationId.current = selectedOrganizationId
   const organizationMembersStatus =
     membersLoad.organizationId === selectedOrganizationId ? membersLoad.status : 'loading'
 
-  useEffect(() => {
-    let cancelled = false
-    setMembersLoad({ organizationId: selectedOrganizationId, status: 'loading' })
-    getOrganizationMembers(selectedOrganizationId)
-      .then((members) => {
-        if (!cancelled) {
-          setOrganizationMembers(members)
-          setMembersLoad({ organizationId: selectedOrganizationId, status: 'ready' })
-        }
-      })
-      // getOrganizationMembers already surfaces a toast via handleApiError; a
-      // members failure must not crash the dashboard (was: error boundary).
-      .catch(() => {
-        if (!cancelled) setMembersLoad({ organizationId: selectedOrganizationId, status: 'error' })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [getOrganizationMembers, selectedOrganizationId])
-
   const refreshOrganizationMembers = useCallback(
     async (organizationId?: string) => {
       const target = organizationId || selectedOrganizationId
-      setMembersLoad({ organizationId: target, status: 'loading' })
+      // Requests for another organization must not invalidate the active context.
+      const request = target === currentOrganizationId.current ? ++membersRequest.current : null
+      const isCurrent = () => request === membersRequest.current && currentOrganizationId.current === target
+      if (isCurrent()) setMembersLoad({ organizationId: target, status: 'loading' })
       try {
         const members = await getOrganizationMembers(target)
-        if (currentOrganizationId.current === target) {
+        if (isCurrent()) {
           setOrganizationMembers(members)
           setMembersLoad({ organizationId: target, status: 'ready' })
         }
         return members
       } catch (error) {
-        if (currentOrganizationId.current === target) setMembersLoad({ organizationId: target, status: 'error' })
+        if (isCurrent()) setMembersLoad({ organizationId: target, status: 'error' })
         throw error
       }
     },
     [getOrganizationMembers, selectedOrganizationId],
   )
+
+  useEffect(() => {
+    // The API helper reports the error; readiness exposes a retry without crashing the page.
+    void refreshOrganizationMembers().catch(() => undefined)
+    return () => {
+      membersRequest.current += 1
+    }
+  }, [refreshOrganizationMembers])
 
   const authenticatedUserOrganizationMember = useMemo(() => {
     return organizationMembers.find((member) => member.userId === user?.profile.sub) || null

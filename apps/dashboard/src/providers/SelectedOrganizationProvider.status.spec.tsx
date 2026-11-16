@@ -67,3 +67,33 @@ describe('key permission readiness', () => {
     expect(document.body.textContent).toBe('two:loading')
   })
 })
+
+it.each(['success', 'failure'])('ignores an older refresh %s after a newer refresh completes', async (outcome) => {
+  mocks.api.listOrganizationMembers.mockResolvedValueOnce({ data: [] })
+  await render()
+  let resolveOld!: (value: unknown) => void
+  let rejectOld!: (error: Error) => void
+  mocks.api.listOrganizationMembers.mockImplementationOnce(
+    () =>
+      new Promise((resolve, reject) => {
+        resolveOld = resolve
+        rejectOld = reject
+      }),
+  )
+  const newerMembers = [{ userId: 'newer', assignedRoles: [] }]
+  mocks.api.listOrganizationMembers.mockResolvedValueOnce({ data: newerMembers })
+  let older!: Promise<unknown>
+  await act(async () => {
+    older = context.refreshOrganizationMembers().catch(() => undefined)
+  })
+  await act(async () => {
+    await context.refreshOrganizationMembers()
+  })
+  await act(async () => {
+    if (outcome === 'success') resolveOld({ data: [] })
+    else rejectOld(new Error('older request failed'))
+    await older
+  })
+  expect(context.organizationMembers).toEqual(newerMembers)
+  expect(context.organizationMembersStatus).toBe('ready')
+})

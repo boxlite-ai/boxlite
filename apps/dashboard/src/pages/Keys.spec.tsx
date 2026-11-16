@@ -11,9 +11,14 @@ import Keys from './Keys'
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(async () => ({ value: 'test-key', permissions: ['write:boxes'] })),
-  member: { role: 'owner', assignedRoles: [] as { permissions: string[] }[] },
+  member: { userId: 'user', role: 'owner', assignedRoles: [] } as {
+    userId?: string
+    role: string
+    assignedRoles: { permissions: string[] }[]
+  } | null,
 }))
 
+vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub: 'user' } } }) }))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ apiUrl: 'https://api.example.com' }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -69,6 +74,25 @@ describe('console member key defaults', () => {
     expect(mocks.create).toHaveBeenCalledTimes(1)
     return (mocks.create.mock.calls[0] as unknown as [{ permissions: string[] }])[0].permissions
   }
+
+  it('preserves the open draft when membership finishes loading', async () => {
+    mocks.member = null
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<Keys />)
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="New API key"]')!.click())
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Name"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'draft-agent')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    mocks.member = { userId: 'user', role: 'owner', assignedRoles: [] }
+    await act(async () => root.render(<Keys />))
+    expect(document.querySelector<HTMLInputElement>('input[placeholder="Name"]')?.value).toBe('draft-agent')
+  })
 
   it('defaults to Box operations for an owner', async () => {
     const permissions = await createKey()

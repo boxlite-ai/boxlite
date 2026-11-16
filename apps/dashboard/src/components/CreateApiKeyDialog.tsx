@@ -93,9 +93,11 @@ function ApiKeyForm({
     !unknownOutcome,
   )
 
+  // A readiness refresh must not erase a secret the user has not copied yet.
+  useLayoutEffect(() => setResult(null), [permissionsSignature])
+
   useLayoutEffect(() => {
     generation.current += 1
-    setResult(null)
     if (pending.current) {
       setUnknownOutcome(true)
       setError(

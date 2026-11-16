@@ -517,7 +517,9 @@ and Quickstart defaults are unchanged. A successful creation displays the return
 permissions and expiration with a one-time secret. Copy is explicit and does not
 close the result. Closing the dialog or switching organization discards the secret
 and ignores late responses. Unavailable selected permissions remain visible until
-removed; permission changes invalidate in-flight results. Known request failures
+removed; permission changes invalidate in-flight results. Background membership refreshes
+preserve the open draft and completed secret when the granted scopes remain unchanged.
+Overlapping membership requests apply only the latest response or failure. Known request failures
 retain the draft; uncertain network/server outcomes require checking the list
 before creating another key.
 
