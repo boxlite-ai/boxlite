@@ -260,81 +260,78 @@ fn build_sandbox_policy(
 
 /// Generate dynamic file-read policy for binary path + all pre-computed paths.
 fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String {
-    let mut policy = String::from("; Dynamic readable paths\n(allow file-read*\n");
+    let mut rules = String::new();
 
     // Add binary's parent directory (copied shim + libkrunfw)
     if let Some(bin_dir) = binary_path.parent() {
         let bin_dir = canonicalize_or_original(bin_dir);
-        policy.push_str(&format!(
-            "    (subpath \"{}\")  ; shim binary + libkrunfw\n",
-            bin_dir.display()
-        ));
+        if let Some(literal) = sbpl_path_literal(&bin_dir) {
+            rules.push_str(&format!(
+                "    (subpath {literal})  ; shim binary + libkrunfw\n"
+            ));
+        } else {
+            tracing::warn!(path = ?bin_dir, "Skipping non-UTF-8 Seatbelt read path");
+        }
     } else {
         // Fallback: allow reading the binary itself
         let bin_path = canonicalize_or_original(binary_path);
-        policy.push_str(&format!(
-            "    (literal \"{}\")  ; shim binary\n",
-            bin_path.display()
-        ));
+        if let Some(literal) = sbpl_path_literal(&bin_path) {
+            rules.push_str(&format!("    (literal {literal})  ; shim binary\n"));
+        } else {
+            tracing::warn!(path = ?bin_path, "Skipping non-UTF-8 Seatbelt read path");
+        }
     }
 
     // All pre-computed paths (both rw and ro need read access)
     for pa in paths {
         let path = canonicalize_or_original(&pa.path);
+        let Some(literal) = sbpl_path_literal(&path) else {
+            tracing::warn!(path = ?path, "Skipping non-UTF-8 Seatbelt file path");
+            continue;
+        };
         let marker = if pa.writable { "rw" } else { "ro" };
         if pa.path.is_dir() {
             // Directory access needs both:
             // - literal: the directory node itself (open/stat on root)
             // - subpath: descendants inside the directory
-            policy.push_str(&format!(
-                "    (literal \"{}\")  ; ({}) dir root\n",
-                path.display(),
-                marker
-            ));
-            policy.push_str(&format!(
-                "    (subpath \"{}\")  ; ({}) dir tree\n",
-                path.display(),
-                marker
-            ));
+            rules.push_str(&format!("    (literal {literal})  ; ({marker}) dir root\n"));
+            rules.push_str(&format!("    (subpath {literal})  ; ({marker}) dir tree\n"));
         } else {
-            policy.push_str(&format!(
-                "    (literal \"{}\")  ; ({})\n",
-                path.display(),
-                marker
-            ));
+            rules.push_str(&format!("    (literal {literal})  ; ({marker})\n"));
         }
     }
 
-    policy.push_str(")\n");
-    policy
+    if rules.is_empty() {
+        String::from("; Dynamic read grants skipped: no path was representable\n")
+    } else {
+        format!("; Dynamic readable paths\n(allow file-read*\n{rules})\n")
+    }
 }
 
 /// Generate dynamic file-write policy for writable paths only.
 fn build_dynamic_write_paths(paths: &[PathAccess]) -> String {
-    let mut policy = String::from("; Dynamic write paths\n(allow file-write*\n");
+    let mut rules = String::new();
 
     for pa in paths.iter().filter(|p| p.writable) {
         let path = canonicalize_or_original(&pa.path);
+        let Some(literal) = sbpl_path_literal(&path) else {
+            tracing::warn!(path = ?path, "Skipping non-UTF-8 Seatbelt file path");
+            continue;
+        };
         if pa.path.is_dir() {
             // See read policy rationale: allow both directory root and descendants.
-            policy.push_str(&format!(
-                "    (literal \"{}\")  ; writable dir root\n",
-                path.display()
-            ));
-            policy.push_str(&format!(
-                "    (subpath \"{}\")  ; writable dir tree\n",
-                path.display()
-            ));
+            rules.push_str(&format!("    (literal {literal})  ; writable dir root\n"));
+            rules.push_str(&format!("    (subpath {literal})  ; writable dir tree\n"));
         } else {
-            policy.push_str(&format!(
-                "    (literal \"{}\")  ; writable\n",
-                path.display()
-            ));
+            rules.push_str(&format!("    (literal {literal})  ; writable\n"));
         }
     }
 
-    policy.push_str(")\n");
-    policy
+    if rules.is_empty() {
+        String::from("; Dynamic write grants skipped: no path was representable\n")
+    } else {
+        format!("; Dynamic write paths\n(allow file-write*\n{rules})\n")
+    }
 }
 
 /// Grant the shim's own AF_UNIX endpoints, independent of `network_enabled`.
@@ -364,12 +361,18 @@ fn build_unix_socket_grants(access: &UnixSocketAccess) -> String {
         if paths.is_empty() {
             continue;
         }
-        policy.push_str(&format!("(allow {operation}\n"));
+        let mut rules = String::new();
         for path in paths {
             let path = canonicalize_or_original(path);
-            policy.push_str(&format!("    (literal \"{}\")\n", path.display()));
+            let Some(literal) = sbpl_path_literal(&path) else {
+                tracing::warn!(path = ?path, "Skipping non-UTF-8 Seatbelt socket path");
+                continue;
+            };
+            rules.push_str(&format!("    (literal {literal})\n"));
         }
-        policy.push_str(")\n");
+        if !rules.is_empty() {
+            policy.push_str(&format!("(allow {operation}\n{rules})\n"));
+        }
     }
     policy
 }
@@ -377,6 +380,27 @@ fn build_unix_socket_grants(access: &UnixSocketAccess) -> String {
 // ============================================================================
 // Utilities (private)
 // ============================================================================
+
+/// Encode a UTF-8 path as a complete SBPL string literal, including quotes.
+/// Seatbelt's parser is byte-transparent apart from backslash escapes: escape
+/// backslashes and quotes, and hex-encode ASCII controls to keep literals log-safe.
+/// Non-UTF-8 paths cannot be represented and are omitted from dynamic grants.
+fn sbpl_path_literal(path: &Path) -> Option<String> {
+    let path = path.to_str()?;
+    let mut literal = String::from("\"");
+    for ch in path.chars() {
+        match ch {
+            '\\' => literal.push_str("\\\\"),
+            '"' => literal.push_str("\\\""),
+            ch if (ch as u32) < 0x20 || ch == '\u{7f}' => {
+                literal.push_str(&format!("\\x{:02x}", ch as u32));
+            }
+            ch => literal.push(ch),
+        }
+    }
+    literal.push('"');
+    Some(literal)
+}
 
 /// Canonicalize a path, falling back to the original if canonicalization fails.
 ///
@@ -441,6 +465,193 @@ fn darwin_user_cache_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_seatbelt_policy_escapes_injected_file_path() {
+        let injected_rule = "(allow file-read* (subpath \"/decoy\"))";
+        let path = PathBuf::from(format!("/nonexistent/a\") {injected_rule} (\"b"));
+        let policy = build_sandbox_policy(
+            &[PathAccess {
+                path,
+                writable: true,
+            }],
+            &UnixSocketAccess::default(),
+            Path::new("/bin/sh"),
+            false,
+        );
+
+        assert!(
+            !policy.contains(injected_rule),
+            "raw injected rule must not appear in the policy"
+        );
+        let literal = r#""/nonexistent/a\") (allow file-read* (subpath \"/decoy\")) (\"b""#;
+        assert!(policy.contains(&format!("    (literal {literal})  ; (rw)\n")));
+        assert!(policy.contains(&format!("    (literal {literal})  ; writable\n")));
+    }
+
+    #[test]
+    fn test_seatbelt_policy_path_literal_encoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().canonicalize().unwrap();
+        for (name, encoded) in [
+            ("ordinary ;(path) é", "ordinary ;(path) é"),
+            ("back\\slash", r"back\\slash"),
+            ("quote\"name", r#"quote\"name"#),
+            (
+                "line\n\t\r\u{1}\u{1f}\u{7f}af",
+                r"line\x0a\x09\x0d\x01\x1f\x7faf",
+            ),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "file").unwrap();
+            let policy = build_sandbox_policy(
+                &[PathAccess {
+                    path,
+                    writable: true,
+                }],
+                &UnixSocketAccess::default(),
+                Path::new("/bin/sh"),
+                false,
+            );
+            let literal = format!("\"{}/{encoded}\"", parent.display());
+            // Exact, single-line rules also guard ordinary paths against gratuitous escaping.
+            assert!(policy.contains(&format!("    (literal {literal})  ; (rw)\n")));
+            assert!(policy.contains(&format!("    (literal {literal})  ; writable\n")));
+            for line in policy.lines().filter(|line| line.contains("  ; (rw)")) {
+                assert_eq!(line, format!("    (literal {literal})  ; (rw)"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_seatbelt_policy_escapes_directory_and_binary_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("quoted\"dir");
+        std::fs::create_dir(&path).unwrap();
+        let literal = format!(
+            r#""{}/quoted\"dir""#,
+            dir.path().canonicalize().unwrap().display()
+        );
+        let policy = build_sandbox_policy(
+            &[PathAccess {
+                path: path.clone(),
+                writable: true,
+            }],
+            &UnixSocketAccess::default(),
+            &path.join("shim"),
+            false,
+        );
+        for rule in [
+            format!("    (subpath {literal})  ; shim binary + libkrunfw\n"),
+            format!("    (literal {literal})  ; (rw) dir root\n"),
+            format!("    (subpath {literal})  ; (rw) dir tree\n"),
+            format!("    (literal {literal})  ; writable dir root\n"),
+            format!("    (subpath {literal})  ; writable dir tree\n"),
+        ] {
+            assert!(policy.contains(&rule), "missing rule: {rule}");
+        }
+    }
+
+    #[test]
+    fn test_seatbelt_policy_preserves_symlink_canonicalization() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let policy = build_sandbox_policy(
+            &[PathAccess {
+                path: link,
+                writable: true,
+            }],
+            &UnixSocketAccess::default(),
+            Path::new("/bin/sh"),
+            false,
+        );
+        let expected = dir.path().canonicalize().unwrap().join("link");
+        assert!(policy.contains(&format!(
+            "    (literal \"{}\")  ; (rw) dir root\n",
+            expected.display()
+        )));
+        assert!(policy.contains(&format!(
+            "    (subpath \"{}\")  ; writable dir tree\n",
+            expected.display()
+        )));
+        assert!(!policy.contains(target.canonicalize().unwrap().to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_seatbelt_policy_escapes_unix_socket_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("quote\"socket");
+        let policy = build_sandbox_policy(
+            &[],
+            &UnixSocketAccess {
+                bind: vec![socket.clone()],
+                connect: vec![socket],
+            },
+            Path::new("/bin/sh"),
+            false,
+        );
+        let literal = format!(
+            r#""{}/quote\"socket""#,
+            dir.path().canonicalize().unwrap().display()
+        );
+        for operation in ["network-bind", "network-outbound"] {
+            assert!(policy.contains(&format!("(allow {operation}\n    (literal {literal})\n)")));
+        }
+    }
+
+    #[test]
+    fn test_seatbelt_policy_skips_non_utf8_paths() {
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(std::ffi::OsString::from_vec(
+            b"/nonexistent/invalid-\xff".to_vec(),
+        ));
+        for binary in [path.join("shim"), PathBuf::from("/bin/sh")] {
+            let policy = build_sandbox_policy(
+                &[PathAccess {
+                    path: path.clone(),
+                    writable: true,
+                }],
+                &UnixSocketAccess {
+                    bind: vec![path.clone()],
+                    connect: vec![path.clone()],
+                },
+                &binary,
+                false,
+            );
+            assert!(!policy.contains("invalid-"));
+            assert!(!policy.contains('\u{fffd}'));
+            assert!(!policy.contains("(allow network-bind"));
+            assert!(!policy.contains("(allow network-outbound"));
+            // Only the static write fragment may grant writes.
+            assert_eq!(
+                policy.matches("(allow file-write*").count(),
+                SEATBELT_FILE_WRITE_POLICY
+                    .matches("(allow file-write*")
+                    .count()
+            );
+            assert!(policy.contains("; Dynamic write grants skipped: no path was representable\n"));
+            if binary == path.join("shim") {
+                assert!(
+                    policy.contains("; Dynamic read grants skipped: no path was representable\n")
+                );
+            } else {
+                assert!(
+                    policy.contains("; Dynamic readable paths\n(allow file-read*\n    (subpath ")
+                );
+            }
+            for operation in [
+                "file-read*",
+                "file-write*",
+                "network-bind",
+                "network-outbound",
+            ] {
+                assert!(!policy.contains(&format!("(allow {operation}\n)")));
+            }
+        }
+    }
 
     #[test]
     fn test_sandbox_exec_path_is_absolute() {
@@ -933,16 +1144,16 @@ mod tests {
         assert_eq!(sandbox.name(), "seatbelt");
     }
 
-    /// Empty path list must produce a valid SBPL write policy with no grants.
+    /// Empty path lists must not produce unrestricted, unfiltered allow rules.
     #[test]
     fn test_dynamic_write_paths_empty_list() {
         let policy = build_dynamic_write_paths(&[]);
 
-        // Must be syntactically valid (has allow block)
-        assert!(
-            policy.contains("(allow file-write*"),
-            "Should contain file-write allow block"
+        assert_eq!(
+            policy,
+            "; Dynamic write grants skipped: no path was representable\n"
         );
+        assert!(!policy.contains("(allow file-write*"));
         // Must NOT grant any paths
         assert!(
             !policy.contains("(subpath"),
@@ -1098,6 +1309,120 @@ mod tests {
             .arg(arg)
             .output()
             .expect("Failed to execute sandboxed shell command")
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_quoted_and_backslash_files_are_readable() {
+        assert!(
+            is_sandbox_available(),
+            "sandbox-exec required for regression probe"
+        );
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        for name in ["quote\"file", "back\\slash"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "readable").unwrap();
+            let output = run_sandboxed_sh(
+                &[PathAccess {
+                    path: path.clone(),
+                    writable: false,
+                }],
+                "cat \"$1\"",
+                &path,
+            );
+            assert!(
+                output.status.success(),
+                "read failed for {name:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, b"readable");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_control_byte_path_matches_exactly() {
+        assert!(
+            is_sandbox_available(),
+            "sandbox-exec required for regression probe"
+        );
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let path = dir.path().join("line\n4141");
+        let sibling = dir.path().join("line4141");
+        let contents = b"control-byte file contents\n";
+        let sibling_contents = b"private sibling contents\n";
+        std::fs::write(&path, contents).unwrap();
+        std::fs::write(&sibling, sibling_contents).unwrap();
+        let paths = [PathAccess {
+            path: path.clone(),
+            writable: false,
+        }];
+
+        let output = run_sandboxed_sh(&paths, "cat \"$1\"", &path);
+        assert!(
+            output.status.success(),
+            "control-byte file read failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, contents);
+        assert!(!sibling_contents.starts_with(&output.stdout));
+
+        let output = run_sandboxed_sh(&paths, "cat \"$1\"", &sibling);
+        assert!(
+            !output.status.success(),
+            "control-byte grant must not allow reading the sibling"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Operation not permitted"),
+            "expected kernel denial, not a profile parse error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "sibling contents must not leak");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_injected_path_cannot_read_decoy() {
+        assert!(
+            is_sandbox_available(),
+            "sandbox-exec required for regression probe"
+        );
+        let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let decoy_dir = dir.path().join("decoy");
+        std::fs::create_dir(&decoy_dir).unwrap();
+        let decoy = decoy_dir.join("secret");
+        std::fs::write(&decoy, "secret").unwrap();
+        let decoy_parent = decoy_dir.canonicalize().unwrap();
+        for payload in [
+            // Balance the surrounding allow block so raw interpolation would
+            // produce a valid profile that actually grants access to the decoy.
+            format!(
+                "a\")) (allow file-read* (subpath \"{}\")) (allow file-read* (literal \"b",
+                decoy_parent.display()
+            ),
+            format!(
+                "a\") (allow file-read* (subpath \"{}\")) (\"b",
+                decoy_parent.display()
+            ),
+        ] {
+            let output = run_sandboxed_sh(
+                &[PathAccess {
+                    path: dir.path().join(payload),
+                    writable: false,
+                }],
+                "cat \"$1\" >/dev/null",
+                &decoy,
+            );
+            assert!(
+                !output.status.success(),
+                "injected path must not grant decoy read access"
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Operation not permitted"),
+                "expected kernel denial, not a profile parse error: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]
