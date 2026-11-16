@@ -40,6 +40,26 @@ async function drainStream(stream: any): Promise<string> {
   return result;
 }
 
+async function waitForBoxState(rt: JsBoxlite, boxId: string, expected: string): Promise<void> {
+  const deadline = performance.now() + 60_000;
+  let lastState = 'not observed';
+  const timeoutError = () => new Error(`box ${boxId} did not reach ${expected} within 60s; last state: ${lastState}`);
+  while (true) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw timeoutError();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const info = await Promise.race([
+      rt.getInfo(boxId),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(timeoutError()), remaining); }),
+    ]).finally(() => clearTimeout(timer));
+    if (!info) die(`box ${boxId} disappeared while waiting for ${expected}`);
+    lastState = info.state.status;
+    if (lastState === expected) return;
+    if (lastState === 'failed' || lastState === 'error') die(`box ${boxId} became ${lastState} while waiting for ${expected}`);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(200, Math.max(0, deadline - performance.now()))));
+  }
+}
+
 function sha256(buf: Buffer): string {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
@@ -354,16 +374,17 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
 
     // ── lifecycle: stop/start preserves rootfs ────────────────────
     if (TEST === 'all' || TEST === 'lifecycle_stop_start') {
-      const b = await newBox(false);
+      const b = await rt.create({ image, autoRemove: false, autoResume: false });
+      trackIds.push(b.id);
       try {
         const src = path.join(tmpDir, 'persist-in.txt');
         const dst = path.join(tmpDir, 'persist-out.txt');
         fs.writeFileSync(src, 'persist-me\n');
         await b.copyIn(src, '/workspace/marker.txt');
         await b.stop();
-        await new Promise((r) => setTimeout(r, 1000));
+        await waitForBoxState(rt, b.id, 'stopped');
         await b.start();
-        await new Promise((r) => setTimeout(r, 2000));
+        await waitForBoxState(rt, b.id, 'running');
         await b.copyOut('/workspace/marker.txt', dst);
         if (fs.readFileSync(dst, 'utf-8') !== 'persist-me\n') die(`rootfs data lost across stop/start`);
         console.log('LIFECYCLE_STOP_START=ok');

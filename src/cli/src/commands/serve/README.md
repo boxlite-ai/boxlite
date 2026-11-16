@@ -144,7 +144,7 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 | POST   | `/v1/boxes/{box_id}/ssh`   | `ssh::configure_ssh` | Replace SSH configuration; returns status    |
 | POST   | `/v1/boxes/{box_id}/ssh/enable` | `ssh::enable_ssh` | Enable saved configuration on a running box |
 | GET    | `/v1/boxes/{box_id}/ssh`   | `ssh::status_ssh`    | Read SSH status without starting the box     |
-| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently without starting it |
+| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently on a running box; otherwise `409 invalid_state`; never starts it |
 
 `POST /ssh` takes the direct `SshConfig` JSON body (not a wrapper) with
 `Content-Type: application/json` and answers with `SshStatus`; every accepted

@@ -160,6 +160,9 @@ export const MOCK_BOXES: Box[] = [
   buildBox({
     id: 'mock-box-running',
     name: 'web-api',
+    autoStop: 900,
+    autoDelete: 4500,
+    autoResume: true,
     state: BoxState.STARTED,
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: ['api.openai.com', '10.0.0.0/8'] },
@@ -174,6 +177,9 @@ export const MOCK_BOXES: Box[] = [
   buildBox({
     id: 'mock-box-stopped',
     name: 'batch-worker',
+    autoStop: 0,
+    autoDelete: 0,
+    autoResume: false,
     state: BoxState.STOPPED,
     createdAt: daysAgo(5),
     desiredState: BoxDesiredState.STOPPED,

@@ -1275,3 +1275,18 @@ are covered by the auth flow tests rather than a simulated provider page.
 Organization entry remembers the last explicitly selected organization per user in local storage as a preference, separately from the active tab session. After login, a remembered organization is restored only if it is in the current organization list and membership is confirmed. Failure falls back to selection. Logout clears the active session, while the preference remains; it never grants access. First-time multi-organization users still choose, and single-organization users enter directly.
 
 In mock mode explicit account switching reports that real authentication is required and does not sign in a default identity. Use the dev target for hosted-login verification.
+
+### Existing Box lifecycle policy
+
+Overview includes a read-only Lifecycle group within Configuration. Values come
+from the current Box response, with no creation defaults: zero intervals and
+`false` are Disabled, while missing fields are Not available. Durations preserve
+seconds using mixed day/hour/minute/second units. Auto-delete shows the idle
+threshold measured from last activity and explicitly requires the Box to be
+stopped; it is not a delay measured from the stop time. Auto-resume reports only
+the stored configuration, without promising which access channels wake a Box.
+
+A failed detail refresh retains the last known values with a retry message;
+initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
+15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
+three options disabled, and other existing fixtures exercise missing fields.
