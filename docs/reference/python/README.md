@@ -444,6 +444,11 @@ locally and over REST, requires saved configuration, and never starts the box.
 | Query | `await box.ssh.status() -> SshStatus` | Return SSH status |
 | Disable | `await box.ssh.disable() -> SshStatus` | Disable SSH |
 
+`enable()` and `disable()` require a running box. On a valid handle to a configured
+or stopped box, both raise `InvalidStateError` (HTTP 409 over REST) without changing
+saved SSH intent. Disable is safe to repeat while running; call it while running
+to persist the disabled switch.
+
 If a box is not running and explicitly sets `BoxOptions.cmd` or `entrypoint`,
 call `await box.start()` before configuring SSH; otherwise `configure()` raises
 `InvalidStateError`. See the [SSH lifecycle guide](../../guides/ssh.md) for

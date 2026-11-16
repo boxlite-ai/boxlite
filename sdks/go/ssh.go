@@ -143,6 +143,8 @@ func (s *SSH) Configure(ctx context.Context, config SSHConfig) (*SSHStatus, erro
 
 // Enable uses saved configuration on a running box without restarting a healthy
 // listener. It requires existing configuration and never starts the box.
+// A valid handle to a configured or stopped box returns ErrInvalidState without
+// changing saved SSH intent.
 func (s *SSH) Enable(ctx context.Context) (*SSHStatus, error) {
 	return s.call(ctx, func(box *C.CBoxHandle, userData unsafe.Pointer, cerr *C.CBoxliteError) C.enum_BoxliteErrorCode {
 		return C.boxlite_box_ssh_enable(box, C.cbSSHEnable(), userData, cerr)
@@ -156,8 +158,10 @@ func (s *SSH) Status(ctx context.Context) (*SSHStatus, error) {
 	})
 }
 
-// Disable stops the listener and disconnects clients without starting the
-// box. Repeating it is safe.
+// Disable stops the listener and disconnects clients on a running box without
+// starting it. Repeating it is safe while running. A valid handle to a configured
+// or stopped box returns ErrInvalidState without changing saved SSH intent.
+// Disable while running to persist the disabled switch.
 func (s *SSH) Disable(ctx context.Context) (*SSHStatus, error) {
 	return s.call(ctx, func(box *C.CBoxHandle, userData unsafe.Pointer, cerr *C.CBoxliteError) C.enum_BoxliteErrorCode {
 		return C.boxlite_box_ssh_disable(box, C.cbSSHDisable(), userData, cerr)

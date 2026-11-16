@@ -29,5 +29,5 @@ class SyncSshHandle:
         return self._owner._sync(self._owner._box.ssh.status())
 
     def disable(self) -> "SshStatus":
-        """Stop SSH and disconnect clients; repeatable, never starts the box."""
+        """Stop SSH on a running box; repeatable while running, never starts it."""
         return self._owner._sync(self._owner._box.ssh.disable())
