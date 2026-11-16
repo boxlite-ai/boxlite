@@ -51,6 +51,7 @@
 #
 # The main suite reads [profiles.p1]. Dev and stage additionally test private access
 # with p2 as owner, p2_readonly in the same org, and p1 in a different org.
+# The image catalog lane also uses p2, isolating its quota from the main suite.
 # Profiles are written to ~/.boxlite/credentials.toml and every request is
 # `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
 # `path_prefix` is derived from the same key via /v1/me, not a second
@@ -464,6 +465,7 @@ jobs:
       #    stream never EOFs and ex.wait() hangs to the 45s bound. Guest-side
       #    root cause + fix tracked in #910. Un-ignore once that lands. The
       #    kill itself is covered by sdks/python/tests/test_exec_timeout_sigalrm.py.
+      #  - image catalog: runs separately with p2's independent image quota.
       # test_path_verification is NOT ignored — despite the name it never
       # touches the journal; it proves the API→Runner chain via the
       # X-BoxLite-Api-Version response header + an exec marker.
@@ -487,6 +489,23 @@ jobs:
           unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
           make test:rest:e2e AUTH=api-key FILTER=preview_private_identity_permissions
 
+      # Catalog lifecycle tests must reach the registry even if the main
+      # suite's organization has exhausted its image slots. Reuse the SDK
+      # builds and p2 profile in a separate process before the p1 suite.
+      - name: Run image catalog E2E (dev and stage)
+        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
+        timeout-minutes: 10
+        env:
+          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
+          BOXLITE_E2E_PROFILE: p2
+          PYTEST_ADDOPTS: >-
+            -s --tb=short --no-header -p no:cacheprovider
+            --timeout=180 --timeout-method=thread
+            --junit-xml=${{ github.workspace }}/pytest-catalog.xml
+        run: |
+          unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
+          make test:rest:e2e AUTH=api-key FILTER=images_catalog
+
       - name: Run E2E suite
         timeout-minutes: 35
         env:
@@ -497,6 +516,7 @@ jobs:
             --ignore=cases/test_c_entry.py --ignore=cases/test_c_coverage.py
             --ignore=cases/test_go_entry.py --ignore=cases/test_go_coverage.py
             --ignore=cases/test_node_entry.py --ignore=cases/test_exec_timeout.py
+            --ignore=cases/test_images_catalog.py
             -s --tb=short --no-header -p no:cacheprovider
             --timeout=180 --timeout-method=thread
             --junit-xml=${{ github.workspace }}/pytest-junit.xml
@@ -517,4 +537,5 @@ jobs:
           path: |
             pytest-junit.xml
             pytest-identities.xml
+            pytest-catalog.xml
           if-no-files-found: ignore
