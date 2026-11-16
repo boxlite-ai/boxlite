@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -20,7 +21,9 @@ import (
 
 // dialTo is the upstreamDial a test hands mitmAndForward for a fixed address.
 func dialTo(addr string) upstreamDial {
-	return dialAddress((&net.Dialer{}).DialContext, addr)
+	return func(ctx context.Context) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	}
 }
 
 // TestMitmRouting_SecretHostGetsMitmd verifies that when a TLS connection

@@ -96,7 +96,7 @@ func TestEgressDialer_DialsResolvedAddressesInOrderUntilOneConnects(t *testing.T
 	d, rec := newTestEgressDialer(t, testFilter("api.example.test"), staticResolve("198.51.100.1", "198.51.100.2", "198.51.100.3"))
 	rec.fail["198.51.100.1:443"] = errors.New("connection refused")
 
-	conn, err := d.DialHost(context.Background(), "api.example.test", 443)
+	conn, err := d.DialHost(context.Background(), egressTarget{Hostname: "api.example.test", Port: 443})
 	if err != nil {
 		t.Fatalf("DialHost: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestEgressDialer_BlackholedAddressDoesNotStarveTheNext(t *testing.T) {
 		staticResolve("198.51.100.1", "198.51.100.2"))
 	rec.block["198.51.100.1:443"] = true
 
-	conn, err := d.DialHost(context.Background(), "api.example.test", 443)
+	conn, err := d.DialHost(context.Background(), egressTarget{Hostname: "api.example.test", Port: 443})
 	if err != nil {
 		t.Fatalf("the second address is healthy and must still be reached: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestEgressDialer_FastFailureHandsItsWindowToTheNext(t *testing.T) {
 	// ~500ms the survivor inherits once the refusal returns its share.
 	rec.slow["198.51.100.2:443"] = 300 * time.Millisecond
 
-	conn, err := d.DialHost(context.Background(), "api.example.test", 443)
+	conn, err := d.DialHost(context.Background(), egressTarget{Hostname: "api.example.test", Port: 443})
 	if err != nil {
 		t.Fatalf("the refused address returned its window; the second must have it: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestEgressDialer_CanceledCallerDialsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := d.DialHost(ctx, "api.example.test", 443); err == nil {
+	if _, err := d.DialHost(ctx, egressTarget{Hostname: "api.example.test", Port: 443}); err == nil {
 		t.Fatal("a canceled caller must not yield a connection")
 	}
 	if got := rec.snapshot(); len(got) != 0 {
@@ -228,7 +228,7 @@ func TestEgressDialer_RefusesUnroutableAnswersUnderAllowNet(t *testing.T) {
 			t.Errorf("unroutableEgress(%s) = (%q, %v), want (%q, true)", ip, reason, refused, wantReason)
 		}
 		d, rec := newTestEgressDialer(t, testFilter("api.example.test"), staticResolve(ip))
-		if _, err := d.DialHost(context.Background(), "api.example.test", 443); err == nil {
+		if _, err := d.DialHost(context.Background(), egressTarget{Hostname: "api.example.test", Port: 443}); err == nil {
 			t.Errorf("%s: expected DialHost to fail, dialed %v", ip, rec.dialed)
 		}
 		if len(rec.dialed) != 0 {
@@ -246,7 +246,7 @@ func TestEgressDialer_RefusesUnroutableAnswersUnderAllowNet(t *testing.T) {
 func TestEgressDialer_ExplicitIPRuleReadmitsPrivateAnswer(t *testing.T) {
 	d, rec := newTestEgressDialer(t, testFilter("db.example.test", "10.0.0.0/8"), staticResolve("10.0.0.5"))
 
-	conn, err := d.DialHost(context.Background(), "db.example.test", 5432)
+	conn, err := d.DialHost(context.Background(), egressTarget{Hostname: "db.example.test", Port: 5432})
 	if err != nil {
 		t.Fatalf("DialHost: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestEgressDialer_BoxSubnetNeverDialedByName(t *testing.T) {
 	cfg := testGvproxyConfig()
 	for _, ip := range []string{cfg.GatewayIP, cfg.GuestIP, cfg.HostIP} {
 		d, rec := newTestEgressDialer(t, testFilter("api.example.test", cfg.Subnet), staticResolve(ip))
-		if _, err := d.DialHost(context.Background(), "api.example.test", 443); err == nil {
+		if _, err := d.DialHost(context.Background(), egressTarget{Hostname: "api.example.test", Port: 443}); err == nil {
 			t.Errorf("%s: expected DialHost to fail", ip)
 		}
 		if len(rec.dialed) != 0 {
@@ -271,7 +271,7 @@ func TestEgressDialer_BoxSubnetNeverDialedByName(t *testing.T) {
 	}
 	// Without an allow_net there is nothing else to refuse.
 	d, rec := newTestEgressDialer(t, nil, staticResolve("10.0.0.5"))
-	if _, err := d.DialHost(context.Background(), "internal.example.test", 443); err != nil {
+	if _, err := d.DialHost(context.Background(), egressTarget{Hostname: "internal.example.test", Port: 443}); err != nil {
 		t.Fatalf("no allow_net: private answers are dialable, got %v", err)
 	}
 	if len(rec.dialed) != 1 {
@@ -295,7 +295,7 @@ func TestEgressDialer_LinkLocalRefusedOnEveryPath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d, rec := newTestEgressDialer(t, tc.filter, staticResolve("169.254.169.254"))
-			if _, err := d.DialHost(context.Background(), "imds.example.test", 80); err == nil {
+			if _, err := d.DialHost(context.Background(), egressTarget{Hostname: "imds.example.test", Port: 80}); err == nil {
 				t.Fatal("a name resolving into 169.254.0.0/16 must never be dialed")
 			}
 			if len(rec.dialed) != 0 {
@@ -322,7 +322,7 @@ func TestEgressDialer_StalledResolverIsBounded(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := d.DialHost(context.Background(), "slow.example.test", 443)
+		_, err := d.DialHost(context.Background(), egressTarget{Hostname: "slow.example.test", Port: 443})
 		done <- err
 	}()
 
@@ -341,7 +341,7 @@ func TestEgressDialer_StalledResolverIsBounded(t *testing.T) {
 
 func TestEgressDialer_IPv6OnlyAnswerIsNotDialable(t *testing.T) {
 	d, rec := newTestEgressDialer(t, testFilter("v6.example.test"), staticResolve("2001:db8::1"))
-	if _, err := d.DialHost(context.Background(), "v6.example.test", 443); err == nil {
+	if _, err := d.DialHost(context.Background(), egressTarget{Hostname: "v6.example.test", Port: 443}); err == nil {
 		t.Fatal("expected an error: the guest network is IPv4-only")
 	}
 	if len(rec.dialed) != 0 {
@@ -352,7 +352,7 @@ func TestEgressDialer_IPv6OnlyAnswerIsNotDialable(t *testing.T) {
 func TestEgressDialer_ResolverErrorMeansNoDial(t *testing.T) {
 	failing := func(context.Context, string) ([]net.IP, error) { return nil, errors.New("SERVFAIL") }
 	d, rec := newTestEgressDialer(t, testFilter("api.example.test"), failing)
-	_, err := d.DialHost(context.Background(), "api.example.test", 443)
+	_, err := d.DialHost(context.Background(), egressTarget{Hostname: "api.example.test", Port: 443})
 	if err == nil || !strings.Contains(err.Error(), "SERVFAIL") {
 		t.Fatalf("expected the resolver error to surface, got %v", err)
 	}
