@@ -73,14 +73,3 @@ export function SetupLayout(props: { title: string; description: string; childre
     />
   )
 }
-
-export function SetupPending({ title = 'Preparing your organization' }: { title?: string }) {
-  return (
-    <SetupLayout title={title} description="We’re checking your account and finding your next step.">
-      <p role="status" className="flex items-center gap-3 text-body text-muted-foreground">
-        <span aria-hidden className="size-3 border border-current motion-safe:animate-pulse" />
-        Please wait…
-      </p>
-    </SetupLayout>
-  )
-}

@@ -1260,6 +1260,17 @@ having distinct memberships and resources before production rollout.
 
 ## Signing out and switching accounts
 
+Automatic account transitions share the Console's BoxCube loading surface: session
+restoration, hosted sign-in navigation, registration checks, default-entry checks,
+sign-out and account switching. Pending surfaces contain no account-setup headings
+or account actions. A successful redirect keeps loading visible until navigation;
+returning through the browser's back/forward cache restores manual entry.
+
+Verification, organization selection and failure recovery remain interactive pages.
+Account checks retain their request timeouts, and admitted Console sessions stay
+mounted during background refreshes. The existing LoadingFallback is reused without changing its animation, wording,
+layout or long-wait feedback timing.
+
 The profile menu separates **Switch account** from **Sign out**. Switching warns
 that unsaved edits and Console terminal connections will close; running Boxes
 continue running. It clears the local identity, organization selection and query
@@ -1309,6 +1320,12 @@ are covered by the auth flow tests rather than a simulated provider page.
 Organization entry remembers the last explicitly selected organization per user in local storage as a preference, separately from the active tab session. After login, a remembered organization is restored only if it is in the current organization list and membership is confirmed. Failure falls back to selection. Logout clears the active session, while the preference remains; it never grants access. First-time multi-organization users still choose, and single-organization users enter directly.
 
 In mock mode explicit account switching reports that real authentication is required and does not sign in a default identity. Use the dev target for hosted-login verification.
+
+For local authentication transition review, the mock target accepts
+`/?authPreview=loading` to hold the shared loader, and
+`/logout?authPreview=slow` or `/logout?switch=1&authPreview=slow` to delay
+mock navigation by 2.5 seconds. Account switching still reports that the real
+sign-in service is required; these fixtures do not simulate an identity provider.
 
 ### Existing Box lifecycle policy
 

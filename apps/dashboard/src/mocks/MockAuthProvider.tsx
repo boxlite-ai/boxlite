@@ -25,6 +25,10 @@ function finishSignIn(index: number, returnTo: string) {
 export function MockAuthProvider({ children }: { children: ReactNode }) {
   const [signedOut, setSignedOut] = useState(() => localStorage.getItem(SIGNED_OUT_KEY) === '1')
   const [debugEnabled] = useState(() => new URLSearchParams(window.location.search).get('authDebug') === '1')
+  const [authPreview] = useState(() => new URLSearchParams(window.location.search).get('authPreview'))
+  const waitForPreview = async () => {
+    if (authPreview === 'slow') await new Promise((resolve) => setTimeout(resolve, 2500))
+  }
   const [debugOpen, setDebugOpen] = useState(false)
   const [error, setError] = useState<Error>()
   const removeUser = async () => {
@@ -32,6 +36,7 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     setSignedOut(true)
   }
   const signinRedirect = async (args?: SigninRedirectArgs) => {
+    await waitForPreview()
     const returnTo = safeReturnTo((args?.state as { returnTo?: string })?.returnTo)
     if (args?.prompt) {
       setError(
@@ -43,12 +48,13 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
     finishSignIn(debugEnabled ? MOCK_ACCOUNTS.indexOf(MOCK_USER) : 0, returnTo)
   }
   const signoutRedirect = async () => {
+    await waitForPreview()
     await removeUser()
     window.location.replace(RoutePath.LANDING)
   }
   const mockAuth = {
     isAuthenticated: !signedOut,
-    isLoading: false,
+    isLoading: authPreview === 'loading',
     activeNavigator: undefined,
     error,
     user: signedOut

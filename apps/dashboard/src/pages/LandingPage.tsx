@@ -3,6 +3,7 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
+import LoadingFallback from '@/components/LoadingFallback'
 import { AccountEntryLayout } from '@/components/SetupLayout'
 import { AsciiButton } from '@/components/ascii'
 import { getSignInIntent, prepareSignIn, safeReturnTo } from '@/lib/auth-session'
@@ -37,24 +38,34 @@ const LandingPage: React.FC = () => {
           ...(chooseAccount ? { prompt: 'login' } : {}),
           state: { returnTo },
         })
-        if (result === null) setFailure(true)
+        if (result !== null) return
       } catch {
-        setFailure(true)
-      } finally {
-        redirecting.current = false
-        setOpening(false)
+        // A failed navigation returns to the same manual recovery surface.
       }
+      setFailure(true)
+      redirecting.current = false
+      setOpening(false)
     },
     [signinRedirect, removeUser, user, returnTo],
   )
 
+  const automaticSignIn = !isLoading && !isAuthenticated && !error && !activeNavigator && !getSignInIntent() && !failure
   useEffect(() => {
-    if (isLoading || isAuthenticated || error || activeNavigator || getSignInIntent() || failure) return
-    void signIn(false)
-  }, [isLoading, isAuthenticated, error, activeNavigator, failure, signIn])
+    if (automaticSignIn) void signIn(false)
+  }, [automaticSignIn, signIn])
 
+  useEffect(() => {
+    const restoreEntry = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      redirecting.current = false
+      setOpening(false)
+    }
+    window.addEventListener('pageshow', restoreEntry)
+    return () => window.removeEventListener('pageshow', restoreEntry)
+  }, [])
+
+  if (opening || (!failure && !error && (isLoading || activeNavigator || automaticSignIn))) return <LoadingFallback />
   if (isAuthenticated && !error && !intent) return <Navigate to={returnTo} replace />
-  const busy = Boolean(opening) || isLoading
 
   return (
     <AccountEntryLayout
@@ -63,24 +74,13 @@ const LandingPage: React.FC = () => {
       title="Sign in to BoxLite"
       description={intent?.signedOut ? 'You’re signed out.' : 'Sign in to manage your Boxes and organizations.'}
     >
-      <AsciiButton
-        variant="primary"
-        onClick={() => void signIn(false)}
-        disabled={busy}
-        aria-busy={busy}
-        className="h-10 w-full justify-center px-4"
-      >
-        {opening ? 'Opening sign-in…' : isLoading ? 'Checking session…' : 'Sign in'}
+      <AsciiButton variant="primary" onClick={() => void signIn(false)} className="h-10 w-full justify-center px-4">
+        Sign in
       </AsciiButton>
-      <AsciiButton
-        variant="quiet"
-        disabled={busy}
-        onClick={() => void signIn(true)}
-        className="mt-2 h-10 w-full justify-center px-4"
-      >
+      <AsciiButton variant="quiet" onClick={() => void signIn(true)} className="mt-2 h-10 w-full justify-center px-4">
         Use another account
       </AsciiButton>
-      {!busy && (failure || (error && !cancelled)) && (
+      {(failure || (error && !cancelled)) && (
         <p role="alert" className="mt-4 text-body text-destructive">
           {errorCode === 'mock_auth_unavailable'
             ? 'Account switching requires the real sign-in service. This preview uses a test identity.'

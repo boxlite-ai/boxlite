@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /* Copyright BoxLite AI, 2026 · SPDX-License-Identifier: AGPL-3.0 */
 import { act, StrictMode } from 'react'
+import { renderToString } from 'react-dom/server'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +15,7 @@ const auth = vi.hoisted(() => ({
   isLoading: false,
   error: undefined as undefined | { innerError: { error: string } },
   user: undefined as undefined | { profile: { sub: string } },
-  activeNavigator: undefined,
+  activeNavigator: undefined as string | undefined,
 }))
 vi.mock('react-oidc-context', () => ({ useAuth: () => auth }))
 let container: HTMLDivElement
@@ -22,6 +23,7 @@ let root: Root
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   sessionStorage.clear()
+  auth.activeNavigator = undefined
   auth.user = undefined
   auth.isLoading = false
   auth.isAuthenticated = false
@@ -59,14 +61,14 @@ describe('account entry regression', () => {
     expect(auth.signinRedirect).not.toHaveBeenCalled()
     expect(container.querySelector('button')).not.toBeNull()
   })
-  it('disables the pending primary action and prevents duplicate requests', async () => {
+  it('replaces pending actions with loading and prevents duplicate requests', async () => {
     markJustLoggedOut()
     auth.signinRedirect.mockReturnValue(new Promise(() => undefined))
     await mount()
     await click()
-    expect(container.querySelector('button')!.disabled).toBe(true)
-    expect(container.textContent).toContain('Opening sign-in')
-    await click()
+    expect(container.querySelector('button')).toBeNull()
+    expect(container.textContent).toContain('Loading')
+    expect(container.textContent).not.toContain('Opening sign-in')
     expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
   })
   it('allows retry after the OIDC wrapper returns null on failure', async () => {
@@ -139,8 +141,9 @@ describe('account entry recovery coverage', () => {
     markJustLoggedOut()
     auth.isLoading = true
     await mount()
-    expect(container.textContent).toContain('Checking session')
-    expect([...container.querySelectorAll('button')].every((button) => button.disabled)).toBe(true)
+    expect(container.textContent).toContain('Loading')
+    expect(container.textContent).not.toContain('Checking session')
+    expect(container.querySelector('button')).toBeNull()
     expect(auth.signinRedirect).not.toHaveBeenCalled()
   })
   it('explains unsupported mock authentication without redirecting', async () => {
@@ -150,4 +153,41 @@ describe('account entry recovery coverage', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('requires the real sign-in service')
     expect(auth.signinRedirect).not.toHaveBeenCalled()
   })
+})
+
+it('shows loading on the first automatic sign-in render, before effects run', () => {
+  const html = renderToString(
+    <MemoryRouter>
+      <LandingPage />
+    </MemoryRouter>,
+  )
+  expect(html).toContain('Loading')
+  expect(html).not.toContain('Sign in to BoxLite')
+})
+it('keeps loading after a successful redirect request until document navigation', async () => {
+  markJustLoggedOut()
+  await mount()
+  await click()
+  expect(container.textContent).toContain('Loading')
+  expect(container.querySelector('button')).toBeNull()
+})
+it('shows loading while the identity provider navigator is active', async () => {
+  auth.activeNavigator = 'signinRedirect'
+  await mount()
+  expect(container.textContent).toContain('Loading')
+  expect(container.querySelector('button')).toBeNull()
+  expect(auth.signinRedirect).not.toHaveBeenCalled()
+})
+
+// Browser back can restore the document without remounting React.
+it('restores manual entry from the back-forward cache after a successful redirect', async () => {
+  markJustLoggedOut()
+  await mount()
+  await click()
+  expect(container.textContent).toContain('Loading')
+  await act(async () => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
+  expect(container.textContent).toContain('Sign in to BoxLite')
+  expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
+  await click()
+  expect(auth.signinRedirect).toHaveBeenCalledTimes(2)
 })
