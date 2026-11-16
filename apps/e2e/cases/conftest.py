@@ -311,6 +311,31 @@ async def drain(ex) -> tuple[str, str]:
     return await asyncio.gather(out_t, err_t)
 
 
+async def wait_for_box_state(rt, box_id: str, expected: str, timeout: float = 60):
+    """Wait for REST lifecycle completion, including a bound on stalled reads."""
+    last_state = "not observed"
+
+    async def poll():
+        nonlocal last_state
+        while True:
+            info = await rt.get_info(box_id)
+            assert info is not None, f"box {box_id} disappeared while waiting for {expected}"
+            last_state = info.state.status
+            if last_state == expected:
+                return info
+            assert last_state not in ("failed", "error"), (
+                f"box {box_id} became {last_state} while waiting for {expected}"
+            )
+            await asyncio.sleep(0.2)
+
+    try:
+        return await asyncio.wait_for(poll(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise AssertionError(
+            f"box {box_id} did not reach {expected} within {timeout}s; last state: {last_state}"
+        ) from exc
+
+
 async def wait_until_unlisted(
     rt,
     box_ids: list[str],
