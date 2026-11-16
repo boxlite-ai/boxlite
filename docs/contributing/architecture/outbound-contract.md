@@ -43,6 +43,22 @@ Transport failure does not select a different route implicitly.
 The local host alias keeps its existing direct NAT behavior.
 A future remote transport must reject that alias unless it defines an explicit safe mapping; translated loopback is not the proxy server's equivalent destination.
 
+### TCP transport implementation
+
+The bridge's `egressTarget` carries the observed hostname, pre-NAT policy IP, approved connection IP, actual port, and protocol.
+Ordinary TCP binds `egressDialer.byAddress`; inspected traffic binds either `byAddress` or `byName`, and MITM retains that bound dialer for its upstream connections.
+The selected `connectFunc` receives this target after the applicable checks.
+Its error is returned without selecting the direct socket dialer; an unset connector selects the existing direct transport.
+Configure resolver and transport seams before installing the forwarder.
+
+Initial unrestricted TCP also installs this boundary; initial unrestricted UDP retains its upstream handler.
+Address setup and controlled hostname resolution each use a bounded setup context, including candidate retries and MITM redials.
+The typed connector does not implement proxy registration or a proxy protocol, and this step does not implement revisioned snapshot publication.
+
+The guest-stack transport tests consume the shared NAT and hostname examples, relay HTTP/TLS bytes to test-owned listeners, and verify refused targets never enter the connector.
+The MITM test uses an isolated test CA in a subprocess so production certificate verification remains active; a wrong upstream certificate must receive no HTTP request.
+For HTTP/2 fixture concurrency, one explicit `http2.ClientConn` owns the guest TLS pipe; separate transport pool dials must not return the same physical connection.
+
 ## Configuration boundary
 
 The current policy shape is `{ "mode": "enabled" | "disabled", "allow_net": [...] }`.

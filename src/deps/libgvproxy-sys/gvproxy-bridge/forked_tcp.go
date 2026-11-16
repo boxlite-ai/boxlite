@@ -10,10 +10,8 @@ package main
 // What the inspect path dials depends on what authorized the connection. An
 // IP/CIDR match dials the address the guest chose (NAT applied, as upstream
 // does). A hostname match dials the NAME: the gateway resolves it itself and
-// the guest's destination address is discarded (egress_dialer.go). A secret
-// host is MITM'd and likewise dialed by name.
-//
-// When filter is nil: identical to upstream (zero overhead).
+// the guest's destination address cannot select the upstream socket
+// (egress_dialer.go). A secret host is MITM'd and likewise dialed by name.
 
 import (
 	"bufio"
@@ -21,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/tcpproxy"
@@ -161,14 +160,19 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		// while the actual outbound dial uses any NAT-translated address (for example 127.0.0.1).
 		destIP, dialAddress := resolveTCPDestination(localAddress, nat, natLock)
 		destPort := r.ID().LocalPort
-		destAddr := fmt.Sprintf("%s:%d", dialAddress, destPort)
+		target := egressTarget{
+			PolicyIP:     netip.AddrFrom4(localAddress.As4()),
+			ConnectionIP: netip.AddrFrom4(dialAddress.As4()),
+			Port:         destPort,
+			Protocol:     "tcp",
+		}
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
 		case tcpRouteStandardForward:
-			standardForward(r, destAddr)
+			standardForward(r, dialer.byAddress(target))
 			return
 		case tcpRouteInspect:
-			inspectAndForward(r, destAddr, destIP, destPort, filter, dialer, ca, secretMatcher)
+			inspectAndForward(r, target, filter, dialer, ca, secretMatcher)
 			return
 		default:
 			// No matching rule: block
@@ -182,10 +186,10 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 }
 
 // standardForward is the upstream flow: Dial → CreateEndpoint → relay.
-func standardForward(r *tcp.ForwarderRequest, destAddr string) {
-	outbound, err := net.Dial("tcp", destAddr)
+func standardForward(r *tcp.ForwarderRequest, dial upstreamDial) {
+	outbound, err := dial(context.Background())
 	if err != nil {
-		logrus.Tracef("net.Dial() = %v", err)
+		logrus.Tracef("outbound dial = %v", err)
 		r.Complete(true)
 		return
 	}
@@ -214,8 +218,10 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 // inspectAndForward: Accept → Peek SNI/Host → decide → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
 // before deciding whether, and where, to connect.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, destPort uint16,
+func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
 	filter *AllowNetFilter, dialer *egressDialer, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+	destIP := net.IP(target.PolicyIP.AsSlice())
+	destPort := target.Port
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -241,6 +247,7 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 		hostname = peekHTTPHost(br)
 	}
 	hostname = canonicalHostname(hostname)
+	target.Hostname = hostname
 
 	// Step 3: One decision, covering every outcome. Wrapping the guest here
 	// rather than once per branch keeps the peeked bytes replayable on
@@ -251,11 +258,11 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 	var dial upstreamDial
 	var dst string
 	if egress == egressByName {
-		dial = dialer.byName(hostname, destPort)
+		dial = dialer.byName(target)
 		dst = fmt.Sprintf("%s:%d", hostname, destPort)
 	} else {
-		dial = dialAddress(dialer.dial, destAddr)
-		dst = destAddr
+		dial = dialer.byAddress(target)
+		dst = target.address()
 	}
 	fields := logrus.Fields{
 		"dst":      dst,
@@ -281,13 +288,8 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 		return
 	}
 
-	// Step 4: Dial upstream, bounded so a stalled peer cannot hold the guest's
-	// connection open indefinitely. A by-name dial carries the same bound
-	// internally (egress_dialer.go DialHost), which is what covers the MITM
-	// branch above; this one is what covers the address path.
-	ctx, cancel := context.WithTimeout(context.Background(), upstreamDialTimeout)
-	defer cancel()
-	outbound, err := dial(ctx)
+	// Both bound dialers own the setup deadline, including MITM redials.
+	outbound, err := dial(context.Background())
 	if err != nil {
 		logrus.WithFields(fields).WithField("error", err).Trace("allowNet TCP: upstream dial failed")
 		guestConn.Close()

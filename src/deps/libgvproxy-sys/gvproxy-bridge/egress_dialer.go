@@ -1,25 +1,24 @@
 package main
 
-// egress_dialer.go — how the gateway reaches a destination that allow_net
-// names by hostname.
+// egress_dialer.go — checked destinations and the selected TCP transport.
 //
 // A hostname rule authorizes a NAME, never an address the guest chose. Once
 // SNI/Host inspection (forked_tcp.go) has matched the name, the gateway
 // resolves it itself through the host resolver and dials what it gets; the
-// guest's destination IP is discarded. That is what makes the hostname the
-// only authorization input: a guest that edits /etc/hosts or hard-codes an
+// guest's destination IP cannot select the upstream socket. The hostname is
+// the authorization input: a guest that edits /etc/hosts or hard-codes an
 // attacker's address while presenting an allowed SNI still lands on the real
 // host, and a destination whose address changes after the box started is
 // reached at whatever it resolves to now.
 //
-// Destinations covered by an IP/CIDR rule keep dialing the guest's address —
-// that path also carries the host.boxlite.internal NAT (main.go) — so only
-// hostname-authorized flows come through here.
+// Address-authorized flows retain the guest's pre-NAT policy address and
+// dial the translated address. Both paths enter the same transport boundary.
 
 import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -33,18 +32,38 @@ type resolveFunc func(ctx context.Context, host string) ([]net.IP, error)
 // dialFunc is the socket seam, shaped like net.Dialer.DialContext.
 type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
+// egressTarget separates the business destination from its approved socket
+// address. A transport receives a literal IPv4 address and must not resolve
+// Hostname again; PolicyIP retains the guest's address before NAT or DNS.
+type egressTarget struct {
+	Hostname     string
+	PolicyIP     netip.Addr
+	ConnectionIP netip.Addr
+	Port         uint16
+	Protocol     string
+}
+
+func (t egressTarget) address() string {
+	return net.JoinHostPort(t.ConnectionIP.String(), strconv.Itoa(int(t.Port)))
+}
+
+// connectFunc must honor context cancellation and release setup resources on
+// failure. A successful connection becomes the forwarder's responsibility.
+type connectFunc func(context.Context, egressTarget) (net.Conn, error)
+
 // upstreamDial is what the TCP forwarder and the MITM proxy consume: a dial
 // already bound to one destination, so neither needs to know whether that
 // destination is a name or an address.
 type upstreamDial func(ctx context.Context) (net.Conn, error)
 
-// egressDialer resolves, classifies and dials hostname-authorized
-// destinations. One instance per box.
+// egressDialer owns controlled resolution and one selected transport. Configure
+// its seams before publishing it to forwarders; flows retain that instance.
 type egressDialer struct {
 	filter    *AllowNetFilter // an IP/CIDR rule may re-admit an address unroutableEgress refuses
 	boxSubnet *net.IPNet      // the virtual network itself is never a by-name destination
 	resolve   resolveFunc
 	dial      dialFunc
+	connect   connectFunc // nil selects the direct socket dialer
 }
 
 func newEgressDialer(filter *AllowNetFilter, subnet string) (*egressDialer, error) {
@@ -82,18 +101,28 @@ var systemResolve resolveFunc = func(ctx context.Context, host string) ([]net.IP
 }
 
 // byName binds a hostname-authorized destination for the forwarder.
-func (d *egressDialer) byName(hostname string, port uint16) upstreamDial {
+func (d *egressDialer) byName(target egressTarget) upstreamDial {
 	return func(ctx context.Context) (net.Conn, error) {
-		return d.DialHost(ctx, hostname, port)
+		return d.DialHost(ctx, target)
 	}
 }
 
-// dialAddress binds an address-authorized destination (an IP/CIDR match, or
+// byAddress binds an address-authorized destination (an IP/CIDR match, or
 // the NAT-translated host alias), dialed exactly as the guest addressed it.
-func dialAddress(dial dialFunc, addr string) upstreamDial {
+func (d *egressDialer) byAddress(target egressTarget) upstreamDial {
 	return func(ctx context.Context) (net.Conn, error) {
-		return dial(ctx, "tcp", addr)
+		ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
+		defer cancel()
+		return d.dialTarget(ctx, "tcp", target)
 	}
+}
+
+func (d *egressDialer) dialTarget(ctx context.Context, network string, target egressTarget) (net.Conn, error) {
+	target.Protocol = "tcp"
+	if d.connect != nil {
+		return d.connect(ctx, target)
+	}
+	return d.dial(ctx, network, target.address())
 }
 
 // DialHost resolves hostname on the host, drops addresses the box must not
@@ -101,7 +130,7 @@ func dialAddress(dial dialFunc, addr string) upstreamDial {
 // guest network is IPv4-only (gvisor-tap-vsock virtualnetwork.go), and the
 // gateway process is not, so an unforced dial could open IPv6 egress that no
 // allow_net rule can express.
-func (d *egressDialer) DialHost(ctx context.Context, hostname string, port uint16) (net.Conn, error) {
+func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.Conn, error) {
 	// One bound for the whole operation: the host lookup plus every candidate
 	// dial. It lives here rather than at the call site because the MITM path
 	// hands this dial to http.Transport, whose DialContext carries only the
@@ -113,7 +142,7 @@ func (d *egressDialer) DialHost(ctx context.Context, hostname string, port uint1
 
 	deadline, _ := ctx.Deadline() // always set: WithTimeout above just set one
 
-	ips, err := d.candidates(ctx, hostname)
+	ips, err := d.candidates(ctx, target.Hostname)
 	if err != nil {
 		return nil, err
 	}
@@ -132,14 +161,15 @@ func (d *egressDialer) DialHost(ctx context.Context, hostname string, port uint1
 		}
 		attemptCtx, cancelAttempt := context.WithDeadline(ctx,
 			candidateDeadline(time.Now(), deadline, len(ips)-i))
-		conn, err := d.dial(attemptCtx, "tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(int(port))))
+		target.ConnectionIP = netip.AddrFrom4([4]byte(ip.To4()))
+		conn, err := d.dialTarget(attemptCtx, "tcp4", target)
 		cancelAttempt()
 		if err == nil {
 			return conn, nil
 		}
 		lastErr = err
 	}
-	return nil, fmt.Errorf("dial %s:%d: %w", hostname, port, lastErr)
+	return nil, fmt.Errorf("dial %s:%d: %w", target.Hostname, target.Port, lastErr)
 }
 
 // minCandidateDialWindow is net/dial.go's saneMinimum and means the same
