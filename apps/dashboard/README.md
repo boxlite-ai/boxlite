@@ -1224,3 +1224,18 @@ The existing MSW worker supplies three synthetic memberships. Without the flag,
 mock mode has one organization. Mock resource fixtures are shared: these previews
 verify navigation and UI, not backend resource isolation. Review with real accounts
 having distinct memberships and resources before production rollout.
+
+### Existing Box lifecycle policy
+
+Overview includes a read-only Lifecycle group within Configuration. Values come
+from the current Box response, with no creation defaults: zero intervals and
+`false` are Disabled, while missing fields are Not available. Durations preserve
+seconds using mixed day/hour/minute/second units. Auto-delete shows the idle
+threshold measured from last activity and explicitly requires the Box to be
+stopped; it is not a delay measured from the stop time. Auto-resume reports only
+the stored configuration, without promising which access channels wake a Box.
+
+A failed detail refresh retains the last known values with a retry message;
+initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
+15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
+three options disabled, and other existing fixtures exercise missing fields.
