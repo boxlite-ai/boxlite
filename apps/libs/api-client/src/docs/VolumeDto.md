@@ -9,6 +9,8 @@ Name | Type | Description | Notes
 **name** | **string** | Volume name | [default to undefined]
 **organizationId** | **string** | Organization ID | [default to undefined]
 **state** | [**VolumeState**](VolumeState.md) | Volume state | [default to undefined]
+**storageBackend** | **string** | The storage backend that owns the volume | [default to undefined]
+**instance** | **string** | Filestore instance name; filestore volumes only | [optional] [default to undefined]
 **createdAt** | **string** | Creation timestamp | [default to undefined]
 **updatedAt** | **string** | Last update timestamp | [default to undefined]
 **lastUsedAt** | **string** | Last used timestamp | [optional] [default to undefined]
@@ -24,6 +26,8 @@ const instance: VolumeDto = {
     name,
     organizationId,
     state,
+    storageBackend,
+    instance,
     createdAt,
     updatedAt,
     lastUsedAt,
