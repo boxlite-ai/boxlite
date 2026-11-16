@@ -30,7 +30,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
-import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { deleteBoxViaBoxApi, formatLifecycleSeconds, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
@@ -47,15 +46,12 @@ import {
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { createBulkActionToast } from '@/lib/bulk-action-toast'
 import { handleApiError } from '@/lib/error-handling'
-import { getLocalStorageItem } from '@/lib/local-storage'
 import {
   mergeOnboardingProgress,
   ONBOARDING_PROGRESS_EVENT,
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
-import { shouldAutoOpenOnboarding } from '@/lib/onboarding-visibility'
-import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { pluralize } from '@/lib/utils'
 import {
@@ -69,7 +65,7 @@ import {
 import { QueryKey, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { generatePath, useNavigate, useSearchParams } from 'react-router-dom'
+import { generatePath, useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { getBoxDisplayName } from '@/lib/box-identity'
 import { toast } from 'sonner'
@@ -85,7 +81,6 @@ const Boxes: React.FC = () => {
   const { user } = useAuth()
   const userId = user?.profile.sub
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
   const { notificationSocket } = useNotificationSocket()
   const config = useConfig()
   const queryClient = useQueryClient()
@@ -675,43 +670,6 @@ const Boxes: React.FC = () => {
     enabled: !!orgId,
     staleTime: 10_000,
   })
-
-  // Onboarding auto-open. Deliberately placed below the fleet-count query: the local "skip"
-  // flag only remembers one browser, so whether this account is actually new is decided by
-  // account state (an API key or any box), which follows the user to a new browser or device.
-  const apiKeysQuery = useApiKeysQuery(orgId)
-
-  useEffect(() => {
-    if (!selectedOrganization || !userId) {
-      return
-    }
-
-    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${userId}`
-
-    const requestedByUrl = searchParams.get('onboarding') === '1'
-    if (
-      shouldAutoOpenOnboarding({
-        requestedByUrl,
-        canCompleteWelcome: authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER,
-        dismissedInThisBrowser: getLocalStorageItem(skipOnboardingKey) === 'true',
-        accountStateLoaded: apiKeysQuery.isSuccess && totalBoxesQuery.isSuccess,
-        hasApiKeys: (apiKeysQuery.data?.length ?? 0) > 0,
-        hasBoxes: (totalBoxesQuery.data ?? 0) > 0,
-      })
-    ) {
-      navigate(requestedByUrl ? RoutePath.QUICKSTART : RoutePath.WELCOME, { replace: true })
-    }
-  }, [
-    navigate,
-    apiKeysQuery.data,
-    apiKeysQuery.isSuccess,
-    authenticatedUserOrganizationMember?.role,
-    searchParams,
-    selectedOrganization,
-    totalBoxesQuery.data,
-    totalBoxesQuery.isSuccess,
-    userId,
-  ])
 
   const totalBoxesDisplay = totalBoxesQuery.data != null ? totalBoxesQuery.data.toLocaleString('en-US') : '…'
   const runningBoxesDisplay = runningBoxesQuery.data != null ? runningBoxesQuery.data.toLocaleString('en-US') : '…'

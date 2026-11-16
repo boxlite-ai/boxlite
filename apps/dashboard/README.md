@@ -40,6 +40,23 @@ or offer a retry with the same identity. The explicit action uses `/logout` to e
 the identity-provider session and return to the existing manual sign-in screen.
 Other authorization failures keep their existing error handling.
 
+## Registration and setup entry
+
+See the [interaction walkthrough and screenshots](docs/onboarding-entry/README.md).
+
+Verification and organization preparation share the Welcome header, neutral surfaces,
+and visible status text. The explicit **Create account** action submits the challenge;
+Turnstile uses the application theme and a flexible width. Account confirmation and
+read failures retain the setup context, with retry and an alternate-account exit.
+
+The Dashboard/Boxes entry resolves owner eligibility and account resource signals
+before mounting the Console shell. New owners with no keys or Boxes enter Welcome;
+existing accounts enter Boxes. Explicit resource deep links retain their destination.
+Decision read failures remain in setup with retry. Admitted views are preserved during
+background refresh; decisions are scoped to identity and organization. Local dismissal
+still uses the existing policy. Cross-browser completion remains a separate server
+contract and is not inferred from a saved use case.
+
 ## Managed checkpoints
 
 **Boxes → Checkpoints** lists reusable disk archives captured from eligible stopped Boxes.

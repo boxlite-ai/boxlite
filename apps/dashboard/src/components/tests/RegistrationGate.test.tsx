@@ -125,12 +125,12 @@ describe('RegistrationGate', () => {
       await render()
       if (phase !== 'initial') {
         await click('Complete challenge')
-        await click('Continue')
+        await click('Create account')
       }
       await act(async () => {
         await vi.advanceTimersByTimeAsync(9_999)
       })
-      expect(document.body.textContent).toContain('Checking account')
+      expect(document.body.textContent).toContain(phase === 'initial' ? 'Checking account' : 'Confirming your account')
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1)
       })
@@ -142,7 +142,7 @@ describe('RegistrationGate', () => {
       expect(api.register).toHaveBeenCalledTimes(phase === 'initial' ? 0 : 1)
       api.userApi.getAuthenticatedUser.mockRejectedValue(required())
       await click('Try again')
-      expect(button('Continue').disabled).toBe(true)
+      expect(button('Create account').disabled).toBe(true)
     },
   )
 
@@ -185,7 +185,7 @@ describe('RegistrationGate', () => {
     })
     await flush()
     expect(businessUnmount).toHaveBeenCalledTimes(1)
-    expect(button('Continue').disabled).toBe(true)
+    expect(button('Create account').disabled).toBe(true)
   })
 
   it('requires fresh admission when the authenticated identity changes, even with cached user data', async () => {
@@ -196,7 +196,7 @@ describe('RegistrationGate', () => {
     await render()
     expect(businessUnmount).toHaveBeenCalledTimes(1)
     expect(businessMount).toHaveBeenCalledTimes(1)
-    expect(button('Continue').disabled).toBe(true)
+    expect(button('Create account').disabled).toBe(true)
   })
 
   it('revokes admission when a background account check rejects the email', async () => {
@@ -235,7 +235,7 @@ describe('RegistrationGate', () => {
     await render()
     expect(api.userApi.getAuthenticatedUser).toHaveBeenCalledTimes(1)
     expect(businessMount).not.toHaveBeenCalled()
-    expect(button('Continue').disabled).toBe(true)
+    expect(button('Create account').disabled).toBe(true)
   })
 
   it('blocks business providers until the initial account check completes', async () => {
@@ -264,11 +264,11 @@ describe('RegistrationGate', () => {
     )
     await render()
     expect(businessMount).not.toHaveBeenCalled()
-    expect(button('Continue').disabled).toBe(true)
+    expect(button('Create account').disabled).toBe(true)
     await click('Complete challenge')
     await act(async () => {
-      button('Continue').click()
-      button('Continue').click()
+      button('Create account').click()
+      button('Create account').click()
     })
     expect(api.register).toHaveBeenCalledTimes(1)
     expect(api.register).toHaveBeenCalledWith('token-1')
@@ -293,13 +293,13 @@ describe('RegistrationGate', () => {
       await render()
       await click('Complete challenge')
       if (created) api.userApi.getAuthenticatedUser.mockResolvedValue(userResponse)
-      await click('Continue')
+      await click('Create account')
       expect(api.register).toHaveBeenCalledTimes(1)
       expect(api.userApi.getAuthenticatedUser).toHaveBeenCalledTimes(2)
       if (created) expect(businessMount).toHaveBeenCalledTimes(1)
       else {
         expect(document.body.textContent).toContain('Registration could not be confirmed')
-        expect(button('Continue').disabled).toBe(true)
+        expect(button('Create account').disabled).toBe(true)
         expect(widgetMount).toHaveBeenCalledTimes(2)
         expect(businessMount).not.toHaveBeenCalled()
       }
@@ -312,9 +312,9 @@ describe('RegistrationGate', () => {
       api.register.mockRejectedValue(new RegistrationError('Try again later', code))
       await render()
       await click('Complete challenge')
-      await click('Continue')
+      await click('Create account')
       expect(document.body.textContent).toContain('Try again later')
-      expect(button('Continue').disabled).toBe(true)
+      expect(button('Create account').disabled).toBe(true)
       expect(widgetMount).toHaveBeenCalledTimes(2)
       expect(businessMount).not.toHaveBeenCalled()
     },
@@ -324,7 +324,7 @@ describe('RegistrationGate', () => {
     api.userApi.getAuthenticatedUser.mockRejectedValueOnce(new Error('Unavailable'))
     await render()
     expect(widgetMount).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('Registration is temporarily unavailable')
+    expect(document.body.textContent).toContain('We couldn’t confirm your account')
     await click('Try again')
     expect(widgetMount).toHaveBeenCalledTimes(1)
   })
@@ -334,7 +334,7 @@ describe('RegistrationGate', () => {
     api.register.mockRejectedValue(new RegistrationEmailError('Email required', 'email_required'))
     await render()
     await click('Complete challenge')
-    await click('Continue')
+    await click('Create account')
     expect(document.body.textContent).toContain('Sign out and use another email')
     expect(businessMount).not.toHaveBeenCalled()
     consoleError.mockRestore()
