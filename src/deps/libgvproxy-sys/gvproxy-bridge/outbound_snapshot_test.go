@@ -113,7 +113,9 @@ func TestOutboundSnapshot_ModeTransitionGatesBeforeNICCompletion(t *testing.T) {
 }
 
 func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) {
+	var handled atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handled.Store(true)
 		_, _ = io.WriteString(w, "captured snapshot")
 	}))
 	t.Cleanup(server.Close)
@@ -122,6 +124,7 @@ func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) 
 	release := func() { once.Do(func() { close(resume) }) }
 	t.Cleanup(release)
 	var oldCalls, newCalls atomic.Int32
+	oldTargets := make(chan egressTarget, 1)
 	cfg := testGvproxyConfig()
 	cfg.AllowNet = []string{"api.example.com"}
 	tap := startNetworkWithSeams(t, cfg, networkSeams{
@@ -135,8 +138,9 @@ func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) 
 			}
 		},
 		dial: refuseDial,
-		connect: func(ctx context.Context, _ egressTarget) (net.Conn, error) {
+		connect: func(ctx context.Context, target egressTarget) (net.Conn, error) {
 			oldCalls.Add(1)
+			oldTargets <- target
 			return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
 		},
 	})
@@ -146,7 +150,7 @@ func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	request := "GET / HTTP/1.1\r\nHost: api.example.com\r\nConnection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, request); err != nil {
 		t.Fatal(err)
@@ -160,6 +164,9 @@ func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) 
 	// Configure the new snapshot's network seams without changing its compiled
 	// policy. An old flow must retain the prior resolver and connector.
 	current := *tap.policy.active.Load()
+	if current.revision == cfg.OutboundRevision {
+		t.Fatal("replacement reused the captured revision")
+	}
 	nextDialer := *current.dialer
 	nextDialer.resolve = refuseResolve
 	nextDialer.connect = func(context.Context, egressTarget) (net.Conn, error) {
@@ -169,9 +176,10 @@ func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) 
 	current.dialer = &nextDialer
 	tap.policy.publish(&current, "confirmed")
 	release()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("captured flow: %v old=%d new=%d upstream_received=%t", err, oldCalls.Load(), newCalls.Load(), handled.Load())
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
@@ -190,6 +198,9 @@ func TestOutboundSnapshot_DelayedResolutionKeepsCapturedTransport(t *testing.T) 
 	}
 	if oldCalls.Load() != 1 || newCalls.Load() != 0 {
 		t.Fatalf("transport ownership: old=%d new=%d", oldCalls.Load(), newCalls.Load())
+	}
+	if target := <-oldTargets; target.PolicyRevision != cfg.OutboundRevision {
+		t.Fatalf("delayed flow changed policy identity: got %q, want %q", target.PolicyRevision, cfg.OutboundRevision)
 	}
 }
 

@@ -120,7 +120,7 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	if err != nil {
 		t.Fatalf("virtualnetwork.New: %v", err)
 	}
-	policy, err := newOutboundPolicyController(vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet})
+	policy, err := newOutboundPolicyController(vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet}, cfg.OutboundRevision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,10 +135,25 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 
 	guestSide, stackSide := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = vn.AcceptQemu(ctx, wrapConn(stackSide, 4, cfg.RateLimit)) }()
+	accepted := make(chan struct{})
+	go func() {
+		defer close(accepted)
+		_ = vn.AcceptQemu(ctx, wrapConn(stackSide, 4, cfg.RateLimit))
+	}()
+	nic := policy.nic
 	t.Cleanup(func() {
+		// Stop packet delivery before disconnecting the switch's peer. Closing
+		// endpoints may emit resets, so their routes must already be disabled.
+		_ = policy.stack.DisableNIC(nic)
+		policy.stack.Close()
 		cancel()
 		_ = guestSide.Close()
+		select {
+		case <-accepted:
+		case <-time.After(5 * time.Second):
+			t.Error("guest link did not stop during cleanup")
+		}
+		policy.stack.Wait()
 	})
 
 	tap := &guestTap{conn: guestSide, frames: make(chan []byte, 64), policy: policy}

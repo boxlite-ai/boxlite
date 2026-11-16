@@ -13,8 +13,8 @@
     {"id": "unsupported-deny", "policy": {"mode": "enabled", "allow_net": [], "deny_net": ["192.0.2.0/24"]}, "valid": false}
   ],
   "connection_cases": [
-    {"id": "direct-nat", "hostname": "", "policy_ip": "192.168.127.254", "connection_ip": "127.0.0.1", "port": 8080, "protocol": "tcp", "transport": "direct"},
-    {"id": "approved-hostname-candidate", "hostname": "api.example.com", "policy_ip": "192.0.2.99", "connection_ip": "198.51.100.8", "port": 443, "protocol": "tcp", "transport": "direct"}
+    {"id": "direct-nat", "hostname": "", "policy_ip": "192.168.127.254", "connection_ip": "127.0.0.1", "port": 8080, "protocol": "tcp", "transport": "direct", "policy_revision": "initial"},
+    {"id": "approved-hostname-candidate", "hostname": "api.example.com", "policy_ip": "192.0.2.99", "connection_ip": "198.51.100.8", "port": 443, "protocol": "tcp", "transport": "direct", "policy_revision": "initial"}
   ],
   "mode_transition_cases": [
     {"id": "disable-before-nic-suspension", "snapshot_mode": "disabled", "nic_state": "enabled", "transition": "pending", "new_tcp": "blocked", "new_udp": "blocked", "new_dns_tcp": "blocked", "new_dns_udp": "blocked", "ack": false},

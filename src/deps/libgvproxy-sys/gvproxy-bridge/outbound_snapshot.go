@@ -10,22 +10,23 @@ import (
 // Published snapshots are immutable. A flow keeps its filter and dialer even
 // when a replacement publishes another snapshot or changes application state.
 type outboundSnapshot struct {
-	policy outboundPolicy
-	filter *AllowNetFilter
-	dialer *egressDialer
-	state  string
+	policy   outboundPolicy
+	revision string
+	filter   *AllowNetFilter
+	dialer   *egressDialer
+	state    string
 }
 
 type snapshotSource func() *outboundSnapshot
 
-func (p *outboundPolicyController) compile(policy outboundPolicy) (*outboundSnapshot, error) {
+func (p *outboundPolicyController) compile(policy outboundPolicy, revision string) (*outboundSnapshot, error) {
 	policy.AllowNet = append([]string{}, policy.AllowNet...)
 	filter := NewAllowNetFilter(policy.AllowNet, p.config.GatewayIP, p.guestIP)
 	dialer, err := newEgressDialer(filter, p.config.Subnet)
 	if err != nil {
 		return nil, err
 	}
-	return &outboundSnapshot{policy: policy, filter: filter, dialer: dialer}, nil
+	return &outboundSnapshot{policy: policy, revision: revision, filter: filter, dialer: dialer}, nil
 }
 
 func (p *outboundPolicyController) publish(snapshot *outboundSnapshot, state string) {

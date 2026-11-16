@@ -53,7 +53,7 @@ Configure resolver and transport seams before installing the forwarder.
 
 Initial unrestricted TCP also installs this boundary; unrestricted UDP delegates to the upstream forwarder.
 Address setup and controlled hostname resolution each use a bounded setup context, including candidate retries and MITM redials.
-The typed connector does not implement proxy registration or a proxy protocol, and this step does not implement revisioned snapshot publication.
+The connector carries the captured policy revision; revisioned publication uses the control resources below.
 
 The guest-stack transport tests consume the shared NAT and hostname examples, relay HTTP/TLS bytes to test-owned listeners, and verify refused targets never enter the connector.
 The MITM test uses an isolated test CA in a subprocess so production certificate verification remains active; a wrong upstream certificate must receive no HTTP request.
@@ -127,11 +127,48 @@ Enabled traffic continues through the existing filter-table chains, including th
 Disabling publishes a rejecting snapshot before NIC suspension; enabling retains that gate until the NIC has enabled successfully.
 NIC errors retain the disabled gate and mark application uncertain.
 Policy GET returns 503 while application is pending or uncertain, and successful GET/PUT retain the existing policy JSON shape.
-The separate revision/status protocol is an implementation target for the following control-plane step.
+The separate status resource reports the observed snapshot identity and application state without changing the policy body.
 
 The registered-DNS regression fixture binds native gVisor UDP/TCP endpoints on port 5353 and forwards received DNS messages to a test-owned host listener.
 It exercises endpoint demultiplexing without replacing the global mode gate, and includes a new query on an established TCP DNS connection.
 Controlled NIC pauses separately verify the interval before suspension and the interval after enabling but before policy publication.
+
+### Bridge revision protocol
+
+| Control resource | Contract |
+| --- | --- |
+| `GET /network/outbound` | Existing policy JSON plus a strong ETag; 503 while application is pending or uncertain. |
+| `PUT /network/outbound` | Existing complete policy replacement, optional HTTP `If-Match`; the bridge chooses a fresh revision. |
+| `PUT /network/outbound/snapshot` | Version-required internal replacement; one strong expected revision in `If-Match` and a fresh candidate in `X-Boxlite-Outbound-Revision`. |
+| `GET /network/outbound/status` | Policy, observed `revision`, `application_state`, and capabilities including `revision-v1`; no persistence or Internet-connectivity claim. |
+
+Version-aware clients use the dedicated snapshot resource and never fall back to legacy PUT.
+An old handler may ignore extra headers on its existing resource; a new resource makes unsupported peers reject the operation before application, including after a capability-probe/backend-restart race.
+Coordinator headers on the legacy resource are rejected rather than silently ignored.
+
+For a snapshot initialized as `initial`, this request returns policy JSON with `ETag: "rev-b"` only after NIC suspension succeeds:
+
+```http
+PUT /network/outbound/snapshot
+If-Match: "initial"
+X-Boxlite-Outbound-Revision: rev-b
+Content-Type: application/json
+
+{"mode":"disabled"}
+```
+
+A stale expected revision returns 412 without application.
+Candidate metadata requires a single strong expected token; missing, empty, ambiguous, oversized, reserved, or current candidate identities are rejected.
+Trusted coordinators allocate fresh candidate IDs once and propagate them unchanged; the bridge does not keep a historical ID registry.
+Legacy conditional requests use HTTP strong comparison, including tag lists and wildcard matching.
+
+Startup wire metadata may supply `outbound_revision` to restore an existing identity.
+Without a seed, the bridge generates a fresh 128-bit token for that startup, avoiding an initial-token reset across unseeded restarts.
+Internal identities use 1–128 ASCII letters, digits, hyphens, or underscores; clients treat them as opaque values.
+The public Rust `GvproxyConfig` shape remains unchanged; restoring Runtime-owned revisions belongs to its private bootstrap metadata path.
+
+A matching status revision is not an acknowledgement while `application_state` is `pending` or `uncertain`.
+This capability describes the gvproxy control boundary; Runtime persistence and Cloud/Runner propagation require their own completed implementation and verification.
 
 Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
 Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.

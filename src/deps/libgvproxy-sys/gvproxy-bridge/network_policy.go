@@ -38,7 +38,7 @@ type outboundPolicyController struct {
 	nicOps  nicOperations
 }
 
-func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy) (*outboundPolicyController, error) {
+func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
 	s, err := stackOf(vn)
 	if err != nil {
 		return nil, err
@@ -51,7 +51,16 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	for id := range nics {
 		p.nic = id
 	}
-	snapshot, err := p.compile(initial)
+	if initialRevision == "" {
+		initialRevision, err = newOutboundRevision()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !validOutboundRevision(initialRevision) {
+		return nil, fmt.Errorf("invalid initial outbound revision")
+	}
+	snapshot, err := p.compile(initial, initialRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +77,8 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	return p, nil
 }
 
-func (p *outboundPolicyController) apply(policy outboundPolicy) error {
-	candidate, err := p.compile(policy)
+func (p *outboundPolicyController) apply(policy outboundPolicy, revision string) error {
+	candidate, err := p.compile(policy, revision)
 	if err != nil {
 		return err
 	}
@@ -96,6 +105,27 @@ func (p *outboundPolicyController) apply(policy outboundPolicy) error {
 }
 
 func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == outboundStatusPath {
+		p.serveStatus(w, r)
+		return
+	}
+	if r.URL.Path == outboundSnapshotPath {
+		if r.Method != http.MethodPut {
+			w.Header().Set("Allow", "PUT")
+			http.Error(w, "PUT required", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(r.Header.Values(outboundRevisionHeader)) == 0 {
+			http.Error(w, "snapshot replacement requires a candidate revision", http.StatusBadRequest)
+			return
+		}
+	} else if r.URL.Path != "/network/outbound" {
+		http.NotFound(w, r)
+		return
+	} else if len(r.Header.Values(outboundRevisionHeader)) != 0 {
+		http.Error(w, "coordinator metadata requires the snapshot resource", http.StatusBadRequest)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 	case http.MethodPut:
@@ -116,7 +146,12 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := p.apply(policy); err != nil {
+		revision, status, err := revisionForOutboundUpdate(r, p.active.Load().revision)
+		if err != nil {
+			http.Error(w, err.Error(), status)
+			return
+		}
+		if err := p.apply(policy, revision); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -131,6 +166,7 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", outboundETag(snapshot.revision))
 	_ = json.NewEncoder(w).Encode(snapshot.policy)
 }
 

@@ -36,11 +36,12 @@ type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 // address. A transport receives a literal IPv4 address and must not resolve
 // Hostname again; PolicyIP retains the guest's address before NAT or DNS.
 type egressTarget struct {
-	Hostname     string
-	PolicyIP     netip.Addr
-	ConnectionIP netip.Addr
-	Port         uint16
-	Protocol     string
+	Hostname       string
+	PolicyIP       netip.Addr
+	ConnectionIP   netip.Addr
+	Port           uint16
+	Protocol       string
+	PolicyRevision string
 }
 
 func (t egressTarget) address() string {

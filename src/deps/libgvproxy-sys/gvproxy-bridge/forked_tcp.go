@@ -167,10 +167,11 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		destIP, dialAddress := resolveTCPDestination(localAddress, nat, natLock)
 		destPort := r.ID().LocalPort
 		target := egressTarget{
-			PolicyIP:     netip.AddrFrom4(localAddress.As4()),
-			ConnectionIP: netip.AddrFrom4(dialAddress.As4()),
-			Port:         destPort,
-			Protocol:     "tcp",
+			PolicyIP:       netip.AddrFrom4(localAddress.As4()),
+			ConnectionIP:   netip.AddrFrom4(dialAddress.As4()),
+			Port:           destPort,
+			Protocol:       "tcp",
+			PolicyRevision: current.revision,
 		}
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
