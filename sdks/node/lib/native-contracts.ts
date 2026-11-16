@@ -627,7 +627,7 @@ export interface JsSshHandle {
   enable(): Promise<JsSshStatus>;
   /** Observe SSH state without starting the VM or its main command. */
   status(): Promise<JsSshStatus>;
-  /** Stop SSH idempotently without starting the VM or its main command. */
+  /** Stop SSH idempotently on a running box; never starts the VM or its main command. */
   disable(): Promise<JsSshStatus>;
 }
 

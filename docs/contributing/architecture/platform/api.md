@@ -250,6 +250,12 @@ organization boundaries.
 <details>
 <summary><b>Roles and regions</b> · 10 routes</summary>
 
+All four organization-role routes require OWNER membership, subject to the existing
+system administrator exemption. Custom-role mutations require the role ID to belong
+to the authorized organization; foreign or unknown roles return 404. Global roles
+are listed but reject mutations with 403. See [role authorization and tests](../../../../apps/api/README.md#organization-role-authorization)
+for metadata precedence and membership-cache timing.
+
 | Method   | Path                                                 | What it does                                 |
 | -------- | ---------------------------------------------------- | -------------------------------------------- |
 | `GET`    | `/organizations/{organizationId}/roles`          | Lists organization roles.                    |

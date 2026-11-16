@@ -30,6 +30,9 @@ vi.mock('@/components/Sidebar', async () => {
     },
   }
 })
+vi.mock('@/components/OnboardingEntryGate', () => ({
+  OnboardingEntryGate: ({ children }: { children: ReactNode }) => children,
+}))
 let root: Root | undefined
 beforeAll(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true

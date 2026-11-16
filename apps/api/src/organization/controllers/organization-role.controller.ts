@@ -120,7 +120,7 @@ export class OrganizationRoleController {
     @Param('roleId') roleId: string,
     @Body() updateOrganizationRoleDto: UpdateOrganizationRoleDto,
   ): Promise<OrganizationRoleDto> {
-    const updatedRole = await this.organizationRoleService.update(roleId, updateOrganizationRoleDto)
+    const updatedRole = await this.organizationRoleService.update(organizationId, roleId, updateOrganizationRoleDto)
     return OrganizationRoleDto.fromOrganizationRole(updatedRole)
   }
 
@@ -149,6 +149,6 @@ export class OrganizationRoleController {
     targetIdFromRequest: (req) => req.params.roleId,
   })
   async delete(@Param('organizationId') organizationId: string, @Param('roleId') roleId: string): Promise<void> {
-    return this.organizationRoleService.delete(roleId)
+    return this.organizationRoleService.delete(organizationId, roleId)
   }
 }

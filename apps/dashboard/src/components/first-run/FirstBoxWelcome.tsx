@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { Button } from '@/components/ui/button'
 import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { AsciiButton } from '@/components/ascii'
@@ -37,11 +38,14 @@ export default function FirstBoxWelcome() {
   })
   if (profile.isError)
     return (
-      <p role="alert" className="p-8">
-        Could not load your setup. <button onClick={() => void profile.refetch()}>Try again</button>
-      </p>
+      <div className="mx-auto max-w-[620px] px-6 py-12">
+        <p role="alert" className="mb-5 text-body text-destructive">
+          Could not load your setup. Try again to continue.
+        </p>
+        <Button onClick={() => void profile.refetch()}>Try again</Button>
+      </div>
     )
-  if (!selectedOrganization || profile.isPending) return <p className="p-8">Loading your workspace…</p>
+  if (!selectedOrganization || profile.isPending) return <p className="p-8">Loading your organization…</p>
   let organizationSaved = false
   let completedAt: number | null = null
   try {
@@ -118,7 +122,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               action.mutate({ type: 'organization', name }, { onSuccess: () => setStep('intent') })
             }}
           >
-            <h1 className="font-display text-page font-semibold">Create your organization</h1>
+            <h1 className="font-display text-page font-semibold">Name your organization</h1>
             <p className="mt-3 text-body leading-6 text-muted-foreground">
               A home for your Boxes, team, and billing. Working solo? Use your own name.
             </p>

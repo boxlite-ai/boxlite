@@ -17,7 +17,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain, wait_until_unlisted
+from conftest import drain, wait_for_box_state, wait_until_unlisted
 
 
 # ── stop / start preserves data ────────────────────────────────────
@@ -26,7 +26,7 @@ from conftest import drain, wait_until_unlisted
 @pytest.mark.asyncio
 async def test_stop_start_preserves_rootfs(rt, image):
     """Data written to the rootfs must survive a stop→start cycle."""
-    b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False))
+    b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False, auto_resume=False))
     try:
         # Write a file
         ex = await b.exec("sh", ["-c", "echo persist-me > /workspace/marker.txt"])
@@ -36,13 +36,11 @@ async def test_stop_start_preserves_rootfs(rt, image):
 
         # Stop
         await b.stop()
-        # Give it a moment to fully stop
-        await asyncio.sleep(1)
+        await wait_for_box_state(rt, b.id, "stopped")
 
         # Start
         await b.start()
-        # Wait for it to be ready
-        await asyncio.sleep(2)
+        await wait_for_box_state(rt, b.id, "running")
 
         # Read back
         ex = await b.exec("cat", ["/workspace/marker.txt"])

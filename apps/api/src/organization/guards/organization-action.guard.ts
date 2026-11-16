@@ -57,7 +57,10 @@ export class OrganizationActionGuard extends OrganizationAccessGuard {
       return false
     }
 
-    const requiredRole = this.reflector.get(RequiredOrganizationMemberRole, context.getHandler())
+    const requiredRole = this.reflector.getAllAndOverride(RequiredOrganizationMemberRole, [
+      context.getHandler(),
+      context.getClass(),
+    ])
     if (!requiredRole) {
       return true
     }

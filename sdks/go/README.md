@@ -418,10 +418,13 @@ runtime's lifetime.
 - **Lifecycle:** `Configure` replaces the whole configuration, restarts the
   listener, and may start the box. With `WithCmd` or `WithEntrypoint`, call
   `box.Start` first or `Configure` returns `ErrInvalidState`. `Status`, `Enable` and
-  `Disable` never start the box. `Enable` requires a running box and saved
-  configuration, works locally and over REST, and preserves healthy connections. On an idle local box, `Status` reports disabled
-  with generation zero, and `Disable` returns `ErrInvalidState`. On a running
-  box, `Disable` is safe to repeat and keeps the generation.
+  `Disable` never start the box. `Enable` requires saved configuration, works
+  locally and over REST, and preserves healthy connections. `Enable` and `Disable`
+  require a running box; a valid handle to a configured or stopped box returns
+  `ErrInvalidState` (HTTP 409 over REST) without changing saved SSH intent. On such
+  a local handle, `Status` reports disabled with generation zero. On a running box,
+  `Disable` is safe to repeat and keeps the generation. Call `Disable` while
+  running to persist the disabled switch.
 - **Keys:** the guest validates keys and stores them on the container disk. A
   rejected configuration returns `ErrInvalidArgument` without echoing key
   material. `%v`, `%+v`, `%s`, and `%#v` redact keys and CA values; JSON

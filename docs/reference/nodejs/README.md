@@ -422,6 +422,11 @@ connections from ordinary host applications.
 | Observe | `await box.ssh.status()` | Return `SshStatus` |
 | Disable | `await box.ssh.disable()` | Disable SSH and return `SshStatus` |
 
+`enable()` and `disable()` require a running box. On a valid handle to a configured
+or stopped box, both reject with an `Error` describing the invalid state (HTTP 409
+over REST), without changing saved SSH intent. Disable is safe to repeat while
+running; call it while running to persist the disabled switch.
+
 ```typescript
 interface SshConfig {
   listenAddress: string;      // e.g. "0.0.0.0:2222"

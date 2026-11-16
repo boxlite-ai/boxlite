@@ -15,6 +15,7 @@ from pathlib import Path
 
 import boxlite
 import pytest
+from boxlite.errors import InvalidStateError
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
@@ -128,7 +129,8 @@ async def test_ssh_through_cli_forwarding(rt, image, cli, keys, processes):
         await rt.remove(box.id, force=True)
 
 
-async def test_ssh_status_on_a_stopped_box_reports_disabled(rt, image):
+async def test_ssh_status_reports_disabled_and_disable_rejects_stopped_box(rt, image):
+    """Stopped SSH reports disabled; disable rejects without resuming the box."""
     box = await rt.create(boxlite.BoxOptions(image=image))
     try:
         await box.start()
@@ -143,8 +145,11 @@ async def test_ssh_status_on_a_stopped_box_reports_disabled(rt, image):
         status = await box.ssh.status()
         assert (status.enabled, status.generation, status.listen_address) == (False, 0, "")
         assert (status.host_public_key, status.host_key_fingerprint) == ("", "")
-        disabled = await box.ssh.disable()
-        assert disabled.generation == 0
+        with pytest.raises(InvalidStateError):
+            await box.ssh.disable()
         assert (await rt.get_info(box.id)).state.status == "stopped"
+        status = await box.ssh.status()
+        assert (status.enabled, status.generation, status.listen_address) == (False, 0, "")
+        assert (status.host_public_key, status.host_key_fingerprint) == ("", "")
     finally:
         await rt.remove(box.id, force=True)
