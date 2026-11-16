@@ -1636,20 +1636,18 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
-// Safety contract for all four mount functions: handle must be live and
-// cannot be freed concurrently with the call. The box handle is cloned
-// synchronously; handle may be freed after return. Input strings are borrowed
-// NUL-terminated UTF-8 and copied before return; out_error must be writable
-// when non-NULL. On successful submission keep the runtime, callback and
-// user_data valid until completion is dispatched by boxlite_runtime_drain.
-// Callback error pointers are borrowed only during dispatch. Successful
-// list/get JSON strings transfer ownership; release with boxlite_free_string.
-// Immediate submission errors do not schedule a completion callback.
-//
 // Submit a runtime directory delivery into the running container.
 //
 // `source` is a host directory, `box_path` the container target, and
 // `read_only` non-zero for a read-only delivery.
+//
+// # Safety
+// `handle` must remain live and must not be freed concurrently until this
+// call returns: the entrypoint synchronously clones its owned box handle.
+// Strings must be readable NUL-terminated UTF-8 through this call; they are
+// copied before return. `out_error`, when non-null, must be writable.
+// After successful submission, keep the runtime, callback and `user_data`
+// valid until completion is dispatched by `boxlite_runtime_drain`.
 enum BoxliteErrorCode boxlite_box_mount_add(struct BoxHandle *handle,
                                             const char *source,
                                             const char *box_path,
@@ -1662,6 +1660,10 @@ enum BoxliteErrorCode boxlite_box_mount_add(struct BoxHandle *handle,
 //
 // Idempotent: removing an unknown target completes successfully; a mount
 // already converging reports success once the record reaches `detaching`.
+//
+// # Safety
+// The handle, strings, error output, runtime and callback obey the same
+// lifetime requirements as [`boxlite_box_mount_add`].
 enum BoxliteErrorCode boxlite_box_mount_remove(struct BoxHandle *handle,
                                                const char *box_path,
                                                CBoxMountCb cb,
@@ -1672,6 +1674,11 @@ enum BoxliteErrorCode boxlite_box_mount_remove(struct BoxHandle *handle,
 //
 // On success, the callback owns the returned string and must release it
 // with `boxlite_free_string`.
+//
+// # Safety
+// The handle, error output, runtime and callback obey the same lifetime
+// requirements as [`boxlite_box_mount_add`]. Callback errors are borrowed
+// only for the callback duration; successful JSON strings are caller-owned.
 enum BoxliteErrorCode boxlite_box_mount_list(struct BoxHandle *handle,
                                              CBoxMountJsonCb cb,
                                              void *user_data,
@@ -1682,6 +1689,11 @@ enum BoxliteErrorCode boxlite_box_mount_list(struct BoxHandle *handle,
 //
 // On success, the callback owns the returned string and must release it
 // with `boxlite_free_string`.
+//
+// # Safety
+// The handle, strings, error output, runtime and callback obey the same
+// lifetime requirements as [`boxlite_box_mount_add`]. Callback errors are
+// borrowed only for the callback duration; successful JSON is caller-owned.
 enum BoxliteErrorCode boxlite_box_mount_get(struct BoxHandle *handle,
                                             const char *box_path,
                                             CBoxMountJsonCb cb,
