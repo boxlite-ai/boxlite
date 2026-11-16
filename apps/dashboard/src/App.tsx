@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { OrganizationGate } from './components/OrganizationExperience'
 import { NotificationSocketProvider } from '@/providers/NotificationSocketProvider'
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
@@ -14,16 +15,8 @@ import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import LoadingFallback from './components/LoadingFallback'
+import { SetupPending } from './components/SetupLayout'
 import { RegistrationGate } from './components/RegistrationGate'
-import { Button } from './components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from './components/ui/dialog'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
@@ -96,7 +89,7 @@ function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
-  const { error: authError, isAuthenticated, user, removeUser } = useAuth()
+  const { error: authError, isAuthenticated, user } = useAuth()
   const boxesRedirect = `${RoutePath.BOXES}${location.search}`
 
   useEffect(() => {
@@ -128,28 +121,7 @@ function App() {
     }
   }, [location, posthog])
 
-  if (authError) {
-    return (
-      <Dialog open>
-        <DialogContent className="[&>button]:hidden">
-          <DialogHeader>
-            <DialogTitle>Authentication Error</DialogTitle>
-            <DialogDescription>{authError.message}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              onClick={async () => {
-                await removeUser()
-                window.location.assign(RoutePath.LANDING)
-              }}
-            >
-              Go Back
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    )
-  }
+  if (authError && location.pathname !== RoutePath.LOGOUT) return <LandingPage />
 
   return (
     <Routes>
@@ -175,19 +147,21 @@ function App() {
       <Route
         path={RoutePath.DASHBOARD}
         element={
-          <Suspense fallback={<LoadingFallback />}>
+          <Suspense fallback={<SetupPending />}>
             <ApiProvider>
               <RegistrationGate key={user?.profile.sub}>
                 <OrganizationsProvider>
-                  <SelectedOrganizationProvider>
-                    <RegionsProvider>
-                      <NotificationSocketProvider>
-                        <BannerProvider>
-                          <Dashboard />
-                        </BannerProvider>
-                      </NotificationSocketProvider>
-                    </RegionsProvider>
-                  </SelectedOrganizationProvider>
+                  <OrganizationGate>
+                    <SelectedOrganizationProvider>
+                      <RegionsProvider>
+                        <NotificationSocketProvider>
+                          <BannerProvider>
+                            <Dashboard />
+                          </BannerProvider>
+                        </NotificationSocketProvider>
+                      </RegionsProvider>
+                    </SelectedOrganizationProvider>
+                  </OrganizationGate>
                 </OrganizationsProvider>
               </RegistrationGate>
             </ApiProvider>

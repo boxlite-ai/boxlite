@@ -10,6 +10,11 @@ import { useApi } from '@/hooks/useApi'
 import { useOrganizationBoxLimitsQuery } from '@/hooks/queries/useOrganizationBoxLimitsQuery'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { handleApiError } from '@/lib/error-handling'
+import {
+  readOrganizationSession,
+  saveOrganizationSession,
+  ORGANIZATION_SESSION_EVENT,
+} from '@/lib/organization-session'
 import { resolveSelectedOrganizationId } from '@/lib/organization-selection'
 import {
   Organization,
@@ -18,7 +23,7 @@ import {
   OrganizationUserRoleEnum,
 } from '@boxlite-ai/api-client'
 import { usePostHog } from 'posthog-js/react'
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
@@ -33,28 +38,18 @@ export function SelectedOrganizationProvider(props: Props) {
 
   const { organizations } = useOrganizations()
 
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(() => {
-    const storedId = localStorage.getItem(LocalStorageKey.SelectedOrganizationId)
-    const resolvedOrganizationId = resolveSelectedOrganizationId(organizations, storedId)
-    if (resolvedOrganizationId) {
-      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, resolvedOrganizationId)
-      return resolvedOrganizationId
-    }
-
-    localStorage.removeItem(LocalStorageKey.SelectedOrganizationId)
-    return null
-  })
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(() =>
+    resolveSelectedOrganizationId(organizations, readOrganizationSession(user?.profile.sub)),
+  )
 
   useEffect(() => {
     if (!organizations.length) {
       setSelectedOrganizationId(null)
-      localStorage.removeItem(LocalStorageKey.SelectedOrganizationId)
       return
     }
 
     const resolvedOrganizationId = resolveSelectedOrganizationId(organizations, selectedOrganizationId)
     if (resolvedOrganizationId && resolvedOrganizationId !== selectedOrganizationId) {
-      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, resolvedOrganizationId)
       setSelectedOrganizationId(resolvedOrganizationId)
     }
   }, [organizations, selectedOrganizationId])
@@ -99,30 +94,45 @@ export function SelectedOrganizationProvider(props: Props) {
   // empty list) until members arrive.
   const [organizationMembers, setOrganizationMembers] = useState<OrganizationUser[]>([])
 
-  useEffect(() => {
-    let cancelled = false
-    getOrganizationMembers(selectedOrganizationId)
-      .then((members) => {
-        if (!cancelled) {
-          setOrganizationMembers(members)
-        }
-      })
-      // getOrganizationMembers already surfaces a toast via handleApiError; a
-      // members failure must not crash the dashboard (was: error boundary).
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [getOrganizationMembers, selectedOrganizationId])
+  const [membersLoad, setMembersLoad] = useState<{
+    organizationId: string | null
+    status: 'loading' | 'ready' | 'error'
+  }>({ organizationId: null, status: 'loading' })
+  const membersRequest = useRef(0)
+  const currentOrganizationId = useRef(selectedOrganizationId)
+  currentOrganizationId.current = selectedOrganizationId
+  const organizationMembersStatus =
+    membersLoad.organizationId === selectedOrganizationId ? membersLoad.status : 'loading'
 
   const refreshOrganizationMembers = useCallback(
     async (organizationId?: string) => {
-      const organizationMembers = await getOrganizationMembers(organizationId || selectedOrganizationId)
-      setOrganizationMembers(organizationMembers)
-      return organizationMembers
+      const target = organizationId || selectedOrganizationId
+      // Requests for another organization must not invalidate the active context.
+      const request = target === currentOrganizationId.current ? ++membersRequest.current : null
+      const isCurrent = () => request === membersRequest.current && currentOrganizationId.current === target
+      if (isCurrent()) setMembersLoad({ organizationId: target, status: 'loading' })
+      try {
+        const members = await getOrganizationMembers(target)
+        if (isCurrent()) {
+          setOrganizationMembers(members)
+          setMembersLoad({ organizationId: target, status: 'ready' })
+        }
+        return members
+      } catch (error) {
+        if (isCurrent()) setMembersLoad({ organizationId: target, status: 'error' })
+        throw error
+      }
     },
     [getOrganizationMembers, selectedOrganizationId],
   )
+
+  useEffect(() => {
+    // The API helper reports the error; readiness exposes a retry without crashing the page.
+    void refreshOrganizationMembers().catch(() => undefined)
+    return () => {
+      membersRequest.current += 1
+    }
+  }, [refreshOrganizationMembers])
 
   const authenticatedUserOrganizationMember = useMemo(() => {
     return organizationMembers.find((member) => member.userId === user?.profile.sub) || null
@@ -150,11 +160,18 @@ export function SelectedOrganizationProvider(props: Props) {
 
   const handleSelectOrganization = useCallback(
     async (organizationId: string): Promise<boolean> => {
-      const organizationMembers = await refreshOrganizationMembers(organizationId)
+      const organizationMembers = await getOrganizationMembers(organizationId)
 
       // confirm switch if user is a member of the new organization
       if (organizationMembers.some((member) => member.userId === user?.profile.sub)) {
-        localStorage.setItem(LocalStorageKey.SelectedOrganizationId, organizationId)
+        saveOrganizationSession(user!.profile.sub, organizationId)
+        try {
+          localStorage.setItem(LocalStorageKey.SelectedOrganizationId, organizationId)
+        } catch {
+          /* The session record is authoritative; this is only a compatibility hint. */
+        }
+        setOrganizationMembers(organizationMembers)
+        window.dispatchEvent(new Event(ORGANIZATION_SESSION_EVENT))
         setSelectedOrganizationId(organizationId)
         return true
       } else {
@@ -164,13 +181,14 @@ export function SelectedOrganizationProvider(props: Props) {
         return false
       }
     },
-    [refreshOrganizationMembers, user],
+    [getOrganizationMembers, user],
   )
 
   const contextValue: ISelectedOrganizationContext = useMemo(() => {
     return {
       selectedOrganization,
       organizationMembers,
+      organizationMembersStatus,
       refreshOrganizationMembers,
       authenticatedUserOrganizationMember,
       authenticatedUserHasPermission,
@@ -179,6 +197,7 @@ export function SelectedOrganizationProvider(props: Props) {
   }, [
     selectedOrganization,
     organizationMembers,
+    organizationMembersStatus,
     authenticatedUserOrganizationMember,
     authenticatedUserHasPermission,
     handleSelectOrganization,

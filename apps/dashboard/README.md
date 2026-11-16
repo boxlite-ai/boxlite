@@ -36,9 +36,26 @@ or email rejection still blocks access and shows the relevant recovery screen.
 When the API rejects account creation with `disposable_email`, `email_required`,
 or `invalid_email`, the console explains the email problem and offers
 **Sign out and use another email**. These responses do not restart authentication
-or offer a retry with the same identity. The explicit action uses `/logout` to end
-the identity-provider session and return to the existing manual sign-in screen.
+or offer a retry with the same identity. The explicit action uses the account-switch flow to clear the Console identity
+and ask the identity provider to select an account.
 Other authorization failures keep their existing error handling.
+
+## Registration and setup entry
+
+See the [interaction walkthrough and screenshots](docs/onboarding-entry/README.md).
+
+Verification and organization preparation share the Welcome header, neutral surfaces,
+and visible status text. The explicit **Create account** action submits the challenge;
+Turnstile uses the application theme and a flexible width. Account confirmation and
+read failures retain the setup context, with retry and an alternate-account exit.
+
+The Dashboard/Boxes entry resolves owner eligibility and account resource signals
+before mounting the Console shell. New owners with no keys or Boxes enter Welcome;
+existing accounts enter Boxes. Explicit resource deep links retain their destination.
+Decision read failures remain in setup with retry. Admitted views are preserved during
+background refresh; decisions are scoped to identity and organization. Local dismissal
+still uses the existing policy. Cross-browser completion remains a separate server
+contract and is not inferred from a saved use case.
 
 ## Managed checkpoints
 
@@ -62,134 +79,72 @@ See [Checkpoint controls and recovery](#checkpoint-controls-and-recovery) for re
 
 ## SSH access
 
-The **Network** section shows SSH state and its switch. The switch only
-enables or disables saved configuration; it does not generate keys or change
-inbound. Status refreshes on click, window focus, and every 30 seconds while
-visible and idle. Reads skip pending operations and preserve mutation errors.
-Unknown/loading states cannot be toggled. The header and Network section share one
-controller and component-scoped private keys.
+**Connect via SSH**, beside start/stop, opens a static local-terminal guide.
+Opening, closing and copying commands make no SSH or network changes. The guide
+uses the shared compact dialog, square code surfaces and monospace typography;
+its header stays fixed while the body scrolls. The overview remains mounted throughout.
+Copy actions sit beside step headings rather than in repeated code headers. The
+desktop dialog is 760px wide with compact spacing; shorter windows scroll only
+the body, keeping the title and close control visible.
 
-**Connect via SSH**, beside start/stop, first opens an access confirmation.
-Opening or cancelling it changes nothing. The confirmation explains that SSH
-and inbound access will be enabled, and that missing configuration requires a
-new private key. It also discloses that setup replaces SSH accounts and host
-identity and disconnects existing clients.
+### Connection steps
 
-After confirmation, the controller reads fresh SSH status, enables inbound if
-needed through the existing network mutation, and enables saved SSH configuration
-when disabled. Only the verified missing-configuration server response permits
-initial setup. Other failures remain in the entry view with refresh/retry; they
-never trigger key generation. Existing enabled SSH is reused without a setup POST.
-The missing-config response is a point-in-time observation, not atomic
-create-if-absent: concurrent configuration can be replaced by the existing setup API.
-Partial success is retained; SSH failure does not undo an inbound change.
+1. Install or update the CLI with the displayed installer.
+2. Run `boxlite auth login`, select the API-key method and enter a key for the
+   selected organization interactively, not in a copied command.
+3. Start the Box and enable **Inbound access** in its existing Network section.
+   Run `boxlite ssh <box-id>` to enter a shell directly.
+   No second SSH command is needed. Connecting requires Box-write permission and
+   local `ssh` and `ssh-keygen`.
 
-Setup still generates independent Ed25519 host/client keys in the browser and
-configures login `box` at guest address `0.0.0.0:22`. The client private key stays
-in memory and its downloaded file; only its public key is sent. The host private
-key is part of the guest configuration. Browser Ed25519 support and a secure
-context are required. The browser retains the generated host public key beside the
-client key so a fresh server response can identify the host. This does not prove
-that the client key remains authorized. An externally observed generation change
-with the same host displays a reminder to check authorization. This public metadata
-is not added to the SSH POST body.
+This guide targets the direct-login CLI contract. An older CLI that only prints a
+connection command must be updated. The CLI manages Ed25519 keys under
+`<BOXLITE_HOME>/ssh/remote/<scope>/<box-id>/`, scoped by CLI home, context, endpoint
+and organization. Healthy matching configurations are reused without replacement;
+disabled saved SSH is enabled. A different host identity fails rather than being
+silently overwritten. The first managed configuration can replace previous SSH
+accounts and host identity and disconnect existing clients. Previously downloaded
+browser keys are not imported.
 
-Failed setup retains generated credentials. Continuing always rechecks status and
-tries Enable when needed; only a new, verified missing-config response permits
-resubmitting the same generated configuration. A matching host identity recovers a
-configuration saved before a failed response, without another setup POST. An observed
-different enabled identity discards the obsolete cached private key and path; temporary
-disabled/empty identity status preserves them. Replacing existing configuration is
-available only through the separate Reset confirmation, including from a failed
-preparation's entry view. Reset preserves the existing key until inbound is ready
-and the replacement configuration is about to be submitted.
+OpenSSH is launched with a CLI-managed known-hosts file and strict host-key
+checking. Users do not copy a printed SSH command or manually accept a fingerprint.
 
-Successful preparation opens the connection guide: CLI setup, private-key path,
-and a copyable command once the path is valid. It contains no Enable controls.
-CLI instructions start expanded every time the dialog is opened, regardless of SSH
-status or previously stored preferences. **Hide commands** collapses them only for
-the current opening; **Show commands** expands them again. Both are text actions,
-and downloading a private key uses an outlined button. Background status refreshes
-preserve the visibility choice. The browser does not detect local CLI installation or auth.
-Download a new private key before leaving, then enter its actual path. A download
-click does not establish that saving succeeded or reveal the destination.
+The Dashboard no longer generates/downloads private keys, asks for a key-file path,
+stores SSH path preferences, or offers a configuration-reset flow. The guide is
+readable regardless of live SSH status; it does not claim to detect CLI installation,
+login, successful setup or a completed connection.
 
-The browser tab remembers only a validated key path and its host public key in
-sessionStorage, scoped to endpoint, authenticated user, organization and box.
-The saved path is bound to the observed host public key and cleared on a confirmed
-identity change; disabled status with an empty identity does not clear it. Private
-keys are never put in storage. Storage failures leave the connection guide usable.
-Leaving or reloading the page discards generated keys; closing/reopening the dialog
-keeps them in component memory. Resetting SSH is a separate explicit confirmation.
-Cancelling a reset preserves the current key and path.
-If Reset submission fails, the current key and the proposed replacement remain
-separately downloadable. The replacement has a distinct filename and is reused
-on an explicitly confirmed retry. A status exposing its host identity adopts it
-and clears the previous path; seeing the old host does not discard an unresolved
-replacement. Neither private key is stored beyond the mounted page. External
-generation changes observed while disabled still warn about possible client-key
-authorization changes after Enable.
+Commands are deliberately short: the CLI default endpoint is the hosted API,
+`https://api.boxlite.ai`, and successful login caches the organization's routing
+prefix. Bare login writes the selected CLI context; the guide does not isolate
+existing CLI state or override exported `BOXLITE_*` variables. Its muted docs line
+points users with self-hosted endpoints, other organizations or an existing CLI
+setup to the [SSH guide](https://docs.boxlite.ai/cloud/ssh). The browser does not
+detect these cases. Box IDs are validated before inclusion in commands.
 
-Login and the SSH proxy explicitly select a dedicated context named
-`dashboard:<normalized API endpoint>`, for example `dashboard:https://api.boxlite.ai`.
-The first connection requires running the displayed login command to create that
-context. Login supplies the Dashboard endpoint; the proxy supplies the organization
-with `--path-prefix` and uses `ssh --proxy -- BOX`, matching
-[the cloud CLI syntax](https://github.com/boxlite-ai/boxlite/pull/2327).
-Both commands remove `BOXLITE_REST_URL` and `BOXLITE_API_KEY` from their child
-environment, so an unrelated exported API key cannot override the credential saved
-by the displayed login command. This leaves the parent shell unchanged. Their explicit
-`--context` takes precedence over `BOXLITE_CONTEXT`, legacy `BOXLITE_PROFILE`, and
-the saved current context. Login updates only the dedicated profile; it does not
-change the current context or overwrite other profiles. Switching contexts in
-another terminal therefore cannot redirect this command. Deliberately logging in
-to a different endpoint under the same dedicated context name can still redirect
-it; rerun the displayed login command to restore that context.
+Dashboard does not duplicate the CLI's identity-file paths, known-hosts handling
+or system OpenSSH invocation. Default login does not edit `~/.ssh/config`.
 
-To troubleshoot the generated context, run
-`env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context 'dashboard:<endpoint>' context show`
-and `env -u BOXLITE_REST_URL -u BOXLITE_API_KEY boxlite --context 'dashboard:<endpoint>' context ls`,
-substituting the exact name from the generated command. Check that its endpoint
-matches the Dashboard. For manually written CLI commands, `BOXLITE_CONTEXT`,
-`BOXLITE_PROFILE`, `BOXLITE_REST_URL`, and the saved current context still affect
-selection; `env -u BOXLITE_REST_URL boxlite context show` shows the effective
-context without the URL override. `boxlite context use NAME` changes the saved
-current context for manual commands; explicit flags and environment context
-selectors take precedence over that saved choice. For manually written commands,
-`BOXLITE_API_KEY` still overrides stored bearer credentials. If login succeeds but
-a manual command returns HTTP 401, check for that override; the generated SSH
-commands explicitly remove it.
+### Saved access and status
 
-Empty/invalid paths hide the command. `~/`, spaces, quotes,
-backslashes and literal percent signs are supported; control characters and
-`${...}` expansion in user input are rejected. `~/` resolves against the terminal's
-`HOME` for both chmod and SSH, including when it differs from the account home or
-contains literal percent signs. Relative paths resolve in the terminal's working
-directory. A relative filename equal to `none`, case-insensitively, is prefixed with
-`./` so OpenSSH loads it as a key file. API credentials are loaded by the CLI, never
-embedded in commands. Copy feedback belongs to the displayed command; a late copy
-completion for an older path cannot mark the new command copied.
-Compare the host fingerprint before accepting it. The cloud proxy requires server
-tunnel support and inbound access; exiting SSH leaves the tunnel declaration open.
-Setup itself opens no tunnel.
+The Network section's SSH switch still only enables/disables saved configuration;
+it never generates credentials or changes inbound. Missing configuration directs
+users to CLI setup. Only running Boxes with `WRITE_BOXES` can be toggled; unknown
+status cannot be toggled. Read-only members can inspect status and static guidance.
 
-Connection preparation and command presentation require a running box and
-WRITE_BOXES permission, because the SSH proxy creates a network tunnel. Read-only
-members can inspect SSH status, but cannot enter the connection guide even when
-SSH and inbound are already enabled. If access changes after preparation,
-the guide hides the command and returns users to **Review access**. Mutations are
-not automatically retried. Pending operations block overlapping actions and closing;
-detail refreshes during mutations wait for the mutation to finish. Stale reads and
-responses after stop, permission, account, endpoint or scope changes are ignored.
-The title/close control stays fixed while the dialog body scrolls. Command lines
-wrap without changing copied content. The overview remains mounted throughout.
+Status refreshes on demand, focus and every 30 seconds while visible and idle.
+Reads defer during mutations; stale responses after lifecycle, permission, account,
+endpoint or organization changes are ignored. Mutations are not retried automatically.
+The guide contains no preparation or network action buttons.
 
-Tests cover consent, conditional creation, request ordering, permissions, partial
-success, same-key retry, stale responses, storage isolation and reset cancellation.
-The local MSW preview echoes the generated host public key and fingerprint, retains
-saved configuration across Disable/Enable, and hides disabled listener identity like
-the real service. It exercises the real Dashboard but does not start an SSH server
-or prove a live cloud SSH handshake.
+Direct cloud login opens a public tunnel protected by SSH authentication and
+requires server tunnel support and inbound access. Exiting SSH closes local
+forwarding but leaves the public tunnel declaration open; revoke it with
+`boxlite network tunnel BOX PORT --revoke` using the same context and organization.
+
+The MSW preview exercises the actual guide and sidebar state, not a local CLI,
+SSH server or live cloud handshake. Focused checks:
+`make test:apps:dashboard FILTER=SSH`.
 
 ## Box overview and terminal
 
@@ -542,18 +497,47 @@ their message through the shared interceptor. Panel tests cover the masked
 secret and its cleanup on close, prefix completion, the `?connect=` link,
 duplicates, updates with fixed scope, write permissions, and refusals named by box.
 
-## Console API keys include member access
+## Console API key permissions and expiration
 
-The key dialog creates a key with the user's available permissions. An owner's
-new key includes `read:members` and `write:members`, displayed in the Members
-permission group. A non-owner's key can include assigned member read access,
-but never member write. Existing keys receive no additional permissions.
+**New API key** defaults to **Operate boxes** (`write:boxes`) and **30 days**.
+The Access selector offers Operate boxes, Manage box lifecycle (adds Box deletion),
+and Use boxes with volumes (adds Volume read and write). A preset requires every
+scope in its bundle; unavailable presets explain the missing capabilities.
+Adjust permissions opens resource groups for independent choices within the
+signed-in member's available scopes. Manual changes mark the choice Custom access;
+technical scope identifiers live in expandable details. Deleting Boxes and member management require explicit selection. Without
+Box-write permission the form starts with no selection; empty or revoked selections
+cannot be submitted. Permission loading and failures block creation and failures
+provide refresh. Permissions apply across the selected organization, not a single Box.
+Box reading is implicit and cannot be disabled in this form. Managing image aliases
+includes alias deletion; using an image does not automatically require catalog access.
 
-Create restricted keys through the API or SDK by supplying an explicit
-`permissions` array; see [API key delegation and member scopes](../../docs/contributing/architecture/platform/api.md).
-The scopes are independent, and an API key can only create keys with the same
-or fewer permissions. Invitation acceptance in the console continues to use
-the signed-in user's JWT.
+Users can explicitly select **No expiration**, 90 days or one year. Existing keys
+and Quickstart defaults are unchanged. A successful creation displays the returned
+permissions and expiration with a one-time secret. Copy is explicit and does not
+close the result. Closing the dialog or switching organization discards the secret
+and ignores late responses. Unavailable selected permissions remain visible until
+removed; permission changes invalidate in-flight results. Background membership refreshes
+preserve the open draft and completed secret when the granted scopes remain unchanged.
+Overlapping membership requests apply only the latest response or failure. Known request failures
+retain the draft; uncertain network/server outcomes require checking the list
+before creating another key.
+
+The list uses the same permission labels and preserves unknown API scopes. Expired
+keys are marked **Expired**; permanent keys show **No expiration**. The backend
+continues to validate grants and expiration; frontend options are not authorization.
+The API/SDK can also supply an explicit permissions array. A non-owner can select
+assigned member-read permission, but the Console does not offer member-write.
+
+The mock preview uses synthetic, organization-scoped keys held only in memory.
+Create, list, duplicate-name refusal and revoke are supported; reload resets them.
+Mock results do not verify live authorization or expiration enforcement.
+
+Visual review: [before](../../docs/contributing/investigations/assets/api-key-access/before.png),
+[default form](../../docs/contributing/investigations/assets/api-key-access/after.png), and
+[access presets](../../docs/contributing/investigations/assets/api-key-access/presets.png).
+These captures use synthetic mock data. Open API Keys → New API key, enter a name,
+choose Access, and expand Adjust permissions only when a preset does not fit.
 
 ## Every invitee joins as an owner
 
@@ -564,7 +548,7 @@ can be removed but not given another role. The member whose personal
 organization this is has no remove action, because the API refuses that
 removal.
 
-The profile menu's Organization entry opens two tabs. General shows the editable
+The Management navigation's Organization entry opens two tabs. General shows the editable
 name and copyable ID. Member combines members and outgoing invitations in one
 table, with Member, Invited, and Expired statuses. Owners can invite, remove members,
 and cancel invitations. Expired invitations offer Remove (with confirmation) and
@@ -572,7 +556,7 @@ Resend. Resending creates a new invitation with the same permissions and the cur
 default lifetime, then removes the expired record. Creation failure preserves the
 old row; cleanup failure reports that the new invitation exists and refreshes both
 rows, so the owner can remove the expired one. The old link remains unusable.
-The page shows the current organization's name; switching stays in the profile menu.
+The page shows the current organization's name; use the header switcher to change organizations.
 The Member tab can be bookmarked at
 `/dashboard/settings?tab=member`; older `/dashboard/members` links redirect there.
 
@@ -591,15 +575,15 @@ an invitation ID redirects to the current organization's Member tab without acce
 
 The new selection is saved only after membership validation succeeds. If switching
 fails, acceptance still succeeds. The page explains that joining succeeded and
-asks the user to switch through the profile menu. The console keeps the previous
+asks the user to switch through the header organization switcher. The console keeps the previous
 organization both on screen and for the next reload.
 
-## The organization you pick is the one you come back to
+## Organization selection persists for the session
 
-A user in more than one organization switches between them from the profile
-menu, which marks the personal one. The pick is kept in `localStorage`, so the
-next login opens the same organization; if the user was removed from it in the
-meantime, the console falls back to their personal organization.
+Users switch organizations from the header switcher. The selection is kept in
+`sessionStorage` for the authenticated user. Reload and token renewal restore it,
+and explicit logout clears it. A new login does not treat the legacy `localStorage`
+ID as a confirmed selection. See [Organization context](#organization-context).
 
 ## New-user onboarding
 
@@ -718,10 +702,13 @@ Resource headers leave 24px before the next section. Desktop filters share a 380
 
 Billing pagers retain Previous on a failed later page with unknown totals. Cached Images refresh failures identify the retained rows as previously loaded data. Unknown invoice statuses preserve the upstream text. Create Box pricing and validation scroll inside the body while header and action footer remain visible.
 
-The signed-out landing state uses a centered, borderless column, a semantic heading,
-and one primary Sign in action. Its presentation shares dashboard theme tokens;
-ordinary unauthenticated visits still redirect to the hosted identity provider,
-while an explicit logout retains the existing manual sign-in guard.
+The signed-out landing state shares the registration entry header and top-aligned,
+left-aligned content layout, a semantic heading,
+and a primary Sign in action with a secondary Use another account recovery action.
+The compact authentication variant has a 360px inner content width.
+An explicit logout remains manual across reloads and Back until authentication succeeds.
+Ordinary unauthenticated visits and expired-session recovery start hosted sign-in once;
+cancellation or failure leaves the same retryable entry screen.
 
 ## Expandable left navigation
 
@@ -742,14 +729,14 @@ route remains highlighted when the whole sidebar collapses.
 
 The desktop sidebar spans the viewport height (minus any announcement). Its logo
 shows the full wordmark when expanded and the icon when compact. The right column
-contains a 48px header and route content; API Keys is separated from the account
-by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+contains a 64px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the header prioritizes organization context and the mobile menu.
 Welcome keeps its simplified header.
 
 Management is a primary disclosure after Applications, with Billing and Organization
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
-Organization switching, theme and logout remain in the account menu.
+Organization switching is in the header; theme and logout are in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
@@ -1222,3 +1209,118 @@ validation and actionable errors, lifecycle labels, and keyboard access to check
 and runner failure reasons. CI tests also cover repository disclosure without changing
 the selected account, missing runner metadata, and explicit retries that retain cached
 connections and runners. These tests use the existing frontend API contracts.
+
+## Organization context
+
+After authentication, users with multiple organizations select an organization before
+organization business providers mount. One organization enters directly; zero
+organizations offers refresh and another-account recovery. Invitation and email
+verification URLs complete their existing scoped flow before this gate applies.
+
+The 64px Console header displays the active organization. Multiple memberships
+open a compact switcher showing names and complete IDs; search appears above five
+memberships. The profile menu contains account actions, not another organization list. On mobile,
+API Keys remains available in the navigation menu while its header shortcut is hidden.
+
+Selection is stored in tab-local sessionStorage with the authenticated user ID.
+Reload and token renewal restore a valid confirmation; explicit logout clears it.
+The legacy localStorage ID is a compatibility hint, not a login confirmation.
+A missing or removed selection returns multiple-membership users to the chooser.
+The server remains responsible for authorizing every organization API request.
+
+Switching validates membership without changing the current permission context,
+saves the session, then performs a full document navigation. This discards in-memory
+query state and connections. Resource lists retain their section without query/hash;
+Box and Image details return to their lists. Settings and billing switches land on
+Boxes, avoiding a destination that may require permissions the new member lacks.
+Non-list pages ask before discarding edits or terminal connections. Running Boxes
+continue running. This conservative route warning is not general form-dirty tracking;
+list-page modal editors already block access to the header.
+
+A failed membership request or session write leaves the current context intact and
+shows a retryable error. Failed invitation entry can be retried through the header.
+Email verification waits for organization selection and does not replay the token
+when React effects rerun. GitHub CI authorization callbacks save the authenticated
+user’s organization session before returning to Connects, including attempts started
+before the session selection rollout. Storage failure keeps a retry action on the callback.
+
+### Local organization review
+
+From `apps/`, run:
+
+```sh
+VITE_MOCK_MULTIPLE_ORGANIZATIONS=true node scripts/start-dashboard.mjs --target=mock --host 127.0.0.1 --port 3187
+```
+
+The existing MSW worker supplies three synthetic memberships. Without the flag,
+mock mode has one organization. Mock resource fixtures are shared: these previews
+verify navigation and UI, not backend resource isolation. Review with real accounts
+having distinct memberships and resources before production rollout.
+
+
+## Signing out and switching accounts
+
+The profile menu separates **Switch account** from **Sign out**. Switching warns
+that unsaved edits and Console terminal connections will close; running Boxes
+continue running. It clears the local identity, organization selection and query
+cache before requesting standard OIDC `prompt=login`. Onboarding and
+no-organization recovery use this same account-switch entry. Authentication returns
+through the existing registration and organization gates: one membership enters
+directly; multiple memberships restore a validated per-user preference or require selection.
+
+Sign out clears the Console session first, then requests RP-initiated logout with
+the captured ID-token hint. If local storage cannot be cleared, the page offers
+retry without claiming success. If provider logout fails after local clear, it
+reports that BoxLite is signed out and offers account choice. Browser Back never
+replays an account-switch URL. No global Google/GitHub logout is requested.
+
+Authentication-error recovery preserves the full local destination, including query
+parameters and fragments, even without saved intent. For example, an invitation
+link retains its invitation ID after retrying sign-in. The destination still passes
+through the same local-route validation.
+
+Interactive intent is stored per tab until a successful callback. Read operations
+do not consume it, and unsuccessful redirects retain a usable Sign in
+button. Sign in uses ordinary provider authentication. Use another account requests `prompt=login`; account switching is optional rather than a mandatory step. Cancelling returns quietly to manual entry. Only local Console return destinations are accepted; the GitHub recovery route
+retains its path without callback credentials. OIDC callback parameters and logout
+routes are not used as return destinations. Explicit account exits also discard
+pending GitHub connection metadata; ordinary reauthentication preserves it. Silent renewal
+and ordinary reload preserve the current organization. Authentication document
+navigation resets connections and in-memory state before another identity enters.
+
+The hosted identity provider owns the login page. `prompt=login` requests
+reauthentication. This opens the provider login instead of a Console-owned account
+chooser. Verify changing the identifier and social/enterprise connections against
+the deployed provider; forcing reauthentication does not prove every upstream
+connection supports account switching.
+
+For local review, the mock dashboard signs in with its default fixture and does not
+render an account chooser or simulate an identity provider's login page. It cannot
+validate entering arbitrary credentials or switching real provider accounts.
+
+To test another identity, explicitly open `/dashboard?authDebug=1` and expand
+**Developer fixtures**. The fixture buttons are development tools, not saved login
+accounts; they reload the document using the selected test identity. Normal mock
+sign-in returns to the default fixture. Resources remain shared fixtures and do not
+test server-side data isolation. The panel is absent without the explicit flag;
+normal previews show only the Preview marker. Authentication failure and cancellation
+are covered by the auth flow tests rather than a simulated provider page.
+
+Organization entry remembers the last explicitly selected organization per user in local storage as a preference, separately from the active tab session. After login, a remembered organization is restored only if it is in the current organization list and membership is confirmed. Failure falls back to selection. Logout clears the active session, while the preference remains; it never grants access. First-time multi-organization users still choose, and single-organization users enter directly.
+
+In mock mode explicit account switching reports that real authentication is required and does not sign in a default identity. Use the dev target for hosted-login verification.
+
+### Existing Box lifecycle policy
+
+Overview includes a read-only Lifecycle group within Configuration. Values come
+from the current Box response, with no creation defaults: zero intervals and
+`false` are Disabled, while missing fields are Not available. Durations preserve
+seconds using mixed day/hour/minute/second units. Auto-delete shows the idle
+threshold measured from last activity and explicitly requires the Box to be
+stopped; it is not a delay measured from the stop time. Auto-resume reports only
+the stored configuration, without promising which access channels wake a Box.
+
+A failed detail refresh retains the last known values with a retry message;
+initial failures continue to offer Retry. The mock preview's `web-api` demonstrates
+15-minute auto-stop and a 75-minute auto-delete threshold; `batch-worker` has all
+three options disabled, and other existing fixtures exercise missing fields.

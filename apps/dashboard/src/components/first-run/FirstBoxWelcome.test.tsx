@@ -101,7 +101,7 @@ async function input(id: string, value: string) {
 }
 it('saves the name and selected intent before offering optional credits', async () => {
   await mount()
-  expect(host.textContent).toContain('Create your organization')
+  expect(host.textContent).toContain('Name your organization')
   await input('welcome-organization', 'New team')
   expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true)
   await act(async () => host.querySelector<HTMLInputElement>('#welcome-terms')!.click())
@@ -144,7 +144,7 @@ it('shows profile loading failures and reloads them without losing the page', as
   expect(host.textContent).toContain('Could not load your setup')
   api.profile.mockResolvedValue(null)
   await click('Try again')
-  expect(host.textContent).toContain('Create your organization')
+  expect(host.textContent).toContain('Name your organization')
 })
 
 it('restores the confirmed organization step after reloading before intent submission', async () => {

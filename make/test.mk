@@ -11,6 +11,7 @@ PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
+PHONY_TARGETS += test\:integration\:lifecycle-race
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -475,6 +476,22 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 			$(CARGOTEST_FILTER); \
 	fi
 
+# Explicit opt-in: these ignored tests must execute, not merely match FILTER.
+test\:integration\:lifecycle-race: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_REPRO_ROOTFS" -a -d "$$BOXLITE_REPRO_ROOTFS" || { \
+		echo "Set BOXLITE_REPRO_ROOTFS to a local OCI image directory" >&2; exit 1; }
+	@test -z "$$BOXLITE_DEPS_STUB" || { echo "Real VM tests cannot use dependency stubs" >&2; exit 1; }
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --features krun,gvproxy,native --lib --test start_stop_race \
+			-E 'binary(start_stop_race) | test(implicit_job_rechecks_after_admission)' \
+			--run-ignored only --no-tests=fail --no-fail-fast --profile vm; \
+	else \
+		cargo test -p boxlite --features krun,gvproxy,native --test start_stop_race \
+			-- --ignored --test-threads=1 --nocapture && \
+		cargo test -p boxlite --features krun,gvproxy,native --lib \
+			-- --ignored --test-threads=1 --nocapture implicit_job_rechecks_after_admission; \
+	fi
+
 # OpenCode agent adapter and `boxlite agent` CLI tests (requires VM). Ignored by the suites above:
 # each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
 test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
@@ -893,7 +910,7 @@ test\:unit\:plugins: plugin-boxlite-force
 PHONY_TARGETS += test\:integration\:vmm\:m2 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m2\:list
 PHONY_TARGETS += test\:integration\:vmm\:m3 test\:integration\:vmm\:m3\:run test\:integration\:vmm\:m3\:list
 M2_TEST_SUITES := lifecycle shutdown detach recovery exec_options exec_user run_main_command resize_tty zygote_integration copy snapshot clone_export_import network gvproxy_backend network_spec copy_ownership execution_shutdown
-M3_TEST_SUITES := copy_ownership mount_security secret_substitution security_enforcement network_spec volume_matrix
+M3_TEST_SUITES := copy_ownership mount_security secret_substitution security_enforcement network_spec volume_matrix container_cgroup_limits
 ENGINE ?= native
 test\:integration\:vmm\:m2: MATRIX = m2
 test\:integration\:vmm\:m3: MATRIX = m3

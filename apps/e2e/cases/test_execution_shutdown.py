@@ -2,7 +2,7 @@
 
 Verifies the behaviour of exec and box state during/after box.stop():
 pending exec.wait() should resolve, new exec attempts on a stopped
-box should be cleanly rejected (not 5xx).
+box with auto-resume disabled should be cleanly rejected (HTTP 409).
 """
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from conftest import wait_for_box_state
+from e2e_auth import auth_context, request_json
 
 
 @pytest.mark.asyncio
@@ -39,20 +40,24 @@ async def test_wait_resolves_after_box_stop(rt, image):
 
 @pytest.mark.asyncio
 async def test_exec_on_stopped_box_is_typed_error(rt, image):
-    """Trying to exec on a stopped box must return a typed client
-    error (not 5xx). Catches API/runner mapping regressions."""
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False))
+    """Disabled auto-resume refuses stopped exec through both SDK and HTTP."""
+    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False, auto_resume=False))
     try:
+        ctx = auth_context()
+        status, body = request_json("GET", ctx.v1(f"boxes/{box.id}"))
+        assert status == 200 and body["auto_resume"] is False
         await box.stop()
-        # Now try to exec — should fail with a clean client error
-        with pytest.raises(Exception) as exc_info:
-            ex = await box.exec("sh", ["-c", "echo nope"], None)
-            await drain(ex)
-            await ex.wait()
-        msg = str(exc_info.value)
-        assert "500" not in msg and "Internal" not in msg, (
-            f"exec on stopped box returned 5xx: {msg!r}"
+        await wait_for_box_state(rt, box.id, "stopped")
+
+        with pytest.raises((boxlite.InvalidStateError, boxlite.StoppedError)):
+            await box.exec("echo", ["must-not-run"])
+
+        status, body = request_json(
+            "POST", ctx.v1(f"boxes/{box.id}/exec"),
+            {"command": "echo", "args": ["must-not-run"]},
         )
+        assert status == 409, f"stopped exec returned HTTP {status}: {body}"
+        assert (await rt.get_info(box.id)).state.status == "stopped"
     finally:
         try:
             await rt.remove(box.id, force=True)

@@ -1,30 +1,37 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { useEffect, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { clearCiConnectSession, getCiConnectSession, completeCiRedirect } from '@/lib/ci-connect'
-import { LocalStorageKey } from '@/enums/LocalStorageKey'
+import { useAuth } from 'react-oidc-context'
+import { saveOrganizationSession } from '@/lib/organization-session'
 import { AsciiButton } from '@/components/ascii'
 import { CiOrganizationRecovery } from '@/components/CiAccountPicker'
 import { toast } from 'sonner'
 
 export default function CiConnectCallback() {
   const api = useApi()
+  const { user } = useAuth()
+  const userId = user?.profile.sub
   const [view, setView] = useState<Awaited<ReturnType<typeof completeCiRedirect>>>()
   const [failed, setFailed] = useState(false)
   const [storageFailed, setStorageFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   const [pending] = useState(getCiConnectSession)
-  const selectOrganization = (organization: string) => {
-    try {
-      window.localStorage.setItem(LocalStorageKey.SelectedOrganizationId, organization)
-      setStorageFailed(false)
-      return true
-    } catch {
-      setStorageFailed(true)
-      return false
-    }
-  }
+  const selectOrganization = useCallback(
+    (organization: string) => {
+      try {
+        if (!userId) throw new Error('Authentication required')
+        saveOrganizationSession(userId, organization)
+        setStorageFailed(false)
+        return true
+      } catch {
+        setStorageFailed(true)
+        return false
+      }
+    },
+    [userId],
+  )
   const leave = (event: MouseEvent<HTMLAnchorElement>) => {
     if (
       event.defaultPrevented ||
@@ -58,7 +65,7 @@ export default function CiConnectCallback() {
     return () => {
       active = false
     }
-  }, [api, retry])
+  }, [api, retry, selectOrganization])
   const result = view?.result
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-[560px] flex-col justify-center px-6 py-12 font-sans">

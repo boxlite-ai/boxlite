@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { apiKeyHandlers } from './api-key-handlers'
 import { onboardingHandlers } from './onboarding-handlers'
 import { domainHandlers } from './domain-handlers'
 import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handlers'
@@ -111,10 +112,27 @@ export const handlers = [
       createdAt: new Date(0).toISOString(),
     }),
   ),
-  http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations`, () =>
+    HttpResponse.json(
+      import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true'
+        ? [
+            { ...MOCK_ORGANIZATION, name: 'Personal organization' },
+            { ...MOCK_ORGANIZATION, id: 'demo-acme', name: 'Acme AI', isDefaultForAuthenticatedUser: false },
+            {
+              ...MOCK_ORGANIZATION,
+              id: 'demo-research',
+              name: 'Research Collective',
+              isDefaultForAuthenticatedUser: false,
+            },
+          ]
+        : [MOCK_ORGANIZATION],
+    ),
+  ),
   http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
-    params.organizationId === MOCK_ORGANIZATION.id
-      ? HttpResponse.json(MOCK_ORGANIZATION)
+    params.organizationId === MOCK_ORGANIZATION.id ||
+    (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
+      ['demo-acme', 'demo-research'].includes(String(params.organizationId)))
+      ? HttpResponse.json({ ...MOCK_ORGANIZATION, id: params.organizationId })
       : new HttpResponse(null, { status: 404 }),
   ),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
@@ -490,17 +508,7 @@ export const handlers = [
   }),
 
   http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
-  http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
-  http.post(`${API_URL}/api-keys`, async ({ request }) => {
-    const body = (await request.json().catch(() => ({}))) as { name?: string }
-    return HttpResponse.json({
-      name: body?.name || 'mock-key',
-      value: 'bxl_sk_mock_0123456789abcdef0123456789abcdef',
-      createdAt: new Date(),
-      permissions: [],
-      expiresAt: null,
-    })
-  }),
+  ...apiKeyHandlers,
   http.get(`${BILLING_API_URL}/organization/:organizationId/portal-url`, async () => {
     return HttpResponse.json<string>(`${BILLING_API_URL}/portal`)
   }),

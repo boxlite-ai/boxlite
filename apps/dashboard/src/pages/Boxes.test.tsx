@@ -385,14 +385,4 @@ describe('Boxes page, empty account', () => {
     expect(navigate).not.toHaveBeenCalled()
     expect(document.querySelector('h1')?.textContent).toBe('Boxes')
   })
-
-  it('opens welcome first for a new account with no keys and no boxes', () => {
-    // Nothing dismissed anywhere, and both account signals say the account is
-    // empty: this is someone's first visit, so the guide leads.
-    localStorage.clear()
-    render()
-
-    expect(onboardingIsOpen()).toBeUndefined()
-    expect(navigate.mock.calls.at(-1)?.[0]).toBe('/dashboard/welcome')
-  })
 })
