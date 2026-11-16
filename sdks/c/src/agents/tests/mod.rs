@@ -8,6 +8,28 @@ struct Seen {
     agent: *mut CAgent,
     turn: *mut CAgentTurn,
     json: Option<serde_json::Value>,
+    error: Option<(BoxliteErrorCode, String)>,
+    error_callbacks: usize,
+}
+
+unsafe extern "C" fn error_cb(error: *const CBoxliteError, data: *mut c_void) {
+    let seen = &mut *(data as *mut Seen);
+    assert!(!error.is_null());
+    seen.error = Some((
+        (*error).code,
+        CStr::from_ptr((*error).message).to_str().unwrap().into(),
+    ));
+    seen.error_callbacks += 1;
+    seen.done = true;
+}
+
+unsafe extern "C" fn error_json_cb(
+    json: *const c_char,
+    error: *const CBoxliteError,
+    data: *mut c_void,
+) {
+    assert!(json.is_null());
+    error_cb(error, data);
 }
 
 unsafe extern "C" fn agent_cb(agent: *mut CAgent, error: *const CBoxliteError, data: *mut c_void) {
@@ -112,6 +134,27 @@ fn c_calls_and_getters_reach_core_through_drain() {
         drain(runtime_ptr, &mut seen);
         let agent = seen.agent;
         assert!(!agent.is_null());
+        seen.done = false;
+        let agent_id = CString::new("agent-1").unwrap();
+        assert_eq!(
+            boxlite_agents_get(
+                agents,
+                agent_id.as_ptr(),
+                Some(agent_cb),
+                data,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::Ok
+        );
+        assert!(!seen.done);
+        drain(runtime_ptr, &mut seen);
+        assert!(!seen.agent.is_null());
+        assert_ne!(seen.agent, agent);
+        assert_eq!(
+            read_getter(seen.agent, boxlite_agent_state)["id"],
+            "agent-1"
+        );
+        boxlite_agent_free(seen.agent);
         seen.done = false;
         let request_id = CString::new("request-1").unwrap();
         let malformed = CString::new("{invalid").unwrap();
@@ -259,6 +302,55 @@ fn c_calls_and_getters_reach_core_through_drain() {
         );
         drain(runtime_ptr, &mut seen);
         boxlite_agent_turn_free(seen.turn);
+        let key = CString::new("control-1").unwrap();
+        let control = CAgentControlOptions {
+            idempotency_key: key.as_ptr(),
+        };
+        seen.done = false;
+        assert_eq!(
+            boxlite_agent_turn_steer(
+                turn,
+                text.as_ptr(),
+                &control,
+                Some(error_json_cb),
+                data,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::Ok
+        );
+        assert!(!seen.done);
+        drain(runtime_ptr, &mut seen);
+        let (code, message) = seen.error.take().unwrap();
+        assert_eq!(code, BoxliteErrorCode::Unsupported);
+        assert!(message.contains("turn.steer"));
+        assert_eq!(seen.error_callbacks, 1);
+        seen.done = false;
+        assert_eq!(
+            boxlite_agent_turn_interrupt(turn, &control, Some(error_cb), data, ptr::null_mut()),
+            BoxliteErrorCode::Ok
+        );
+        assert!(!seen.done);
+        drain(runtime_ptr, &mut seen);
+        let (code, message) = seen.error.take().unwrap();
+        assert_eq!(code, BoxliteErrorCode::Unsupported);
+        assert!(message.contains("turn.interrupt"));
+        assert_eq!(seen.error_callbacks, 2);
+        seen.done = false;
+        assert_eq!(
+            boxlite_agent_close(agent, &control, Some(error_cb), data, ptr::null_mut()),
+            BoxliteErrorCode::Ok
+        );
+        assert!(!seen.done);
+        drain(runtime_ptr, &mut seen);
+        let (code, message) = seen.error.take().unwrap();
+        assert_eq!(code, BoxliteErrorCode::Unsupported);
+        assert!(message.contains("agent.close"));
+        assert_eq!(seen.error_callbacks, 3);
+        assert_eq!(
+            crate::boxlite_runtime_drain(runtime_ptr, 0, ptr::null_mut()),
+            0
+        );
+        assert_eq!(seen.error_callbacks, 3);
         boxlite_agent_turn_free(turn);
         boxlite_agent_free(agent);
         boxlite_agents_free(agents);
