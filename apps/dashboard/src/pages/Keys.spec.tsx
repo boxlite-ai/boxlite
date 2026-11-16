@@ -10,6 +10,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import Keys from './Keys'
 
 const mocks = vi.hoisted(() => ({
+  refresh: vi.fn(async () => []),
+  status: undefined as 'error' | undefined,
   create: vi.fn(async () => ({ value: 'test-key', permissions: ['write:boxes'] })),
   member: { userId: 'user', role: 'owner', assignedRoles: [] } as {
     userId?: string
@@ -23,6 +25,8 @@ vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ apiUrl: 'https://api.e
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1' },
+    refreshOrganizationMembers: mocks.refresh,
+    organizationMembersStatus: mocks.status,
     authenticatedUserOrganizationMember: mocks.member,
   }),
 }))
@@ -44,6 +48,7 @@ describe('console member key defaults', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.status = undefined
     mocks.member = { role: 'owner', assignedRoles: [] }
   })
 
@@ -92,6 +97,23 @@ describe('console member key defaults', () => {
     mocks.member = { userId: 'user', role: 'owner', assignedRoles: [] }
     await act(async () => root.render(<Keys />))
     expect(document.querySelector<HTMLInputElement>('input[placeholder="Name"]')?.value).toBe('draft-agent')
+  })
+
+  it('connects the failed membership state to the refresh action', async () => {
+    mocks.status = 'error'
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<Keys />)
+    })
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="New API key"]')!.click())
+    const retry = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Refresh permissions',
+    )!
+    await act(async () => retry.click())
+    expect(mocks.refresh).toHaveBeenCalledOnce()
+    expect(mocks.create).not.toHaveBeenCalled()
   })
 
   it('defaults to Box operations for an owner', async () => {

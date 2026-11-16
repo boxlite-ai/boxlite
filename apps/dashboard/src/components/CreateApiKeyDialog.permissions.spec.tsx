@@ -221,3 +221,83 @@ it('preserves the completed secret during a membership refresh', async () => {
   await render()
   expect(document.body.textContent).toContain('test-secret')
 })
+
+it('allows an explicit permanent key with a custom access selection', async () => {
+  await render()
+  await open()
+  await chooseAccess('Custom access')
+  expect(document.body.textContent).toContain('Technical scopes')
+  await act(async () =>
+    document
+      .querySelectorAll('[role="combobox"]')[1]
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+  )
+  const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+    (item) => item.textContent === 'No expiration',
+  )!
+  await act(async () => option.click())
+  await submit()
+  expect(mocks.create.mock.calls[0][0].expiresAt).toBeNull()
+  expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
+})
+
+it.each([
+  [403, 'You can no longer grant these permissions'],
+  [409, 'A key with this name already exists'],
+  [503, 'Creation could not be confirmed'],
+])('explains HTTP %s without discarding the name', async (status, message) => {
+  mocks.create.mockRejectedValueOnce({ cause: { response: { status } } })
+  await render()
+  await open()
+  await submit()
+  expect(document.body.textContent).toContain(message)
+  expect(document.querySelector<HTMLInputElement>('input[placeholder="Name"]')!.value).toBe('agent')
+})
+
+it('exposes a failed membership retry and keeps submission blocked', async () => {
+  const retry = vi.fn().mockRejectedValue(new Error('offline'))
+  await act(async () =>
+    root.render(
+      <CreateApiKeyDialog
+        organizationId="org-1"
+        apiUrl=""
+        availablePermissions={[]}
+        permissionsStatus="error"
+        onRetryPermissions={retry}
+      />,
+    ),
+  )
+  await open()
+  await act(async () => button('Refresh permissions').click())
+  expect(retry).toHaveBeenCalledOnce()
+  expect(document.body.textContent).toContain('Could not load permissions. Try again.')
+  await submit()
+  expect(mocks.create).not.toHaveBeenCalled()
+})
+
+it('disables creation when the loaded grantable set is empty', async () => {
+  await render([])
+  await open()
+  expect(document.body.textContent).toContain('You have no permissions available to grant.')
+  await submit()
+  expect(mocks.create).not.toHaveBeenCalled()
+})
+
+it('discards an in-flight secret when permissions change and prevents blind retry', async () => {
+  let resolve!: (value: unknown) => void
+  mocks.create.mockImplementation(
+    () =>
+      new Promise((r) => {
+        resolve = r
+      }),
+  )
+  await render()
+  await open()
+  await submit()
+  await render([P.WRITE_BOXES])
+  await act(async () => resolve({ value: 'revoked-context-secret', permissions: [P.WRITE_BOXES] }))
+  expect(document.body.textContent).not.toContain('revoked-context-secret')
+  expect(document.body.textContent).toContain('Permissions changed during creation')
+  await submit()
+  expect(mocks.create).toHaveBeenCalledTimes(1)
+})
