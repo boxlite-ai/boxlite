@@ -1010,18 +1010,19 @@ func (c *Client) forgetBox(boxId string) {
 // while it is still the cached one — a concurrent Create or fetch may already
 // have replaced it, and unmapping the winner would drop a live entry.
 //
-// The stale handle is closed after the cache lock is released. The SDK
-// serializes native use against Close and frees exactly once, so closing an
-// evicted handle never races a call in flight — including one the evicting
-// goroutine itself started.
+// It deliberately does not Close the handle: an evicted handle may still be
+// referenced by callers that have not finished their requests, and closing it
+// here would turn those calls into ErrInvalidState. That ownership hand-off
+// is its own change, tracked in Linear BUI-1747 — until it lands, the
+// unmapped handle is leaked for the process lifetime, bounded by the request
+// volume that finds its box down.
 func (c *Client) evictBox(boxId string, stale *boxlite.Box) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if current, ok := c.boxes[boxId]; ok && current == stale {
 		delete(c.boxes, boxId)
 	}
-	c.mu.Unlock()
-
-	stale.Close()
 }
 
 // ExecResult holds the output of a command execution.
