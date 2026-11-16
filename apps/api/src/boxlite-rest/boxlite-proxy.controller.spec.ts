@@ -194,6 +194,40 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalled()
   })
 
+  // A refusal before dispatch (stopped box, auto-resume disabled) never
+  // reaches the runner: holding the key pending would block same-key retries
+  // with outcome-unknown until the record expired.
+  it('releases the key as retryable when admission refuses a keyed exec', async () => {
+    const proxyHandler = jest.fn()
+    jest.mocked(createProxyMiddleware).mockReturnValue(proxyHandler as never)
+    const owner = new ReplaySession(undefined, { key: 'k', owner: 'o' }, undefined)
+    const releaseSpy = jest.spyOn(owner, 'releaseSafe')
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'stopped',
+      desiredState: 'stopped',
+    })
+    const sessionStub = { session: jest.fn().mockResolvedValue(owner) }
+    const gated = new (BoxliteProxyController as any)(
+      boxService,
+      { findOne: jest.fn() },
+      autoResume,
+      { prepare: jest.fn(), revoke: jest.fn() },
+      sessionStub,
+    ) as BoxliteProxyController
+    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST', body: { command: '/bin/echo' } }
+
+    await expect(
+      gated.proxyExec(activeAuth as never, 'public-box', 'key-1', req as never, new EventEmitter() as never, jest.fn()),
+    ).rejects.toMatchObject({ status: 409 })
+
+    expect(releaseSpy).toHaveBeenCalledWith(true)
+    expect(proxyHandler).not.toHaveBeenCalled()
+  })
+
   it('lists a stopped box without resuming it or extending its idle lifetime', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller, boxService, autoResume } = makeHarness()

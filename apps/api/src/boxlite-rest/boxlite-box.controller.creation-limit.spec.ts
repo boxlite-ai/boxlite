@@ -93,6 +93,32 @@ describe('BoxliteBoxController creation limit', () => {
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
   })
 
+  // A wait failure after admission means the Box exists: releasing or
+  // deleting the record would let a same-key retry create a second one.
+  it('keeps the replay record when the state wait fails after admission', async () => {
+    const key = randomUUID()
+    const owner = new ReplaySession(undefined, { key: 'k', owner: 'o' }, undefined)
+    const releaseSpy = jest.spyOn(owner, 'releaseSafe')
+    const completeSpy = jest.spyOn(owner, 'complete')
+    const { controller, boxService, boxStateWaiter } = makeController()
+    boxService.create.mockResolvedValue({ ...startedBox, state: BoxState.CREATING })
+    boxStateWaiter.waitForStarted.mockRejectedValue(new Error('runner never confirmed'))
+    const sessionStub = { session: jest.fn().mockResolvedValue(owner) }
+    const gated = new BoxliteBoxController(
+      boxService as never,
+      boxStateWaiter as never,
+      { resolveMaxCreatedBoxes: async () => 3 } as never,
+      {} as never,
+      sessionStub as never,
+    )
+
+    await expect(gated.createBox(authContext as never, key, {} as never, Context.user())).rejects.toThrow(
+      'runner never confirmed',
+    )
+    expect(completeSpy).not.toHaveBeenCalled()
+    expect(releaseSpy).not.toHaveBeenCalled()
+  })
+
   // The Notion page's four-step acceptance sequence: quota 429 → free a slot
   // → same key succeeds → full quota again, same key still replays the
   // original success. The replay service must not cache the 429 as terminal.

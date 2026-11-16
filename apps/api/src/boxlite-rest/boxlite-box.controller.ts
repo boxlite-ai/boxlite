@@ -180,7 +180,17 @@ export class BoxliteBoxController {
       await replay.complete({ status: 201, body: JSON.stringify(response) })
       return response
     } catch (error) {
-      await replay.releaseSafe(error instanceof BoxCreationLimitExceededError)
+      // Only a failure proven to happen before admission may free the key.
+      // Quota rejection is the documented retryable case; 400/403 validation
+      // runs before any dispatch. Anything else (admission, state wait) may
+      // have had an effect: the record is left untouched, staying pending and
+      // fencing same-key retries with idempotency_outcome_unknown after the
+      // completion deadline, instead of allowing a second Box.
+      const preAdmission =
+        error instanceof BoxCreationLimitExceededError ||
+        error instanceof BadRequestException ||
+        error instanceof ForbiddenException
+      if (preAdmission) await replay.releaseSafe(true)
       throw error
     }
   }

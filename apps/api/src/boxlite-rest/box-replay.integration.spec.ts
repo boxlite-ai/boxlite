@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { INestApplication } from '@nestjs/common'
@@ -132,26 +132,58 @@ describeIfRedis('Box request replay real Redis HTTP', () => {
     const key = randomUUID()
     const body = { image: 'boxlite/base' }
 
-    const [first, second] = await Promise.all([
-      post(baseA, '/api/v1/boxes', key, body),
-      post(baseB, '/api/v1/boxes', key, body),
-    ])
+    // Hold the winning create open so both reservations definitely overlap:
+    // without this, the mock resolves immediately and the second request may
+    // arrive after the record completes, making both 201.
+    // (Manual executor: the project's TS lib predates Promise.withResolvers.)
+    let releaseCreate!: () => void
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve
+    })
+    const createA = createMocks.get('a')!
+    createA.mockImplementationOnce(async () => {
+      callsA.value++
+      await createGate
+      return startedBox
+    })
 
-    // Exactly one replica dispatches the create; the other is told to retry.
-    const totalCalls = callsA.value + callsB.value
-    expect(totalCalls).toBe(1)
-    const statuses = [first.status, second.status]
-    expect(statuses).toContain(201)
-    expect(statuses).toContain(409)
+    const ownerPromise = post(baseA, '/api/v1/boxes', key, body)
+    // Wait until replica A owns the key (exact record key, same formula as
+    // the service), then let replica B race for it. Bounded so a regression
+    // fails with a clear message instead of eating the suite timeout.
+    const digest = createHash('sha256').update(key).digest('hex')
+    const recordKey = `replay:${org}:${caller.userId}:createBox:${digest}`
+    const deadline = Date.now() + 3000
+    while (!(await redis.exists(recordKey))) {
+      if (Date.now() > deadline) throw new Error(`record ${recordKey} never appeared`)
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    try {
+      // The loser's 409 arrives while the owner's create is still held open:
+      // deterministic overlap, no reliance on Promise.all scheduling.
+      const loser = await post(baseB, '/api/v1/boxes', key, body)
+      releaseCreate()
+      const owner = await ownerPromise
 
-    // The loser retries with the same key and now gets the stored success.
-    const winner = first.status === 201 ? first : second
-    const retryBase = first.status === 201 ? baseB : baseA
-    const retry = await post(retryBase, '/api/v1/boxes', key, body)
-    expect(retry.status).toBe(201)
-    expect(retry.body).toEqual(winner.body)
-    expect(callsA.value + callsB.value).toBe(1)
-  })
+      // Exactly one replica dispatched the create.
+      const totalCalls = callsA.value + callsB.value
+      expect(totalCalls).toBe(1)
+      expect(loser.status).toBe(409)
+      expect(owner.status).toBe(201)
+
+      // The loser retries with the same key and now gets the stored success.
+      const retryBase = owner.status === 201 ? baseB : baseA
+      const retry = await post(retryBase, '/api/v1/boxes', key, body)
+      expect(retry.status).toBe(201)
+      expect(retry.body).toEqual(owner.body)
+      expect(callsA.value + callsB.value).toBe(1)
+    } catch (error) {
+      // Release the held create even on failure, so afterAll can close appA.
+      releaseCreate()
+      throw error
+    }
+    await ownerPromise.catch(() => undefined)
+  }, 15_000)
 
   it('rejects a same-key different-payload caller with 422 across replicas', async () => {
     const key = randomUUID()

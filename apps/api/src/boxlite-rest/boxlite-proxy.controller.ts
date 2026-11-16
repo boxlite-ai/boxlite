@@ -169,22 +169,38 @@ export class BoxliteProxyController {
       return
     }
 
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
-      req,
-      res,
-      next,
-      USER_OPERATION,
-      {
-        operation: 'box.exec',
-        admit: requireExecReady,
-        captureResponse: async (status, body) => {
-          await replay.complete({ status, body })
+    let admissionRefused = false
+    try {
+      return await this.proxyToRunner(
+        authContext,
+        boxId,
+        (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
+        req,
+        res,
+        next,
+        USER_OPERATION,
+        {
+          operation: 'box.exec',
+          admit: (box, id) => {
+            try {
+              requireExecReady(box, id)
+            } catch (err) {
+              admissionRefused = true
+              throw err
+            }
+          },
+          captureResponse: async (status, body) => {
+            await replay.complete({ status, body })
+          },
         },
-      },
-    )
+      )
+    } catch (err) {
+      // Admission refused before any runner dispatch, so the key can be
+      // retried once the box is ready. Failures after dispatch keep the
+      // record: the runner may have executed, and the outcome is unknown.
+      if (admissionRefused) await replay.releaseSafe(true)
+      throw err
+    }
   }
 
   @All(':boxId/executions/:execId/signal')
@@ -635,7 +651,14 @@ export class BoxliteProxyController {
         },
         proxyRes: capture
           ? responseInterceptor(async (responseBuffer: Buffer, proxyRes: any, _req: any, res: any) => {
-              await capture(proxyRes.statusCode, responseBuffer.toString('utf8'))
+              try {
+                await capture(proxyRes.statusCode, responseBuffer.toString('utf8'))
+              } catch (err) {
+                // The runner already produced this response; ending it matters
+                // more than the replay record, which stays pending and fences
+                // retries. Logging keeps the failure diagnosable.
+                this.logger.warn(`Failed to record replay response for ${box.id}: ${err}`)
+              }
               return responseBuffer
             })
           : undefined,
