@@ -4,7 +4,7 @@ Ported from E2B's cloud volume tests
 (`packages/python-sdk/tests/async/volume_async/test_volume.py:83-131,208` and
 `test_volume_content.py:46-69`): create a volume, see it in the listing, fetch
 it by id, write through a sandbox, and read the same bytes back. BoxLite's volumes
-are the same idea reached through `rt.volumes()` and
+are the same idea reached through `rt.volumes` and
 `BoxOptions(volumes=[{"managed_volume": ..., "guest_path": ...}])`.
 
 Only `test_volume_host_bind_mount.py` touched volumes before this, and it
@@ -69,12 +69,12 @@ def managed_volume():
 async def test_volume_is_listed_and_fetchable_through_the_sdk(rt, managed_volume):
     volume_id = managed_volume["id"]
 
-    infos = await rt.volumes().list()
+    infos = await rt.volumes.list()
     assert volume_id in {info.id for info in infos}, (
         f"created volume {volume_id} missing from {[i.id for i in infos]}"
     )
 
-    info = await rt.volumes().get(volume_id)
+    info = await rt.volumes.get(volume_id)
     assert info.name == managed_volume["name"], (
         f"name changed between create and get: {info.name!r} vs {managed_volume['name']!r}"
     )

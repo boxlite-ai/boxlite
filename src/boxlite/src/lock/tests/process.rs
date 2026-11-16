@@ -61,6 +61,11 @@ fn run_child(root: &Path, mode: &str) -> ! {
             control.write_all(b"R").unwrap();
             exit_on_command(&mut control);
         }
+        "holder" => {
+            let _guard = LockGuard::try_new(owner.as_ref()).expect("child owns the kernel lock");
+            control.write_all(b"W").unwrap();
+            exit_on_command(&mut control);
+        }
         "writer" => {
             assert!(ReadLockGuard::try_new(owner.as_ref()).is_none());
             assert!(LockGuard::try_new(peer.as_ref()).is_none());
@@ -141,6 +146,65 @@ async fn file_read_write_across_processes() {
     })
     .await
     .expect("cross-process lock scenario timed out");
+}
+
+#[tokio::test]
+async fn file_async_waiters_retry_cross_process_contention() {
+    if let Ok(mode) = std::env::var(CHILD_MODE) {
+        run_child(Path::new(&std::env::var_os(CHILD_ROOT).unwrap()), &mode);
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let manager = FileLockManager::new(temp.path().join("locks")).unwrap();
+    let id = manager.allocate().unwrap();
+    let owner = manager.retrieve(id).unwrap();
+    // Independent admission ensures the probes below test flock, not the local gate.
+    let peer_manager = FileLockManager::open(temp.path().join("locks")).unwrap();
+    let peer = peer_manager.retrieve(id).unwrap();
+    let listener = UnixListener::bind(temp.path().join("control.sock")).unwrap();
+
+    timeout(DEADLINE * 2, async {
+        for read in [false, true] {
+            let mut child = LockChild(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "lock::process_tests::file_async_waiters_retry_cross_process_contention",
+                        "--nocapture",
+                    ])
+                    .env(CHILD_MODE, "holder")
+                    .env(CHILD_ROOT, temp.path())
+                    .env(CHILD_ID, id.0.to_string())
+                    .spawn()
+                    .unwrap(),
+            );
+            let (mut control, _) = listener.accept().await.unwrap();
+            assert_eq!(control.read_u8().await.unwrap(), b'W');
+            let mut acquire = Box::pin(async {
+                if read {
+                    (Some(ReadLockGuard::new_async(owner.as_ref()).await), None)
+                } else {
+                    (None, Some(LockGuard::new_async(owner.as_ref()).await))
+                }
+            });
+            assert!(futures::poll!(&mut acquire).is_pending());
+            control.write_all(b"X").await.unwrap();
+            child.wait_for_success().await;
+            let held = acquire.await;
+            assert!(
+                LockGuard::try_new(peer.as_ref()).is_none(),
+                "async acquisition must hold the kernel lock against writers"
+            );
+            let concurrent_read = ReadLockGuard::try_new(peer.as_ref());
+            assert_eq!(concurrent_read.is_some(), read, "wrong acquisition mode");
+            drop(concurrent_read);
+            drop(held);
+            assert!(ReadLockGuard::try_new(peer.as_ref()).is_some());
+            assert!(LockGuard::try_new(peer.as_ref()).is_some());
+        }
+    })
+    .await
+    .expect("async waiter did not acquire after the other process exited");
 }
 
 static INTERRUPTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

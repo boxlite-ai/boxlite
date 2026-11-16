@@ -111,7 +111,7 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
     if (searchParams.get('onboarding') === '1') navigate(RoutePath.QUICKSTART, { replace: true })
   }, [navigate, searchParams, selectedOrganization, user?.profile.sub])
 
-  const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
+  const { data: box, isLoading, isError, isFetching, error, refetch } = useBoxQuery(boxId ?? '')
   usePageTitle(box ? `${getBoxDisplayName(box)}${page === 'terminal' ? ' · Terminal' : ''}` : 'Box')
 
   const isNotFound = isError && isAxiosError(error?.cause) && error.cause?.status === 404
@@ -329,6 +329,8 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
                 onClick={handleRefresh}
                 title="Refresh"
                 aria-label="Refresh"
+                disabled={isFetching}
+                aria-busy={isFetching}
               >
                 <span ref={refreshRef} className="inline-flex">
                   <RefreshCw className="size-4" />
@@ -336,6 +338,18 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
               </Button>
             </div>
           </div>
+
+          {isError && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-3 border border-border/50 px-4 py-2 text-body"
+            >
+              <span>Couldn’t refresh Box details. Showing last known values.</span>
+              <Button variant="quiet" size="sm" disabled={isFetching} onClick={() => refetch()}>
+                Retry
+              </Button>
+            </div>
+          )}
 
           <BoxPageNavigation boxId={boxId ?? box.id} current={page} />
 

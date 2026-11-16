@@ -27,6 +27,7 @@ let host: HTMLDivElement
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   sessionStorage.clear()
+  localStorage.clear()
   mocks.organizations = [
     { id: 'a', name: 'Same name' },
     { id: 'b', name: 'Same name' },
@@ -78,6 +79,29 @@ describe('Organization experience', () => {
     expect(mocks.members).toHaveBeenCalledExactlyOnceWith('a')
     expect(readOrganizationSession('user-a')).toBe('a')
     expect(host.textContent).toContain('Business page')
+  })
+  it('restores the same account’s previous organization after logout only after membership validation', async () => {
+    saveOrganizationSession('user-a', 'b')
+    markJustLoggedOut()
+    await render()
+    expect(mocks.members).toHaveBeenCalledWith('b')
+    expect(readOrganizationSession('user-a')).toBe('b')
+    expect(host.textContent).toContain('Business page')
+  })
+  it('does not restore another account’s remembered organization', async () => {
+    saveOrganizationSession('user-b', 'b')
+    markJustLoggedOut()
+    await render()
+    expect(mocks.members).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Choose an organization')
+  })
+  it('offers selection when remembered membership is denied', async () => {
+    saveOrganizationSession('user-a', 'b')
+    markJustLoggedOut()
+    mocks.members.mockResolvedValue({ data: [] })
+    await render()
+    expect(readOrganizationSession('user-a')).toBeNull()
+    expect(host.textContent).toContain('Choose an organization')
   })
   it('restores only this user’s valid selection', async () => {
     saveOrganizationSession('user-a', 'b')
@@ -274,7 +298,7 @@ describe('Organization experience', () => {
     await act(async () => buttons[0].click())
     expect(navigation.reload).toHaveBeenCalledTimes(1)
     await act(async () => buttons[1].click())
-    expect(navigation.assign).toHaveBeenCalledWith('/logout')
+    expect(navigation.assign).toHaveBeenCalledWith(expect.stringContaining('/logout?switch=1&returnTo='))
   })
   it('clears confirmation on explicit logout', () => {
     saveOrganizationSession('user-a', 'a')

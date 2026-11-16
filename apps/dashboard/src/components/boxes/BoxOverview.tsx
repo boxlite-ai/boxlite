@@ -16,6 +16,7 @@ import { getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { catalogNameOf, registryHostOf } from '@/lib/image-ref'
 import { copyToClipboard } from '@/lib/copy-text'
 import { getRelativeTimeString } from '@/lib/utils'
+import { BoxLifecycle } from './BoxLifecycle'
 import { BoxResourceSummary } from './BoxResourceSummary'
 import { BoxNetworkSection } from './BoxNetworkSection'
 import { BoxDetailField, BoxDetailHeading } from './BoxDetailFields'
@@ -108,6 +109,7 @@ export function BoxOverview({
                   </BoxDetailField>
                 </dl>
               </div>
+              <BoxLifecycle box={box} />
               <dl
                 aria-label="Activity"
                 className="flex flex-wrap gap-x-5 gap-y-1 bg-muted/30 px-4 py-2 text-meta text-muted-foreground"

@@ -177,12 +177,17 @@ async fn fixture_with_container(started: bool) -> Fixture {
         container: ContainerRuntimeConfig {
             id: ContainerID::new(),
         },
-        options: BoxOptions::default(),
+        options: BoxOptions {
+            detach: true,
+            ..Default::default()
+        },
         engine_kind: crate::vmm::VmmKind::Libkrun,
     };
     let mut state = BoxState::new();
     state.status = BoxStatus::Running;
     state.pid = Some(std::process::id());
+    state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+    runtime.box_manager.add_box(&config, &state).unwrap();
     let backend = Arc::new(BoxImpl::new(
         config,
         state,

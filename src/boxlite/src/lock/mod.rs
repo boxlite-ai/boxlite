@@ -18,7 +18,10 @@ mod process_tests;
 pub use file::FileLockManager;
 pub use memory::InMemoryLockManager;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -32,6 +35,24 @@ pub struct LockId(pub u32);
 impl std::fmt::Display for LockId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+/// Local admission shared by all handles for an ID within one manager.
+#[derive(Default)]
+struct LockGates(Mutex<HashMap<LockId, Arc<RwLock<()>>>>);
+
+impl LockGates {
+    fn get(&self, id: LockId) -> Arc<RwLock<()>> {
+        self.0.lock().unwrap().entry(id).or_default().clone()
+    }
+
+    fn remove(&self, id: LockId) {
+        self.0.lock().unwrap().remove(&id);
+    }
+
+    fn clear(&self) {
+        self.0.lock().unwrap().clear();
     }
 }
 
@@ -147,13 +168,25 @@ pub trait LockManager: Send + Sync {
 /// shares its file descriptor and is not an independent lock owner. Nested
 /// acquisition and upgrading a read lock to a write lock are unsupported.
 /// Blocking and try-acquire methods are synchronous. The guards also provide
-/// asynchronous acquisition with nonblocking retries; neither promises fairness.
+/// asynchronous acquisition with nonblocking retries. FIFO fairness covers queued
+/// async acquisitions on a manager's per-ID local gate. Try acquisition takes no
+/// queue position; it respects existing admission reservations, failing fast while
+/// a queued async writer owns the gate. Cross-process acquisition has no fairness
+/// guarantee. The blocking constructors and the manual methods below wait on the
+/// kernel lock alone, bypassing the local gate.
 ///
 /// Custom implementations may retain the default read methods, which use
 /// exclusive locking. Both supplied managers implement shared reads.
 pub trait Locker: Send + Sync {
     /// Get the lock's unique ID.
     fn id(&self) -> LockId;
+
+    /// Local admission used by guards before acquiring the underlying lock.
+    ///
+    /// Custom lockers without a gate retain nonblocking retry behavior.
+    fn gate(&self) -> Option<&Arc<RwLock<()>>> {
+        None
+    }
 
     /// Acquire the write lock, blocking until all readers and writers release it.
     ///
@@ -206,31 +239,43 @@ pub trait Locker: Send + Sync {
 /// RAII guard holding an exclusive write lock.
 pub struct LockGuard<'a> {
     lock: &'a dyn Locker,
+    // Fields drop after Drop::drop unlocks the underlying lock.
+    _gate: Option<OwnedRwLockWriteGuard<()>>,
 }
 
 impl<'a> LockGuard<'a> {
     /// Create a new guard, acquiring the lock.
+    ///
+    /// The blocking constructor waits on the kernel lock alone. It cannot wait on
+    /// the local gate without parking the calling thread, which would deadlock a
+    /// single-threaded runtime that must release the gate itself.
     pub fn new(lock: &'a dyn Locker) -> Self {
         lock.lock();
-        Self { lock }
+        Self { lock, _gate: None }
     }
 
     /// Acquire a write lock without blocking the executor thread while waiting.
     pub async fn new_async(lock: &'a dyn Locker) -> Self {
-        loop {
-            if let Some(guard) = Self::try_new(lock) {
-                return guard;
-            }
+        let gate = match lock.gate() {
+            Some(gate) => Some(gate.clone().write_owned().await),
+            None => None,
+        };
+        while !lock.try_lock() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        Self { lock, _gate: gate }
     }
 
     /// Try to create a new guard without blocking.
     ///
-    /// Returns `None` if the lock is already held.
+    /// Returns `None` if local admission or the underlying lock is busy.
     pub fn try_new(lock: &'a dyn Locker) -> Option<Self> {
+        let gate = match lock.gate() {
+            Some(gate) => Some(gate.clone().try_write_owned().ok()?),
+            None => None,
+        };
         if lock.try_lock() {
-            Some(Self { lock })
+            Some(Self { lock, _gate: gate })
         } else {
             None
         }
@@ -246,6 +291,8 @@ impl Drop for LockGuard<'_> {
 /// RAII guard holding a shared read lock.
 pub struct ReadLockGuard<'a> {
     lock: &'a dyn Locker,
+    // Fields drop after Drop::drop unlocks the underlying lock.
+    _gate: Option<OwnedRwLockReadGuard<()>>,
 }
 
 impl std::fmt::Debug for ReadLockGuard<'_> {
@@ -258,25 +305,34 @@ impl std::fmt::Debug for ReadLockGuard<'_> {
 
 impl<'a> ReadLockGuard<'a> {
     /// Acquire a read lock, blocking until it becomes available.
+    ///
+    /// Like [`LockGuard::new`], this waits on the kernel lock alone and bypasses
+    /// the local gate.
     pub fn new(lock: &'a dyn Locker) -> Self {
         lock.read_lock();
-        Self { lock }
+        Self { lock, _gate: None }
     }
 
     /// Acquire a read lock without blocking the executor thread while waiting.
     pub async fn new_async(lock: &'a dyn Locker) -> Self {
-        loop {
-            if let Some(guard) = Self::try_new(lock) {
-                return guard;
-            }
+        let gate = match lock.gate() {
+            Some(gate) => Some(gate.clone().read_owned().await),
+            None => None,
+        };
+        while !lock.try_read_lock() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        Self { lock, _gate: gate }
     }
 
-    /// Try to acquire a read lock, returning `None` on contention.
+    /// Try to acquire a read lock, returning `None` if either layer is busy.
     pub fn try_new(lock: &'a dyn Locker) -> Option<Self> {
+        let gate = match lock.gate() {
+            Some(gate) => Some(gate.clone().try_read_owned().ok()?),
+            None => None,
+        };
         if lock.try_read_lock() {
-            Some(Self { lock })
+            Some(Self { lock, _gate: gate })
         } else {
             None
         }
@@ -406,6 +462,11 @@ mod tests {
         let probe = manager.retrieve(id).unwrap();
 
         let exclusive = LockGuard::new_async(owner.as_ref()).await;
+        assert!(
+            LockGuard::try_new(owner.as_ref()).is_none(),
+            "nested try is busy"
+        );
+        assert!(ReadLockGuard::try_new(owner.as_ref()).is_none());
         let mut waiting_reader = Box::pin(ReadLockGuard::new_async(reader.as_ref()));
         assert!(futures::poll!(&mut waiting_reader).is_pending());
         let mut cancelled_writer = Box::pin(LockGuard::new_async(writer.as_ref()));
@@ -426,6 +487,10 @@ mod tests {
         .expect("second reader did not acquire while first reader held the lock");
         let mut waiting_writer = Box::pin(LockGuard::new_async(writer.as_ref()));
         assert!(futures::poll!(&mut waiting_writer).is_pending());
+        assert!(
+            ReadLockGuard::try_new(probe.as_ref()).is_none(),
+            "later readers must not bypass a queued local writer"
+        );
         drop(shared);
         assert!(LockGuard::try_new(owner.as_ref()).is_none());
         drop(shared_peer);
@@ -441,6 +506,111 @@ mod tests {
         assert!(ReadLockGuard::try_new(probe.as_ref()).is_none());
         drop(exclusive);
         assert!(LockGuard::try_new(owner.as_ref()).is_some());
+    }
+
+    async fn test_local_gate_contract(manager: &dyn LockManager) {
+        let id = manager.allocate().unwrap();
+        let owner = manager.retrieve(id).unwrap();
+        let waiter = manager.retrieve(id).unwrap();
+        let probe = manager.retrieve(id).unwrap();
+        assert!(Arc::ptr_eq(owner.gate().unwrap(), waiter.gate().unwrap()));
+
+        // Bypass the gate to simulate contention from another process/manager.
+        // After kernel release, a pending async acquisition still owns its gate
+        // until its next 10ms retry, or cancellation.
+        for read in [false, true] {
+            owner.lock();
+            let mut pending = Box::pin(async {
+                if read {
+                    let _guard = ReadLockGuard::new_async(waiter.as_ref()).await;
+                } else {
+                    let _guard = LockGuard::new_async(waiter.as_ref()).await;
+                }
+            });
+            assert!(futures::poll!(&mut pending).is_pending());
+            owner.unlock();
+            assert!(LockGuard::try_new(probe.as_ref()).is_none());
+            assert_eq!(ReadLockGuard::try_new(probe.as_ref()).is_some(), read);
+            drop(pending);
+            assert!(LockGuard::try_new(probe.as_ref()).is_some());
+        }
+
+        let held = LockGuard::new_async(owner.as_ref()).await;
+        manager.free(id).unwrap();
+        assert!(LockGuard::try_new(waiter.as_ref()).is_none());
+        let replacement = manager.allocate_and_retrieve(id).unwrap();
+        assert!(!Arc::ptr_eq(
+            owner.gate().unwrap(),
+            replacement.gate().unwrap()
+        ));
+        drop(held);
+        assert!(LockGuard::try_new(waiter.as_ref()).is_some());
+        assert!(LockGuard::try_new(replacement.as_ref()).is_some());
+
+        manager.free_all().unwrap();
+        let after_free_all = manager.allocate_and_retrieve(id).unwrap();
+        assert!(!Arc::ptr_eq(
+            replacement.gate().unwrap(),
+            after_free_all.gate().unwrap()
+        ));
+        manager.clear_all_locks().unwrap();
+        let after_clear = manager.allocate_and_retrieve(id).unwrap();
+        assert!(!Arc::ptr_eq(
+            after_free_all.gate().unwrap(),
+            after_clear.gate().unwrap()
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_local_gate_contract() {
+        test_local_gate_contract(&InMemoryLockManager::new(1)).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_local_gate_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        test_local_gate_contract(&FileLockManager::new(temp.path()).unwrap()).await;
+    }
+
+    async fn test_local_async_lock_queue(manager: &dyn LockManager) {
+        let id = manager.allocate().unwrap();
+        let owner = manager.retrieve(id).unwrap();
+        let held = LockGuard::new_async(owner.as_ref()).await;
+        let mut waiters = Vec::new();
+        for _ in 0..5 {
+            let locker = manager.retrieve(id).unwrap();
+            let mut waiter = Box::pin(async move {
+                let _guard = LockGuard::new_async(locker.as_ref()).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            });
+            // Put every waiter behind the same owner before starting the clock.
+            assert!(futures::poll!(&mut waiter).is_pending());
+            waiters.push(waiter);
+        }
+        let start = tokio::time::Instant::now();
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(1), futures::future::join_all(waiters))
+            .await
+            .expect("local lock queue stalled");
+        let elapsed = start.elapsed();
+        eprintln!("five local lock holders completed in {elapsed:?}");
+        // Paused time charges only timers, not host scheduling or file syscalls.
+        // Allow timer-resolution slack for five 1ms holds, but no retry grid.
+        assert!(
+            elapsed < Duration::from_millis(15),
+            "local waiters still pay the flock polling interval: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_in_memory_local_async_lock_queue() {
+        test_local_async_lock_queue(&InMemoryLockManager::new(1)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_file_local_async_lock_queue() {
+        let temp = tempfile::tempdir().unwrap();
+        test_local_async_lock_queue(&FileLockManager::new(temp.path()).unwrap()).await;
     }
 
     #[tokio::test]
