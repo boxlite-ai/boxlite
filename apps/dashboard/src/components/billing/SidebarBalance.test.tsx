@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   configured: true,
   failed: false,
   ready: true,
+  topUp: false,
   grant: 0,
   credit: 0,
   balance: 1000,
@@ -25,7 +26,12 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useOwnerWalletQuery: () => ({
     isSuccess: state.ready && !state.failed,
     isError: state.failed,
-    data: { ongoingBalanceCents: state.balance, creditGrantedCents: state.grant, creditRemainingCents: state.credit },
+    data: {
+      ongoingBalanceCents: state.balance,
+      creditGrantedCents: state.grant,
+      creditRemainingCents: state.credit,
+      automaticTopUp: state.topUp ? { thresholdAmount: 20, targetAmount: 50 } : undefined,
+    },
   }),
   useOwnerPlanQuery: () => ({
     isSuccess: state.ready,
@@ -45,6 +51,7 @@ function render(expanded = true) {
 beforeEach(() =>
   Object.assign(state, {
     grant: 0,
+    topUp: false,
     credit: 0,
     hasPlan: true,
     role: 'owner',
@@ -57,6 +64,10 @@ beforeEach(() =>
 )
 
 describe('SidebarBalance', () => {
+  it('uses the configured automatic reload threshold for wallet warnings', () => {
+    Object.assign(state, { hasPlan: false, topUp: true })
+    expect(render()).toContain('Below auto-reload threshold')
+  })
   it.each([0, 1000])('keeps compact billing reachable with wallet balance %s', (balance) => {
     Object.assign(state, { hasPlan: false, balance })
     const html = render(false)
@@ -136,5 +147,6 @@ describe('SidebarBalance', () => {
     state.quota = null
     expect(render()).toContain('Unlimited')
     expect(render()).not.toContain('role="meter"')
+    expect(render(false)).toContain('View billing and balance')
   })
 })
