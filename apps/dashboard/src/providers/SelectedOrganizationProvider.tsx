@@ -23,7 +23,7 @@ import {
   OrganizationUserRoleEnum,
 } from '@boxlite-ai/api-client'
 import { usePostHog } from 'posthog-js/react'
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
@@ -94,30 +94,45 @@ export function SelectedOrganizationProvider(props: Props) {
   // empty list) until members arrive.
   const [organizationMembers, setOrganizationMembers] = useState<OrganizationUser[]>([])
 
-  useEffect(() => {
-    let cancelled = false
-    getOrganizationMembers(selectedOrganizationId)
-      .then((members) => {
-        if (!cancelled) {
-          setOrganizationMembers(members)
-        }
-      })
-      // getOrganizationMembers already surfaces a toast via handleApiError; a
-      // members failure must not crash the dashboard (was: error boundary).
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [getOrganizationMembers, selectedOrganizationId])
+  const [membersLoad, setMembersLoad] = useState<{
+    organizationId: string | null
+    status: 'loading' | 'ready' | 'error'
+  }>({ organizationId: null, status: 'loading' })
+  const membersRequest = useRef(0)
+  const currentOrganizationId = useRef(selectedOrganizationId)
+  currentOrganizationId.current = selectedOrganizationId
+  const organizationMembersStatus =
+    membersLoad.organizationId === selectedOrganizationId ? membersLoad.status : 'loading'
 
   const refreshOrganizationMembers = useCallback(
     async (organizationId?: string) => {
-      const organizationMembers = await getOrganizationMembers(organizationId || selectedOrganizationId)
-      setOrganizationMembers(organizationMembers)
-      return organizationMembers
+      const target = organizationId || selectedOrganizationId
+      // Requests for another organization must not invalidate the active context.
+      const request = target === currentOrganizationId.current ? ++membersRequest.current : null
+      const isCurrent = () => request === membersRequest.current && currentOrganizationId.current === target
+      if (isCurrent()) setMembersLoad({ organizationId: target, status: 'loading' })
+      try {
+        const members = await getOrganizationMembers(target)
+        if (isCurrent()) {
+          setOrganizationMembers(members)
+          setMembersLoad({ organizationId: target, status: 'ready' })
+        }
+        return members
+      } catch (error) {
+        if (isCurrent()) setMembersLoad({ organizationId: target, status: 'error' })
+        throw error
+      }
     },
     [getOrganizationMembers, selectedOrganizationId],
   )
+
+  useEffect(() => {
+    // The API helper reports the error; readiness exposes a retry without crashing the page.
+    void refreshOrganizationMembers().catch(() => undefined)
+    return () => {
+      membersRequest.current += 1
+    }
+  }, [refreshOrganizationMembers])
 
   const authenticatedUserOrganizationMember = useMemo(() => {
     return organizationMembers.find((member) => member.userId === user?.profile.sub) || null
@@ -173,6 +188,7 @@ export function SelectedOrganizationProvider(props: Props) {
     return {
       selectedOrganization,
       organizationMembers,
+      organizationMembersStatus,
       refreshOrganizationMembers,
       authenticatedUserOrganizationMember,
       authenticatedUserHasPermission,
@@ -181,6 +197,7 @@ export function SelectedOrganizationProvider(props: Props) {
   }, [
     selectedOrganization,
     organizationMembers,
+    organizationMembersStatus,
     authenticatedUserOrganizationMember,
     authenticatedUserHasPermission,
     handleSelectOrganization,

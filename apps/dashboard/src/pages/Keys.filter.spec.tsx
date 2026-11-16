@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Keys from './Keys'
+vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub: 'user' } } }) }))
 
 const state = vi.hoisted(() => ({
   keys: ['crm_key', 'quickstart', 'quickstart-agent'].map((name) => ({
