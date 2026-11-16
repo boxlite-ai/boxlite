@@ -209,8 +209,17 @@ The full runtime policy is assembled in `boxlite/src/jailer/sandbox/seatbelt.rs`
 
 When debugging, inspect:
 - Static fragments in `boxlite/resources/seatbelt/*.sbpl`
-- Dynamic path grants from `build_dynamic_read_paths()` and `build_dynamic_write_paths()`
+- Dynamic file grants from `build_dynamic_read_paths()` and `build_dynamic_write_paths()`, and AF_UNIX endpoint grants from `build_unix_socket_grants()`
 - Sandbox denials from `log show`/`log stream` to identify missing allowlist clauses
+
+All dynamic paths first use `canonicalize_or_original()` (preserving binding
+symlink leaves and ancestors), then `sbpl_path_literal()` to produce a complete
+quoted SBPL token. Seatbelt's string parser is byte-transparent apart from
+backslash escapes: the helper escapes `\` as `\\` and `"` as `\"`, and encodes
+ASCII controls below `0x20` and DEL (`0x7f`) as exactly two-digit `\xHH` escapes.
+Other UTF-8 characters are unchanged. This keeps path values inside their
+literal and rendered literals single-line/log-safe. Non-UTF-8 paths are skipped
+with a warning, not converted lossily.
 
 ## Common issues
 
