@@ -11,6 +11,7 @@ PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
+PHONY_TARGETS += test\:integration\:c\:agents
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -502,6 +503,16 @@ test\:perf\:import-export: runtime
 		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
 # BoxLite C SDK unit tests.
+test\:integration\:c\:agents:
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@$(MAKE) dev:c
+	@mkdir -p sdks/c/tests/build
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
+	@cd sdks/c/tests/build && cmake --build . --target test_agents_opencode -j
+	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
+		cargo test -p boxlite-c --lib c_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
+
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \

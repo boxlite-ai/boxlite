@@ -462,3 +462,134 @@ fn separate_runtimes_can_dispatch_callbacks_concurrently() {
         thread.join().unwrap();
     }
 }
+
+#[test]
+fn single_drainer_serializes_open_events_and_terminal() {
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+
+    struct OrderProbe {
+        queue: Arc<EventQueue>,
+        callback_active: AtomicBool,
+        overlap: AtomicBool,
+        wrong_thread: AtomicBool,
+        owner: std::thread::ThreadId,
+        two_queued: AtomicBool,
+        order: std::sync::Mutex<Vec<&'static str>>,
+        handle: AtomicPtr<CAgentEvents>,
+    }
+    unsafe extern "C" fn open_callback(
+        handle: *mut CAgentEvents,
+        error: *const CBoxliteError,
+        data: *mut c_void,
+    ) {
+        let probe = &*(data as *const OrderProbe);
+        let owns_slot = !probe.callback_active.swap(true, Ordering::SeqCst);
+        if !owns_slot {
+            probe.overlap.store(true, Ordering::SeqCst);
+        }
+        if std::thread::current().id() != probe.owner {
+            probe.wrong_thread.store(true, Ordering::SeqCst);
+        }
+        probe.order.lock().unwrap().push("open-enter");
+        probe.handle.store(handle, Ordering::SeqCst);
+        if !error.is_null() {
+            probe.order.lock().unwrap().push("open-error");
+        }
+        let pending = probe.queue.inner.lock().unwrap();
+        let (pending, _) = probe
+            .queue
+            .cv
+            .wait_timeout_while(pending, Duration::from_secs(5), |q| q.len() < 2)
+            .unwrap();
+        probe.two_queued.store(pending.len() >= 2, Ordering::SeqCst);
+        drop(pending);
+        probe.order.lock().unwrap().push("open-exit");
+        if owns_slot {
+            probe.callback_active.store(false, Ordering::SeqCst);
+        }
+    }
+    unsafe extern "C" fn event_callback(
+        json: *const c_char,
+        error: *const CBoxliteError,
+        data: *mut c_void,
+    ) {
+        let probe = &*(data as *const OrderProbe);
+        let owns_slot = !probe.callback_active.swap(true, Ordering::SeqCst);
+        if !owns_slot {
+            probe.overlap.store(true, Ordering::SeqCst);
+        }
+        if std::thread::current().id() != probe.owner {
+            probe.wrong_thread.store(true, Ordering::SeqCst);
+        }
+        let mut order = probe.order.lock().unwrap();
+        if json.is_null() {
+            order.push("terminal-enter");
+            if error.is_null() {
+                order.push("missing-read-error");
+            }
+            order.push("terminal-exit");
+        } else {
+            order.push("event-enter");
+            order.push("event-exit");
+        }
+        if owns_slot {
+            probe.callback_active.store(false, Ordering::SeqCst);
+        }
+    }
+
+    unsafe {
+        let (runtime, agent, queue) = fixture();
+        let cursor = CString::new("read-error").unwrap();
+        let options = CAgentEventsOptions {
+            after: cursor.as_ptr(),
+        };
+        let probe = OrderProbe {
+            queue,
+            callback_active: AtomicBool::new(false),
+            overlap: AtomicBool::new(false),
+            wrong_thread: AtomicBool::new(false),
+            owner: std::thread::current().id(),
+            two_queued: AtomicBool::new(false),
+            order: std::sync::Mutex::new(Vec::new()),
+            handle: AtomicPtr::new(ptr::null_mut()),
+        };
+        assert_eq!(
+            boxlite_agent_events(
+                agent,
+                &options,
+                Some(open_callback),
+                Some(event_callback),
+                &probe as *const _ as *mut c_void,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::Ok
+        );
+        for _ in 0..100 {
+            if probe.order.lock().unwrap().last() == Some(&"terminal-exit") {
+                break;
+            }
+            assert!(crate::boxlite_runtime_drain(runtime, 100, ptr::null_mut()) >= 0);
+        }
+        assert!(
+            probe.two_queued.load(Ordering::SeqCst),
+            "event and terminal must be queued while on_open is active"
+        );
+        assert!(
+            !probe.overlap.load(Ordering::SeqCst) && !probe.wrong_thread.load(Ordering::SeqCst)
+        );
+        assert_eq!(
+            *probe.order.lock().unwrap(),
+            [
+                "open-enter",
+                "open-exit",
+                "event-enter",
+                "event-exit",
+                "terminal-enter",
+                "terminal-exit"
+            ]
+        );
+        boxlite_agent_events_free(probe.handle.load(Ordering::SeqCst));
+        boxlite_agent_free(agent);
+        crate::boxlite_runtime_free(runtime);
+    }
+}

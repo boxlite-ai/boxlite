@@ -84,6 +84,7 @@ help:
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
 	@echo "    make test:integration:rust  - Run Rust integration tests (requires VM, FILTER=<pattern>)"
 	@echo "    make test:integration:agents - Run OpenCode agent tests (requires VM, BOXLITE_TEST_OPENCODE_BINARY)"
+	@echo "    make test:integration:c:agents - Compare C and Rust OpenCode agent behavior (requires VM)"
 	@echo "    make test:perf:import-export - Run manual 1 GiB import/export benchmark (release, requires VM)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"
 	@echo "    make test:unit:gvproxy      - Run gvproxy bridge unit tests"

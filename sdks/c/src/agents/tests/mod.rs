@@ -200,3 +200,5 @@ fn c_calls_and_getters_reach_core_through_drain() {
 }
 
 mod subscriptions;
+
+mod opencode_vm;
