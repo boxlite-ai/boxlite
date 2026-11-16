@@ -23,7 +23,7 @@ func LoadConfig() (Config, error) {
 	if c.Port == "" {
 		c.Port = "8080"
 	}
-	if _, err := net.LookupPort("tcp", c.Port); err != nil {
+	if port, err := net.LookupPort("tcp", c.Port); err != nil || port == 0 {
 		return c, errors.New("invalid PORT")
 	}
 	seconds := os.Getenv("SHUTDOWN_TIMEOUT_SEC")

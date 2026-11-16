@@ -20,6 +20,10 @@ issuer, verified email, and the caller allowlist. Dev mode uses an exact bearer
 token and is permitted only in local and dev environments. The server entry
 point and routes are delivered separately.
 
+Google-mode bearer tokens with signatures shorter than 32 bytes are rejected
+before validation; signatures and claims still require verification. `PORT` must
+resolve to a nonzero TCP port so the service does not silently select one.
+
 ## Calling the package
 
 The future application configuration layer reads `SECRET_MASTER_KEY_ID` and
