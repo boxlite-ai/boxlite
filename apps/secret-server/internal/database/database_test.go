@@ -48,7 +48,7 @@ func TestNormalizeName(t *testing.T) {
 		input, want string
 		valid       bool
 	}{
-		{"open-ai", "OPEN_AI", true}, {"café", "CAF_", true}, {"", "", false},
+		{"open-ai", "OPEN_AI", true}, {"AZ09_", "AZ09_", true}, {"café", "CAF_", true}, {"", "", false},
 		{strings.Repeat("a", 64), strings.Repeat("A", 64), true}, {strings.Repeat("a", 65), "", false},
 		{"\xff", "", false}, {"a\x00b", "", false},
 	} {
@@ -390,6 +390,42 @@ func TestIntegration(t *testing.T) {
 	}) {
 		return
 	}
+
+	t.Run("existing secret read failure prevents canary enrollment", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, "DELETE FROM key_verification_canary"); err != nil {
+			t.Fatal(err)
+		}
+		identity := encryption.SecretContext{OrganizationID: "10000000-0000-0000-0000-000000000001", SecretID: "20000000-0000-0000-0000-000000000005", Version: 1, Hosts: []string{"host"}, Headers: map[string]string{"Authorization": "Bearer {value}"}}
+		envelope, err := cipher.Encrypt(ctx, identity, []byte("existing secret"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = pool.Exec(ctx, `INSERT INTO secret(id,organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,$2,'org','existing','EXISTING',$3,$4,$5,ARRAY['host'],'{"Authorization":"Bearer {value}"}','p','test')`, identity.SecretID, identity.OrganizationID, envelope.Ciphertext, envelope.WrappedDEK.Ciphertext, envelope.WrappedDEK.KeyID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM secret WHERE id=$1", identity.SecretID); err != nil {
+				t.Error(err)
+			}
+		})
+		if _, err := pool.Exec(ctx, "ALTER TABLE secret RENAME TO unavailable_secret"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "ALTER TABLE unavailable_secret RENAME TO secret"); err != nil {
+				t.Error(err)
+			}
+		})
+		err = VerifyKey(ctx, pool, cipher)
+		if err == nil || !strings.Contains(err.Error(), "read existing secret for key verification") {
+			t.Fatalf("existing secret read failure = %v", err)
+		}
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("canary count after read failure = %d, %v; want 0", count, err)
+		}
+	})
 
 	t.Run("single-value schema and key recovery", func(t *testing.T) {
 		org := "10000000-0000-0000-0000-000000000001"
