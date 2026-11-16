@@ -95,7 +95,7 @@ FILESTORE_INSTANCES='[{"instance":"boxlite-dev-shared","project_id":"boxlite-dev
 contract again. The instance name satisfies the existing runner path-safety pattern:
 
 ```text
-^[a-z0-9][a-z0-9-]{0,62}$
+^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$
 ```
 
 Instances are sorted by name before hashing so every API replica makes the same choice.
