@@ -166,12 +166,14 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 
 	var sourceKind C.int32_t
 	var cerr C.CBoxliteError
+	// copy_out_start holds the guard for its whole call, which may
+	// implicitly boot the box and wait on the guest's file service —
+	// potentially seconds. The returned stream is independent of the box
+	// handle, so the read loop below runs without the lock.
 	handle, unlock, err := b.acquire()
 	if err != nil {
 		return err
 	}
-	// copy_out_start dereferences the box handle across its whole
-	// synchronous setup; the returned stream is independent of it.
 	stream := C.boxlite_copy_out_start(handle, cSrc, &sourceKind, &cerr)
 	unlock()
 	if stream == nil {
@@ -267,6 +269,9 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
+	// Like copy_out_start, copy_in_start may implicitly boot the box and
+	// wait on guest file service under the guard; the returned stream is
+	// independent of the box handle.
 	// The C ABI takes the discriminant as int32_t (an out-of-range value a
 	// C caller might pass must map to Unknown, not an invalid Rust enum);
 	// cgo needs the explicit conversion.
