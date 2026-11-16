@@ -1,0 +1,29 @@
+{
+  "contract_version": 1,
+  "policy_cases": [
+    {"id": "enabled-empty", "policy": {"mode": "enabled", "allow_net": []}, "valid": true},
+    {"id": "enabled-omitted-allow", "policy": {"mode": "enabled"}, "valid": true},
+    {"id": "disabled-empty", "policy": {"mode": "disabled", "allow_net": []}, "valid": true},
+    {"id": "disabled-with-allow", "policy": {"mode": "disabled", "allow_net": ["api.example.com"]}, "valid": false},
+    {"id": "hostname-and-ipv4", "policy": {"mode": "enabled", "allow_net": ["api.example.com", "*.example.org", "192.0.2.8", "198.51.100.0/24"]}, "valid": true},
+    {"id": "invalid-mode", "policy": {"mode": "unknown", "allow_net": []}, "valid": false},
+    {"id": "invalid-hostname", "policy": {"mode": "enabled", "allow_net": ["bad..example.com"]}, "valid": false},
+    {"id": "unsupported-ipv6", "policy": {"mode": "enabled", "allow_net": ["2001:db8::/32"]}, "valid": false},
+    {"id": "unsupported-proxy", "policy": {"mode": "enabled", "allow_net": [], "proxy": "proxy-main"}, "valid": false},
+    {"id": "unsupported-deny", "policy": {"mode": "enabled", "allow_net": [], "deny_net": ["192.0.2.0/24"]}, "valid": false}
+  ],
+  "connection_cases": [
+    {"id": "direct-nat", "hostname": "", "policy_ip": "192.168.127.254", "connection_ip": "127.0.0.1", "port": 8080, "protocol": "tcp", "transport": "direct"},
+    {"id": "approved-hostname-candidate", "hostname": "api.example.com", "policy_ip": "192.0.2.99", "connection_ip": "198.51.100.8", "port": 443, "protocol": "tcp", "transport": "direct"}
+  ],
+  "replacement_cases": [
+    {"id": "matching-ack", "expected_revision": "rev-a", "current_revision": "rev-a", "candidate_revision": "rev-b", "ack_revision": "rev-b", "persistence": "succeeds", "outcome": "confirmed"},
+    {"id": "stale-public-precondition", "expected_revision": "rev-a", "current_revision": "rev-b", "candidate_revision": "rev-c", "outcome": "precondition-failed", "apply": false},
+    {"id": "mismatched-ack-without-readback", "expected_revision": "rev-a", "current_revision": "rev-a", "candidate_revision": "rev-b", "ack_revision": "rev-other", "readback": "unavailable", "outcome": "uncertain"},
+    {"id": "timeout-old-readback-pending", "expected_revision": "rev-a", "candidate_revision": "rev-b", "ack": "timeout", "readback_revision": "rev-a", "request_state": "pending", "outcome": "uncertain"},
+    {"id": "conditional-restoration", "expected_revision": "rev-a", "candidate_revision": "rev-b", "ack_revision": "rev-b", "persistence": "fails", "compensation_expected_revision": "rev-b", "restoration_revision": "rev-c", "restoration_policy_from": "rev-a"},
+    {"id": "stale-compensation", "candidate_revision": "rev-b", "current_revision": "rev-c", "compensation_expected_revision": "rev-b", "outcome": "conflict", "apply": false},
+    {"id": "old-backend", "revision_capability": false, "request_requires_revision": true, "outcome": "unsupported", "apply": false},
+    {"id": "crash-after-ack-before-persist", "persisted_revision": "rev-a", "observed_revision": "rev-b", "coordinator": "restarted", "outcome": "uncertain"}
+  ]
+}

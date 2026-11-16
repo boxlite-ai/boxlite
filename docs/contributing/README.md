@@ -35,6 +35,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-16 · [Outbound transport and policy update foundation](investigations/2026-11-16-egress-foundation.md): accepted connection boundary, conditional replacement, revision acknowledgements, and recovery contract; implementation pending.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
 - 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.

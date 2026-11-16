@@ -5,6 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +19,61 @@ func replacePolicy(t *testing.T, tap *guestTap, body string, wantStatus int) {
 	tap.policy.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/network/outbound", strings.NewReader(body)))
 	if response.Code != wantStatus {
 		t.Fatalf("policy response %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestOutboundPolicySharedContract(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "tests", "fixtures", "outbound", "contract-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Version int `json:"contract_version"`
+		Cases   []struct {
+			ID     string          `json:"id"`
+			Policy json.RawMessage `json:"policy"`
+			Valid  bool            `json:"valid"`
+		} `json:"policy_cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Version != 1 || len(fixture.Cases) == 0 {
+		t.Fatal("expected outbound contract v1 with policy examples")
+	}
+	for _, example := range fixture.Cases {
+		t.Run(example.ID, func(t *testing.T) {
+			tap := startNetwork(t, []string{"initial.example.org"})
+			readPolicy := func() outboundPolicy {
+				t.Helper()
+				response := httptest.NewRecorder()
+				tap.policy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/network/outbound", nil))
+				var policy outboundPolicy
+				if response.Code != http.StatusOK {
+					t.Fatalf("read policy: status=%d body=%s", response.Code, response.Body)
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &policy); err != nil {
+					t.Fatal(err)
+				}
+				return policy
+			}
+			want := readPolicy()
+			status := http.StatusBadRequest
+			if example.Valid {
+				status = http.StatusOK
+				want = outboundPolicy{}
+				if err := json.Unmarshal(example.Policy, &want); err != nil {
+					t.Fatal(err)
+				}
+				if want.AllowNet == nil {
+					want.AllowNet = []string{}
+				}
+			}
+			replacePolicy(t, tap, string(example.Policy), status)
+			if got := readPolicy(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("policy after replacement: got=%+v want=%+v", got, want)
+			}
+		})
 	}
 }
 
