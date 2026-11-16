@@ -150,6 +150,13 @@ it('setup entry does not admit Console just because Welcome was opened', async (
   expect(document.body.textContent).toContain('Preparing your organization')
 })
 
+it.each(['/dashboard/welcome/', '/DASHBOARD/WELCOME'])('setup entry keeps the Welcome header for %s', async (path) => {
+  await mount(path)
+  expect(document.body.textContent).toContain('Welcome content')
+  expect(document.querySelector('nav')).toBeNull()
+  expect(document.body.textContent).toContain('GET STARTED WITH BOXLITE')
+})
+
 it('setup entry admits non-owner members without owner-only reads', async () => {
   api.organizationsApi.listOrganizationMembers.mockResolvedValue({ data: [{ userId: 'user', role: 'member' }] })
   await mount()

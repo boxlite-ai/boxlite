@@ -5,7 +5,7 @@
  */
 
 import React, { Suspense, useEffect, useMemo, useState } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { matchPath, Outlet, useLocation } from 'react-router-dom'
 import { SetupHeader } from '@/components/SetupLayout'
 import { OnboardingEntryGate } from '@/components/OnboardingEntryGate'
 import { RoutePath } from '@/enums/RoutePath'
@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils'
 /** Keeps navigation mounted across lazy routes and owns header/banner viewport offsets. */
 const Dashboard: React.FC = () => {
   const { pathname } = useLocation()
-  const isWelcome = pathname === RoutePath.WELCOME
+  const isWelcome = Boolean(matchPath(RoutePath.WELCOME, pathname))
   const { selectedOrganization } = useSelectedOrganization()
   const [showVerifyEmailDialog, setShowVerifyEmailDialog] = useState(false)
   const config = useConfig()
