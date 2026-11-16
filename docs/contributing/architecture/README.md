@@ -264,7 +264,11 @@ Runs inside the Box, receives commands from host via gRPC.
 - `Files`: Copies in and out as tar streams. An upload streams straight into extraction, landed
   by the archive's first entry (see `tar` under [Shared library](#shared-library)); an entry
   that would land under a container mount is refused before it is written, and the entries
-  before it stay.
+  before it stay. Successful uploads hand only written files and newly created directories
+  to the container user. An empty archive preserves existing destination contents and
+  ownership, even with overwrite disabled; it creates no destination or parent directories.
+  An archive containing an empty directory can create a destination directory, which is
+  handed to the container user.
 
 **Guest-side modules:**
 

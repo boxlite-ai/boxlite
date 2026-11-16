@@ -7,6 +7,7 @@
 use crate::service::server::GuestServer;
 use crate::storage::attach::Attacher;
 use boxlite_shared::errors::BoxliteError;
+use boxlite_shared::tar::UnpackReport;
 use boxlite_shared::{
     files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
@@ -15,7 +16,6 @@ use nix::fcntl::OFlag;
 use std::collections::HashSet;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::{mpsc, OwnedRwLockReadGuard};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
@@ -130,8 +130,6 @@ struct DestBefore {
     /// Ancestors of the destination that `mkdir_parents` had to conjure,
     /// outermost first.
     created_dirs: Vec<PathBuf>,
-    /// The destination itself was already there.
-    dest_existed: bool,
     /// Absolute paths of archive entries that were already directories.
     ///
     /// A set, not a list: [`Self::created`] tests every target against it, and
@@ -141,39 +139,34 @@ struct DestBefore {
 }
 
 impl DestBefore {
-    /// Facts captured while they still describe the tree: the first two
-    /// before extraction starts, `existing_dirs` as extraction first reaches
-    /// each path.
-    fn recorded(
-        created_dirs: Vec<PathBuf>,
-        dest_existed: bool,
-        existing_dirs: HashSet<PathBuf>,
-    ) -> Self {
+    /// Ancestors sampled before extraction starts, and existing directories
+    /// sampled as extraction first reaches each path.
+    fn recorded(created_dirs: Vec<PathBuf>, existing_dirs: HashSet<PathBuf>) -> Self {
         Self {
             created_dirs,
-            dest_existed,
             existing_dirs,
         }
     }
 
     /// Absolute paths this upload created — exactly the set that may change
-    /// owner. Reads `dest_root` as it stands *after* extraction, so a
-    /// destination the copy conjured is classified by what it became.
+    /// owner, selected from the extraction report's actual writes.
     ///
     /// Every entry the archive carried, the parent directories extraction had
     /// to make, and the destination itself when we made it. Directories the
     /// image already shipped are left alone whether the request names one
     /// (`copy_in("./x", "/usr/local/bin/")`) or the archive does
     /// (`copy_in("./dist/.", "/usr/local")` carrying `bin/tool`) — handing either
-    /// to the box user is a permission change nobody asked for. Files are
-    /// always ours, existing or not: extraction just overwrote them, and a
-    /// file landing as the destination is the destination itself.
-    fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
+    /// to the box user is a permission change nobody asked for. Files this
+    /// upload wrote are ours, including one landing as the destination itself.
+    fn created(&self, dest_root: &Path, report: &UnpackReport) -> Vec<PathBuf> {
+        if !report.destination_written && report.entry_paths.is_empty() {
+            return Vec::new();
+        }
         let mut targets = self.created_dirs.clone();
-        if !dest_root.is_dir() || !self.dest_existed {
+        if report.destination_written {
             targets.push(dest_root.to_path_buf());
         }
-        targets.extend(entry_paths.iter().map(|rel| dest_root.join(rel)));
+        targets.extend(report.entry_paths.iter().map(|rel| dest_root.join(rel)));
 
         // Second line of defence behind sanitize_entry_path: nothing outside the
         // destination gets chowned, whatever the archive claimed its names were.
@@ -458,11 +451,8 @@ impl Files for GuestServer {
             }
         });
 
-        // The two pre-extraction facts — whether the destination existed,
-        // and which ancestors mkdir_parents still has to conjure. Both must
-        // be captured BEFORE extraction: afterwards the ancestors exist and
-        // are indistinguishable from ones the image shipped.
-        let dest_existed = dest_root.exists();
+        // Capture missing ancestors before extraction makes them
+        // indistinguishable from directories the image shipped.
         let created_dirs = missing_ancestors(&dest_root);
         let report = boxlite_shared::tar::unpack_stream_refusing(
             tar_stream,
@@ -476,12 +466,9 @@ impl Files for GuestServer {
         )
         .await
         .map_err(payload_refusal_status)?;
-        let boxlite_shared::tar::UnpackReport {
-            entry_paths,
-            preexisting_dirs,
-        } = report;
-        let existing_dirs = preexisting_dirs
-            .into_iter()
+        let existing_dirs = report
+            .preexisting_dirs
+            .iter()
             .map(|rel| dest_root.join(rel))
             .collect();
 
@@ -494,8 +481,8 @@ impl Files for GuestServer {
         self.chown_to_container_user(
             &container_id,
             dest_root.clone(),
-            entry_paths.into(),
-            DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
+            report,
+            DestBefore::recorded(created_dirs, existing_dirs),
         )
         .await;
 
@@ -610,7 +597,7 @@ impl GuestServer {
         &self,
         container_id: &str,
         dest_root: PathBuf,
-        entry_paths: Arc<[PathBuf]>,
+        report: UnpackReport,
         before: DestBefore,
     ) {
         let container_arc = {
@@ -642,7 +629,7 @@ impl GuestServer {
         // archive entry, so this runs on a blocking thread for the same reason
         // the sampling did.
         let handoff = tokio::task::spawn_blocking(move || {
-            let targets = before.created(&dest_root, &entry_paths);
+            let targets = before.created(&dest_root, &report);
             let (mut changed, mut failed) = (0usize, 0usize);
 
             // Anchored at the rootfs rather than at `dest_root`: the parents
@@ -723,6 +710,7 @@ impl GuestServer {
 mod tests {
     use super::*;
     use boxlite_shared::tar;
+    use std::sync::Arc;
 
     /// `/etc` holds the `/etc/hosts` bind but is not itself a mount, so naming
     /// it is fine — only paths at or below a mount are unreachable.
@@ -870,38 +858,23 @@ mod tests {
         }
     }
 
-    /// What the upload records about `dest` before extraction writes
-    /// `entries` (paths relative to it).
-    fn before_extraction(dest: &Path, entries: &[PathBuf]) -> DestBefore {
-        DestBefore::recorded(
-            missing_ancestors(dest),
-            dest.exists(),
-            entries
-                .iter()
-                .map(|rel| dest.join(rel))
-                .filter(|path| path.is_dir())
-                .collect(),
-        )
-    }
-
     /// Nothing the image shipped changes owner, however the copy reaches it.
     ///
     /// A destination directory is the shape the *request* names; an entry
     /// directory is the shape the *archive* names, which
-    /// `copy_in("./dist/.", "/usr/local")` produces. Only the second was
-    /// unguarded: `/usr/local/bin` is the image's, `bin/tool` is ours.
-    #[test]
-    fn directories_the_image_shipped_keep_their_owner() {
+    /// `copy_in("./dist/.", "/usr/local")` produces. `/usr/local/bin` is
+    /// the image's, `bin/tool` is ours.
+    #[tokio::test]
+    async fn directories_the_image_shipped_keep_their_owner() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("local");
         std::fs::create_dir_all(dest.join("bin")).unwrap();
-        let entries = vec![PathBuf::from("bin"), PathBuf::from("bin/tool")];
-
-        let before = before_extraction(&dest, &entries);
-        std::fs::write(dest.join("bin/tool"), b"payload").unwrap();
+        let source = tmp.path().join("source");
+        std::fs::create_dir_all(source.join("bin")).unwrap();
+        std::fs::write(source.join("bin/tool"), b"payload").unwrap();
 
         assert_eq!(
-            before.created(&dest, &entries),
+            copy_ownership_targets(&source, &dest, false).await,
             vec![dest.join("bin/tool")],
             "only the file this copy wrote is ours to hand over"
         );
@@ -910,18 +883,16 @@ mod tests {
     /// The other half: what the copy did conjure is all in scope — the
     /// destination it made, the parents `mkdir_parents` made for it, and the
     /// directories the archive named that were not there before.
-    #[test]
-    fn everything_the_copy_conjured_is_handed_over() {
+    #[tokio::test]
+    async fn everything_the_copy_conjured_is_handed_over() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("srv/probe");
-        let entries = vec![PathBuf::from("pkg"), PathBuf::from("pkg/file.txt")];
-
-        let before = before_extraction(&dest, &entries);
-        std::fs::create_dir_all(dest.join("pkg")).unwrap();
-        std::fs::write(dest.join("pkg/file.txt"), b"payload").unwrap();
+        let source = tmp.path().join("source");
+        std::fs::create_dir_all(source.join("pkg")).unwrap();
+        std::fs::write(source.join("pkg/file.txt"), b"payload").unwrap();
 
         assert_eq!(
-            before.created(&dest, &entries),
+            copy_ownership_targets(&source, &dest, false).await,
             vec![
                 tmp.path().join("srv"),
                 dest.clone(),
@@ -929,30 +900,62 @@ mod tests {
                 dest.join("pkg/file.txt"),
             ]
         );
+
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        for include_parent in [false, true] {
+            let parent = tmp.path().join(include_parent.to_string());
+            let dest = parent.join("dest");
+            let targets = copy_ownership_targets(&empty, &dest, include_parent).await;
+            assert!(dest.is_dir());
+            assert_eq!(targets, vec![parent, dest]);
+        }
     }
 
     /// A destination *file* is ours whether or not it was there: extraction
     /// just overwrote it. A file landing as the destination is reported with
     /// no path below it, so the destination itself is the target.
-    #[test]
-    fn an_existing_destination_file_is_still_ours() {
+    #[tokio::test]
+    async fn an_existing_destination_file_is_still_ours() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("payload.txt");
         std::fs::write(&dest, b"old").unwrap();
 
-        let before = before_extraction(&dest, &[]);
-        std::fs::write(&dest, b"new").unwrap();
+        let source = tmp.path().join("source");
+        std::fs::write(&source, b"new").unwrap();
 
-        assert_eq!(before.created(&dest, &[]), vec![dest.clone()]);
+        assert_eq!(
+            copy_ownership_targets(&source, &dest, true).await,
+            vec![dest.clone()]
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
     }
 
-    async fn unpack_ownership_targets(tar_path: &Path, dest: &Path) -> Vec<PathBuf> {
+    async fn copy_ownership_targets(src: &Path, dest: &Path, include_parent: bool) -> Vec<PathBuf> {
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        tar::pack(
+            src.to_path_buf(),
+            archive.path().to_path_buf(),
+            tar::PackContext {
+                follow_symlinks: false,
+                include_parent,
+            },
+        )
+        .await
+        .unwrap();
+        unpack_ownership_targets(archive.path(), dest, true).await
+    }
+
+    async fn unpack_ownership_targets(
+        tar_path: &Path,
+        dest: &Path,
+        overwrite: bool,
+    ) -> Vec<PathBuf> {
         let opts = tar::UnpackContext {
-            overwrite: true,
+            overwrite,
             mkdir_parents: true,
             force_directory: false,
         };
-        let dest_existed = dest.exists();
         let created_dirs = missing_ancestors(dest);
         let bytes = std::fs::read(tar_path).unwrap();
         let report = tar::unpack_stream(
@@ -964,14 +967,42 @@ mod tests {
         .unwrap();
         let before = DestBefore::recorded(
             created_dirs,
-            dest_existed,
             report
                 .preexisting_dirs
                 .iter()
                 .map(|rel| dest.join(rel))
                 .collect(),
         );
-        before.created(dest, &report.entry_paths)
+        before.created(dest, &report)
+    }
+
+    #[tokio::test]
+    async fn empty_upload_preserves_an_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("empty.tar");
+        std::fs::write(&archive, [0u8; 1024]).unwrap();
+        let dest = tmp.path().join("payload.txt");
+        std::fs::write(&dest, b"existing payload").unwrap();
+
+        for overwrite in [false, true] {
+            let targets = unpack_ownership_targets(&archive, &dest, overwrite).await;
+            assert_eq!(std::fs::read(&dest).unwrap(), b"existing payload");
+            assert!(targets.is_empty(), "overwrite={overwrite}: {targets:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_upload_does_not_create_ownership_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("empty.tar");
+        std::fs::write(&archive, [0u8; 1024]).unwrap();
+        let dest = tmp.path().join("missing/parent/payload.txt");
+
+        for overwrite in [false, true] {
+            let targets = unpack_ownership_targets(&archive, &dest, overwrite).await;
+            assert!(!tmp.path().join("missing").exists());
+            assert!(targets.is_empty(), "overwrite={overwrite}: {targets:?}");
+        }
     }
 
     #[tokio::test]
@@ -995,7 +1026,7 @@ mod tests {
         .unwrap();
 
         let dest = rootfs.join("link");
-        let targets = unpack_ownership_targets(&archive, &dest).await;
+        let targets = unpack_ownership_targets(&archive, &dest, true).await;
         assert_eq!(std::fs::read_link(&dest).unwrap(), Path::new("etc"));
         assert!(!targets.is_empty());
         assert!(
@@ -1025,7 +1056,7 @@ mod tests {
         .await
         .unwrap();
 
-        let targets = unpack_ownership_targets(&archive, &dest).await;
+        let targets = unpack_ownership_targets(&archive, &dest, true).await;
         assert_eq!(
             std::fs::read(rootfs.join("usr/lib/tool")).unwrap(),
             b"copied payload"

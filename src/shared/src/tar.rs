@@ -240,6 +240,9 @@ pub struct UnpackContext {
 /// Paths observed while unpacking a one-shot tar stream.
 #[derive(Debug, Default)]
 pub struct UnpackReport {
+    /// The destination itself was written as a file or symlink, or created
+    /// as a directory. An empty archive leaves this false.
+    pub destination_written: bool,
     /// Extracted paths relative to the destination, including implied
     /// directories. A file that lands as the destination itself is not
     /// listed: it has no path below the destination.
@@ -325,6 +328,10 @@ fn extract_from_reader<R: Read>(
         unpack_at(&mut dir, dest, &landed).map_err(|e| {
             BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
         })?;
+    }
+    if let Some(report) = report {
+        report.destination_written =
+            landing.decided() && (landing.lands_a_file() || !landing.dest_exists);
     }
     Ok(())
 }
