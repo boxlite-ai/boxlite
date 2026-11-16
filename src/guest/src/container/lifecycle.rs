@@ -370,6 +370,13 @@ impl Container {
         self.mount_destinations.push(destination);
     }
 
+    /// Forget a runtime mount that left the container (`Container.Detach`).
+    /// Unknown destinations are ignored: the mount table is the truth.
+    pub fn remove_mount_destination(&mut self, destination: &Path) {
+        self.mount_destinations
+            .retain(|recorded| recorded != destination);
+    }
+
     /// The attacher, behind the lock that orders mounts and copies (see the
     /// field). Taken without holding this container's lock.
     pub(crate) fn attacher(&self) -> Arc<tokio::sync::RwLock<Attacher>> {

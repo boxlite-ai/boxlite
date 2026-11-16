@@ -76,7 +76,10 @@ build_shim_binary() {
         local arch
         arch=$(uname -m)
         local target="${arch}-unknown-linux-gnu"
-        export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
+        # LIBRARY_PATH comes from the devShell (glibc static stubs: libutil,
+        # librt, libpthread, libm) — without a -L the static link cannot find
+        # them on hosts whose toolchain does not search the store path.
+        export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition${LIBRARY_PATH:+ -C link-arg=-L$LIBRARY_PATH}"
         echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
         cargo build $build_flag -p boxlite-shim --target "$target"
         cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"

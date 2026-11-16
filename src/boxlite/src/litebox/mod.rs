@@ -14,6 +14,7 @@ mod executions;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
+pub mod mounts;
 mod network;
 pub(crate) mod ports;
 mod snapshot;
@@ -122,6 +123,12 @@ impl LiteBox {
     /// See [`ExecutionsHandle`].
     pub fn executions(&self) -> ExecutionsHandle {
         ExecutionsHandle::new(Arc::clone(&self.box_backend))
+    }
+
+    /// Runtime directory delivery on the running Box: add, remove, list and
+    /// inspect mounts. See [`crate::litebox::mounts`].
+    pub fn mounts(&self) -> crate::litebox::mounts::MountsHandle {
+        crate::litebox::mounts::MountsHandle::new(Arc::clone(&self.box_backend))
     }
 
     /// Attach to a session in the box.

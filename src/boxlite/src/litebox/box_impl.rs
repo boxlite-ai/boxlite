@@ -5,6 +5,7 @@
 // ============================================================================
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -19,6 +20,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::attach::AttachOptions;
 use super::config::BoxConfig;
 use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
+use super::mounts::MountCoordinator;
 use super::state::BoxState;
 use crate::disk::Disk;
 use crate::event_listener::EventListener;
@@ -91,6 +93,9 @@ pub(crate) struct LiveState {
     )]
     agent_installs: tokio::sync::Mutex<()>,
     agents_mounted: OnceCell<()>,
+    /// Runtime directory delivery (M6): coordinator plus the records of this
+    /// VM run. A stop drops them together with the control socket.
+    mounts: MountCoordinator,
 }
 
 impl LiveState {
@@ -117,6 +122,7 @@ impl LiveState {
             bind_mount,
             agent_installs: tokio::sync::Mutex::new(()),
             agents_mounted: OnceCell::new(),
+            mounts: MountCoordinator::new(),
         }
     }
 }
@@ -1689,6 +1695,56 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self
     }
 
+    async fn mounts_add(
+        &self,
+        request: crate::litebox::mounts::MountRequest,
+    ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
+        let live = self.live_state().await?;
+        let container_id = self.container_id().to_string();
+        let control = crate::vmm::controller::mount_control::MountControlClient::connect(
+            &self.layout.sockets_dir(),
+        )
+        .map_err(|error| {
+            BoxliteError::Unsupported(format!(
+                "runtime directory delivery socket unavailable: {error}"
+            ))
+        })?;
+        let mut guest = live.guest_session.container().await?;
+        live.mounts
+            .add(&container_id, control, &mut guest, request)
+            .await
+    }
+
+    async fn mounts_remove(&self, target: &Path) -> BoxliteResult<()> {
+        let live = self.live_state().await?;
+        let container_id = self.container_id().to_string();
+        let control = crate::vmm::controller::mount_control::MountControlClient::connect(
+            &self.layout.sockets_dir(),
+        )
+        .map_err(|error| {
+            BoxliteError::Unsupported(format!(
+                "runtime directory delivery socket unavailable: {error}"
+            ))
+        })?;
+        let mut guest = live.guest_session.container().await?;
+        live.mounts
+            .remove(&container_id, control, &mut guest, target)
+            .await
+    }
+
+    async fn mounts_list(&self) -> BoxliteResult<Vec<crate::litebox::mounts::MountInfo>> {
+        let live = self.live_state().await?;
+        Ok(live.mounts.list())
+    }
+
+    async fn mounts_get(
+        &self,
+        target: &Path,
+    ) -> BoxliteResult<Option<crate::litebox::mounts::MountInfo>> {
+        let live = self.live_state().await?;
+        Ok(live.mounts.get(target))
+    }
+
     async fn info(&self) -> BoxliteResult<BoxInfo> {
         self.refresh_network_policy()?;
         Ok(BoxImpl::info(self))
@@ -1993,6 +2049,12 @@ mod tests {
             &self,
             _: Request<boxlite_shared::ContainerMountRequest>,
         ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
+            Err(Status::unimplemented("not used by these tests"))
+        }
+        async fn detach(
+            &self,
+            _: Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerDetachResponse>, Status> {
             Err(Status::unimplemented("not used by these tests"))
         }
     }

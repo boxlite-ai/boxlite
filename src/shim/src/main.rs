@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use boxlite::vmm::exit_info::ExitErrorKind;
 use boxlite::{
     util,
-    vmm::{self, ExitInfo, InstanceSpec, VmmConfig, controller::watchdog},
+    vmm::{self, ExitInfo, InstanceSpec, VmmConfig, VmmKind, controller::watchdog},
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crash_capture::CrashCapture;
@@ -192,6 +192,36 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // Save detach/transport before config is moved into engine.create()
     let detach = config.detach;
     let transport = config.transport.clone();
+    let engine_kind = config.engine;
+
+    // Runtime directory delivery (native VMM only): serve the mount-control
+    // socket for the lifetime of the VM. The aggregate handle appears when
+    // the engine built the virtio-fs device; the server resolves it lazily
+    // per request, so early requests answer ENODEV instead of racing boot.
+    if engine_kind == VmmKind::Native {
+        let box_dir = config
+            .exit_file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let sockets_dir = box_dir.join("sockets");
+        std::fs::create_dir_all(&sockets_dir).ok();
+        match boxlite::vmm::controller::mount_control::bind(&sockets_dir) {
+            Ok(listener) => {
+                let tag = boxlite_shared::constants::mount_tags::AGGREGATE.to_string();
+                std::thread::Builder::new()
+                    .name("mount-control".into())
+                    .spawn(move || {
+                        boxlite::vmm::controller::mount_control::serve(listener, tag);
+                    })
+                    .map_err(|e| BoxliteError::Engine(format!("spawn mount-control: {e}")))?;
+                timing("mount control socket listening");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "mount control socket unavailable; runtime directory delivery disabled");
+            }
+        }
+    }
 
     // Initialize engine options with defaults
     let options = VmmConfig::default();

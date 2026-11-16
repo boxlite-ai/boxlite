@@ -36,10 +36,13 @@
           nodejs_22 corepack postgresql_17 redis mountpoint-s3 docker-compose
           llvm libclang
           flex bison bc elfutils
-          meson ninja libcap
+          meson ninja libcap libseccomp
           protobuf cmake
         ];
         LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+        # The bundled bubblewrap links libcap dynamically; without this the
+        # loader cannot find the library outside the nix build environment.
+        LD_LIBRARY_PATH = "${pkgs.libcap.lib}/lib";
         # Static glibc only for -static links; as a package it breaks dynamic ones.
         LIBRARY_PATH = "${pkgs.glibc.static}/lib";
         BOXLITE_LIBRESOLV_DIR = "${resolvDir}";

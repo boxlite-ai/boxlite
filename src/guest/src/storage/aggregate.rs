@@ -1,7 +1,8 @@
 //! Aggregate mounts own their bindings and roots until the whole batch succeeds.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::layout::GUEST_BASE;
@@ -10,6 +11,25 @@ use nix::mount::{mount, umount, MsFlags};
 
 use super::virtiofs::VirtiofsMount;
 use super::volume::{mount_volume, resolve_mount_point};
+
+/// Aggregate roots mounted during guest initialization, keyed by device tag.
+/// The mount RPC delivers runtime exports from these roots; the agent
+/// process serves one VM, so the map lives as long as the process.
+static ROOTS: LazyLock<Mutex<BTreeMap<String, PathBuf>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+/// Records a mounted aggregate root under its device tag.
+fn remember_root(tag: &str, root: &Path) {
+    ROOTS
+        .lock()
+        .unwrap()
+        .insert(tag.to_string(), root.to_path_buf());
+}
+
+/// The registered root of an aggregate device, for runtime export delivery.
+pub(crate) fn aggregate_root(tag: &str) -> Option<PathBuf> {
+    ROOTS.lock().unwrap().get(tag).cloned()
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum Mount {
@@ -176,7 +196,9 @@ pub(crate) fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<MountedVolumes>
         |operation| match operation {
             Mount::Root { tag, target } => {
                 prepare_destination(target)?;
-                VirtiofsMount::mount(tag, target, false)
+                VirtiofsMount::mount(tag, target, false)?;
+                remember_root(tag, target);
+                Ok(())
             }
             Mount::Bind {
                 source,

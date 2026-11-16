@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io;
+use std::sync::Arc;
 
 use super::{AggregateFs, Share, descriptor::request_buffers, server::Server};
 use crate::virtio::{
@@ -50,6 +51,12 @@ impl Fs {
             server: Server::new(AggregateFs::new(shares)?),
             activation: None,
         })
+    }
+
+    /// The aggregate filesystem this device serves, shared with the
+    /// process-wide mount registry for the control socket.
+    pub(crate) fn filesystem(&self) -> Arc<AggregateFs> {
+        self.server.filesystem()
     }
 }
 

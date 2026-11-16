@@ -76,5 +76,22 @@ The driver calls the same `storage::mount_volumes` as the initialization RPC. It
 
 This test establishes the guest mount adapter and native device working together. The native runtime sends aggregate guest instructions; libkrun retains per-tag instructions. The [M2/M3 matrices](../../docs/guides/native-vmm.md#linux-x86_64-m2-and-m3-matrices) exercise container binding, copy RPCs, volumes and Box lifecycle separately from this mount-only acceptance test.
 
+## Runtime directory delivery (M6)
+
+`Container.Mount` accepts two delivery forms. Legacy share folders stay
+read-only and resolve inside the container's volumes directory. Aggregate
+delivery carries `export_key` + `device_tag`: the agent binds the export from
+the aggregate root that guest initialization registered (per device tag), in
+the read-only or writable mode the host requested — content policy stays with
+the export's backend policy either way.
+
+`Container.Detach` undoes a runtime mount with `MNT_DETACH`: the detach child
+joins the container mount namespace, opens the destination without creating
+or following links, and unties it by path. Descriptors opened before the
+detach keep serving their content; the destination directory itself remains.
+The guest's FUSE layer reports zero entry/attribute timeouts, so a retired
+export name resolves to ENOENT on the next lookup and a re-registered name
+resolves to its new identity instead of a cached dentry.
+
 The acceptance init lives in `tests/support/mount_init.rs` and is included only
 with `integration-test-init`. It is not a standalone Cargo integration test.

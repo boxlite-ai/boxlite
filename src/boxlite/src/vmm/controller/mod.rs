@@ -15,6 +15,7 @@
 //! - Caller-controlled GuestSession creation
 
 mod handler;
+pub mod mount_control;
 mod shim;
 mod spawn;
 pub mod watchdog;

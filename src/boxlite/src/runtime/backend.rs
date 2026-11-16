@@ -96,6 +96,43 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn start(&self) -> BoxliteResult<()>;
 
+    // ---- Runtime directory delivery (M6). Local native VMs implement these;
+    // remote or non-native backends keep the unsupported defaults. ----
+
+    /// Deliver a host directory into the running container.
+    async fn mounts_add(
+        &self,
+        _request: crate::litebox::mounts::MountRequest,
+    ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
+        Err(BoxliteError::Unsupported(
+            "runtime directory delivery requires a local native VM".into(),
+        ))
+    }
+
+    /// Lazily detach the runtime mount at `target`.
+    async fn mounts_remove(&self, _target: &Path) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "runtime directory delivery requires a local native VM".into(),
+        ))
+    }
+
+    /// Every runtime mount of the current VM run.
+    async fn mounts_list(&self) -> BoxliteResult<Vec<crate::litebox::mounts::MountInfo>> {
+        Err(BoxliteError::Unsupported(
+            "runtime directory delivery requires a local native VM".into(),
+        ))
+    }
+
+    /// The runtime mount at `target`, if any.
+    async fn mounts_get(
+        &self,
+        _target: &Path,
+    ) -> BoxliteResult<Option<crate::litebox::mounts::MountInfo>> {
+        Err(BoxliteError::Unsupported(
+            "runtime directory delivery requires a local native VM".into(),
+        ))
+    }
+
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
     async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>>;

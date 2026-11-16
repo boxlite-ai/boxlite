@@ -77,6 +77,7 @@ pub use config::{
 };
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
+pub use virtio::fs::{AggregateFs, Share, insert_aggregate, lookup_aggregate};
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test
