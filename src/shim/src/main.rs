@@ -198,6 +198,9 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // socket for the lifetime of the VM. The aggregate handle appears when
     // the engine built the virtio-fs device; the server resolves it lazily
     // per request, so early requests answer ENODEV instead of racing boot.
+    // The aggregate filesystem and its server only exist on Linux x86_64;
+    // other targets run native VMs without runtime directory delivery.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     if engine_kind == VmmKind::Native {
         let box_dir = config
             .exit_file
@@ -221,6 +224,10 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
                 tracing::warn!(error = %e, "mount control socket unavailable; runtime directory delivery disabled");
             }
         }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    if engine_kind == VmmKind::Native {
+        tracing::warn!("runtime directory delivery is Linux x86_64 only; disabled on this target");
     }
 
     // Initialize engine options with defaults
