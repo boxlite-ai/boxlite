@@ -72,9 +72,8 @@ async fn by_target_routes_reject_an_empty_target_query() {
 }
 
 #[tokio::test]
-async fn an_unreachable_runtime_surfaces_the_shared_error_body() {
-    // lifecycle_state points the REST runtime at a port nothing listens on,
-    // so every box lookup fails; the handlers must map that, not hang.
+async fn source_add_is_denied_before_runtime_lookup_and_remove_preserves_errors() {
+    // The default server must deny access to host sources before box lookup.
     let state = Arc::new(lifecycle_state());
 
     let (status, body) = status_of(
@@ -90,13 +89,8 @@ async fn an_unreachable_runtime_surfaces_the_shared_error_body() {
         .await,
     )
     .await;
-    assert!(status.is_server_error(), "got {status}");
-    assert!(
-        !body["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .is_empty()
-    );
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"]["code"], "permission_denied");
 
     let (status, _) = status_of(
         remove_mount(
@@ -111,4 +105,19 @@ async fn an_unreachable_runtime_surfaces_the_shared_error_body() {
     )
     .await;
     assert!(status.is_server_error(), "got {status}");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn approved_source_reaches_box_lookup() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().canonicalize().unwrap();
+    let mut state = lifecycle_state();
+    state.mount_sources = super::super::mount_sources::MountSources::new(&[source.clone()]).unwrap();
+    let (status, body) = status_of(add_mount(
+        State(Arc::new(state)), Path("box-1".into()),
+        Json(CreateMountRequest { source: source.display().to_string(), target: "/workspace".into(), read_only: false }),
+    ).await).await;
+    assert!(status.is_server_error(), "approved source must reach unavailable upstream: {status}");
+    assert_ne!(body["error"]["code"], "permission_denied");
 }

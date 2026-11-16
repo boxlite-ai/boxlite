@@ -53,7 +53,7 @@ impl PyBox {
 
     /// Runtime directory delivery namespace (native VM only).
     ///
-    /// Usage: `await box.mounts.add(request)`, `await box.mounts.list()`.
+    /// Usage: `await box.mounts().add(request)`, `await box.mounts().list()`.
     fn mounts(&self) -> PyMountsHandle {
         PyMountsHandle {
             handle: Arc::clone(&self.handle),

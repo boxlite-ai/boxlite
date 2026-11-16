@@ -46,8 +46,8 @@ impl From<MountInfo> for JsMountInfo {
 
 /// Handle for runtime directory delivery on a Box.
 ///
-/// Accessed via `box.mounts()`: `await box.mounts().add(...)`,
-/// `await box.mounts().list()`.
+/// Accessed via `box.mounts`: `await box.mounts.add(...)`,
+/// `await box.mounts.list()`.
 #[napi]
 pub struct JsMountsHandle {
     pub(crate) handle: Arc<LiteBox>,

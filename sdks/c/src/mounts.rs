@@ -22,6 +22,14 @@ use crate::event_queue::{CBoxMountCb, CBoxMountJsonCb, RuntimeEvent, push_event}
 ///
 /// `source` is a host directory, `box_path` the container target, and
 /// `read_only` non-zero for a read-only delivery.
+///
+/// # Safety
+/// `handle` must remain live and must not be freed concurrently until this
+/// call returns: the entrypoint synchronously clones its owned box handle.
+/// Strings must be readable NUL-terminated UTF-8 through this call; they are
+/// copied before return. `out_error`, when non-null, must be writable.
+/// After successful submission, keep the runtime, callback and `user_data`
+/// valid until completion is dispatched by `boxlite_runtime_drain`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_mount_add(
     handle: *mut BoxHandle,
@@ -43,6 +51,10 @@ pub unsafe extern "C" fn boxlite_box_mount_add(
 ///
 /// Idempotent: removing an unknown target completes successfully; a mount
 /// already converging reports success once the record reaches `detaching`.
+///
+/// # Safety
+/// The handle, strings, error output, runtime and callback obey the same
+/// lifetime requirements as [`boxlite_box_mount_add`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_mount_remove(
     handle: *mut BoxHandle,
@@ -58,6 +70,11 @@ pub unsafe extern "C" fn boxlite_box_mount_remove(
 ///
 /// On success, the callback owns the returned string and must release it
 /// with `boxlite_free_string`.
+///
+/// # Safety
+/// The handle, error output, runtime and callback obey the same lifetime
+/// requirements as [`boxlite_box_mount_add`]. Callback errors are borrowed
+/// only for the callback duration; successful JSON strings are caller-owned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_mount_list(
     handle: *mut BoxHandle,
@@ -73,6 +90,11 @@ pub unsafe extern "C" fn boxlite_box_mount_list(
 ///
 /// On success, the callback owns the returned string and must release it
 /// with `boxlite_free_string`.
+///
+/// # Safety
+/// The handle, strings, error output, runtime and callback obey the same
+/// lifetime requirements as [`boxlite_box_mount_add`]. Callback errors are
+/// borrowed only for the callback duration; successful JSON is caller-owned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_mount_get(
     handle: *mut BoxHandle,

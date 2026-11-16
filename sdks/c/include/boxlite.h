@@ -1636,6 +1636,16 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
+// Safety contract for all four mount functions: handle must be live and
+// cannot be freed concurrently with the call. The box handle is cloned
+// synchronously; handle may be freed after return. Input strings are borrowed
+// NUL-terminated UTF-8 and copied before return; out_error must be writable
+// when non-NULL. On successful submission keep the runtime, callback and
+// user_data valid until completion is dispatched by boxlite_runtime_drain.
+// Callback error pointers are borrowed only during dispatch. Successful
+// list/get JSON strings transfer ownership; release with boxlite_free_string.
+// Immediate submission errors do not schedule a completion callback.
+//
 // Submit a runtime directory delivery into the running container.
 //
 // `source` is a host directory, `box_path` the container target, and

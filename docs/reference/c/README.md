@@ -1706,6 +1706,13 @@ boxlite_box_mount_list(handle, cb, user_data, &err);   // JSON array of mounts
 boxlite_box_mount_get(handle, "/workspace", cb, user_data, &err); // object or JSON null
 ```
 
+Keep `handle` live and prevent concurrent free until each function returns;
+the entrypoint clones the owned box synchronously. Input strings are copied
+before return. After a successful submission, keep the runtime, callback and
+`user_data` alive until `boxlite_runtime_drain` dispatches completion. Callback
+error pointers are borrowed only during dispatch. Successful JSON strings
+belong to the callback recipient and require `boxlite_free_string`.
+
 A mount document reports `source`, `target`, `readOnly` and `state`
 (`"mounted"` / `"detaching"`). `remove` is idempotent: an unknown target
 completes successfully; a mount already converging reports success once the

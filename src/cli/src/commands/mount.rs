@@ -34,11 +34,11 @@ pub struct AddArgs {
     pub target: String,
 
     /// Host directory to deliver (must be a real directory, no symlinks)
-    #[arg(long, value_name = "HOST_DIR")]
+    #[arg(long, required = true, value_name = "HOST_DIR")]
     pub source: std::path::PathBuf,
 
     /// Absolute path inside the container
-    #[arg(long, value_name = "CONTAINER_PATH")]
+    #[arg(long, required = true, value_name = "CONTAINER_PATH")]
     pub box_path: String,
 
     /// Deliver read-only (content policy still follows the export)
@@ -53,7 +53,7 @@ pub struct RmArgs {
     pub target: String,
 
     /// Absolute path inside the container
-    #[arg(long, value_name = "CONTAINER_PATH")]
+    #[arg(long, required = true, value_name = "CONTAINER_PATH")]
     pub box_path: String,
 }
 
@@ -64,7 +64,7 @@ pub struct LsArgs {
     pub target: String,
 
     /// Output format (table, json, yaml)
-    #[arg(long, default_value = "table")]
+    #[arg(long, default_value = "table", value_parser = ["table", "json", "yaml"])]
     pub format: String,
 }
 
@@ -75,11 +75,11 @@ pub struct InspectArgs {
     pub target: String,
 
     /// Absolute path inside the container
-    #[arg(long, value_name = "CONTAINER_PATH")]
+    #[arg(long, required = true, value_name = "CONTAINER_PATH")]
     pub box_path: String,
 
     /// Output format (table, json, yaml)
-    #[arg(long, default_value = "table")]
+    #[arg(long, default_value = "table", value_parser = ["table", "json", "yaml"])]
     pub format: String,
 }
 
@@ -190,5 +190,26 @@ pub async fn execute(args: MountArgs, global: &GlobalFlags) -> anyhow::Result<()
                 .ok_or_else(|| anyhow::anyhow!("No mount at {}", args.box_path))?;
             emit(&[MountPresenter::from(&info)], &args.format)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        mount: MountArgs,
+    }
+
+    #[test]
+    fn required_paths_and_supported_formats_are_checked_at_parse_time() {
+        assert!(Cli::try_parse_from(["mount", "add", "box"]).is_err());
+        assert!(Cli::try_parse_from(["mount", "rm", "box"]).is_err());
+        assert!(Cli::try_parse_from(["mount", "inspect", "box"]).is_err());
+        assert!(Cli::try_parse_from(["mount", "ls", "box", "--format", "invalid"]).is_err());
+        assert!(Cli::try_parse_from(["mount", "add", "box", "--source", "/host", "--box-path", "/guest"]).is_ok());
     }
 }

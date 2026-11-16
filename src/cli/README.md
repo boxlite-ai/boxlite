@@ -845,6 +845,25 @@ boxlite completion fish > ~/.config/fish/completions/boxlite.fish
 
 Then reload your shell or source the file.
 
+## Experimental runtime mounts
+
+With `BOXLITE_EXPERIMENTAL=native-vmm`, use `boxlite mount add BOX --source /host/project --box-path /workspace [--read-only]`,
+`boxlite mount ls BOX`, `boxlite mount inspect BOX --box-path /workspace`, and
+`boxlite mount rm BOX --box-path /workspace`. These hidden commands require an already running native VM.
+
+REST host sources are denied by default. The server operator explicitly grants
+trees with `BOXLITE_EXPERIMENTAL=native-vmm boxlite serve --mount-source-root /srv/projects`;
+repeat the flag for additional roots. Roots must be absolute canonical directories.
+On Linux, root and source descriptors are opened with `openat2` beneath pinned
+directories with symlinks forbidden; the validated descriptor reaches the mount
+transaction without reopening the source path. Systems without `openat2` fail closed.
+
+A grant authorizes every authenticated API client to expose that tree to boxes.
+The operator owns authentication and bind policy. Roots and their directory
+topology must remain operator-controlled: descriptor pinning preserves identity
+across renames, while host writers may still change exported contents. Grants
+do not sandbox the host processes that can mutate the approved tree.
+
 ## Environment variables
 
 | Variable | Description |

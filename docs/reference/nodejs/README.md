@@ -1211,3 +1211,9 @@ const one = await mounts.get("/workspace"); // JsMountInfo | null
 (`"mounted"` / `"detaching"`). A failed add unwinds its completed steps; a
 failed removal leaves the record in `detaching` and a repeated removal
 converges. Mounts do not survive a VM stop.
+
+`JsMountRequest`, `JsMountInfo` and `JsMountsHandle` are exported types from
+`@boxlite-ai/boxlite`. On REST runtimes, `source` names a directory on the
+server host. The server denies additions unless its operator supplies
+`serve --mount-source-root PATH` with the native VM experimental opt-in.
+Only real directories beneath approved roots are allowed; symlinks are rejected.
