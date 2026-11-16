@@ -26,8 +26,8 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 
 	// Newer clients carry the archive shape; older clients omit it. Either way
-	// we stream straight into the guest — hint=Unknown makes the guest peek
-	// the archive to decide (its pre-hint behavior). No runner-side staging.
+	// we stream straight into the guest, which lands every upload by the
+	// archive's first entry. No runner-side staging.
 	kind := parseSourceIsDir(ctx.Query("source_is_dir"))
 	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, kind, ctx.Request.Body); err != nil {
 		respondCopyError(ctx, err)
@@ -83,7 +83,7 @@ func BoxliteFileDownload(ctx *gin.Context) {
 
 // parseSourceIsDir maps the optional source_is_dir query parameter to a
 // copy-source kind. Absent or malformed values mean the client predates the
-// hint → Unknown, which makes the guest peek the archive to decide.
+// hint → Unknown; the guest lands the archive by its first entry either way.
 func parseSourceIsDir(raw string) boxlite.CopySourceKind {
 	if raw == "" {
 		return boxlite.CopySourceUnknown

@@ -178,9 +178,9 @@ async fn copy_in_hands_files_to_the_box_user() {
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
-/// The streaming (hinted) copy-in arm must hand created files to the box
-/// user exactly like the staged arm does — the extraction recording is the
-/// list that decides what changes owner.
+/// A streamed copy-in must hand created files to the box user exactly like
+/// the path-based copy does. The extraction report identifies what this
+/// upload actually wrote, so an empty archive leaves existing ownership alone.
 #[tokio::test(flavor = "multi_thread")]
 async fn streaming_copy_in_hands_files_to_the_box_user() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -241,8 +241,8 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
         "streamed file must belong to the box user"
     );
 
-    // mkdir_parents conjured /srv/probe — the staged arm hands it over, and
-    // the streamed arm must match, or the workload cannot replace its file.
+    // mkdir_parents conjured /srv/probe — it must be handed over too, or the
+    // workload cannot replace its file.
     let dir_owner = exec_stdout(
         &bx,
         BoxCommand::new("stat").args(["-c", "%u:%g", "/srv/probe"]),
@@ -263,6 +263,40 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
         content, "PAYLOAD-STREAM-OWNED\n",
         "box user must be able to read it"
     );
+
+    let destination = "/etc/alpine-release";
+    let metadata = BoxCommand::new("stat").args(["-c", "%u:%g:%a:%s", destination]);
+    let before = exec_stdout(&bx, metadata).await;
+    assert!(
+        before.starts_with("0:0:"),
+        "image file must start root-owned"
+    );
+    let original_content = exec_stdout(&bx, BoxCommand::new("cat").args([destination])).await;
+    for overwrite in [false, true] {
+        let empty_tar = Box::pin(tokio_stream::iter([Ok(vec![0u8; 1024])]));
+        bx.copy_in_stream(
+            empty_tar,
+            destination,
+            CopySourceKind::from_wire(None),
+            CopyOptions {
+                overwrite,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("empty upload must succeed");
+        let after = exec_stdout(
+            &bx,
+            BoxCommand::new("stat").args(["-c", "%u:%g:%a:%s", destination]),
+        )
+        .await;
+        assert_eq!(after, before, "empty upload must preserve file metadata");
+        assert_eq!(
+            exec_stdout(&bx, BoxCommand::new("cat").args([destination])).await,
+            original_content,
+            "empty upload must preserve file contents"
+        );
+    }
 
     let _ = bx.stop().await;
     let _ = runtime.remove(bx.id().as_str(), true).await;
