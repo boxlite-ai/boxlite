@@ -2,8 +2,12 @@ package attest
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"google.golang.org/api/idtoken"
@@ -45,6 +49,11 @@ func NewGoogleTokenVerifier(ctx context.Context, client *http.Client) (*GoogleTo
 // Verify returns ErrInvalidProof for a bad token and a plain error when
 // fetching Google's keys failed.
 func (g *GoogleTokenVerifier) Verify(ctx context.Context, token, audience string) (*idtoken.Payload, error) {
+	// idtoken v0.247.0 panics on a short ES256 signature, and instance identity
+	// tokens are always RS256, so nothing else reaches the validator.
+	if !signedRS256(token) {
+		return nil, invalid(GCPIITName, "token is not RS256")
+	}
 	var outage atomic.Bool
 	payload, err := g.validator.Validate(context.WithValue(ctx, outageKey{}, &outage), token, audience)
 	switch {
@@ -53,9 +62,18 @@ func (g *GoogleTokenVerifier) Verify(ctx context.Context, token, audience string
 	case outage.Load() || ctx.Err() != nil:
 		return nil, fmt.Errorf("attest: fetch Google signing keys: %w", err)
 	default:
-		// idtoken messages describe the token's shape and times, never its content.
-		return nil, fmt.Errorf("%w: %v", ErrInvalidProof, err)
+		// A fixed reason: idtoken errors can quote token content.
+		return nil, invalid(GCPIITName, "Google token rejected")
 	}
+}
+
+func signedRS256(token string) bool {
+	segment, _, _ := strings.Cut(token, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(segment)
+	var header struct {
+		Alg string `json:"alg"`
+	}
+	return err == nil && json.Unmarshal(raw, &header) == nil && header.Alg == "RS256"
 }
 
 type outageKey struct{}
@@ -67,11 +85,29 @@ type outageTransport struct {
 }
 
 func (t outageTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	flag, _ := r.Context().Value(outageKey{}).(*atomic.Bool)
 	resp, err := t.base.RoundTrip(r)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		if flag, ok := r.Context().Value(outageKey{}).(*atomic.Bool); ok {
-			flag.Store(true)
-		}
+	if flag == nil {
+		return resp, err
 	}
-	return resp, err
+	if err != nil || resp.StatusCode != http.StatusOK {
+		flag.Store(true)
+		return resp, err
+	}
+	resp.Body = outageBody{ReadCloser: resp.Body, flag: flag}
+	return resp, nil
+}
+
+// outageBody marks an outage when the key response breaks off mid-read.
+type outageBody struct {
+	io.ReadCloser
+	flag *atomic.Bool
+}
+
+func (b outageBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		b.flag.Store(true)
+	}
+	return n, err
 }

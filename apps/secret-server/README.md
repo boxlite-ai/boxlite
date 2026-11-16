@@ -208,7 +208,7 @@ inputs merely to exercise those guards.
 
 Attestation tests sign tokens with a locally generated RSA key and serve it as
 a fake Google key set to the real `idtoken` adapter, so no network is needed.
-Real Google tokens are verified on staging.
+Verifying real Google tokens is planned for staging.
 
 This is a new contract with no equivalent on the base branch. Full-revert defect
 proof is not applicable; positive, negative, and boundary tests exercise the new code.

@@ -33,9 +33,10 @@ const (
 
 // fakeGoogle serves a JWKS for one local RSA key in place of Google's.
 type fakeGoogle struct {
-	key    *rsa.PrivateKey
-	status int
-	hits   int
+	key     *rsa.PrivateKey
+	status  int
+	hits    int
+	readErr error // when set, the key response body fails mid-read
 }
 
 func newFakeGoogle(t *testing.T) *fakeGoogle {
@@ -54,13 +55,22 @@ func (f *fakeGoogle) RoundTrip(r *http.Request) (*http.Response, error) {
 		"kid": testKeyID, "kty": "RSA", "alg": "RS256", "use": "sig",
 		"n": b64(f.key.N.Bytes()), "e": b64(big.NewInt(int64(f.key.E)).Bytes()),
 	}}})
+	var reader io.Reader = bytes.NewReader(body)
+	if f.readErr != nil {
+		reader = io.MultiReader(bytes.NewReader(body[:len(body)/2]), &failingReader{f.readErr})
+	}
 	return &http.Response{
 		StatusCode: f.status,
 		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       io.NopCloser(bytes.NewReader(body)),
+		Body:       io.NopCloser(reader),
 		Request:    r,
 	}, nil
 }
+
+// failingReader fails every read with err.
+type failingReader struct{ err error }
+
+func (r *failingReader) Read([]byte) (int, error) { return 0, r.err }
 
 // validClaims are what a registered runner VM's format=full token carries.
 func validClaims() map[string]any {
@@ -320,4 +330,61 @@ func newFakeVerifier() TokenVerifier { return fakeVerifier{} }
 
 func (fakeVerifier) Verify(context.Context, string, string) (*idtoken.Payload, error) {
 	return nil, errors.New("unused")
+}
+
+// unsigned builds a token with any header and an arbitrary signature segment,
+// as an attacker could send it.
+func unsigned(t *testing.T, header map[string]string, claims map[string]any, sig string) string {
+	t.Helper()
+	enc := func(v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	return enc(header) + "." + enc(claims) + "." + sig
+}
+
+func TestES256ProofWithEmptySignatureIsRejected(t *testing.T) {
+	h := mustHarness(t)
+	token := unsigned(t, map[string]string{"alg": "ES256", "kid": testKeyID}, validClaims(), "")
+	if _, err := h.sel.Verify(context.Background(), identity(token)); !errors.Is(err, ErrInvalidProof) {
+		t.Fatalf("Verify err = %v; want ErrInvalidProof", err)
+	}
+}
+
+func TestUnsupportedAlgorithmIsNotEchoed(t *testing.T) {
+	h := mustHarness(t)
+	const marker = "MARKER-alg-9c1d"
+	token := unsigned(t, map[string]string{"alg": marker, "kid": testKeyID}, validClaims(), "c2ln")
+	_, err := h.sel.Verify(context.Background(), identity(token))
+	if !errors.Is(err, ErrInvalidProof) || strings.Contains(err.Error(), marker) {
+		t.Fatalf("Verify err = %v; want ErrInvalidProof without the marker", err)
+	}
+}
+
+func TestKeyBodyReadFailureIsAnOutage(t *testing.T) {
+	h := mustHarness(t)
+	h.google.readErr = errors.New("connection reset mid-body")
+	_, err := h.sel.Verify(context.Background(), identity(sign(t, h.google.key, "RS256", validClaims())))
+	if err == nil || errors.Is(err, ErrInvalidProof) {
+		t.Fatalf("Verify err = %v; want a non-ErrInvalidProof error", err)
+	}
+}
+
+func TestBoundaryInputs(t *testing.T) {
+	if _, err := NewGoogleTokenVerifier(context.Background(), nil); err != nil {
+		t.Fatalf("NewGoogleTokenVerifier(nil) = %v; want the default client", err)
+	}
+	h, err := newHarness(t, []string{DevName}, "local", `{"dev": {"laptop": "rnr_local"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.sel.Verify(context.Background(), http.Header{DevHeader: {""}, GCPIITHeader: {""}}); !errors.Is(err, ErrInvalidProof) {
+		t.Fatalf("empty headers: err = %v; want ErrInvalidProof", err)
+	}
+	if got, err := h.sel.Verify(context.Background(), http.Header{DevHeader: {"rnr_local"}}); err != nil || got != "rnr_local" {
+		t.Fatalf("runner registered under dev: Verify = %q, %v; want rnr_local", got, err)
+	}
 }
