@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -105,6 +106,10 @@ func TestBoxMethodsAfterCloseReturnInvalidState(t *testing.T) {
 		"SSHStatus":      func() error { _, err := box.SSH().Status(ctx); return err },
 		"Export":         func() error { _, err := box.Export(ctx, "/tmp/boxlite-closed-export"); return err },
 		"StartExecution": func() error { _, err := box.StartExecution(ctx, "true", nil, nil); return err },
+		"CopyInto":       func() error { return box.CopyInto(ctx, "/tmp/src", "/dst") },
+		"CopyOut":        func() error { return box.CopyOut(ctx, "/src", "/tmp/dst") },
+		"CopyOutStream":  func() error { return box.CopyOutStream(ctx, "/src", io.Discard, nil) },
+		"CopyInStream":   func() error { return box.CopyInStream(ctx, "/dst", CopySourceUnknown, strings.NewReader("x")) },
 	}
 	for name, call := range checks {
 		if err := call(); !IsInvalidState(err) {
