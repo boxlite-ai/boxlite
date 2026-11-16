@@ -187,6 +187,11 @@ client on an attached main session gets 409, same as for an exec.
 | PUT    | `/v1/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
 | GET    | `/v1/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
 
+Downloads preserve symbolic links as link entries rather than reading their
+targets. A guest chooses the target, so dereferencing it on the host could read
+host files into the response; clients extracting the downloaded tar must apply
+the usual safeguards for untrusted archives.
+
 ### Metrics
 
 | Method | Path                                        | Handler                  | Description               |
