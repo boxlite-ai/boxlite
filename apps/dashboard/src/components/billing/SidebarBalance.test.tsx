@@ -35,10 +35,10 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
       : null,
   }),
 }))
-function render() {
+function render(expanded = true) {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <SidebarBalance expanded />
+      <SidebarBalance expanded={expanded} />
     </MemoryRouter>,
   )
 }
@@ -57,6 +57,14 @@ beforeEach(() =>
 )
 
 describe('SidebarBalance', () => {
+  it.each([0, 1000])('keeps compact billing reachable with wallet balance %s', (balance) => {
+    Object.assign(state, { hasPlan: false, balance })
+    const html = render(false)
+    expect(html).toContain('href="/dashboard/billing"')
+    expect(html).toContain('aria-label="View billing and balance"')
+    expect(html.includes('bg-warning')).toBe(balance === 0)
+    expect(html).not.toContain('role="meter"')
+  })
   it('prioritizes funded plan allowance without stacking the wallet balance', () => {
     const html = render()
     expect(html).toContain('$187.50')
