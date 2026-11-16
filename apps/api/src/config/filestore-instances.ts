@@ -11,7 +11,7 @@ export interface FilestoreInstancesConfig {
   instances: FilestoreInstanceConfig[]
 }
 
-export const FILESTORE_INSTANCE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
+export const FILESTORE_INSTANCE_NAME_PATTERN = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const GCP_PROJECT_ID_PATTERN = /^[a-z](?:[a-z0-9-]{4,28}[a-z0-9])?$/
 const GCP_ZONE_PATTERN = /^[a-z]+(?:-[a-z0-9]+)*\d+-[a-z]$/
 const DEFAULT_FILESTORE_INSTANCES: FilestoreInstanceConfig[] = [
