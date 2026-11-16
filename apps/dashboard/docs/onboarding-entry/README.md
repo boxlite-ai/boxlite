@@ -3,8 +3,13 @@
 ## User flow
 
 An account that still needs setup stays outside the Console navigation until its
-next destination is known. Verification, account confirmation, organization
-preparation, and retry share the same header and content layout. Existing accounts
+next destination is known. Sign-in, sign-out recovery, verification, account confirmation, organization
+preparation, and retry share AccountEntryLayout: the same header, left-aligned heading and top spacing.
+Registration uses a 560px outer container; single-step authentication uses the
+compact variant with a 360px inner content width. Authentication shows only the brand, title, description and primary action.
+Registration retains its setup caption, Account setup label and another-account footer.
+Session checks and authentication errors stay inside this shell. Returning users
+do not repeat registration consent. Existing accounts
 enter Boxes; explicit resource links retain their destination and admit the Console
 for later navigation within the same user and organization. Entry matching follows
 the router's case-insensitive and trailing-slash semantics, including Welcome's
@@ -37,20 +42,20 @@ Dashboard URL opens the regular mock console instead.
 Captured from the local browser at 1280×800, except the 390×844 mobile view.
 The before view uses main at `666d436a5`; all other views use this change.
 
-| Before verification | After verification |
-| --- | --- |
+| Before verification                             | After verification                             |
+| ----------------------------------------------- | ---------------------------------------------- |
 | ![Before verification](before-verification.png) | ![Verification, light](verification-light.png) |
 
-| Verification, dark | Confirmation |
-| --- | --- |
+| Verification, dark                           | Confirmation                                  |
+| -------------------------------------------- | --------------------------------------------- |
 | ![Verification, dark](verification-dark.png) | ![Confirming account](confirming-account.png) |
 
-| Preparation | Recoverable error |
-| --- | --- |
+| Preparation                                           | Recoverable error                                   |
+| ----------------------------------------------------- | --------------------------------------------------- |
 | ![Preparing organization](preparing-organization.png) | ![Organization read failed](organization-error.png) |
 
-| Organization naming | Use case |
-| --- | --- |
+| Organization naming                 | Use case                  |
+| ----------------------------------- | ------------------------- |
 | ![Organization naming](welcome.png) | ![Use case](use-case.png) |
 
 ![Credits, mock payment fixture](credits.png)
@@ -67,3 +72,7 @@ Run `make test:apps:dashboard` and `make build:apps:dashboard` from the reposito
 Cross-browser completion persistence, organization rename partial-success recovery,
 and the remaining field-validation improvements are separate follow-ups. A saved
 use case is not treated as proof that every onboarding step is complete.
+
+The login organization chooser uses the compact account entry shell and the same `OrganizationChoices` rows as the Dashboard organization switcher. Both show organization name, full ID and default marker with identical row density and feedback; the entry header retains the signed-in email.
+
+The short signed-out form is vertically centered below the header, with a small upward optical adjustment on larger screens. Registration remains top-aligned; short viewports can scroll naturally.

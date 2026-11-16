@@ -21,7 +21,7 @@ import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
 import { OrganizationSwitcher } from './OrganizationExperience'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { markJustLoggedOut } from '@/lib/auth-session'
+import { accountSwitchPath } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 import { cn } from '@/lib/utils'
 import {
@@ -31,6 +31,7 @@ import {
   ChevronDown,
   KeyRound,
   LogOut,
+  UserRound,
   MessageCircle,
   Monitor,
   MoonIcon,
@@ -39,7 +40,16 @@ import {
   Pin,
   SunIcon,
 } from '@/components/ui/icon'
-import { usePostHog } from 'posthog-js/react'
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '@/components/ui/alert-dialog'
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
@@ -183,10 +193,10 @@ function readExpandedPreference(): boolean {
 
 /** Full-height desktop navigation beside the application header and route content. */
 export function Sidebar({ isBannerVisible, children }: SidebarProps) {
-  const posthog = usePostHog()
   const { theme, setTheme } = useTheme()
-  const { user, signoutRedirect } = useAuth()
-  const { pathname } = useLocation()
+  const { user } = useAuth()
+  const { pathname, search, hash } = useLocation()
+  const [switchAccountOpen, setSwitchAccountOpen] = useState(false)
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(readExpandedPreference)
   const [peeking, setPeeking] = useState(false)
@@ -275,12 +285,6 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     }
   }, [navigate])
 
-  const handleSignOut = () => {
-    posthog?.reset()
-    markJustLoggedOut()
-    signoutRedirect()
-  }
-
   const userName = user?.profile.name || user?.profile.email || 'Profile'
   const initials =
     userName
@@ -344,6 +348,23 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
+      <AlertDialog open={switchAccountOpen} onOpenChange={setSwitchAccountOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Switch account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Any unsaved changes on this page will be discarded. Console terminal connections will close; running Boxes
+              will keep running.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Stay here</AlertDialogCancel>
+            <AlertDialogAction onClick={() => window.location.assign(accountSwitchPath(pathname + search + hash))}>
+              Switch account
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <aside
         aria-label="Feature navigation"
         style={{ '--navigation-width': expanded ? '224px' : '64px' } as CSSProperties}
@@ -697,7 +718,11 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
                 </a>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="cursor-pointer" onClick={handleSignOut}>
+              <DropdownMenuItem className="cursor-pointer" onSelect={() => setSwitchAccountOpen(true)}>
+                <UserRound className="size-4" />
+                Switch account
+              </DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer" onClick={() => window.location.assign(RoutePath.LOGOUT)}>
                 <LogOut className="size-4" />
                 Sign out
               </DropdownMenuItem>

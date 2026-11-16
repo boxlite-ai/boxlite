@@ -13,9 +13,23 @@ export function readOrganizationSession(userId: string | undefined): string | nu
   }
 }
 
+export function readPreferredOrganization(userId: string | undefined): string | null {
+  if (!userId) return null
+  try {
+    return localStorage.getItem(`boxlite-preferred-organization:${userId}`)
+  } catch {
+    return null
+  }
+}
+
 export function saveOrganizationSession(userId: string, organizationId: string) {
   // Storage must succeed before navigation; otherwise reload would restore the previous context.
   sessionStorage.setItem(ORGANIZATION_SESSION_KEY, JSON.stringify({ userId, organizationId }))
+  try {
+    localStorage.setItem(`boxlite-preferred-organization:${userId}`, organizationId)
+  } catch {
+    // Remembering a preference is optional; the active tab session is already saved.
+  }
 }
 
 export function organizationSwitchPath(pathname: string): string {

@@ -36,8 +36,8 @@ or email rejection still blocks access and shows the relevant recovery screen.
 When the API rejects account creation with `disposable_email`, `email_required`,
 or `invalid_email`, the console explains the email problem and offers
 **Sign out and use another email**. These responses do not restart authentication
-or offer a retry with the same identity. The explicit action uses `/logout` to end
-the identity-provider session and return to the existing manual sign-in screen.
+or offer a retry with the same identity. The explicit action uses the account-switch flow to clear the Console identity
+and ask the identity provider to select an account.
 Other authorization failures keep their existing error handling.
 
 ## Registration and setup entry
@@ -673,10 +673,13 @@ Resource headers leave 24px before the next section. Desktop filters share a 380
 
 Billing pagers retain Previous on a failed later page with unknown totals. Cached Images refresh failures identify the retained rows as previously loaded data. Unknown invoice statuses preserve the upstream text. Create Box pricing and validation scroll inside the body while header and action footer remain visible.
 
-The signed-out landing state uses a centered, borderless column, a semantic heading,
-and one primary Sign in action. Its presentation shares dashboard theme tokens;
-ordinary unauthenticated visits still redirect to the hosted identity provider,
-while an explicit logout retains the existing manual sign-in guard.
+The signed-out landing state shares the registration entry header and top-aligned,
+left-aligned content layout, a semantic heading,
+and a primary Sign in action with a secondary Use another account recovery action.
+The compact authentication variant has a 360px inner content width.
+An explicit logout remains manual across reloads and Back until authentication succeeds.
+Ordinary unauthenticated visits and expired-session recovery start hosted sign-in once;
+cancellation or failure leaves the same retryable entry screen.
 
 ## Expandable left navigation
 
@@ -1224,6 +1227,59 @@ The existing MSW worker supplies three synthetic memberships. Without the flag,
 mock mode has one organization. Mock resource fixtures are shared: these previews
 verify navigation and UI, not backend resource isolation. Review with real accounts
 having distinct memberships and resources before production rollout.
+
+
+## Signing out and switching accounts
+
+The profile menu separates **Switch account** from **Sign out**. Switching warns
+that unsaved edits and Console terminal connections will close; running Boxes
+continue running. It clears the local identity, organization selection and query
+cache before requesting standard OIDC `prompt=login`. Onboarding and
+no-organization recovery use this same account-switch entry. Authentication returns
+through the existing registration and organization gates: one membership enters
+directly; multiple memberships restore a validated per-user preference or require selection.
+
+Sign out clears the Console session first, then requests RP-initiated logout with
+the captured ID-token hint. If local storage cannot be cleared, the page offers
+retry without claiming success. If provider logout fails after local clear, it
+reports that BoxLite is signed out and offers account choice. Browser Back never
+replays an account-switch URL. No global Google/GitHub logout is requested.
+
+Authentication-error recovery preserves the full local destination, including query
+parameters and fragments, even without saved intent. For example, an invitation
+link retains its invitation ID after retrying sign-in. The destination still passes
+through the same local-route validation.
+
+Interactive intent is stored per tab until a successful callback. Read operations
+do not consume it, and unsuccessful redirects retain a usable Sign in
+button. Sign in uses ordinary provider authentication. Use another account requests `prompt=login`; account switching is optional rather than a mandatory step. Cancelling returns quietly to manual entry. Only local Console return destinations are accepted; the GitHub recovery route
+retains its path without callback credentials. OIDC callback parameters and logout
+routes are not used as return destinations. Explicit account exits also discard
+pending GitHub connection metadata; ordinary reauthentication preserves it. Silent renewal
+and ordinary reload preserve the current organization. Authentication document
+navigation resets connections and in-memory state before another identity enters.
+
+The hosted identity provider owns the login page. `prompt=login` requests
+reauthentication. This opens the provider login instead of a Console-owned account
+chooser. Verify changing the identifier and social/enterprise connections against
+the deployed provider; forcing reauthentication does not prove every upstream
+connection supports account switching.
+
+For local review, the mock dashboard signs in with its default fixture and does not
+render an account chooser or simulate an identity provider's login page. It cannot
+validate entering arbitrary credentials or switching real provider accounts.
+
+To test another identity, explicitly open `/dashboard?authDebug=1` and expand
+**Developer fixtures**. The fixture buttons are development tools, not saved login
+accounts; they reload the document using the selected test identity. Normal mock
+sign-in returns to the default fixture. Resources remain shared fixtures and do not
+test server-side data isolation. The panel is absent without the explicit flag;
+normal previews show only the Preview marker. Authentication failure and cancellation
+are covered by the auth flow tests rather than a simulated provider page.
+
+Organization entry remembers the last explicitly selected organization per user in local storage as a preference, separately from the active tab session. After login, a remembered organization is restored only if it is in the current organization list and membership is confirmed. Failure falls back to selection. Logout clears the active session, while the preference remains; it never grants access. First-time multi-organization users still choose, and single-organization users enter directly.
+
+In mock mode explicit account switching reports that real authentication is required and does not sign in a default identity. Use the dev target for hosted-login verification.
 
 ### Existing Box lifecycle policy
 
