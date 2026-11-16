@@ -25,6 +25,7 @@ typedef struct Seen {
 static void record_error(Seen *s, const CBoxliteError *error) {
   s->code = error ? error->code : Ok;
   if (error && error->message) {
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(s->message, sizeof(s->message), "%s", error->message);
   }
 }
@@ -101,6 +102,7 @@ static void wait_ok(CBoxliteRuntime *rt, Seen *s) {
   drain_until(rt, &s->done);
   if (s->code != Ok) {
     char diagnostic[sizeof(s->message) + 64];
+    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(diagnostic, sizeof(diagnostic), "callback failed: %d %s\n",
              s->code, s->message);
     fputs(diagnostic, stderr);
@@ -214,6 +216,7 @@ int main(int argc, char **argv) {
   const char *id_end = strchr(id_start, '"');
   assert(id_end && id_end > id_start && (size_t)(id_end - id_start) < 128);
   char turn_id[128];
+  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
   snprintf(turn_id, sizeof(turn_id), "%.*s", (int)(id_end - id_start),
            id_start);
   boxlite_free_string(json);
