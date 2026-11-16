@@ -112,6 +112,26 @@ fn c_calls_and_getters_reach_core_through_drain() {
         drain(runtime_ptr, &mut seen);
         let agent = seen.agent;
         assert!(!agent.is_null());
+        seen.done = false;
+        let request_id = CString::new("request-1").unwrap();
+        let malformed = CString::new("{invalid").unwrap();
+        assert_eq!(
+            boxlite_agent_respond(
+                agent,
+                request_id.as_ptr(),
+                malformed.as_ptr(),
+                ptr::null(),
+                Some(turn_cb),
+                data,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            crate::boxlite_runtime_drain(runtime_ptr, 0, ptr::null_mut()),
+            0
+        );
+        assert!(!seen.done);
         assert_eq!(read_getter(agent, boxlite_agent_state)["id"], "agent-1");
         assert_eq!(
             read_getter(agent, boxlite_agent_config)["tools"],
