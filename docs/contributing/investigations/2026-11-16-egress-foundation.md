@@ -22,6 +22,12 @@ See [Runtime replacement](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a
 
 These boundaries need a common contract before adding independent policy and upstream transport extensions.
 
+Policy replacement also installs TCP and UDP handlers before changing the NIC state.
+For a disabled candidate with an empty allowlist, this can publish unrestricted handlers before NIC suspension.
+See the [installation order](https://github.com/boxlite-ai/boxlite/blob/b81a1a6b24005b8d644ec94efd02b3ce72f3385f/src/deps/libgvproxy-sys/gvproxy-bridge/network_policy.go#L61-L82).
+Registered DNS endpoints bypass default transport handlers, so gating those handlers alone cannot preserve disabled mode when NIC suspension fails.
+See the [endpoint distinction](https://github.com/boxlite-ai/boxlite/blob/b81a1a6b24005b8d644ec94efd02b3ce72f3385f/src/deps/libgvproxy-sys/gvproxy-bridge/forked_udp.go#L10-L15).
+
 ## Scope
 
 Extend the existing gvproxy process, resolver/dial seams, network controller, Runtime lock, and Cloud transaction.
@@ -36,6 +42,7 @@ Their eventual configuration must use the same snapshot and replacement operatio
 | Method | Projects and primary sources | Trade-off | Stance |
 | --- | --- | --- | --- |
 | Check resolved candidates, then dial a pinned address | [BoxLite's existing dialer](https://github.com/boxlite-ai/boxlite/blob/0c15a54267a87c529ff5f587adeaa20d1c62e9e8/src/deps/libgvproxy-sys/gvproxy-bridge/egress_dialer.go#L104), [Smokescreen](https://github.com/stripe/smokescreen/blob/master/pkg/smokescreen/smokescreen.go) | Domain approval alone does not approve every resolved IP; centralization must preserve NAT and cancellation. | **Pick:** adapt existing seams; do not add a second resolver/dialer. |
+| Gate disabled mode before endpoint demultiplexing | [gVisor input filtering](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/network/ipv4/ipv4.go#L1207-L1216), [gVisor target interface](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/stack/iptables_types.go#L382-L388) | Covers registered DNS endpoints as well as default forwarders; adds per-packet filtering cost, which must be measured before claiming equivalent performance. | **Pick:** adapt the existing dependency's input/forward hooks, retain NIC suspension, and share the immutable mode snapshot. |
 | Conditional replacement | [Kubernetes resource versions](https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions), [HTTP If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.1) | Prevents stale client writes; requires a compatibility path for existing clients. | **Pick:** optional HTTP preconditions for current clients, mandatory internal compare-and-swap for versioned operations. |
 | Correlate acceptance with configuration identity | [Envoy xDS](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol.html#ack-nack-and-resource-type-instance-version), [go-control-plane](https://pkg.go.dev/github.com/envoyproxy/go-control-plane/pkg/cache/v3) | A success without an identity cannot identify which update was applied; xDS streaming is unnecessary here. | **Pick:** adapt versioned acknowledgement over existing control channels. |
 | Add a separate proxy or configuration service | [Envoy in Istio](https://istio.io/latest/docs/ops/deployment/architecture/) | Strong isolation and extensive features, with additional processes and operational scope. | Reject for this foundation; the existing embedded boundary is sufficient. |
@@ -108,8 +115,24 @@ Future deny/proxy configuration may remain stored while disabled, but cannot ena
 ### Application, persistence, and recovery
 
 Compare-and-swap is performed under the current Box update lock and Cloud row lock; all callers, including future rotation jobs, share it.
-Compile and validate the complete candidate before publication; new flows capture the new snapshot and existing flows retain theirs.
+Compile and validate the complete candidate before publication.
+Install stable TCP and UDP entry points before guest traffic starts; each new flow loads one shared immutable snapshot, including mode, filter, transport, and revision.
+Enabled-to-enabled replacement publishes one snapshot reference; existing flows retain their captured snapshot for delayed resolution, retries, and MITM upstream connections.
+
+A disabled snapshot explicitly rejects new TCP and UDP flows, regardless of its empty allowlist.
+Install a mode gate before IP endpoint demultiplexing, including registered DNS endpoints, using the existing gVisor input/forward filtering hooks and the same snapshot reference.
+The pinned gVisor version calls [input filtering before local delivery](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/network/ipv4/ipv4.go#L1207-L1216); its [target interface](https://github.com/google/gvisor/blob/a174eb65023f/pkg/tcpip/stack/iptables_types.go#L382-L388) supports a mode-dependent verdict.
+This gate drops guest IP packets while disabled, even if NIC suspension fails; enabled-mode DNS behavior remains unchanged.
+Work already accepted before publication may finish under its captured snapshot, subject to NIC suspension; a new DNS request arriving after publication cannot start host forwarding.
+To disable, publish that snapshot before suspending the NIC; acknowledge only after suspension succeeds.
+To enable from disabled, retain the disabled snapshot while enabling the NIC, then publish the enabled candidate after enabling succeeds.
+Thus a packet arriving between either NIC operation and publication remains denied.
 NIC disable continues to suspend traffic rather than promising to terminate every established connection.
+
+Mark application pending before publication or a NIC transition.
+An installation or NIC failure cannot acknowledge the candidate or describe the previous revision as confirmed live state.
+Keep the disabled flow gate on a failed mode transition, expose uncertainty, and require readback/reconciliation before confirming another replacement.
+Compilation failure before any publication preserves the previous confirmed snapshot.
 
 An acknowledgement timeout is uncertain, because the candidate may already be live.
 Use bounded status readback to reconcile the expected, candidate, or another revision; unresolved state is reported explicitly and never acknowledged as success.
@@ -132,6 +155,8 @@ Source inspection is complete; implementation and traffic validation below are p
 | --- | --- | --- |
 | Common transport covers every TCP branch | Real guest-stack forwarding through ordinary, hostname, and secrets paths with an injected transport; retain allow/deny controls | Every allowed upstream uses the selected transport; blocked targets never reach it. |
 | Existing behavior survives extraction | Current network suites, NAT alias, normalization, DNS candidate changes, cancellation, and blackholes | Same target decisions and bytes; bounded connection setup and cleanup. |
+| Mode changes cannot expose an unrestricted interval | Pause after publishing disabled and before NIC suspension; probe denied TCP/UDP targets; repeat while enabling and inject NIC failures | Denied targets never reach a connector; a failed transition stays gated and cannot report a confirmed revision. |
+| Registered endpoints cannot bypass disabled mode | Send guest UDP and TCP DNS queries after disabled publication, during paused NIC transitions and after injected NIC failure; observe a test-owned DNS upstream | No new guest query starts host forwarding while disabled; enabled-mode DNS controls still succeed. |
 | Concurrent replacements cannot overwrite newer state | Controlled interleavings through controller, Runtime storage, and Cloud transaction | One expected revision wins; stale candidates and stale compensations are rejected. |
 | Success identifies an installed snapshot | Missing/mismatched ACK, delayed ACK, old backend, and status readback tests | No status-only success; unsupported or uncertain state is explicit. |
 | Recovery preserves state | Persistence failure, compensation failure, lifecycle writes, handle reacquisition, and restart | Confirmed configuration/revision survive; uncertainty cannot appear as confirmed live state. |
