@@ -5,6 +5,7 @@ package boxlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1170,5 +1171,60 @@ func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
 	}
 	if !haveFilestore || !haveS3 {
 		t.Fatalf("restored record = %#v, want both previous references", record.Entries)
+	}
+}
+
+func TestCreateRollsBackRecordWhenNativeIDResolutionFails(t *testing.T) {
+	ctx := context.Background()
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	c.homeDir = t.TempDir()
+	fake := installFakeFilestoreMounts(c)
+	boxID := "abc123def456"
+	journalPath := filepath.Join(c.homeDir, "work", "checkpoint-operations", fmt.Sprintf("%x", sha256.Sum256([]byte(boxID)))+".json")
+	c.testMountRunner = func(cmd *exec.Cmd) error {
+		fake.mounts.Add(1)
+		fake.mu.Lock()
+		fake.mounted[cmd.Args[len(cmd.Args)-1]] = true
+		fake.mu.Unlock()
+		return os.WriteFile(journalPath, []byte("not-json"), 0600)
+	}
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{
+			VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected native ID resolution to fail on the damaged journal")
+	}
+	if _, statErr := os.Stat(filepath.Join(getVolumeMountRecordDir(), boxID+".json")); !os.IsNotExist(statErr) {
+		t.Fatalf("volume record survived native ID resolution failure: %v", statErr)
+	}
+}
+
+func TestCreateRollsBackRecordWhenClearPublishedFails(t *testing.T) {
+	ctx := context.Background()
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	c.homeDir = t.TempDir()
+	installFakeFilestoreMounts(c)
+	c.clearPublishedRunner = func() error { return errors.New("injected clear-published failure") }
+	boxID := "abc123def456"
+	outbound := true
+
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{{
+			VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected clear-published failure") {
+		t.Fatalf("Create returned %v, want clear-published failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(getVolumeMountRecordDir(), boxID+".json")); !os.IsNotExist(statErr) {
+		t.Fatalf("volume record survived clear-published failure: %v", statErr)
 	}
 }
