@@ -197,22 +197,7 @@ export function WebhooksEndpointTable({
                 colSpan={columns.length}
                 message="No webhook endpoints found."
                 icon={<Mail className="size-8" />}
-                description={
-                  <div className="space-y-2">
-                    <p>Create an endpoint to start receiving webhook events.</p>
-                    <p>
-                      <a
-                        href="https://docs.boxlite.ai"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline font-medium"
-                      >
-                        Check out the Docs
-                      </a>{' '}
-                      to learn more.
-                    </p>
-                  </div>
-                }
+                description="Create an endpoint to start receiving webhook events."
               />
             )}
           </TableBody>

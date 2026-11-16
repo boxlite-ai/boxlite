@@ -20,7 +20,11 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { DOMAIN_COUNT_LIMIT_CODE, DOMAIN_NOT_OWNED_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
+import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
 import { DomainService } from './domain.service'
+import { RequestDrivenCustomDomains1794398400000 } from '../../migrations/pre-deploy/1794398400000-request-driven-custom-domains-migration'
+import { CustomDomainService } from './custom-domain.service'
+import { CustomDomainWorkflowService } from './custom-domain-workflow.service'
 import { TunnelService } from './tunnel.service'
 import { PreviewController } from '../controllers/preview.controller'
 
@@ -47,9 +51,16 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   let preview: PreviewController
   let ownsSchema = false
   let minLength = 5
+  let customEnabled = false
+  const subscriptions = { read: jest.fn(), refresh: jest.fn() }
 
   const configService = {
-    get: (key: string) => (key === 'domain.appDomain' || key === 'domain.appHost' ? APP_DOMAIN : undefined),
+    get: (key: string) =>
+      key === 'customDomains.enabled'
+        ? customEnabled
+        : key === 'domain.appDomain' || key === 'domain.appHost'
+          ? APP_DOMAIN
+          : undefined,
     getOrThrow: (key: string) => {
       switch (key) {
         case 'domain.platformSubdomainMinLength':
@@ -92,6 +103,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const runner = dataSource.createQueryRunner()
     try {
       await new AddDomain1792972800000().up(runner)
+      await new AddCustomDomainConfig1793764800000().up(runner)
+      await new RequestDrivenCustomDomains1794398400000().up(runner)
     } finally {
       await runner.release()
     }
@@ -113,14 +126,172 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
   beforeEach(async () => {
     minLength = 5
+    customEnabled = false
+    await dataSource.query(`TRUNCATE custom_domain_config`)
     await dataSource.query(`DELETE FROM "${schemaName}"."domain"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."tunnel"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."organization"`)
     await dataSource.query(`INSERT INTO "${schemaName}"."organization" ("id") VALUES ($1), ($2)`, [ORG, OTHER_ORG])
     tunnels = new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never)
-    service = new DomainService(dataSource, regionService as never, configService as never)
+    subscriptions.read.mockReset().mockResolvedValue({ status: 'unavailable', expiresAt: 0 })
+    subscriptions.refresh.mockReset().mockImplementation(() => subscriptions.read())
+    service = new DomainService(dataSource, regionService as never, configService as never, subscriptions as never)
     preview = createPreview(tunnels)
+  })
+
+  it('admits only ready, subscribed custom bindings while preserving fields and targets on refusal', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    await dataSource.getRepository(Domain).insert({ hostname: 'app.customer.com', kind: 'custom', organizationId: ORG })
+    await expect(service.bind(box, 3000, 'app.customer.com')).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'subscription_not_ready' },
+    })
+    subscriptions.read.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
+    await expect(service.bind(box, 3000, 'app.customer.com')).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'subscription_required' },
+    })
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 86_400_000 })
+    await expect(service.bind(box, 3000, 'app.customer.com')).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'domain_not_ready' },
+    })
+    await prepareReady('app.customer.com')
+    await setLimit(ORG, 0)
+    const target = { type: 'box', box: box.id, port: 3000 }
+    await expect(service.bind(box, 3000, 'app.customer.com')).resolves.toEqual({
+      hostname: 'app.customer.com',
+      url: 'https://app.customer.com',
+      target,
+    })
+    expect(await service.resolve('app.customer.com')).toEqual(target)
+    await dataSource.query(`UPDATE custom_domain_config SET dns_valid_until = now() - interval '1 second'`)
+    await dataSource.query(
+      `UPDATE custom_domain_config SET certificate_valid_until = now() - interval '1 day', certificate_expires_at = now() - interval '1 day'`,
+    )
+    expect(await service.resolve('app.customer.com')).toEqual(target)
+    await expect(service.bind(box, 3000, 'app.customer.com')).resolves.toMatchObject({ target })
+    expect((await service.listHeld(ORG)).domains[0].target).toEqual(target)
+    expect((await service.listHeld(ORG)).used).toBe(0)
+    await service.unbind(ORG, 'app.customer.com')
+    expect((await service.listHeld(ORG)).domains[0].target).toBeNull()
+  })
+
+  async function prepareReady(hostname: string) {
+    const settings = { enabled: true, trafficHost: 'custom.platform.com' }
+    const flowConfig = {
+      get: (key: string) => (key === 'customDomains' ? settings : configService.get(key)),
+      getOrThrow: (key: string) => (key === 'customDomains' ? settings : configService.getOrThrow(key)),
+    }
+    const provider = {
+      reconcile: async (row, mode) => ({
+        state: {
+          ...row.provider_state,
+          authorizationRecord: { name: `_acme.${hostname}`, type: 'CNAME', value: 'auth.test' },
+          certificateSubmitted: mode !== 'prepare',
+        },
+        phase: mode === 'prepare' ? 'pending_certificate_dns' : 'ready',
+        expires: '2030-01-01T00:00:00Z',
+        cleaned: false,
+      }),
+    }
+    const dns = {
+      checkAll: async () => [{ record: 'ownership', status: 'passed' }],
+      verifyTls: async () => '2030-01-01T00:00:00Z',
+    }
+    const flow = new CustomDomainWorkflowService(
+      dataSource,
+      flowConfig as never,
+      subscriptions as never,
+      dns as never,
+      provider as never,
+    )
+    const custom = new CustomDomainService(dataSource, flowConfig as never, subscriptions as never, flow)
+    const row = await custom.create(ORG, hostname)
+    await custom.verify(ORG, row.id)
+    return custom
+  }
+
+  it('refreshes subscription on traffic without Dashboard activity and keeps the target across suspension', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    await prepareReady('expiry.customer.com')
+    const bound = await service.bind(box, 3000, 'expiry.customer.com')
+    subscriptions.read.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
+    expect(await service.resolve('expiry.customer.com')).toBeNull()
+    await expect(service.bind(box, 4000, 'expiry.customer.com')).rejects.toMatchObject({ status: 403 })
+    expect((await service.listHeld(ORG)).domains[0].target).toEqual(bound.target)
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    expect(await service.resolve('expiry.customer.com')).toEqual(bound.target)
+  })
+
+  it('checks the authorization deadline after a binding waits for the organization lock', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    await prepareReady('expiry.customer.com')
+    const bound = await service.bind(box, 3000, 'expiry.customer.com')
+    const blocker = dataSource.createQueryRunner()
+    await blocker.connect()
+    await blocker.startTransaction()
+    const [{ pid }] = await blocker.query(`SELECT pg_backend_pid() AS pid`)
+    await blocker.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [ORG])
+    const expires = Date.now() + 1000
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: expires })
+    const pending = service.bind(box, 4000, 'expiry.customer.com').then(
+      () => null,
+      (error) => error,
+    )
+    try {
+      let waiting = false
+      for (let i = 0; i < 100; i++) {
+        const [row] = await dataSource.query(
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))) AS waiting`,
+          [pid],
+        )
+        if (row.waiting) {
+          waiting = true
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      expect(waiting).toBe(true)
+      await blocker.query(`SELECT pg_sleep(GREATEST(0, extract(epoch FROM ($1::timestamptz - clock_timestamp()))))`, [
+        new Date(expires),
+      ])
+    } finally {
+      await blocker.commitTransaction()
+      await blocker.release()
+    }
+    expect(await pending).toMatchObject({ status: 409 })
+    expect(await service.resolve('expiry.customer.com')).toBeNull()
+    expect((await service.listHeld(ORG)).domains[0].target).toEqual(bound.target)
+  })
+
+  it('does not return a stale target when unbound during subscription refresh', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    subscriptions.read.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 60_000 })
+    await prepareReady('expiry.customer.com')
+    await service.bind(box, 3000, 'expiry.customer.com')
+    subscriptions.refresh.mockImplementationOnce(async () => {
+      await service.unbind(ORG, 'expiry.customer.com')
+      return { status: 'active', expiresAt: Date.now() + 60_000 }
+    })
+    expect(await service.resolve('expiry.customer.com')).toBeNull()
+  })
+
+  it('keeps legacy custom rows closed when provider configuration is disabled', async () => {
+    const box = await makeBox()
+    await dataSource
+      .getRepository(Domain)
+      .insert({ hostname: 'app.customer.com', kind: 'custom', organizationId: ORG, boxId: box.id, port: 3000 })
+    expect(await service.resolve('app.customer.com')).toBeNull()
+    await expect(service.bind(box, 4000, 'app.customer.com')).rejects.toMatchObject({ status: 409 })
+    await expect(service.bind(box, 4000, 'foreign.customer.com')).rejects.toMatchObject({ status: 404 })
   })
 
   function createPreview(tunnelService: TunnelService): PreviewController {
@@ -480,6 +651,42 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     expect(rejected).toHaveLength(1)
     expect(rejected[0].reason).toMatchObject({ response: { code: DOMAIN_COUNT_LIMIT_CODE } })
     expect(await heldNames(ORG)).toHaveLength(2)
+  })
+
+  it('custom allowance: excludes custom rows when concurrent platform names consume the last slot', async () => {
+    await setLimit(ORG, 1)
+    await dataSource.getRepository(Domain).insert({
+      hostname: 'app.customer.example',
+      kind: 'custom',
+      organizationId: ORG,
+    })
+
+    const outcomes = await Promise.allSettled([service.claim(ORG, 'first-name'), service.claim(ORG, 'second-name')])
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    const rejected = outcomes.filter((outcome) => outcome.status === 'rejected') as PromiseRejectedResult[]
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0].reason).toMatchObject({ response: { code: DOMAIN_COUNT_LIMIT_CODE } })
+    expect(await heldNames(ORG)).toHaveLength(2)
+  })
+
+  it.each([0, 1])('custom allowance: keeps custom rows in the list with platform limit %i', async (limit) => {
+    await setLimit(ORG, limit)
+    if (limit > 0) await service.claim(ORG, 'first-name')
+    await dataSource.getRepository(Domain).insert([
+      { hostname: 'app.customer.example', kind: 'custom', organizationId: ORG },
+      { hostname: 'other.customer.example', kind: 'custom', organizationId: ORG },
+    ])
+
+    const held = await service.listHeld(ORG)
+
+    expect(held).toMatchObject({ limit, used: limit, remaining: 0 })
+    expect(held.domains).toHaveLength(limit + 2)
+    expect(held.domains.find((domain) => domain.hostname === 'app.customer.example')).toEqual({
+      hostname: 'app.customer.example',
+      url: 'https://app.customer.example',
+      target: null,
+    })
   })
 
   it('gives a contested new name to exactly one organization', async () => {

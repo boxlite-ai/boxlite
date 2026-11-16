@@ -58,16 +58,16 @@ export function BoxCube({
               d={face}
               {...stroke}
               strokeDasharray={140}
-              style={{ animation: `box-draw 2.4s ease-in-out ${(i * 0.22).toFixed(2)}s infinite` }}
-              className="motion-reduce:animate-none"
+              style={{ animationDelay: `${i * 0.22}s` }}
+              className="motion-safe:animate-[box-draw_2.4s_ease-in-out_infinite]"
             />
           ))}
           <path
             d={TOP}
             fill={brand}
             fillOpacity={0}
-            style={{ animation: 'box-lit 2.4s ease-in-out 0.66s infinite' }}
-            className="motion-reduce:hidden"
+            style={{ animationDelay: '0.66s' }}
+            className="motion-safe:animate-[box-lit_2.4s_ease-in-out_infinite] motion-reduce:hidden"
           />
         </>
       ) : state === 'empty' ? (

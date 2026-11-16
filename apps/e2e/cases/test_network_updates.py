@@ -3,7 +3,7 @@ import asyncio
 from ipaddress import IPv4Address
 import json
 import os
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import boxlite
 import pytest
@@ -29,13 +29,21 @@ async def _readback(rt, box, ctx, mode, rules):
     for handle in (box, await rt.get(box.id)):
         policy = (await handle.info()).network.outbound
         assert {"mode": policy.mode, "allow_net": policy.allow_net} == expected
-    for path in (f"boxes/{box.id}", "boxes"):
+    reply = await api(ctx, "GET", f"boxes/{box.id}")
+    assert reply.status == 200
+    assert json.loads(reply.body)["network"]["outbound"] == expected
+    path = "boxes"
+    while True:
         reply = await api(ctx, "GET", path)
         assert reply.status == 200
-        data = json.loads(reply.body)
-        if path == "boxes":
-            data = next(item for item in data["boxes"] if item["box_id"] == box.id)
-        assert data["network"]["outbound"] == expected
+        page = json.loads(reply.body)
+        listed = next((item for item in page["boxes"] if item["box_id"] == box.id), None)
+        if listed is not None:
+            assert listed["network"]["outbound"] == expected
+            break
+        token = page.get("next_page_token")
+        assert token, f"Box {box.id} missing from inventory"
+        path = "boxes?" + urlencode({"pageToken": token})
 
 
 async def test_network_updates_replace_live_policy_without_restarting(rt, image, e2e_auth):

@@ -51,9 +51,20 @@ export class OrganizationRoleService {
     })
   }
 
-  async update(roleId: string, updateOrganizationRoleDto: UpdateOrganizationRoleDto): Promise<OrganizationRole> {
+  async update(
+    organizationId: string,
+    roleId: string,
+    updateOrganizationRoleDto: UpdateOrganizationRoleDto,
+  ): Promise<OrganizationRole> {
+    if (!organizationId || !roleId) {
+      throw new NotFoundException('Organization role not found')
+    }
+
     const role = await this.organizationRoleRepository.findOne({
-      where: { id: roleId },
+      where: [
+        { id: roleId, organizationId },
+        { id: roleId, isGlobal: true },
+      ],
     })
 
     if (!role) {
@@ -71,9 +82,16 @@ export class OrganizationRoleService {
     return this.organizationRoleRepository.save(role)
   }
 
-  async delete(roleId: string): Promise<void> {
+  async delete(organizationId: string, roleId: string): Promise<void> {
+    if (!organizationId || !roleId) {
+      throw new NotFoundException('Organization role not found')
+    }
+
     const role = await this.organizationRoleRepository.findOne({
-      where: { id: roleId },
+      where: [
+        { id: roleId, organizationId },
+        { id: roleId, isGlobal: true },
+      ],
     })
 
     if (!role) {

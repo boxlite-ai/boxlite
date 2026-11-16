@@ -11,7 +11,13 @@ import { useCreateBoxFromCheckpointMutation } from '@/hooks/mutations/useCreateB
 import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { Checkpoint } from '@/api/checkpoint-types'
 import { checkpointAdmittedBoxId, checkpointErrorMessage } from '@/lib/checkpoints'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
+import { Dialog, DialogDescription, DialogTitle } from './ui/dialog'
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogBody,
+  FormDialogFooter,
+} from './ui/form-dialog'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
@@ -38,9 +44,9 @@ export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint:
         if (!open && !create.isPending) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[92svh] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-[540px]">
-        <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
-          <DialogTitle className="text-section font-bold tracking-[-0.3px]">New Box</DialogTitle>
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle>Create Box</DialogTitle>
         </DialogHeader>
         <form
           className="flex min-h-0 flex-1 flex-col"
@@ -58,12 +64,13 @@ export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint:
             )
           }}
         >
-          <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
-            <DialogDescription className="font-mono text-meta leading-relaxed">
-              Create a new box inheriting the disk and execution settings saved in “{checkpoint.name}”.
+          <FormDialogBody>
+            <DialogDescription className="text-body leading-relaxed">
+              Create a Box from{' '}
+              <span className="font-mono text-foreground [overflow-wrap:anywhere]">{checkpoint.name}</span>.
             </DialogDescription>
-            <label className="flex flex-col gap-[9px]">
-              <span className="font-mono text-meta font-medium text-foreground">Name</span>
+            <label className="block">
+              <span className="form-field-label">Name</span>
               <input
                 aria-label="Box name"
                 maxLength={128}
@@ -73,44 +80,39 @@ export function CheckpointBoxCreateDialog({ checkpoint, onClose }: { checkpoint:
                 disabled={create.isPending || !!admittedBoxId}
                 aria-invalid={!nameValid}
                 aria-describedby="checkpoint-box-name-hint"
-                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-body text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
+                className="form-field-input font-mono disabled:opacity-50"
               />
-              <span id="checkpoint-box-name-hint" className="font-mono text-meta leading-relaxed text-muted-foreground">
-                Leave blank to generate a name.
+              <span
+                id="checkpoint-box-name-hint"
+                className="mt-2 block text-meta leading-relaxed text-muted-foreground"
+              >
+                {nameValid
+                  ? 'Leave blank to generate a name.'
+                  : 'Start with a letter or number; use only letters, numbers, dots, underscores or hyphens.'}
               </span>
             </label>
             {create.error && (
-              <p role="alert" className="font-mono text-meta text-destructive">
+              <p role="alert" className="text-meta text-destructive [overflow-wrap:anywhere]">
                 {checkpointErrorMessage(create.error)}
               </p>
             )}
             {admittedBoxId && (
-              <p className="font-mono text-meta">
+              <p className="text-meta">
                 The import was accepted. Check this Box before starting another import.{' '}
                 <Link className="underline" to={`/dashboard/boxes/${encodeURIComponent(admittedBoxId)}`}>
                   View Box
                 </Link>
               </p>
             )}
-          </div>
-          <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
-            <AsciiButton
-              type="button"
-              onClick={onClose}
-              disabled={create.isPending}
-              className="border border-border px-[18px] py-[11px] text-body font-medium transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:py-[10px]"
-            >
+          </FormDialogBody>
+          <FormDialogFooter>
+            <AsciiButton type="button" onClick={onClose} disabled={create.isPending}>
               Cancel
             </AsciiButton>
-            <AsciiButton
-              variant="primary"
-              type="submit"
-              disabled={!canSubmit}
-              className="bg-primary px-5 py-[11px] text-body font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
-            >
+            <AsciiButton variant="primary" type="submit" disabled={!canSubmit}>
               {create.isPending ? 'Creating…' : 'Create Box'}
             </AsciiButton>
-          </div>
+          </FormDialogFooter>
         </form>
       </DialogContent>
     </Dialog>

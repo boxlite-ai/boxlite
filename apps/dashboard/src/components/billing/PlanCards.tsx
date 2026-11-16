@@ -34,7 +34,7 @@ function SpecRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-2 font-sans text-meta">
       <span className="uppercase tracking-[0.5px] text-muted-foreground">{label}</span>
-      <span className="tabular-nums text-foreground">{value}</span>
+      <span className="font-mono tabular-nums text-foreground">{value}</span>
     </div>
   )
 }

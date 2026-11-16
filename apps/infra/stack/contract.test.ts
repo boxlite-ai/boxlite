@@ -616,6 +616,15 @@ test('Runner bootstrap fetches the selected artifact and fails closed on its che
   )
 })
 
+test('Runner bootstrap installs the NFS client filestore volumes mount with', () => {
+  // filestore volumes run `mount -t nfs -o vers=4.1,hard` as root. nfs-common is
+  // not in the Ubuntu cloud image's default package set, so the bootstrap
+  // carries it: a host without it fails the first filestore box with "unknown
+  // filesystem type nfs", on an instance whose script nobody will read again.
+  const runnerBootstrap = configSection('async function buildRunnerUserData')
+  assert.match(runnerBootstrap, /apt-get install -y curl iproute2 nfs-common/)
+})
+
 test('upgrades every Runner through a dependsOn chain, one host per command', () => {
   // The chain is the only thing sequencing the restarts, and it cannot be observed
   // without a real deploy — so it is pinned here, next to the other deploy-shape

@@ -20,7 +20,14 @@ import {
   checkpointErrorMessage,
   CHECKPOINT_POLL_INTERVAL,
 } from '@/lib/checkpoints'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog'
+import { Dialog, DialogDescription, DialogTitle } from './ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogBody,
+  FormDialogFooter,
+} from './ui/form-dialog'
 
 export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: () => void }) {
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
@@ -56,9 +63,9 @@ export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: (
         if (!open && !create.isPending) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[92svh] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-[540px]">
-        <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
-          <DialogTitle className="text-section font-bold tracking-[-0.3px]">New Checkpoint</DialogTitle>
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle>Create Checkpoint</DialogTitle>
         </DialogHeader>
         <form
           className="flex min-h-0 flex-1 flex-col"
@@ -76,32 +83,41 @@ export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: (
             )
           }}
         >
-          <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
-            <DialogDescription className="font-mono text-meta leading-relaxed">
-              Save a box’s disk and execution settings. The checkpoint stays available after its source box is deleted.
+          <FormDialogBody>
+            <DialogDescription className="text-body leading-relaxed">
+              Save a stopped Box’s disk and settings for reuse.
             </DialogDescription>
-            <label className="flex flex-col gap-[9px]">
-              <span className="font-mono text-meta font-medium text-foreground">Source Box</span>
-              <select
-                aria-label="Source box"
-                value={boxId}
-                onChange={(event) => setBoxId(event.target.value)}
-                disabled={!!box || create.isPending}
-                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-body text-foreground outline-none focus:border-brand"
-              >
-                <option value="">Select a box</option>
-                {eligible.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name || item.id} · {item.disk} GiB
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div>
+              <label htmlFor="checkpoint-source" className="form-field-label">
+                Source box
+              </label>
+              <Select value={boxId} onValueChange={setBoxId} disabled={!!box || create.isPending}>
+                <SelectTrigger
+                  id="checkpoint-source"
+                  aria-label="Source box"
+                  className="form-field-input font-mono"
+                  title={eligible.find((item) => item.id === boxId)?.name || boxId || undefined}
+                >
+                  <SelectValue placeholder="Select a box" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[min(20rem,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)]">
+                  {eligible.map((item) => (
+                    <SelectItem key={item.id} value={item.id} className="font-mono text-meta [overflow-wrap:anywhere]">
+                      {item.name || item.id} · {item.disk} GiB
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {(box ? source.isLoading : boxes.isLoading) && <p role="status">Loading boxes…</p>}
             {(box ? source.isError : boxes.isError) && (
-              <p role="alert">
+              <p role="alert" className="text-meta text-destructive [overflow-wrap:anywhere]">
                 Could not load boxes.{' '}
-                <button type="button" onClick={() => void (box ? source.refetch() : boxes.refetch())}>
+                <button
+                  type="button"
+                  className="underline underline-offset-4 focus-visible:outline focus-visible:outline-2"
+                  onClick={() => void (box ? source.refetch() : boxes.refetch())}
+                >
                   Retry
                 </button>
               </p>
@@ -111,8 +127,8 @@ export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: (
                 No eligible boxes. Stop a box without volumes or secrets before creating a checkpoint.
               </p>
             )}
-            <label className="flex flex-col gap-[9px]">
-              <span className="font-mono text-meta font-medium text-foreground">Name</span>
+            <label className="block">
+              <span className="form-field-label">Name</span>
               <input
                 aria-label="Checkpoint name"
                 maxLength={128}
@@ -122,36 +138,28 @@ export function CheckpointCreateDialog({ box, onClose }: { box?: Box; onClose: (
                 aria-invalid={!nameValid}
                 aria-describedby="checkpoint-name-hint"
                 placeholder="my-new-checkpoint"
-                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-body text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
+                className="form-field-input font-mono disabled:opacity-50"
               />
-              <span id="checkpoint-name-hint" className="font-mono text-meta leading-relaxed text-muted-foreground">
-                Leave blank to generate a name.
+              <span id="checkpoint-name-hint" className="mt-2 block text-meta leading-relaxed text-muted-foreground">
+                {nameValid
+                  ? 'Leave blank to generate a name.'
+                  : 'Start with a letter or number; use only letters, numbers, dots, underscores or hyphens.'}
               </span>
             </label>
             {create.error && (
-              <p role="alert" className="font-mono text-meta text-destructive">
+              <p role="alert" className="text-meta text-destructive [overflow-wrap:anywhere]">
                 {checkpointErrorMessage(create.error)}
               </p>
             )}
-          </div>
-          <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
-            <AsciiButton
-              type="button"
-              onClick={onClose}
-              disabled={create.isPending}
-              className="border border-border px-[18px] py-[11px] text-body font-medium transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:py-[10px]"
-            >
+          </FormDialogBody>
+          <FormDialogFooter>
+            <AsciiButton type="button" onClick={onClose} disabled={create.isPending}>
               Cancel
             </AsciiButton>
-            <AsciiButton
-              variant="primary"
-              type="submit"
-              disabled={!canSubmit}
-              className="bg-primary px-5 py-[11px] text-body font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
-            >
+            <AsciiButton variant="primary" type="submit" disabled={!canSubmit}>
               {create.isPending ? 'Creating…' : 'Create Checkpoint'}
             </AsciiButton>
-          </div>
+          </FormDialogFooter>
         </form>
       </DialogContent>
     </Dialog>

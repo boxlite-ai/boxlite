@@ -97,18 +97,18 @@ test('caller and reusable image jobs admit stage candidate branches without admi
   }
 })
 
-test('missing stage commit images build while dev and prod retain release planning', () => {
+test('missing stage commit images build while dev and prod import existing releases', () => {
   const directory = mkdtempSync(join(tmpdir(), 'stage-image-plan-'))
   try {
     writeFileSync(
       join(directory, 'npm'),
-      '#!/bin/sh\ncase "$*" in *runner:build*) echo staged=missing ;; *) exit 66 ;; esac\n',
+      '#!/bin/sh\ncase "$*" in *--ghcr*) exit 0 ;; *runner:build*) echo staged=missing ;; *) exit 66 ;; esac\n',
       { mode: 0o755 },
     )
     const script = step(deployment.jobs.plan, 'Decide').run
     for (const [stage, ref, expected] of [
-      ['dev', 'v1.2.3', 'release-publish'],
-      ['prod', 'v1.2.3', 'release-promote'],
+      ['dev', 'v1.2.3', 'release-import'],
+      ['prod', 'v1.2.3', 'release-import'],
       ['stage', 'v1.2.3', 'build'],
       ['stage', 'a'.repeat(40), 'build'],
     ]) {
@@ -146,6 +146,7 @@ test('missing stage commit images build while dev and prod retain release planni
         IMAGE_TAG: address.image,
         LINE: fields.line,
         COMPONENTS: 'api+runner',
+        GHCR_REPOSITORY: 'boxlite-ai/boxlite',
         GITHUB_OUTPUT: output,
         GITHUB_STEP_SUMMARY: join(directory, 'summary'),
       })

@@ -25,6 +25,14 @@ dependency's type mapping because TypeScript replaces inherited `paths` as a who
 Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
 Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
 
+The MCP dispatcher streaming test sends data every 50 ms for longer than its
+one-second idle deadline, leaving scheduling room on coverage-instrumented CI.
+It checks every response byte and total elapsed time; a separate stalled-route
+case still verifies idle cancellation. The fixture stops sending when its socket closes.
+The PostgreSQL worker takeover test expires the stored lease at the pre-persistence
+hook, then acquires a replacement through the real lease store. Preparation keeps
+the normal lease duration, so CI scheduling cannot expire it before the tested boundary.
+
 ### Listener configuration tests
 
 `BOXLITE_LISTEN_HOST` selects the API listener address; unset or empty retains
@@ -74,6 +82,31 @@ Enum-backed varchar columns need an explicit SQL type: `Checkpoint.sourceState`
 uses `@Column('varchar')` because production compilation can emit `Object` metadata
 for the imported `BoxState` enum even when source-level Jest tests pass.
 
+## Organization role authorization
+
+The organization-role routes require OWNER membership, including listing roles.
+OrganizationActionGuard reads method requirements before controller requirements;
+a controller-level OWNER requirement applies to methods without an override.
+System administrator exemptions and API-key capability checks retain their own rules.
+
+Role update and delete carry the authorized organization ID into the service.
+Custom-role lookup requires both that organization ID and the requested role ID;
+a foreign or unknown custom role returns 404 without changing stored data.
+Missing organization or role IDs are rejected before querying. Global roles remain
+visible in role listings and reject update or delete with 403.
+
+For example, an OWNER of A can edit A's custom role, but using B's role ID through
+A's route returns 404. A MEMBER of A receives 403 on all four role routes.
+Updated permissions apply to assigned members when their membership is reloaded;
+OrganizationAccessGuard caches memberships for up to ten seconds.
+
+Run `make test:apps:api TEST_FILES='organization-action.guard.spec|organization-role.authorization'`
+with `DB_HOST=127.0.0.1`, `DB_PORT`, `DB_USERNAME`, `DB_DATABASE`, and any required
+`DB_PASSWORD` for a disposable PostgreSQL database. The HTTP/storage suite creates
+and drops a unique schema, requires a loopback database host, and skips without
+`DB_HOST`. It exercises the production authorization guard and repository queries;
+JWT identity setup, rate limiting, and Redis transport use test doubles.
+
 ## Registration configuration
 
 Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
@@ -91,6 +124,48 @@ publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
 The secret, allowed hostnames and verification timeout remain server-side. Restart
 the API to change a widget configuration; the dashboard reads it at runtime.
 The generated TypeScript and Go configuration models accept an absent `turnstile`.
+
+## Hosted Box inventory
+
+`GET /v1/boxes` and its prefixed alias return an organization-scoped live list,
+ordered by immutable Box ID ascending. `pageSize` defaults to 100 and accepts
+integers from 1 through 1000. Follow `next_page_token` as `pageToken` until the
+response omits it; repeat the same `status` selection. Page size may change.
+MCP `listBoxes` delegates to this REST operation and uses the same continuation.
+A resolved organization is required, including for system administrators; requests
+without one return 400 before querying inventory. A non-`default` path prefix must
+match the resolved organization; unresolved or mismatched prefixes return 400.
+
+Deployment must coordinate client upgrades with the bounded server response.
+Previously released native clients that issue only one list request return at most
+the first 100 Boxes after this server change. Upgrade those SDK/CLI clients to a
+version that follows continuation tokens before deploying this behavior for
+organizations with larger inventories; this endpoint has no legacy unbounded mode.
+The cloud E2E sweep follows every inventory continuation before selecting stale
+Boxes, and network-policy readback follows pages until it finds the target Box.
+Both remain correct when the organization inventory exceeds the default page size.
+
+Filtering occurs before the database limit and matches the response's public
+`status`, including desired-state transitions. For example, a stored started Box
+targeting stopped matches `stopping`, while a stopped Box targeting started matches
+`configured`. Archived Boxes match `stopped`; eligible errors and resizing match
+`unknown`. `paused` and `failed` are accepted but currently have no hosted matches.
+Destroyed Boxes and error Boxes targeting destruction remain excluded.
+
+Tokens are opaque, versioned and bound to organization, resource and status;
+malformed or incompatible tokens and invalid/repeated query values return 400.
+Base64url is encoding, not a signature: tokens carry a position, and every page
+reapplies authorization using the current authenticated organization. Deleting the
+boundary Box does not prevent continuation. Concurrent state changes and inserts
+behind the cursor require a fresh scan for a complete current inventory; pages
+are not a cross-request snapshot or creation-time ordering.
+
+Run `make test:apps:api TEST_FILES=box-inventory.integration.spec` with `DB_HOST`,
+`DB_PORT`, `DB_USERNAME`, `DB_DATABASE` and any required `DB_PASSWORD` to exercise
+real PostgreSQL queries, REST validation and MCP dispatch. The suite uses a unique
+schema and drops it afterward; it skips without `DB_HOST`. Authentication guards
+and enrichment dependencies are replaced in this harness, so it does not establish
+credential-policy enforcement or deployed infrastructure behavior.
 
 ## Registration email policy
 
@@ -613,6 +688,15 @@ Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
 remain denied. Confirmed Box absence makes its physical capacity available; the
 allocation remains recorded until the original runner cleanup also finishes.
 A successful CI job alone does not prove that cleanup finished.
+
+## Custom domain tests
+
+Run `make test:apps:api TEST_FILES='custom-domain|domain.service'` for domain setup,
+ownership transfer, cleanup, subscription and routing checks. Use disposable
+PostgreSQL through `DB_*` and Redis through `REDIS_*`; these tests may destroy test data.
+Set `BOXLITE_TEST_REDIS_URL` explicitly to enable the subscription integration suite.
+DNS, Commerce and certificate-provider responses are controlled in these tests;
+real issuance and renewal require [deployment acceptance](../infra/docs/gcp/deployment.md#customer-domain-https).
 
 ## Admin Box image
 
@@ -1393,9 +1477,8 @@ for reference syntax and deployment behavior.
 
 Run Node 24 and use `make build:apps:api`. On GCP Cloud Run, background scheduling
 requires CPU allocation while idle and at least one minimum instance. mdeploy adds
-`cpuIdle: false` and a service-level minimum of one instance when hosted CI is configured;
-unconfigured API deployments retain their existing defaults. This incurs idle instance
-costs. The database lease handles restarts and overlapping replicas; minimum instances
+`cpuIdle: false` for custom domains and a service-level minimum of one instance when hosted CI is configured.
+This incurs idle instance costs. The database lease handles restarts and overlapping replicas; minimum instances
 do not guarantee that a process never restarts. These settings and formal hosted-App CI
 still require dev deployment acceptance.
 

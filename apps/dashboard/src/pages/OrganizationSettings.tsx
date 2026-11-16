@@ -6,6 +6,7 @@
 
 import { TabIcon } from '@/components/ui/TabIcon'
 import { AsciiButton } from '@/components/ascii'
+import { ResourceSectionHeading } from '@/components/ResourceLayout'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -74,9 +75,7 @@ const OrganizationGeneral: React.FC = () => {
 
   return (
     <div className="border border-border">
-      <div className="border-b border-border px-5 py-[15px] font-mono text-label uppercase tracking-[1.2px] text-muted-foreground">
-        Organization Details
-      </div>
+      <ResourceSectionHeading title="Organization details" className="mb-0 border-b border-border px-5 py-4" />
 
       {/* name */}
       <div className="grid items-center gap-4 border-b border-border px-5 py-5 sm:grid-cols-2">

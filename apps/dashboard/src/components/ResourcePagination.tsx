@@ -2,7 +2,8 @@
 
 import { type ReactNode } from 'react'
 import { AsciiButton } from '@/components/ascii'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from '@/components/ui/icon'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from '@/components/ui/icon'
+import { BoxCube } from '@/components/BoxCube'
 import { PAGE_SIZE_OPTIONS } from '@/constants/Pagination'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
@@ -15,6 +16,7 @@ export function ResourcePagination({
   isPagingLocked = false,
   isPageFetching = false,
   itemRangeLabel,
+  showPageSizeSelector = true,
   onPaginationChange,
 }: {
   pageIndex: number
@@ -24,6 +26,7 @@ export function ResourcePagination({
   isPagingLocked?: boolean
   isPageFetching?: boolean
   itemRangeLabel: ReactNode
+  showPageSizeSelector?: boolean
   onPaginationChange: (pagination: { pageIndex: number; pageSize: number }) => void
 }) {
   const canPrev = pageIndex > 0
@@ -42,33 +45,35 @@ export function ResourcePagination({
     <div className="flex flex-none flex-col gap-3 px-0 py-4 font-sans text-meta text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <span>{itemRangeLabel}</span>
-        <div className="flex items-center gap-2">
-          <span className="normal-case tracking-normal">Show</span>
-          <Select value={`${pageSize}`} onValueChange={handlePageSizeChange} disabled={isPagingLocked}>
-            <SelectTrigger
-              aria-label="Rows per page"
-              size="sm"
-              className="h-8 w-[76px] border-border bg-background px-2 font-mono text-meta"
-              loading={isPagingLocked}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent side="top">
-              {PAGE_SIZE_OPTIONS.map((option) => (
-                <SelectItem key={option} value={`${option}`}>
-                  {option}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span className="normal-case tracking-normal">per page</span>
-        </div>
+        {showPageSizeSelector && (
+          <div className="flex items-center gap-2">
+            <span className="normal-case tracking-normal">Show</span>
+            <Select value={`${pageSize}`} onValueChange={handlePageSizeChange} disabled={isPagingLocked}>
+              <SelectTrigger
+                aria-label="Rows per page"
+                size="sm"
+                className="h-8 w-[76px] border-border bg-background px-2 font-mono text-meta"
+                loading={isPagingLocked}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent side="top">
+                {PAGE_SIZE_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={`${option}`}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="normal-case tracking-normal">per page</span>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-[7px]">
         <span className="inline-flex min-w-[92px] items-center justify-end gap-1 normal-case tracking-normal">
           {isPageFetching ? (
             <>
-              <Loader2 className="size-3 animate-spin" strokeWidth={1.5} />
+              <BoxCube state="building" size={18} />
               Loading page {pageIndex + 1}
             </>
           ) : (

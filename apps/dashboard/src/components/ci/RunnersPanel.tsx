@@ -1,18 +1,27 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 import { useEffect, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, generatePath } from 'react-router-dom'
-import { AsciiButton } from '@/components/ascii'
-import { BoxState } from '@/components/BoxTable/BoxState'
-import { BoxCube } from '@/components/BoxCube'
-import { ResourceFilter } from '@/components/ResourceLayout'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
+import { ResourcePagination } from '@/components/ResourcePagination'
+import { BoxStatusIndicator } from '@/components/boxes/box-presentation'
+import { Container } from '@/components/ui/icon'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { timeAgo } from '@/lib/format'
 import { isTransitioning } from '@/lib/utils/box'
-import { boxCubeState } from '@/lib/box-shape'
 import { CapacitySummary } from './CapacitySummary'
 
 export function RunnersPanel() {
@@ -50,6 +59,12 @@ export function RunnersPanel() {
     if (runners.data && !runners.isPlaceholderData && page > Math.max(1, runners.data.totalPages))
       setPage(Math.max(1, runners.data.totalPages))
   }, [runners.data, runners.isPlaceholderData, page])
+  const hasInventory = runners.data !== undefined
+  const empty = hasInventory && !runners.isPlaceholderData && !runners.data.items.length
+  const clearFilter = () => {
+    setFilter('')
+    setPage(1)
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="resource-toolbar">
@@ -61,100 +76,126 @@ export function RunnersPanel() {
             setPage(1)
           }}
           maxLength={128}
+          disabled={runners.isPending}
           count={runners.isPending || runners.isPlaceholderData ? '…' : (runners.data?.total ?? '—')}
         />
         {runners.data?.capacity && <CapacitySummary capacity={runners.data.capacity} />}
       </div>
-      <div className="mt-[14px] min-h-0 flex-1 overflow-auto" aria-busy={runners.isFetching}>
-        <table className="w-full min-w-[720px] text-left text-body">
-          <thead className="border-b border-border font-mono text-meta text-muted-foreground">
-            <tr>
-              {['Name', 'State', 'Image', 'Resources', 'Created'].map((title) => (
-                <th key={title} className="px-2 py-2 font-medium">
-                  {title}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {runners.data?.items.map((box) => (
-              <tr key={box.id} className="border-b border-border/60">
-                <td className="px-2 py-[13px] font-mono font-medium">
-                  <div className="flex items-center gap-3">
-                    <BoxCube
-                      state={isTransitioning(box) ? 'building' : box.state === 'started' ? 'ci' : boxCubeState(box)}
-                      size={28}
-                      className="text-muted-foreground"
-                    />
-                    <div className="min-w-0">
+      <div className="resource-content scroll-edge mt-[14px]" aria-busy={runners.isFetching}>
+        {runners.isError && hasInventory && (
+          <ResourceErrorNotice
+            title="Unable to refresh runners. Showing previously loaded data. Retrying automatically…"
+            retrying={runners.isFetching}
+            onRetry={() => void runners.refetch()}
+          />
+        )}
+        {!!runners.data?.items.length && (
+          <table className="resource-table w-full min-w-[900px] table-fixed text-left font-sans text-body">
+            <colgroup>
+              <col className="w-[23%]" />
+              <col className="w-[14%]" />
+              <col />
+              <col className="w-[80px]" />
+              <col className="w-[80px]" />
+              <col className="w-[80px]" />
+              <col className="w-[110px]" />
+              <col className="w-[96px]" />
+            </colgroup>
+            <thead className="border-b border-border">
+              <tr>
+                {['Name', 'Box ID', 'Image', 'CPU', 'Memory', 'Disk', 'Status', 'Created'].map((title) => (
+                  <th key={title}>{title}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {runners.data?.items.map((box) => (
+                <tr
+                  key={box.id}
+                  className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
+                >
+                  <td>
+                    <ResourceIdentity icon={<BoxResourceIcon box={box} />}>
                       <Link
-                        className="whitespace-nowrap text-foreground hover:underline"
+                        className="resource-link"
+                        title={box.name}
                         to={generatePath(RoutePath.BOX_DETAILS, { boxId: box.id })}
                       >
                         {box.name}
                       </Link>
-                      <div className="mt-1 font-mono text-meta text-muted-foreground">JIT · {box.id}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-2 py-[13px]">
-                  <BoxState state={box.state} errorReason={box.errorReason} />
-                </td>
-                <td
-                  className="max-w-[260px] truncate px-2 py-[13px] font-mono text-meta text-muted-foreground"
-                  title={box.image}
-                >
-                  {box.image || '—'}
-                </td>
-                <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
-                  {box.cpu} vCPU · {box.memory} GiB RAM · {box.disk} GiB disk
-                </td>
-                <td className="px-2 py-[13px] font-mono text-meta text-muted-foreground">
-                  {box.createdAt ? timeAgo(box.createdAt) : '—'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {runners.isPending && (
-          <p role="status" className="py-10 text-center font-mono text-meta text-muted-foreground">
-            Loading runners…
-          </p>
+                    </ResourceIdentity>
+                  </td>
+                  <td className="font-mono text-muted-foreground">
+                    <span className="block truncate" title={box.id}>
+                      {box.id}
+                    </span>
+                  </td>
+                  <td className="font-mono text-muted-foreground">
+                    <span className="block truncate" title={box.image}>
+                      {box.image || '—'}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap font-mono text-muted-foreground">{box.cpu ?? '—'} vCPU</td>
+                  <td className="whitespace-nowrap font-mono text-muted-foreground">{box.memory ?? '—'} GiB</td>
+                  <td className="whitespace-nowrap font-mono text-muted-foreground">{box.disk ?? '—'} GiB</td>
+                  <td>
+                    {box.errorReason ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            tabIndex={0}
+                            className="inline-flex focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                          >
+                            <BoxStatusIndicator box={box} />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-sm break-words">{box.errorReason}</TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <BoxStatusIndicator box={box} />
+                    )}
+                  </td>
+                  <td className="font-mono text-muted-foreground">{box.createdAt ? timeAgo(box.createdAt) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
-        {runners.isError && (
-          <p role="alert" className="py-10 text-center font-mono text-meta text-muted-foreground">
-            Runners could not be loaded. Retrying automatically…
-          </p>
-        )}
-        {runners.isSuccess && !runners.isPlaceholderData && !runners.data.items.length && (
-          <div className="flex flex-col items-center py-10 text-center font-mono text-meta text-muted-foreground">
-            <BoxCube state="ci" size={56} className="mb-4" />
-            <p>
-              {name ? `No runners match “${name}”.` : 'No CI runners. Boxes appear here while GitHub Actions jobs run.'}
-            </p>
-          </div>
-        )}
+        {!hasInventory &&
+          (runners.isError ? (
+            <ResourceErrorState
+              title="Runners could not be loaded"
+              retrying={runners.isFetching}
+              onRetry={() => void runners.refetch()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading runners…" />
+          ))}
+        {empty &&
+          (name ? (
+            <ResourceFilterEmptyState title={`No runners match “${name}”.`} onClear={clearFilter} />
+          ) : (
+            <ResourceEmptyState
+              icon={<Container />}
+              title="No CI runners yet"
+              description="Boxes appear here while GitHub Actions jobs run."
+            />
+          ))}
       </div>
       {(!!runners.data?.total || page > 1) && (
-        <div className="flex items-center justify-between gap-3 border-t border-border py-3 font-mono text-meta text-muted-foreground">
-          <span>
-            {runners.data
-              ? `${runners.data.total} runners · Page ${page} of ${Math.max(1, runners.data.totalPages)}`
-              : `Page ${page}`}
-          </span>
-          <div className="flex gap-2">
-            <AsciiButton size="sm" disabled={page <= 1 || runners.isFetching} onClick={() => setPage(page - 1)}>
-              Previous
-            </AsciiButton>
-            <AsciiButton
-              size="sm"
-              disabled={!runners.data || page >= runners.data.totalPages || runners.isFetching}
-              onClick={() => setPage(page + 1)}
-            >
-              Next
-            </AsciiButton>
-          </div>
-        </div>
+        <ResourcePagination
+          pageIndex={page - 1}
+          pageSize={25}
+          pageCount={runners.isPlaceholderData ? 0 : (runners.data?.totalPages ?? 0)}
+          totalItems={runners.isPlaceholderData ? 0 : (runners.data?.total ?? 0)}
+          isPagingLocked={runners.isFetching}
+          isPageFetching={runners.isFetching && runners.isPlaceholderData}
+          showPageSizeSelector={false}
+          itemRangeLabel={
+            runners.isPlaceholderData ? 'Loading runners…' : runners.data ? `${runners.data.total} runners` : 'Runners'
+          }
+          onPaginationChange={({ pageIndex }) => setPage(pageIndex + 1)}
+        />
       )}
     </div>
   )

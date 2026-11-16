@@ -219,7 +219,7 @@ function ComparisonRow({ comparison }: { comparison: PlanComparison }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-border/40 py-3 font-sans text-meta last:border-b-0">
       <span className="uppercase tracking-[0.5px] text-muted-foreground">{comparison.label}</span>
-      <span className="flex items-baseline gap-2 tabular-nums">
+      <span className="flex items-baseline gap-2 font-mono tabular-nums">
         <span className="text-muted-foreground line-through decoration-muted-foreground/40">{comparison.from}</span>
         <span className="text-muted-foreground">→</span>
         <span className="font-semibold text-foreground">{comparison.to}</span>

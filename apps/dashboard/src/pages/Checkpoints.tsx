@@ -10,8 +10,15 @@ import { CheckpointBoxCreateDialog } from '@/components/CheckpointBoxCreateDialo
 import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { toast } from 'sonner'
 import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
+import { CheckpointGlyph } from '@/components/CheckpointGlyph'
 import { CheckpointTable } from '@/components/CheckpointTable'
-import { ResourceFilter } from '@/components/ResourceLayout'
+import {
+  ResourceEmptyState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceLoadingState,
+  ResourceFilter,
+} from '@/components/ResourceLayout'
 import { AsciiButton as Button } from '@/components/ascii'
 import { Plus } from '@/components/ui/icon'
 import {
@@ -60,6 +67,12 @@ function CheckpointPage() {
     `${checkpoint.name} ${checkpoint.id}`.toLowerCase().includes(filter.trim().toLowerCase()),
   )
   const disabled = capabilities.data?.checkpoints_enabled === false
+  const hasInventory = checkpoints.data !== undefined
+  const blockingError = !hasInventory && (checkpoints.isError || capabilities.isError)
+  const retryFailed = () => {
+    if (capabilities.isError) void capabilities.refetch()
+    if (checkpoints.isError) void checkpoints.refetch()
+  }
   const deleteConfirmed = !!pendingDelete && confirmName === pendingDelete.name
 
   return (
@@ -73,64 +86,91 @@ function CheckpointPage() {
         </div>
       </div>
       {disabled ? (
-        <p role="status" className="my-auto text-center text-muted-foreground">
-          {CHECKPOINTS_DISABLED_MESSAGE}
-        </p>
+        <div className="resource-content">
+          {capabilities.isError && (
+            <ResourceErrorNotice
+              title="Could not refresh checkpoint capabilities."
+              retryLabel="Retry capabilities"
+              retrying={capabilities.isFetching}
+              onRetry={() => void capabilities.refetch()}
+            />
+          )}
+          <ResourceEmptyState
+            icon={<CheckpointGlyph />}
+            title="Checkpoints unavailable"
+            description={CHECKPOINTS_DISABLED_MESSAGE}
+          />
+        </div>
       ) : (
         <>
           <div className="resource-toolbar">
-            <ResourceFilter label="Filter checkpoints" value={filter} onChange={setFilter} count={rows.length} />
+            <ResourceFilter
+              label="Filter checkpoints"
+              value={filter}
+              onChange={setFilter}
+              count={hasInventory ? rows.length : '—'}
+              disabled={!hasInventory}
+            />
             <div className="flex-1" />
             <Button
               variant="primary"
-              className="h-11 gap-[7px] px-[15px] text-meta font-semibold tracking-normal hover:bg-primary hover:opacity-85 sm:h-9"
+              className="h-11 sm:h-9"
               disabled={!canWrite || !capabilities.data?.checkpoints_enabled}
               onClick={() => setCreateOpen(true)}
             >
-              <Plus className="size-3.5" strokeWidth={2.4} /> New Checkpoint
+              <Plus className="size-3.5" strokeWidth={1.3} /> New Checkpoint
             </Button>
           </div>
-          {capabilities.isError && (
-            <div role="alert" className="mt-6 text-body">
-              <p>Could not load checkpoint capabilities.</p>
-              <Button variant="secondary" onClick={() => void capabilities.refetch()}>
-                Retry capabilities
-              </Button>
-            </div>
-          )}
-          {checkpoints.isError ? (
-            <div role="alert" className="mt-6 text-body">
-              <p>{checkpointErrorMessage(checkpoints.error)}</p>
-              <Button variant="secondary" onClick={() => void checkpoints.refetch()}>
-                Retry
-              </Button>
-            </div>
-          ) : (
-            <div className="mt-[14px] min-h-0 flex-1 overflow-auto">
-              <CheckpointTable
-                data={rows}
-                boxes={boxes.isError ? undefined : boxes.data}
-                loading={checkpoints.isLoading}
-                filtered={!!filter.trim()}
-                onCreate={() => setCreateOpen(true)}
-                createBoxEnabled={capabilities.data?.checkpoints_enabled === true}
-                onCreateBox={setPendingBox}
-                onDelete={(checkpoint) => {
-                  remove.reset()
-                  setConfirmName('')
-                  setPendingDelete(checkpoint)
-                }}
+          <div className="resource-content scroll-edge mt-[14px]">
+            {blockingError ? (
+              <ResourceErrorState
+                title="Could not load checkpoints"
+                retrying={checkpoints.isFetching || capabilities.isFetching}
+                onRetry={retryFailed}
               />
-              {boxes.isError && (
-                <p role="alert" className="mt-4 text-body text-muted-foreground">
-                  Could not load source boxes.{' '}
-                  <button className="underline" onClick={() => void boxes.refetch()}>
-                    Retry
-                  </button>
-                </p>
-              )}
-            </div>
-          )}
+            ) : !hasInventory ? (
+              <ResourceLoadingState title="Loading checkpoints…" />
+            ) : (
+              <>
+                {capabilities.isError && (
+                  <ResourceErrorNotice
+                    title="Could not load checkpoint capabilities."
+                    retryLabel="Retry capabilities"
+                    retrying={capabilities.isFetching}
+                    onRetry={() => void capabilities.refetch()}
+                  />
+                )}
+                {checkpoints.isError && (
+                  <ResourceErrorNotice
+                    title="Could not refresh checkpoints. Showing previously loaded data."
+                    retrying={checkpoints.isFetching}
+                    onRetry={() => void checkpoints.refetch()}
+                  />
+                )}
+                {boxes.isError && (
+                  <ResourceErrorNotice
+                    title="Could not load source boxes."
+                    retrying={boxes.isFetching}
+                    onRetry={() => void boxes.refetch()}
+                  />
+                )}
+                <CheckpointTable
+                  data={rows}
+                  boxes={boxes.isError ? undefined : boxes.data}
+                  loading={false}
+                  filtered={!!filter.trim()}
+                  onClearFilter={() => setFilter('')}
+                  createBoxEnabled={capabilities.data?.checkpoints_enabled === true}
+                  onCreateBox={setPendingBox}
+                  onDelete={(checkpoint) => {
+                    remove.reset()
+                    setConfirmName('')
+                    setPendingDelete(checkpoint)
+                  }}
+                />
+              </>
+            )}
+          </div>
           {createOpen && <CheckpointCreateDialog onClose={() => setCreateOpen(false)} />}
           {pendingBox && <CheckpointBoxCreateDialog checkpoint={pendingBox} onClose={() => setPendingBox(null)} />}
           <AlertDialog
@@ -139,16 +179,18 @@ function CheckpointPage() {
               if (!open && !remove.isPending) setPendingDelete(null)
             }}
           >
-            <AlertDialogContent>
+            <AlertDialogContent className="max-h-[calc(100svh-3rem)] overflow-y-auto sm:max-w-[480px]">
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete “{pendingDelete?.name}”?</AlertDialogTitle>
+                <AlertDialogTitle>Delete checkpoint?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This permanently removes the checkpoint. You will no longer be able to restore its disk data.
+                  <span className="font-mono text-foreground [overflow-wrap:anywhere]">{pendingDelete?.name}</span> will
+                  be permanently deleted. This cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <div className="flex flex-col gap-[7px]">
-                <label htmlFor="checkpoint-delete-confirm" className="font-mono text-meta text-muted-foreground">
-                  Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
+                <label htmlFor="checkpoint-delete-confirm" className="text-meta text-muted-foreground">
+                  Type <span className="font-mono text-foreground [overflow-wrap:anywhere]">{pendingDelete?.name}</span>{' '}
+                  to confirm
                 </label>
                 <input
                   id="checkpoint-delete-confirm"
@@ -158,11 +200,11 @@ function CheckpointPage() {
                   autoComplete="off"
                   spellCheck={false}
                   disabled={remove.isPending}
-                  className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-body text-foreground outline-none focus:border-destructive"
+                  className="form-field-input font-mono focus:border-destructive"
                 />
               </div>
               {remove.error && (
-                <p role="alert" className="text-body text-destructive">
+                <p role="alert" className="text-body text-destructive [overflow-wrap:anywhere]">
                   {checkpointErrorMessage(remove.error)}
                 </p>
               )}

@@ -56,6 +56,30 @@ function makeHarness() {
 }
 
 describe('BoxliteProxyController', () => {
+  it('refuses stopped exec when auto-resume is disabled', async () => {
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'stopped',
+      desiredState: 'stopped',
+    } as never)
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+
+    await expect(
+      controller.proxyExec(
+        activeAuth as never,
+        'mybox',
+        { method: 'POST' } as never,
+        new EventEmitter() as never,
+        jest.fn(),
+      ),
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining('auto-resume is disabled') })
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
+  })
+
   it('passes the private choice and returns only the URI and access descriptor', async () => {
     const { controller, tunnelService } = makeHarness()
     tunnelService.prepare.mockResolvedValue({ isPublic: false, token: 'blt_first-secret' })
@@ -527,6 +551,7 @@ describe('BoxliteProxyController business events', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'started',
+      desiredState: 'started',
       inboundEnabled: true,
     })
     return built
@@ -720,6 +745,7 @@ describe('BoxliteProxyController business events', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'started',
+      desiredState: 'started',
       inboundEnabled: false,
     })
 

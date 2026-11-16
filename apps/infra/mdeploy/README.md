@@ -88,10 +88,10 @@ webhook active until a coordinated hosted cutover can avoid duplicate providers.
 
 Pin secret versions and deploy a new revision when rotating them. The API receives
 the resolved values at instance startup; it does not fetch Secret Manager itself.
-Cloud Run receives a service-level minimum of one instance and `cpuIdle: false`
-only when hosted CI is configured, so scheduling continues outside requests.
-This introduces idle instance costs. Other API deployments retain their defaults;
-multiple replicas still use the PostgreSQL lease to select one scheduler.
+The GCP API retains `cpuIdle: false` for custom-domain background work.
+Hosted CI additionally configures a service-level minimum of one instance; custom domains add no minimum.
+Continuous CPU applies only while an instance exists and incurs idle instance costs.
+Multiple replicas use the PostgreSQL lease to select one CI scheduler.
 
 See the [API configuration contract](../../api/README.md#hosted-configuration-and-deployment)
 and [Cloud Run secret delivery](https://docs.cloud.google.com/run/docs/configuring/services/secrets).
@@ -181,15 +181,19 @@ The provider-shape regressions inspect actual constructor inputs; a successful p
 ## CI orchestration
 
 [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml) resolves the requested ref, ensures
-its artifacts exist, checks the stage digest, then previews or applies. Its `components` input
+its artifacts exist, checks the stage digest, then previews or applies. Release images must already
+exist in GHCR; the workflow imports their digests into the target stage's AR/ECR repository and
+enforces that stage's scan policy before deployment. Missing GHCR images stop the run and print
+a manual `mbuild-release` dispatch command. Deployment never starts a release build.
+GCP imports and scans use `GCP_IMAGE_PUBLISHER`; the job restores `GCP_DEPLOYER` before image verification and apply.
+Its `components` input
 selects artifact preparation; it is not a promise that the resource graph targets only those services.
 
 A commit or open PR merge commit is accepted for `dev` and `stage`; both may use candidate workflow branches.
 `prod` requires a published release; release dispatches run from `main`.
 Stage resolves stable tags to their commits and uses SHA-tagged images and a commit Runner build.
-Dev publishes release images and prod promotes them from dev.
-PR/commit builds cannot promote to prod; prepare and validate the version-qualified stable release images in dev first.
-The reusable image workflow and runner build job bind the stage's
+Dev/prod release deployments import the existing version-qualified images from GHCR.
+The commit image workflow and runner build job bind the stage's
 GitHub Environment. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
 

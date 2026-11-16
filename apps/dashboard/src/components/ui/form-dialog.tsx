@@ -27,7 +27,7 @@ export function FormDialogHeader({ className, ...props }: ComponentProps<typeof 
 
 /** Provides the shared scroll region for fields, pricing, and validation messages. */
 export function FormDialogBody({ className, ...props }: ComponentProps<'div'>) {
-  return <div className={cn('form-dialog-body', className)} {...props} />
+  return <div className={cn('form-dialog-body scroll-edge', className)} {...props} />
 }
 
 /** Keeps form actions visible below the scrolling content. */

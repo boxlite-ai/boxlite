@@ -12,6 +12,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 interface UpdateBoxInboundVariables {
   boxId: string
   mode: NetworkMode
+  signal?: AbortSignal
 }
 
 /**
@@ -30,9 +31,9 @@ export const useUpdateBoxInboundMutation = () => {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ boxId, mode }: UpdateBoxInboundVariables) => {
+    mutationFn: async ({ boxId, mode, signal }: UpdateBoxInboundVariables) => {
       if (!selectedOrganization?.id) throw new Error('Missing organization')
-      await api.setBoxInboundMode(selectedOrganization.id, boxId, mode)
+      await api.setBoxInboundMode(selectedOrganization.id, boxId, mode, signal)
     },
     onSuccess: (_, { boxId }) => {
       queryClient.invalidateQueries({

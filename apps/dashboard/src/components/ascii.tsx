@@ -1,4 +1,4 @@
-import { StatusIndicator } from '@/components/ResourceLayout'
+import { ResourceSectionHeading, StatusIndicator } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
@@ -102,7 +102,7 @@ export function StatCard({
           <span style={{ color: BRAND }}>▸</span> {label}
         </span>
         {live && (
-          <span className="inline-flex shrink-0 items-center gap-[5px] font-mono text-meta tracking-[1px] text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-[5px] font-sans text-label tracking-[1px] text-muted-foreground">
             <span
               className="size-[6px] rounded-full"
               style={{ background: BRAND, animation: 'live-pulse 1.6s infinite' }}
@@ -128,19 +128,9 @@ export function StatCard({
   )
 }
 
-/** Section heading: ▸ TITLE, optional count, optional right-aligned action. */
+/** Retains the existing section API while sharing its hierarchy with resource details. */
 export function SectionTitle({ title, count, right }: { title: string; count?: ReactNode; right?: ReactNode }) {
-  return (
-    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-[2px]">
-      <div className="flex items-center gap-3">
-        <span className="font-mono text-meta uppercase tracking-[1.5px] text-foreground">
-          <span style={{ color: BRAND }}>▸</span> {title}
-        </span>
-        {count && <span className="font-mono text-meta text-muted-foreground">{count}</span>}
-      </div>
-      {right}
-    </div>
-  )
+  return <ResourceSectionHeading title={title} count={count} right={right} />
 }
 
 /**

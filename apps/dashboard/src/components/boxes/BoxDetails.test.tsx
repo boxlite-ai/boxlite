@@ -7,14 +7,18 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Box, BoxState } from '@boxlite-ai/api-client'
+import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import BoxDetails from './BoxDetails'
+import { copyToClipboard } from '@/lib/copy-text'
+import { toast } from 'sonner'
+vi.mock('@/lib/copy-text', () => ({ copyToClipboard: vi.fn() }))
 
 const mocks = vi.hoisted(() => ({
   box: undefined as unknown,
   volumes: [] as { id: string; name: string }[],
   images: [] as { id: string | null; name: string; curated: boolean; curatedRef: string | null }[],
   boxRefetch: vi.fn(),
+  queryError: false,
   terminalMounts: vi.fn(),
   navigate: vi.fn(),
   setSearchParams: vi.fn(),
@@ -50,6 +54,7 @@ vi.mock('react-oidc-context', () => ({
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
+    error: vi.fn(),
   },
 }))
 
@@ -60,7 +65,9 @@ vi.mock('@/components/OnboardingGuideDialog', () => ({
 // Owns its own mutations and needs an ApiProvider; these tests cover the detail
 // shell, and the network panel has its own stories.
 vi.mock('./BoxNetworkSection', () => ({
-  BoxNetworkSection: () => <div data-testid="network-section">Network settings</div>,
+  BoxNetworkSection: ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="network-section">Network settings{children}</div>
+  ),
 }))
 
 vi.mock('./BoxSshTab', async () => {
@@ -113,7 +120,7 @@ vi.mock('@/hooks/queries/useBoxQuery', () => ({
   useBoxQuery: () => ({
     data: mocks.box,
     isLoading: false,
-    isError: false,
+    isError: mocks.queryError,
     error: null,
     refetch: mocks.boxRefetch,
   }),
@@ -182,6 +189,7 @@ describe('BoxDetails overview', () => {
   })
 
   beforeEach(() => {
+    mocks.queryError = false
     mocks.box = makeRunningBox()
     mocks.volumes = []
     mocks.images = []
@@ -209,6 +217,69 @@ describe('BoxDetails overview', () => {
     await flushReactWork()
   }
 
+  it('shows lifecycle values from the Box response, including mixed units', async () => {
+    mocks.box = { ...makeRunningBox(), autoStop: 900, autoDelete: 4500, autoResume: true }
+    await renderBoxDetails()
+    const lifecycle = document.querySelector('[aria-label="Lifecycle"]')!
+    expect(lifecycle?.textContent).toContain('After 15 min idle')
+    expect(lifecycle?.textContent).toContain('After 1 h 15 min idle')
+    expect(lifecycle?.textContent).toContain('Only applies while the Box is stopped.')
+    expect(lifecycle?.textContent).toContain('Enabled')
+    expect(mocks.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ autoStop: 0, autoDelete: 0, autoResume: false }, ['Disabled', 'Disabled', 'Disabled']],
+    [{}, ['Not available', 'Not available', 'Not available']],
+    [
+      { autoStop: 900, autoDelete: 90, autoResume: false },
+      ['After 15 min idle', 'After 1 min 30 sec idle', 'Disabled'],
+    ],
+    [{ autoStop: -1, autoDelete: null, autoResume: 'false' }, ['Not available', 'Not available', 'Not available']],
+  ])('renders lifecycle boundary values %j', async (policy, expected) => {
+    mocks.box = { ...makeRunningBox(), ...policy }
+    await renderBoxDetails()
+    const values = [...document.querySelectorAll('[aria-label="Lifecycle"] dd')]
+    expect(values).toHaveLength(3)
+    expected.forEach((value, index) => expect(values[index].textContent).toContain(value))
+  })
+
+  it('keeps lifecycle values visible after a refresh error and offers Retry', async () => {
+    mocks.box = { ...makeRunningBox(), autoStop: 900 }
+    mocks.queryError = true
+    await renderBoxDetails()
+    expect(document.body.textContent).toContain('After 15 min idle')
+    expect(document.body.textContent).toContain('Showing last known values.')
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')!
+    await act(async () => retry.click())
+    expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('copies the public Box ID and clears confirmation after the timeout', async () => {
+    vi.useFakeTimers()
+    vi.mocked(copyToClipboard).mockResolvedValue(true)
+    try {
+      await renderBoxDetails()
+      const button = document.querySelector<HTMLButtonElement>('[aria-label="Copy Box ID"]')!
+      await act(async () => button.click())
+      expect(copyToClipboard).toHaveBeenCalledWith('box-1')
+      expect(button.querySelector('.text-success')).not.toBeNull()
+      await act(async () => vi.advanceTimersByTime(1300))
+      expect(button.querySelector('.text-success')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a clipboard failure without showing copy success', async () => {
+    vi.mocked(copyToClipboard).mockResolvedValue(false)
+    await renderBoxDetails()
+    const button = document.querySelector<HTMLButtonElement>('[aria-label="Copy Box ID"]')!
+    await act(async () => button.click())
+    expect(toast.error).toHaveBeenCalledWith('Could not copy to clipboard')
+    expect(button.querySelector('.text-success')).toBeNull()
+  })
+
   it('opens SSH before the lifecycle action without starting a shell', async () => {
     await renderBoxDetails()
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
@@ -219,7 +290,8 @@ describe('BoxDetails overview', () => {
     expect(document.querySelector('[role="tab"]')).toBeNull()
     const network = document.querySelector('[data-testid="network-section"]')!
     const sshStatus = document.querySelector('[data-testid="ssh-status"]')!
-    expect(network.nextElementSibling?.contains(sshStatus)).toBe(true)
+    expect(sshStatus).not.toBeNull()
+    expect(network.contains(sshStatus)).toBe(true)
     await act(async () => ssh.click())
     expect(document.body.textContent).toContain('SSH controls')
     await act(async () => ssh.click())
@@ -254,7 +326,7 @@ describe('BoxDetails overview', () => {
       ['Terminal', '/dashboard/boxes/box-1/terminal', null],
     ])
     expect(document.querySelector('[aria-label="Box configuration"]')).not.toBeNull()
-    expect(document.querySelector('[aria-label="Box network and activity"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Box network"]')).not.toBeNull()
   })
 
   it('groups resource values with their units and preserves the full image reference', async () => {
@@ -281,6 +353,16 @@ describe('BoxDetails overview', () => {
     await renderBoxDetails()
 
     expect(document.body.textContent).toContain('box-one')
+  })
+
+  it('names preparing an image consistently with the list', async () => {
+    mocks.box = {
+      ...makeRunningBox(),
+      state: BoxState.CREATING,
+      progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
+    }
+    await renderBoxDetails()
+    expect(document.body.textContent).toContain('Pulling image')
   })
 
   // A box stores an opaque volume handle, so the mount list is only readable
@@ -322,6 +404,21 @@ describe('BoxDetails overview', () => {
 
   // The API's reason for a private pull no credential covers names the fix;
   // the page carries the way to it, with the registry already chosen.
+  it('links a curated image by name when its catalog has no ID', async () => {
+    mocks.images = [{ id: null, name: 'curated-python', curated: true, curatedRef: 'python:3.12' }]
+    mocks.box = { ...makeRunningBox(), image: 'python:3.12' }
+    await renderBoxDetails()
+    const image = [...document.querySelectorAll('a')].find((a) => a.textContent === 'python:3.12')
+    expect(image?.getAttribute('href')).toBe('/dashboard/images/curated-python')
+  })
+  it('does not invent an image link when the Box has no image metadata', async () => {
+    mocks.box = { ...makeRunningBox(), image: undefined }
+    await renderBoxDetails()
+    const label = [...document.querySelectorAll('dt')].find((dt) => dt.textContent === 'Image')!
+    expect(label.nextElementSibling?.textContent).toBe('—')
+    expect(label.nextElementSibling?.querySelector('a')).toBeNull()
+  })
+
   it('offers to connect the registry a private pull was refused by', async () => {
     mocks.box = {
       ...(makeRunningBox() as object),

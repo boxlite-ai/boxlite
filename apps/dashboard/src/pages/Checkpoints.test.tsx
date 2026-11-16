@@ -54,6 +54,15 @@ describe('Checkpoint inventory', () => {
   let client: QueryClient
   beforeAll(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    HTMLElement.prototype.scrollIntoView = vi.fn()
   })
   beforeEach(() => {
     vi.useFakeTimers()
@@ -113,12 +122,66 @@ describe('Checkpoint inventory', () => {
       element!.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
     })
   }
+  async function openSourcePicker() {
+    const trigger = document.querySelector('[role="combobox"][aria-label="Source box"]')
+    expect(trigger).not.toBeNull()
+    await act(async () => trigger?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    await settle()
+    expect(document.querySelector('[role="listbox"]')).not.toBeNull()
+  }
+  async function chooseSource(name: string) {
+    if (!document.querySelector('[role="listbox"]')) await openSourcePicker()
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((item) =>
+      item.textContent?.includes(name),
+    )
+    expect(option).toBeDefined()
+    await act(async () => option?.click())
+    await settle()
+  }
   async function submit() {
     await act(async () => {
       document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })
     await settle()
   }
+
+  it('clears a no-match filter and restores the inventory', async () => {
+    await render()
+    input('Filter checkpoints', 'no-match')
+    await settle()
+    expect(document.body.textContent).toContain('No checkpoints match your filter')
+    await click('Clear filter')
+    expect((document.querySelector('[aria-label="Filter checkpoints"]') as HTMLInputElement).value).toBe('')
+    expect(document.querySelector('[aria-label="Create Box from base"]')).not.toBeNull()
+  })
+
+  it('explains an invalid capture name without changing optional naming or submit validation', async () => {
+    await render()
+    await click('New Checkpoint')
+    await chooseSource('source-name')
+    input('Checkpoint name', 'invalid name')
+    await settle()
+    const field = document.querySelector('[aria-label="Checkpoint name"]')!
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById(field.getAttribute('aria-describedby')!)?.textContent).toContain('Start with')
+    await submit()
+    expect(state.api.createCheckpoint).not.toHaveBeenCalled()
+    input('Checkpoint name', '')
+    await submit()
+    expect(state.api.createCheckpoint).toHaveBeenCalledWith('org-1', 'source-box', undefined)
+  })
+
+  it('explains an invalid Box name without submitting an import', async () => {
+    await render()
+    await click('Create Box from base')
+    input('Box name', 'invalid name')
+    await settle()
+    const field = document.querySelector('[aria-label="Box name"]')!
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(document.getElementById(field.getAttribute('aria-describedby')!)?.textContent).toContain('Start with')
+    await submit()
+    expect(state.api.createBoxFromCheckpoint).not.toHaveBeenCalled()
+  })
 
   it('checkpoint restoration removes the recovery action', async () => {
     await render()
@@ -133,7 +196,8 @@ describe('Checkpoint inventory', () => {
     expect(trigger).toBeDefined()
     await act(async () => trigger.click())
     await settle()
-    expect(document.querySelector('select[aria-label="Source box"]')).not.toBeNull()
+    await openSourcePicker()
+    expect(document.querySelector('[role="option"]')?.textContent).toContain('source-name')
   })
 
   it('checkpoint restoration requires typing the exact name before deletion', async () => {
@@ -175,9 +239,10 @@ describe('Checkpoint inventory', () => {
     }))
     await render()
     await click('New Checkpoint')
-    const options = Array.from(document.querySelectorAll<HTMLOptionElement>('select[aria-label="Source box"] option'))
-    expect(options.map((option) => option.value)).toEqual(['', 'source-box'])
-    input('Source box', 'source-box')
+    await openSourcePicker()
+    const options = Array.from(document.querySelectorAll('[role="option"]'))
+    expect(options.map((option) => option.textContent)).toEqual(['source-name · 10 GiB'])
+    await chooseSource('source-name')
     await submit()
     expect(state.api.createCheckpoint).toHaveBeenCalledWith('org-1', 'source-box', undefined)
   })
@@ -204,7 +269,7 @@ describe('Checkpoint inventory', () => {
     state.api.createCheckpoint.mockRejectedValue(new Error('Checkpoint name already exists'))
     await render()
     await click('New Checkpoint')
-    input('Source box', 'source-box')
+    await chooseSource('source-name')
     input('Checkpoint name', 'base')
     await submit()
     expect(document.body.textContent).toContain('Checkpoint name already exists')
@@ -215,7 +280,7 @@ describe('Checkpoint inventory', () => {
   it('rechecks a fixed source and blocks capture after its state changes', async () => {
     state.api.boxApi.getBox.mockResolvedValue({ data: { ...source, desiredState: 'started' } })
     await render(<CheckpointCreateDialog box={source as Box} onClose={vi.fn()} />)
-    const select = document.querySelector<HTMLSelectElement>('[aria-label="Source box"]')!
+    const select = document.querySelector<HTMLButtonElement>('[aria-label="Source box"]')!
     expect(select.disabled).toBe(true)
     await submit()
     expect(state.api.createCheckpoint).not.toHaveBeenCalled()
@@ -225,7 +290,7 @@ describe('Checkpoint inventory', () => {
   it('captures the refreshed fixed source without allowing it to be changed', async () => {
     const onClose = vi.fn()
     await render(<CheckpointCreateDialog box={source as Box} onClose={onClose} />)
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Source box"]')!.value).toBe('source-box')
+    expect(document.querySelector('[aria-label="Source box"]')?.textContent).toContain('source-name')
     await submit()
     expect(state.api.createCheckpoint).toHaveBeenCalledWith('org-1', 'source-box', undefined)
     expect(onClose).toHaveBeenCalledTimes(1)
@@ -239,6 +304,65 @@ describe('Checkpoint inventory', () => {
     state.api.getCheckpointCapabilities.mockResolvedValue({ checkpoints_enabled: false })
     await click('Retry capabilities')
     expect(document.body.textContent).toContain('Checkpoints are not enabled in this environment')
+  })
+
+  it('allows retrying discovery after cached disabled capabilities fail to refresh', async () => {
+    state.api.getCheckpointCapabilities.mockResolvedValue({ checkpoints_enabled: false })
+    await render()
+    state.api.getCheckpointCapabilities.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ['checkpoint-capabilities'] })
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(document.body.textContent).toContain('Checkpoints unavailable')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Retry capabilities')
+    state.api.getCheckpointCapabilities.mockResolvedValue({ checkpoints_enabled: true })
+    await click('Retry capabilities')
+    expect(document.body.textContent).not.toContain('Checkpoints unavailable')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('combines initial discovery and inventory failures into one recoverable state', async () => {
+    state.api.getCheckpointCapabilities.mockRejectedValue(new Error('Cannot GET /api/v1/config'))
+    state.api.listCheckpoints.mockRejectedValue(new Error('Cannot GET /api/v1/org-1/checkpoints'))
+    await render()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1)
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe('Could not load checkpoints')
+    expect(document.body.textContent).not.toContain('Cannot GET')
+    expect(document.querySelector('table')).toBeNull()
+    state.api.getCheckpointCapabilities.mockResolvedValue({ checkpoints_enabled: true })
+    state.api.listCheckpoints.mockResolvedValue([ready])
+    await click('Retry')
+    expect(document.querySelector('table')?.textContent).toContain('base')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('keeps the checkpoint inventory visible after a refresh fails', async () => {
+    state.api.listCheckpoints.mockResolvedValue([ready])
+    await render()
+    state.api.listCheckpoints.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ['checkpoints'] })
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.querySelector('table')?.textContent).toContain('base')
+  })
+
+  it('keeps a successfully empty checkpoint inventory on refresh failure', async () => {
+    state.api.listCheckpoints.mockResolvedValue([])
+    await render()
+    state.api.listCheckpoints.mockRejectedValue(new Error('Unavailable'))
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ['checkpoints'] })
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not refresh checkpoints')
+    expect(document.body.textContent).toContain('No checkpoints yet')
+    expect(document.querySelector('[role="alert"] h2')).toBeNull()
   })
 
   it('lists independent sources and disables actions until ready', async () => {
@@ -262,7 +386,7 @@ describe('Checkpoint inventory', () => {
   it('captures without execution overrides and sends the selected organization', async () => {
     await render()
     await click('New Checkpoint')
-    input('checkpoint-box', 'source-box')
+    await chooseSource('source-name')
     input('checkpoint-name', 'dev-base')
     await submit()
     expect(state.api.createCheckpoint).toHaveBeenCalledWith('org-1', 'source-box', 'dev-base')

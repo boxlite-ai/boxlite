@@ -78,13 +78,7 @@ for (const stage of ['dev', 'prod', 'preview', 'stage']) {
     if (process.env.DISCOVERY_RECEIPTS)
       writeFileSync(join(process.env.DISCOVERY_RECEIPTS, `platform-${stage}.json`), JSON.stringify(built, null, 2))
     for (const service of services) {
-      if (stage === 'stage')
-        assert.deepEqual(
-          service.args.labels,
-          { stage: 'stage' },
-          `${service.logical} is missing its stage discovery label`,
-        )
-      else assert.equal(Object.hasOwn(service.args, 'labels'), false, `${stage}/${service.logical} gained labels`)
+      assert.deepEqual(service.args.labels, { stage }, `${service.logical} is missing its stage discovery label`)
       assert.equal(Object.hasOwn(service.args.template, 'labels'), false, 'inventory labels belong to the Service')
     }
   })

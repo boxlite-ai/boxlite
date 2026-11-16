@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { QuickstartInterfaceIcon } from '@/components/first-run/QuickstartInterfaceIcon'
 import CodeBlock from '@/components/CodeBlock'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -73,9 +74,10 @@ export function UseImageSheet({ imageRef, onClose }: UseImageSheetProps) {
         </div>
 
         <Tabs value={language} onValueChange={selectLanguage}>
-          <TabsList variant="segmented">
+          <TabsList variant="underline" aria-label="Image code language">
             {IMAGE_SNIPPET_LANGUAGES.map((option) => (
               <TabsTrigger key={option.id} value={option.id}>
+                <QuickstartInterfaceIcon icon={option.id === 'cli' ? 'terminal' : option.id} />
                 {option.label}
               </TabsTrigger>
             ))}
@@ -86,7 +88,7 @@ export function UseImageSheet({ imageRef, onClose }: UseImageSheetProps) {
 
         <p className="font-sans text-meta text-muted-foreground">
           <code className="text-foreground">rt</code> is the runtime from the{' '}
-          <Link to={RoutePath.ONBOARDING} className="text-foreground underline-offset-4 hover:underline">
+          <Link to={RoutePath.ONBOARDING} className="resource-guide-link">
             Quickstart
           </Link>
           . Pin production boxes to a digest (<code className="text-foreground">name@sha256:…</code>) so a moved tag

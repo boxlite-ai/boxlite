@@ -35,6 +35,7 @@ import { AlertTriangle, CheckCircle, HardDrive, Loader2, MoreHorizontal, Timer }
 import { AnimatePresence } from 'motion/react'
 import { useEffect, useMemo, useState } from 'react'
 import { TableEmptyState } from './TableEmptyState'
+import { BOXLITE_VOLUMES_DOCS_URL } from '@/constants/ExternalLinks'
 import { VolumeBulkAction, VolumeBulkActionAlertDialog } from './VolumeTable/BulkActionAlertDialog'
 import { getVolumeBulkActionCounts, isVolumeDeletable } from './VolumeTable/volumeBulkActions'
 
@@ -176,21 +177,16 @@ export function VolumeTable({ data, loading, processingVolumeAction, onDelete, o
                 icon={<HardDrive className="w-8 h-8" />}
                 description={
                   <div className="space-y-2">
+                    <p>Create a volume, then mount it when creating a Box. Its data survives Box deletion.</p>
                     <p>
-                      Volumes are shared, persistent directories backed by S3-compatible storage, perfect for reusing
-                      datasets, caching dependencies, or passing files across boxes.
-                    </p>
-                    <p>
-                      Create one via the SDK or CLI. <br />
                       <a
-                        href="https://docs.boxlite.ai"
+                        href={BOXLITE_VOLUMES_DOCS_URL}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-primary hover:underline font-medium"
+                        className="resource-guide-link"
                       >
-                        Read the Volumes guide
-                      </a>{' '}
-                      to learn more.
+                        Cloud Volumes guide ↗
+                      </a>
                     </p>
                   </div>
                 }

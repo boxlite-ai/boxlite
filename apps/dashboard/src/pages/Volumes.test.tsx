@@ -32,7 +32,10 @@ const state = vi.hoisted(() => ({
   permissions: [] as string[],
   empty: false,
   loading: false,
+  hasData: true,
+  fetching: false,
   error: undefined as Error | undefined,
+  refetch: vi.fn(),
   volumeState: 'ready',
   errorReason: undefined as string | undefined,
 }))
@@ -45,9 +48,16 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
 }))
 vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   useVolumesQuery: () => ({
-    data: state.empty ? [] : [{ ...READY_VOLUME, state: state.volumeState, errorReason: state.errorReason }],
+    data:
+      !state.hasData || state.loading
+        ? undefined
+        : state.empty
+          ? []
+          : [{ ...READY_VOLUME, state: state.volumeState, errorReason: state.errorReason }],
     isLoading: state.loading,
     error: state.error,
+    refetch: state.refetch,
+    isFetching: state.loading || state.fetching,
   }),
 }))
 vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
@@ -81,6 +91,8 @@ describe('Volumes row action "New Box"', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    state.hasData = true
+    state.fetching = false
     state.loading = false
     state.error = undefined
     state.empty = false
@@ -94,6 +106,30 @@ describe('Volumes row action "New Box"', () => {
     root = null
     document.body.innerHTML = ''
     vi.unstubAllGlobals()
+  })
+
+  it('offers an in-place retry after the volume request fails', async () => {
+    state.hasData = false
+    state.error = new Error('unavailable')
+    renderPage()
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
+    expect(retry).toBeDefined()
+    await act(async () => retry?.click())
+    expect(state.refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains cached volumes and disables retry only while refreshing', () => {
+    renderPage()
+    state.error = new Error('refresh failed')
+    act(() => root!.render(<Volumes />))
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+    const retry = rowAction('Retry') as HTMLButtonElement
+    expect(retry).toBeDefined()
+    expect(retry.disabled).toBe(false)
+    state.fetching = true
+    act(() => root!.render(<Volumes />))
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+    expect(retry.disabled).toBe(true)
   })
 
   function renderPage() {
@@ -125,9 +161,10 @@ describe('Volumes row action "New Box"', () => {
 
   it('distinguishes volume loading and failure from successful empty data', () => {
     state.empty = true
+    state.hasData = false
     state.error = new Error('unavailable')
     renderPage()
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Volumes are unavailable')
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load volumes')
     expect(document.body.textContent).not.toContain('No volumes yet')
     state.error = undefined
     state.loading = true

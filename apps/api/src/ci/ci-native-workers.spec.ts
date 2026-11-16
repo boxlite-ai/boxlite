@@ -4,7 +4,6 @@ import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { setTimeout as delay } from 'node:timers/promises'
 import { Header } from 'tar'
 import { DataSource } from 'typeorm'
 import {
@@ -641,15 +640,12 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect((await inspectJournal(store.state, lease)).allocations.size).toBe(1)
   })
   it('rechecks the execution epoch inside Box persistence after a real lease takeover', async () => {
-    // Short lease deliberately expires during provisioning, before onPersist.
-    await db.query(
-      `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@lease'`,
-    )
-    lease = (await store.state.acquire(randomUUID(), 300))!
     const { host, config } = await prepared()
     let replacement: ExecutionLease | undefined
     beforePersist.mockImplementationOnce(async () => {
-      await delay(350)
+      await db.query(
+        `UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'::jsonb) WHERE record_key='@lease'`,
+      )
       replacement = await store.state.acquire(randomUUID(), 30000)
     })
     await expect(host.create(config)).rejects.toThrow('lease')

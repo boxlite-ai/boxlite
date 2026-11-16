@@ -72,7 +72,7 @@ impl JsDomain {
     }
 }
 
-/// Every domain the organization holds, with the allowance they count against.
+/// Every held domain, with the allowance counted only against platform domains.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsDomainList {

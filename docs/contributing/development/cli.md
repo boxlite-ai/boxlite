@@ -86,6 +86,8 @@ points stop before tests if building or resolving the CLI executable fails.
 After changing these Make entry points, run both `make test:unit:scripts` and
 `make test:apps:infra`. Their Cargo fakes must emit executable artifact metadata;
 fixtures that isolate PATH must also expose the wrapper's real shell utilities.
+Resolve `jq` from the caller's PATH before narrowing it, then link it into the
+fixture's tool directory so Homebrew, Nix, and custom installations remain usable.
 
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit tests
 and the `auth`, `ssh_cloud`, `custom_kernel_rc`, and `checkpoint` integration

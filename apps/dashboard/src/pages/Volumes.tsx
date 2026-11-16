@@ -3,8 +3,17 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
+import { VolumeResourceIcon } from '@/components/ResourceStateIcon'
 
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -31,13 +40,13 @@ import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useVolumeWsSync } from '@/hooks/useVolumeWsSync'
+import { copyToClipboard } from '@/lib/copy-text'
 import { handleApiError } from '@/lib/error-handling'
 import { timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlite-ai/api-client'
 import { useQueryClient } from '@tanstack/react-query'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { copyToClipboard } from '@/lib/copy-text'
+import React, { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/usePageTitle'
 
@@ -53,9 +62,8 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 // buttons under it — and every `fr` column drifted further apart the further
 // right it sat. The last column is therefore fixed, and this string exists
 // once so the two can no longer diverge.
-// `min-w` keeps every column readable on a phone: the list scrolls sideways inside its own
-// box instead of squeezing names down to a letter.
-const ROW_GRID = 'grid min-w-[760px] grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-center gap-3'
+const ROW_GRID =
+  'grid min-w-[760px] grid-cols-[minmax(0,1.4fr)_minmax(0,1.5fr)_120px_100px_100px_104px] items-center gap-4'
 
 // Transitional states read as `warn` rather than blending in with the healthy
 // ones: a volume stuck in `pending_delete` is exactly the leak this page exists
@@ -90,7 +98,8 @@ const Volumes: React.FC = () => {
   useVolumeWsSync()
 
   const queryKey = useMemo(() => queryKeys.volumes.list(selectedOrganization?.id ?? ''), [selectedOrganization?.id])
-  const { data: volumes = [], isLoading, error: volumesError } = useVolumesQuery()
+  const { data: inventory, error: volumesError, isFetching, refetch } = useVolumesQuery()
+  const volumes = inventory ?? []
   const createVolume = useCreateVolumeMutation()
   const deleteVolume = useDeleteVolumeMutation({ invalidateOnSuccess: false })
 
@@ -105,12 +114,6 @@ const Volumes: React.FC = () => {
   const [boxVolumeId, setBoxVolumeId] = useState<string | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [busy, setBusy] = useState<Record<string, boolean>>({})
-
-  useEffect(() => {
-    if (volumesError) {
-      handleApiError(volumesError, 'Failed to fetch volumes')
-    }
-  }, [volumesError])
 
   const updateVolumeStateInCache = useCallback(
     (volumeId: string, state: VolumeState) => {
@@ -178,7 +181,7 @@ const Volumes: React.FC = () => {
     }
   }
 
-  const showEmpty = !isLoading && volumes.length === 0
+  const showEmpty = volumes.length === 0
 
   return (
     <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
@@ -192,9 +195,10 @@ const Volumes: React.FC = () => {
       <div className="resource-toolbar">
         <ResourceFilter
           label="Filter volumes"
+          disabled={inventory === undefined}
           value={filter}
           onChange={(value) => setFilter(value)}
-          count={rows.length}
+          count={inventory === undefined ? '—' : rows.length}
         />
         <div className="flex-1" />
         {canWrite && (
@@ -205,8 +209,15 @@ const Volumes: React.FC = () => {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-auto">
-        <div className={cn(ROW_GRID, 'resource-list-head', showEmpty && 'hidden')}>
+      <div className="resource-content scroll-edge mt-[14px]">
+        {volumesError && inventory !== undefined && (
+          <ResourceErrorNotice
+            title="Could not refresh volumes. Showing previously loaded data."
+            retrying={isFetching}
+            onRetry={() => void refetch()}
+          />
+        )}
+        <div className={cn(ROW_GRID, 'resource-list-head', rows.length === 0 && 'hidden')}>
           <span>Name</span>
           <span>Volume ID</span>
           <span>Status</span>
@@ -235,12 +246,11 @@ const Volumes: React.FC = () => {
           return (
             <div key={volume.id}>
               <div className={cn(ROW_GRID, 'resource-list-row')}>
-                <span className="flex min-w-0 items-center gap-3">
-                  <HardDrive className="size-6 shrink-0 text-muted-foreground" />
+                <ResourceIdentity icon={<VolumeResourceIcon state={volume.state} />}>
                   <span className="resource-name" title={volume.name}>
                     {volume.name}
                   </span>
-                </span>
+                </ResourceIdentity>
                 <button
                   type="button"
                   onClick={async () => {
@@ -248,9 +258,12 @@ const Volumes: React.FC = () => {
                     else toast.error('Could not copy to clipboard')
                   }}
                   title="Copy volume ID"
-                  className="min-h-6 truncate text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
+                  aria-label={`Copy volume ID ${volume.id}`}
+                  className="min-w-0 text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
                 >
-                  {volume.id}
+                  <span className="block truncate" title={volume.id}>
+                    {volume.id}
+                  </span>
                 </button>
                 <span title={statusDetail} className={statusDetail ? 'cursor-help' : undefined}>
                   <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
@@ -263,6 +276,7 @@ const Volumes: React.FC = () => {
                 <div className="flex items-center justify-end gap-[6px]">
                   {canCreateBox && volume.state === VolumeState.READY && (
                     <AsciiButton
+                      variant="quiet"
                       size="sm"
                       type="button"
                       // The id, not the name — see the mount-row comment in
@@ -275,7 +289,7 @@ const Volumes: React.FC = () => {
                   )}
                   {canDelete && (
                     <AsciiButton
-                      variant="danger"
+                      variant="quiet-danger"
                       size="icon"
                       type="button"
                       onClick={() => {
@@ -286,7 +300,7 @@ const Volumes: React.FC = () => {
                       title={removable ? 'Delete volume' : 'Only a ready or errored volume can be deleted'}
                       aria-label={`Delete ${volume.name}`}
                     >
-                      <Trash className="size-[13px]" strokeWidth={2} />
+                      <Trash className="size-[15px]" />
                     </AsciiButton>
                   )}
                 </div>
@@ -295,26 +309,19 @@ const Volumes: React.FC = () => {
           )
         })}
 
-        {isLoading ? (
-          <p role="status" className="px-4 py-12 text-body text-muted-foreground">
-            Loading volumes…
-          </p>
-        ) : volumesError ? (
-          <p role="alert" className="px-4 py-12 text-body text-muted-foreground">
-            Volumes are unavailable. Reload to try again.
-          </p>
-        ) : showEmpty ? (
-          <EmptyState />
-        ) : (
-          rows.length === 0 && (
-            <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-meta text-muted-foreground">
-              <span>No volume matches “{filter.trim()}”</span>
-              <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
-                Clear filter
-              </AsciiButton>
-            </div>
+        {inventory === undefined ? (
+          volumesError ? (
+            <ResourceErrorState title="Could not load volumes" retrying={isFetching} onRetry={() => void refetch()} />
+          ) : (
+            <ResourceLoadingState title="Loading volumes…" />
           )
-        )}
+        ) : rows.length === 0 ? (
+          showEmpty ? (
+            <EmptyState />
+          ) : (
+            <ResourceFilterEmptyState title={`No volume matches “${filter.trim()}”`} onClear={() => setFilter('')} />
+          )
+        ) : null}
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -337,7 +344,7 @@ const Volumes: React.FC = () => {
               placeholder="subtitle-models"
               aria-label="Volume name"
               aria-invalid={!nameValid}
-              className="form-field-input"
+              className="form-field-input font-mono"
             />
             {/* Name is the entire create payload — the API accepts nothing else
                 — and a mount takes a name in place of an id, so this is the

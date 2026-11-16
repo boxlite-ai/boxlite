@@ -1,39 +1,5 @@
-# One dispatch: have the artifacts this ref needs, then deploy it.
-#
-# The only way a stage is rolled out. `mdeploy.yml` and `mrunner.yml` used to be
-# dispatchable beside this and are gone: their work is the `deploy` and
-# `build-runner` jobs below, in the job that decides, because a second job on
-# one Environment is a second wait on its reviewers. `mbuild.yml` survives as a
-# callee only — nobody dispatches a commit publish by hand any more.
-#
-# What the ref is decides almost everything else:
-#
-#   a commit SHA      the development path. Images are built for this stage
-#                     under `<sha>`, the runner binary is compiled and staged in
-#                     this stage's artifacts bucket. dev or stage.
-#
-#   #<number>         the same path, for a pull request that has not merged.
-#                     It resolves to the commit the request would merge to
-#                     rather than its head, so what a stage gets is the tree
-#                     that would land — the head is the same work missing
-#                     whatever its base gained since it was branched, and
-#                     shaking that out tells you about a tree nobody will
-#                     merge. dev or stage.
-#
-#   a stable tag      stage resolves it to a commit and follows the commit path.
-#                     dev/prod use the release path: `v<X.Y.Z>-<sha>` images
-#                     mbuild-release publishes into dev and promotes to prod;
-#                     the runner is the tarball already attached to the GitHub
-#                     Release, not a rebuild of it. prod takes nothing else.
-#
-# prod is promote-only on purpose. Promotion moves the bytes dev already scanned
-# and served, and a rebuild of one commit is not byte-identical — gzip alone
-# stamps an mtime into the runner tarball, and everything downstream treats
-# version+commit as an identity and never looks inside. Two stages that built
-# one commit hold two sets of bytes under one name.
-#
-# Nothing here names a cloud, a registry or a bucket: every job asks the stage's
-# own declaration, exactly as the tools it calls do.
+# Build commits for dev/stage; import existing GHCR releases for dev/prod.
+# Stage treats a stable tag as a commit reference and builds SHA-tagged artifacts.
 name: mdeploy-all
 
 # Everything a person scanning the Actions list needs to tell two runs apart:
@@ -191,11 +157,7 @@ jobs:
             echo "::error title=ref::$STAGE deploys released versions only; give a release tag (v<X.Y.Z>) rather than a commit or a pull request"
             exit 1
           fi
-          # dev may run off the branch changing it, but only on the commit line.
-          # `mbuild-release.yml` gates every job on main, so a release rollout
-          # dispatched from a branch would skip its publish silently and fail
-          # two jobs later at `Verify the images`, naming an address rather than
-          # the branch.
+          # Release rollouts keep the protected main workflow definition.
           if [ -n "$version" ] && [ "$GITHUB_REF" != 'refs/heads/main' ]; then
             echo "::error title=ref::a release rollout runs from main; $GITHUB_REF can deploy dev from a commit instead"
             exit 1
@@ -382,6 +344,10 @@ jobs:
   # What this stage already holds, and therefore what has to happen.
   plan:
     name: plan ${{ inputs.stage }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
     needs: [resolve]
     if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
@@ -439,6 +405,7 @@ jobs:
           LINE: ${{ needs.resolve.outputs.line }}
           STAGE: ${{ inputs.stage }}
           COMPONENTS: ${{ inputs.components }}
+          GHCR_REPOSITORY: ${{ github.repository }}
         run: |
           set -Eeuo pipefail
           api=skip
@@ -446,25 +413,27 @@ jobs:
 
           case "$COMPONENTS" in
             *api*)
-              # 66 is the registry answering that it is missing at least
-              # one of them, which is what makes this a build. Any other
-              # failure is a read
-              # that never landed, and deciding on one spends a job and its
-              # stage's approval on a question nobody answered: mbuild asks
-              # again downstream and either skips what it finds or fails on the
-              # same unreadable registry, an hour later and one approval in.
               held=0
-              npm run --silent mbuild verify -- --tag "$IMAGE_TAG" --stage "$STAGE" || held=$?
-              if [ "$held" -eq 0 ]; then
-                echo "$STAGE already holds the images for $IMAGE_TAG"
-              elif [ "$held" -ne 66 ]; then
-                echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
-                exit 1
-              elif [ -n "$VERSION" ]; then
-                # The release line publishes into dev and promotes into prod.
-                api=$([ "$STAGE" = 'dev' ] && echo release-publish || echo release-promote)
+              if [ -n "$VERSION" ]; then
+                npm run --silent mbuild verify -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --version "$VERSION" || held=$?
+                if [ "$held" -eq 66 ]; then
+                  echo "::error title=missing release::GHCR is missing images for $IMAGE_TAG. Run manually: gh workflow run mbuild-release.yml --repo $GITHUB_REPOSITORY --ref main -f command=publish -f tag=$VERSION"
+                  exit 1
+                elif [ "$held" -ne 0 ]; then
+                  echo "::error title=registry::could not read GHCR images for $IMAGE_TAG; mbuild verify exited $held"
+                  exit 1
+                fi
+                api=release-import
               else
-                api=build
+                npm run --silent mbuild verify -- --tag "$IMAGE_TAG" --stage "$STAGE" || held=$?
+                if [ "$held" -eq 0 ]; then
+                  echo "$STAGE already holds the images for $IMAGE_TAG"
+                elif [ "$held" -ne 66 ]; then
+                  echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
+                  exit 1
+                else
+                  api=build
+                fi
               fi
               ;;
           esac
@@ -506,31 +475,6 @@ jobs:
             echo "| runner | \`$runner\` |"
             echo "| components | \`$COMPONENTS\` |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  # The release line: publish into dev, or promote into prod. Both call the
-  # workflow that owns the refusals a release needs — a version already in the
-  # target registry is an operator mistake, not something to skip over.
-  release-publish:
-    name: publish images
-    needs: [resolve, plan]
-    if: ${{ !cancelled() && !failure() && needs.plan.outputs.api == 'release-publish' }}
-    uses: ./.github/workflows/mbuild-release.yml
-    with:
-      command: publish
-      tag: ${{ needs.resolve.outputs.version }}
-      sha: ${{ needs.resolve.outputs.sha }}
-    secrets: inherit
-
-  release-promote:
-    name: promote images
-    needs: [resolve, plan]
-    if: ${{ !cancelled() && !failure() && needs.plan.outputs.api == 'release-promote' }}
-    uses: ./.github/workflows/mbuild-release.yml
-    with:
-      command: promote
-      tag: ${{ needs.resolve.outputs.version }}
-      sha: ${{ needs.resolve.outputs.sha }}
-    secrets: inherit
 
   # The commit line, which dev and stage reach. `mbuild.yml` is callee-only for
   # exactly this: it is the development path's publish and nobody's release.
@@ -628,7 +572,11 @@ jobs:
 
   deploy:
     name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
-    needs: [resolve, plan, release-publish, release-promote, build-images, build-runner]
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    needs: [resolve, plan, build-images, build-runner]
     # Every artifact job is skipped when the stage already holds what it needs,
     # and a skipped dependency skips its dependents unless this says otherwise.
     # `!failure()` is what still stops a deploy whose artifacts did not arrive.
@@ -761,9 +709,39 @@ jobs:
       # Does this stage hold these images yet? mbuild answers, because mbuild
       # composes the address the deploy resolves — a check that built its own
       # string could pass against an address nothing pulls.
+      - name: Use the GCP image publisher for release import
+        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_IMAGE_PUBLISHER }}
+
+      - name: Import release images from GHCR
+        if: needs.plan.outputs.api == 'release-import'
+        working-directory: apps/infra
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+          GHCR_REPOSITORY: ${{ github.repository }}
+          STAGE: ${{ inputs.stage }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$RUNNER_TEMP/docker"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker"
+          npm run --silent mbuild import-release -- --tag "$SHA" --version "$VERSION" --ghcr "$GHCR_REPOSITORY" --stage "$STAGE"
+
+      - name: Restore the GCP deployment identity
+        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER }}
+
       - name: Verify the images
         working-directory: apps/infra
-        run: npm run --silent mbuild verify -- --tag "$BOXLITE_IMAGE_TAG" --stage "${{ inputs.stage }}"
+        env:
+          STAGE: ${{ inputs.stage }}
+        run: npm run --silent mbuild verify -- --tag "$BOXLITE_IMAGE_TAG" --stage "$STAGE"
 
       # ----------------------------------------------------------- 5/5
       # Read through mstage's own loader, out of the declaration setup-infra

@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
 import { ImageCatalog } from '@/components/images/ImageCatalog'
 import { RegistriesPanel } from '@/components/images/RegistriesPanel'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
+import { BOXLITE_CUSTOM_IMAGE_DOCS_URL } from '@/constants/ExternalLinks'
 import React, { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
@@ -43,7 +45,7 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
                 aria-expanded={showImageHelp}
                 aria-controls="image-add-guide"
                 onClick={() => setShowImageHelp((open) => !open)}
-                className="ml-3 inline text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                className="resource-guide-link ml-3 inline"
               >
                 How to add an image {showImageHelp ? '−' : '+'}
               </button>
@@ -57,9 +59,15 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
             navigate(value === 'registries' ? `${RoutePath.IMAGE_REGISTRIES}${search}` : RoutePath.IMAGES)
           }
         >
-          <TabsList variant="segmented">
-            <TabsTrigger value="images">Images</TabsTrigger>
-            <TabsTrigger value="registries">Private registries</TabsTrigger>
+          <TabsList variant="underline" aria-label="Image views">
+            <TabsTrigger value="images">
+              <TabIcon name="images" />
+              Images
+            </TabsTrigger>
+            <TabsTrigger value="registries">
+              <TabIcon name="registries" />
+              Private registries
+            </TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -88,12 +96,12 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
             <li>The image appears here after the Box starts successfully.</li>
           </ol>
           <a
-            href="https://docs.boxlite.ai/cloud/images"
+            href={BOXLITE_CUSTOM_IMAGE_DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-2 inline-block text-foreground underline underline-offset-4 hover:text-brand"
+            className="resource-guide-link mt-2 inline-block"
           >
-            Read the Images guide ↗
+            Use your own image ↗
           </a>
         </div>
       )}

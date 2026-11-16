@@ -26,7 +26,7 @@ SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go 
                                         build-runner-binary ──▶ build-c ──▶ Runner link
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
-                                        mbuild-release-on-release ──▶ mbuild-release (images, dev)
+                                        mbuild-release-on-release ──▶ mbuild-release (images, GHCR)
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
@@ -34,7 +34,7 @@ LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
 DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
-                                                     └─▶ mbuild-release (stable images ──▶ dev; dev ──▶ prod)
+                                                     └─▶ GHCR import    (release tag ──▶ dev/prod AR/ECR, no build)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
                                         config workflow ◀── build workflows
@@ -65,13 +65,13 @@ own.
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the main suite and identity lane on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Prepared GCP/AWS stages: dev/stage accept SHA/PR; stage treats stable tags as commit references. Candidate workflows can run from the selected branch. Dev/prod release workflows run from main; prod promotes from dev |
+| `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
 | `mbuild.yml` | `workflow_call` | call-only | Commit images for dev/stage, using the caller's selected stage; nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch, `workflow_call` | yes | Stable images tagged `v<X.Y.Z>-<sha>`: publish into dev, or promote from dev to prod; refuse versions already held by the target |
-| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
+| `mbuild-release.yml` | dispatch | — | Publishes `v<X.Y.Z>-<sha>` images to GHCR, one job per declared artifact. Reuses existing images when recovering partial releases |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images to GHCR |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
-| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
+| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
 
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
@@ -89,6 +89,12 @@ for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 `lint` and `test` always report their required conclusion on PRs and merge groups. A newer PR
 commit cancels its superseded lint, test and client-drift runs. Release and deployment jobs keep
 their existing sequencing.
+
+Joining a [native GitHub stack](https://docs.github.com/en/pull-requests/tutorials/roll-out-stacked-prs#5-update-your-programmatic-tooling)
+emits `pull_request.stacked`, which starts Test with the existing suite and draft filters.
+GitHub evaluates native stack PRs against the stack's trunk, so `branches: [main]`
+covers upper layers when the trunk is `main`; every layer needs `Test (conclusion)`.
+Adding the trigger does not retroactively start missing runs for PRs already in a stack.
 
 Draft PRs defer the Rust, Python, Node and Go SDK coverage matrices, including Go
 vet and golangci-lint, which reuse the Go job's native build. The Lint and Format
@@ -271,7 +277,7 @@ every consumer.
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 3 | lint, test ×2 |
+| `setup-python` | 5 | lint ×2, test ×3 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and

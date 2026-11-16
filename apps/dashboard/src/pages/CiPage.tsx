@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { TabIcon } from '@/components/ui/TabIcon'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConnectsPanel } from '@/components/ci/ConnectsPanel'
 import { RunnersPanel } from '@/components/ci/RunnersPanel'
@@ -16,10 +17,10 @@ export default function CiPage({ tab }: { tab: 'runners' | 'connects' }) {
     <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <Tabs
         value={tab}
-        className="flex min-h-0 flex-1 flex-col"
+        className="flex min-h-0 flex-1 flex-col gap-0"
         onValueChange={(value) => navigate(value === 'connects' ? RoutePath.CI_CONNECTS : RoutePath.CI)}
       >
-        <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3 lg:mb-[22px]">
+        <div className="resource-page-header flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="font-display text-page font-semibold text-foreground">
               {tab === 'runners' ? 'Runners' : 'Connects'}
@@ -30,9 +31,15 @@ export default function CiPage({ tab }: { tab: 'runners' | 'connects' }) {
                 : 'GitHub accounts connected to this organization.'}
             </p>
           </div>
-          <TabsList variant="segmented" aria-label="CI views" className="md:hidden">
-            <TabsTrigger value="runners">Runners</TabsTrigger>
-            <TabsTrigger value="connects">Connects</TabsTrigger>
+          <TabsList variant="underline" aria-label="CI views" className="md:hidden">
+            <TabsTrigger value="runners">
+              <TabIcon name="boxes" />
+              Runners
+            </TabsTrigger>
+            <TabsTrigger value="connects">
+              <TabIcon name="github" />
+              Connects
+            </TabsTrigger>
           </TabsList>
         </div>
         <TabsContent

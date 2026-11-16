@@ -66,7 +66,7 @@ describe('BoxLite REST routing', () => {
         {
           provide: BoxService,
           useValue: {
-            findAllDeprecated: jest.fn().mockResolvedValue([]),
+            findInventory: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
             updateInboundEnabled,
             setOutboundNetwork,
@@ -183,6 +183,7 @@ describe('BoxLite REST routing', () => {
       {
         get: () => 'app.boxlite.test',
       } as never,
+      {} as never,
     )
     await startApp(controllers, [
       { provide: BoxService, useValue: { destroy } },

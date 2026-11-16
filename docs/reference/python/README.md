@@ -444,6 +444,11 @@ locally and over REST, requires saved configuration, and never starts the box.
 | Query | `await box.ssh.status() -> SshStatus` | Return SSH status |
 | Disable | `await box.ssh.disable() -> SshStatus` | Disable SSH |
 
+`enable()` and `disable()` require a running box. On a valid handle to a configured
+or stopped box, both raise `InvalidStateError` (HTTP 409 over REST) without changing
+saved SSH intent. Disable is safe to repeat while running; call it while running
+to persist the disabled switch.
+
 If a box is not running and explicitly sets `BoxOptions.cmd` or `entrypoint`,
 call `await box.start()` before configuring SSH; otherwise `configure()` raises
 `InvalidStateError`. See the [SSH lifecycle guide](../../guides/ssh.md) for
@@ -512,7 +517,7 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 `runtime.domains.unbind(hostname)` in the sync API return the empty tuple `()`
 on success. Failures raise a `BoxliteError` subclass; `()` is not an error
 indicator. Unbinding requires the full hostname returned by `list()`, retains
-the organization's domain and quota slot, and succeeds again if that held
+the organization's domain and any platform quota slot, and succeeds again if that held
 hostname is already unbound.
 
 Creation accepts `(ip, port)` and IPv6 `(ip, port, 0, 0)` tuples. IPs must be

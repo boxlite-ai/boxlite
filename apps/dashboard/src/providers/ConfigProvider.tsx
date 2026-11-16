@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { RoutePath } from '@/enums/RoutePath'
+import { completeSignIn, safeReturnTo } from '@/lib/auth-session'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { BoxliteConfiguration } from '@boxlite-ai/api-client'
 import { useSuspenseQuery } from '@tanstack/react-query'
@@ -26,7 +26,7 @@ import { MockAuthProvider } from '../mocks/MockAuthProvider'
  * `vite dev` and `boxlite serve`. Nothing rewrites there, and the container
  * still mounts every route under `/api`, so this is the one case that adds it.
  */
-const apiUrl = import.meta.env.VITE_BASE_API_URL ?? `${window.location.origin}/api`
+const apiUrl = import.meta.env.VITE_BASE_API_URL || `${window.location.origin}/api`
 const isMocking = import.meta.env.VITE_ENABLE_MOCKING === 'true'
 
 type Props = {
@@ -69,8 +69,10 @@ export function ConfigProvider(props: Props) {
       // so a stale/revoked token can't get stuck.
       userStore: new WebStorageStateStore({ store: window.sessionStorage }),
       onSigninCallback: (user) => {
-        const state = user?.state as { returnTo?: string } | undefined
-        const targetUrl = state?.returnTo || RoutePath.DASHBOARD
+        if (!user) return
+        const state = user.state as { returnTo?: string } | undefined
+        const targetUrl = safeReturnTo(state?.returnTo)
+        completeSignIn()
         window.history.replaceState({}, '', targetUrl)
         window.dispatchEvent(new PopStateEvent('popstate'))
       },

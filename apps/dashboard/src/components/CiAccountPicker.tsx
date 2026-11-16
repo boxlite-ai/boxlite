@@ -4,7 +4,9 @@ import type { CiConnectResult } from '@/api/ci-types'
 import type { ApiClient } from '@/api/apiClient'
 import { CiRepositoryDetails } from './ci/CiRepositoryDetails'
 import { AsciiButton } from '@/components/ascii'
-import { Building2, Check, ChevronDown, ExternalLink, Github, Loader2 } from '@/components/ui/icon'
+import { Building2, ChevronDown, ExternalLink, Github, Loader2 } from '@/components/ui/icon'
+import { ResourceIdentity, StatusIndicator } from '@/components/ResourceLayout'
+import { Checkbox } from '@/components/ui/checkbox'
 import { githubAuthorizationSettingsUrl, prepareCiInstallationRedirect } from '@/lib/ci-connect'
 
 export function CiAccountPicker({
@@ -63,15 +65,15 @@ export function CiAccountPicker({
   const settingsUrl = githubAuthorizationSettingsUrl(result.authorization_settings_url)
   return (
     <>
-      <div className="flex items-center gap-2 font-mono text-meta text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2 font-sans text-meta text-muted-foreground">
         <Github className="size-4 shrink-0" />
-        <span>
+        <span className="min-w-0 break-all">
           Signed in as <span className="text-foreground">{result.authenticated_account}</span>
         </span>
         <button
           type="button"
           onClick={() => switchAccount(true)}
-          className="ml-auto whitespace-nowrap underline underline-offset-4 hover:text-foreground"
+          className="ml-auto whitespace-nowrap underline underline-offset-4 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
         >
           Switch account
         </button>
@@ -81,47 +83,41 @@ export function CiAccountPicker({
           <div
             key={account.account_id}
             data-account-id={account.account_id}
-            className="flex flex-wrap items-center gap-3 py-3"
+            className="grid min-h-12 grid-cols-[minmax(0,1fr)_28px_96px] sm:grid-cols-[minmax(0,1fr)_126px_28px_96px] items-center gap-x-3 gap-y-2 py-2"
           >
-            <div className="flex size-9 shrink-0 items-center justify-center border border-border bg-card text-muted-foreground">
-              {account.account_type === 'User' ? <Github className="size-4" /> : <Building2 className="size-4" />}
+            <div className="col-span-3 min-w-0 sm:col-span-1">
+              <ResourceIdentity icon={account.account_type === 'User' ? <Github /> : <Building2 />}>
+                <span className="resource-name" title={account.github_account}>
+                  {account.github_account}
+                </span>
+              </ResourceIdentity>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-mono text-body font-medium">{account.github_account}</div>
-              <div className="mt-1 flex items-center gap-2 font-mono text-meta text-muted-foreground">
-                {account.account_type === 'User' ? (
-                  'Personal account'
-                ) : (
-                  <>
-                    {'Organization'}
-                    <span className="text-label">OWNER</span>
-                  </>
-                )}
-              </div>
-            </div>
-            {account.installed && account.installation_id && (
-              <button
-                type="button"
-                aria-label={`Repositories for ${account.github_account}`}
-                aria-expanded={expanded.includes(account.account_id)}
-                onClick={() =>
-                  setExpanded((rows) =>
-                    rows.includes(account.account_id)
-                      ? rows.filter((id) => id !== account.account_id)
-                      : [...rows, account.account_id],
-                  )
-                }
-                className="mr-3 text-muted-foreground hover:text-foreground"
-              >
-                <ChevronDown className={`size-4 ${expanded.includes(account.account_id) ? '' : '-rotate-90'}`} />
-              </button>
-            )}
+            <span className="min-w-0 text-meta text-muted-foreground sm:whitespace-nowrap">
+              {account.account_type === 'User' ? 'Personal account' : 'Organization · Owner'}
+            </span>
+            <span className="flex justify-end">
+              {account.installed && account.installation_id && (
+                <AsciiButton
+                  variant="quiet"
+                  size="icon"
+                  type="button"
+                  aria-label={`Repositories for ${account.github_account}`}
+                  aria-expanded={expanded.includes(account.account_id)}
+                  onClick={() =>
+                    setExpanded((rows) =>
+                      rows.includes(account.account_id)
+                        ? rows.filter((id) => id !== account.account_id)
+                        : [...rows, account.account_id],
+                    )
+                  }
+                >
+                  <ChevronDown className={`size-4 ${expanded.includes(account.account_id) ? '' : '-rotate-90'}`} />
+                </AsciiButton>
+              )}
+            </span>
             <div className="flex min-w-[96px] shrink-0 justify-end">
               {account.connected ? (
-                <span className="inline-flex items-center gap-1.5 font-mono text-meta text-success">
-                  <Check className="size-4" />
-                  Connected
-                </span>
+                <StatusIndicator label="Connected" color="hsl(var(--success))" />
               ) : busy === account.account_id ? (
                 <span role="status" className="inline-flex items-center gap-2 text-meta text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" />
@@ -141,7 +137,7 @@ export function CiAccountPicker({
               )}
             </div>
             {expanded.includes(account.account_id) && account.installation_id && result.id && (
-              <div className="w-full basis-full pt-2">
+              <div className="col-span-full min-w-0 pt-2">
                 <CiRepositoryDetails
                   api={api}
                   organization={organization}
@@ -157,11 +153,10 @@ export function CiAccountPicker({
       </div>
       <CiOrganizationRecovery settingsUrl={settingsUrl} reconnect={() => switchAccount(false)} />
       <label className="flex items-center gap-2 text-body">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={allowPrivate}
           disabled={busy !== undefined}
-          onChange={(event) => setAllowPrivate(event.target.checked)}
+          onCheckedChange={(checked) => setAllowPrivate(checked === true)}
         />
         Allow private repositories
       </label>
@@ -198,7 +193,7 @@ export function CiOrganizationRecovery({ settingsUrl, reconnect }: { settingsUrl
           href="https://docs.github.com/en/apps/oauth-apps/using-oauth-apps/authorizing-oauth-apps#oauth-apps-and-organizations"
           target="_blank"
           rel="noreferrer"
-          className="underline underline-offset-4"
+          className="resource-guide-link"
         >
           GitHub help
         </a>

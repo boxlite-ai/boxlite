@@ -33,6 +33,7 @@ from conftest import (
     E2E_BOX_NAME_PREFIX,
     bound_box_lifetime,
     e2e_box_name,
+    wait_until_unlisted,
     with_bounded_lifetime,
 )
 
@@ -341,6 +342,31 @@ def offline_sweep(monkeypatch):
     return calls
 
 
+def test_sweep_reads_every_inventory_page(monkeypatch, offline_sweep):
+    replies = iter([
+        (200, {"boxes": [{"box_id": "first"}], "next_page_token": "cursor+/="}),
+        (200, {"boxes": [{"box_id": "last"}]}),
+    ])
+
+    def request_json(method, path):
+        offline_sweep.append(path)
+        return next(replies)
+
+    monkeypatch.setattr(sweep_mod, "request_json", request_json)
+    assert [box["box_id"] for box in sweep_mod._list_boxes()] == ["first", "last"]
+    assert offline_sweep == ["/v1/boxes", "/v1/boxes?pageToken=cursor%2B%2F%3D"]
+
+
+def test_sweep_refuses_partial_inventory(monkeypatch, offline_sweep):
+    replies = iter([
+        (200, {"boxes": [{"box_id": "first"}], "next_page_token": "next"}),
+        (503, {"message": "unavailable"}),
+    ])
+    monkeypatch.setattr(sweep_mod, "request_json", lambda *args: next(replies))
+    with pytest.raises(SystemExit, match="HTTP 503"):
+        sweep_mod._list_boxes()
+
+
 def test_waiting_ends_when_the_box_reports_not_found(monkeypatch, offline_sweep):
     replies = iter([(200, None), (404, None)])
 
@@ -385,3 +411,45 @@ def test_a_transient_error_is_not_read_as_gone(monkeypatch, offline_sweep):
     monkeypatch.setattr(sweep_mod, "request_json", request_json)
     assert sweep_mod._wait_until_gone(["abcdefghijkl"]) == ["abcdefghijkl"]
     assert offline_sweep, "the settle loop never asked the control plane"
+
+
+class _SettlingRuntime:
+    """A runtime whose `list_info` keeps a removed box for a few reads.
+
+    That is what a cloud stage does: the API answers the force remove before
+    the runner has destroyed the box, so the box stays listed until the next
+    reconcile marks it destroyed.
+    """
+
+    def __init__(self, box_id: str, listed_reads: int | None):
+        self._box_id = box_id
+        self._listed_reads = listed_reads
+        self.reads = 0
+
+    async def list_info(self):
+        self.reads += 1
+        if self._listed_reads is None or self.reads <= self._listed_reads:
+            return [type("Info", (), {"id": self._box_id})()]
+        return []
+
+
+async def test_a_removed_box_still_listed_during_teardown_is_not_a_leak():
+    rt = _SettlingRuntime("abcdefghijkl", listed_reads=2)
+    assert await wait_until_unlisted(rt, ["abcdefghijkl"], timeout=5, interval=0) == []
+    assert rt.reads == 3
+
+
+async def test_a_box_still_listed_after_the_settle_window_is_a_leak():
+    rt = _SettlingRuntime("abcdefghijkl", listed_reads=None)
+    leaked = await wait_until_unlisted(rt, ["abcdefghijkl", "mnopqrstuvwx"], timeout=0.05, interval=0.01)
+    assert leaked == ["abcdefghijkl"]
+
+
+class _FailingListRuntime:
+    async def list_info(self):
+        raise RuntimeError("list failed")
+
+
+async def test_a_list_error_is_not_read_as_unlisted():
+    with pytest.raises(RuntimeError, match="list failed"):
+        await wait_until_unlisted(_FailingListRuntime(), ["abcdefghijkl"], timeout=5, interval=0)

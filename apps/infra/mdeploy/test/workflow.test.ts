@@ -75,7 +75,7 @@ test('both clouds can be federated, and each only when it is the one', () => {
  * with a message about a stale local session on a machine nobody signed in on
  * — far enough from the cause to be worth naming here.
  */
-const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml', 'mbuild-release.yml']
+const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml']
 
 test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
   for (const name of GCP_FEDERATING_WORKFLOWS) {
@@ -123,7 +123,6 @@ test('the AWS role is composed from the account id, as every other workflow does
   for (const [name, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
-    ['mbuild-release.yml', read('mbuild-release.yml')],
   ] as const) {
     // The stage half may be an expression or a literal — mbuild-release's two
     // jobs each serve one fixed stage, and naming it is clearer there than
@@ -196,7 +195,6 @@ test('every job that reads a declaration is given one first', () => {
   for (const [file, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
-    ['mbuild-release.yml', read('mbuild-release.yml')],
   ] as const) {
     /*
      * Every tool below reads `.mstage.config.json`, and on a runner the only

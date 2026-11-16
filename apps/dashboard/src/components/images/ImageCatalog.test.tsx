@@ -212,7 +212,10 @@ describe('the image list', () => {
     await renderCatalog()
 
     expect(document.body.textContent).not.toContain('Built-in')
-    expect(buttonWithTitle('docker.io/library/python:3.12-slim')?.textContent).toBe('python')
+    expect(buttonWithTitle('docker.io/library/python:3.12-slim')?.getAttribute('aria-label')).toBe('python')
+    expect(buttonWithTitle('docker.io/library/python:3.12-slim')?.textContent).toContain(
+      'docker.io/library/python:3.12-slim',
+    )
     expect(buttonWithTitle('Remove python')).toBeUndefined()
     expect(buttonWithTitle('Remove quay.io/acme/app')).toBeTruthy()
   })
@@ -246,7 +249,7 @@ describe('the image list', () => {
   it('opens an image by its catalog id', async () => {
     await renderCatalog()
 
-    const name = [...document.querySelectorAll('button')].find((b) => b.textContent === 'quay.io/acme/app')
+    const name = document.querySelector<HTMLButtonElement>('button[aria-label="quay.io/acme/app"]')
     await act(async () => name?.click())
 
     expect(mocks.navigate).toHaveBeenCalledWith('/dashboard/images/img-1')
@@ -258,9 +261,7 @@ describe('the image list', () => {
     state.byImage = new Map([['quay.io/acme/app', [{ id: 'b1' }, { id: 'b2' }]]])
     await renderCatalog()
 
-    const row = [...document.querySelectorAll('button')].find(
-      (b) => b.textContent === 'quay.io/acme/app',
-    )?.parentElement
+    const row = document.querySelector('button[aria-label="quay.io/acme/app"]')?.parentElement
     expect(row?.textContent).toContain('2')
   })
 
@@ -273,6 +274,13 @@ describe('the image list', () => {
     )
     expect(document.body.textContent).not.toContain('Images are unavailable')
   })
+  it('retains the successful empty catalog when a later refresh fails', async () => {
+    state.images = []
+    state.imagesError = new BoxliteError('refresh failed')
+    await renderCatalog()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not refresh images')
+    expect(document.body.textContent).toContain('No images yet')
+  })
 
   it('reports failed reads and draws no usage it cannot back', async () => {
     state.images = []
@@ -281,14 +289,8 @@ describe('the image list', () => {
     state.usageError = new BoxliteError('usage unavailable')
     await renderCatalog()
 
-    expect(mocks.toastError).toHaveBeenCalledWith(
-      'Failed to fetch images',
-      expect.objectContaining({ description: 'catalog unavailable' }),
-    )
-    expect(mocks.toastError).toHaveBeenCalledWith(
-      'Failed to fetch image usage',
-      expect.objectContaining({ description: 'usage unavailable' }),
-    )
+    expect(mocks.toastError).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
     expect(document.body.textContent).not.toContain('Custom images')
     expect(document.querySelectorAll('button[title^="New Box from "]')).toHaveLength(0)
   })
