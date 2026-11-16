@@ -12,7 +12,6 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::box_impl::BoxImpl;
 use crate::litebox::snapshot_mgr::{SnapshotInfo, validate_snapshot_name};
-use crate::lock::LockGuard;
 use crate::runtime::options::SnapshotOptions;
 
 pub(crate) struct LocalSnapshotBackend {
@@ -31,55 +30,55 @@ impl LocalSnapshotBackend {
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
-        let locker = self.inner.disk_locker()?;
-        let _lock = LockGuard::new_async(locker.as_ref()).await;
-        self.inner.validate_disk_owner(locker.id())?;
+        self.inner
+            .with_disk_admission(async {
+                let box_id = self.inner.id().as_str();
+                let snap_mgr = &self.inner.runtime.snapshot_mgr;
 
-        let box_id = self.inner.id().as_str();
-        let snap_mgr = &self.inner.runtime.snapshot_mgr;
+                // Check if snapshot name already exists for this box.
+                if snap_mgr.exists(box_id, name)? {
+                    return Err(BoxliteError::AlreadyExists(format!(
+                        "snapshot '{}' already exists for box '{}'",
+                        name, box_id
+                    )));
+                }
 
-        // Check if snapshot name already exists for this box.
-        if snap_mgr.exists(box_id, name)? {
-            return Err(BoxliteError::AlreadyExists(format!(
-                "snapshot '{}' already exists for box '{}'",
-                name, box_id
-            )));
-        }
+                // Write crash-recovery marker before moving disks (point of no return).
+                let box_home = &self.inner.config.box_home;
+                let disks_dir = box_home.join("disks");
+                let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
+                let pending_marker = box_home.join(".snapshot_pending");
+                let snapshot_dir = box_home.join("snapshots").join(name);
+                let marker_data = serde_json::json!({
+                    "snapshot_dir": snapshot_dir.to_string_lossy(),
+                    "container_disk": container_disk.to_string_lossy(),
+                });
+                std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
+                })?;
 
-        // Write crash-recovery marker before moving disks (point of no return).
-        let box_home = &self.inner.config.box_home;
-        let disks_dir = box_home.join("disks");
-        let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
-        let pending_marker = box_home.join(".snapshot_pending");
-        let snapshot_dir = box_home.join("snapshots").join(name);
-        let marker_data = serde_json::json!({
-            "snapshot_dir": snapshot_dir.to_string_lossy(),
-            "container_disk": container_disk.to_string_lossy(),
-        });
-        std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
-        })?;
+                // Quiesce VM for point-in-time snapshot consistency.
+                let result = self
+                    .inner
+                    .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
+                    .await;
 
-        // Quiesce VM for point-in-time snapshot consistency.
-        let result = self
-            .inner
-            .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
-            .await;
+                // Remove marker on success.
+                let _ = std::fs::remove_file(&pending_marker);
 
-        // Remove marker on success.
-        let _ = std::fs::remove_file(&pending_marker);
+                let info = result?;
 
-        let info = result?;
+                tracing::info!(
+                    box_id = %self.inner.id(),
+                    snapshot = %name,
+                    snapshot_id = %info.id,
+                    elapsed_ms = t0.elapsed().as_millis() as u64,
+                    "Created snapshot"
+                );
 
-        tracing::info!(
-            box_id = %self.inner.id(),
-            snapshot = %name,
-            snapshot_id = %info.id,
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Created snapshot"
-        );
-
-        Ok(info)
+                Ok(info)
+            })
+            .await
     }
 
     async fn snapshot_list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {
@@ -95,31 +94,33 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let locker = self.inner.disk_locker()?;
-        let _lock = LockGuard::new_async(locker.as_ref()).await;
-        self.inner.validate_disk_owner(locker.id())?;
-
-        let box_id = self.inner.id().as_str();
-        let container_disk = self
-            .inner
-            .config
-            .box_home
-            .join("disks")
-            .join(disk_filenames::CONTAINER_DISK);
-        let bases_dir = self.inner.runtime.layout.bases_dir();
-
         self.inner
-            .runtime
-            .snapshot_mgr
-            .remove(box_id, name, &container_disk, &bases_dir)?;
+            .with_disk_admission(async {
+                let box_id = self.inner.id().as_str();
+                let container_disk = self
+                    .inner
+                    .config
+                    .box_home
+                    .join("disks")
+                    .join(disk_filenames::CONTAINER_DISK);
+                let bases_dir = self.inner.runtime.layout.bases_dir();
 
-        tracing::info!(
-            box_id = %self.inner.id(),
-            snapshot = %name,
-            "Removed snapshot"
-        );
+                self.inner.runtime.snapshot_mgr.remove(
+                    box_id,
+                    name,
+                    &container_disk,
+                    &bases_dir,
+                )?;
 
-        Ok(())
+                tracing::info!(
+                    box_id = %self.inner.id(),
+                    snapshot = %name,
+                    "Removed snapshot"
+                );
+
+                Ok(())
+            })
+            .await
     }
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
@@ -136,25 +137,25 @@ impl LocalSnapshotBackend {
             }
         }
 
-        let locker = self.inner.disk_locker()?;
-        let _lock = LockGuard::new_async(locker.as_ref()).await;
-        self.inner.validate_disk_owner(locker.id())?;
-
-        let box_id = self.inner.id().as_str();
-        let disks_dir = self.inner.config.box_home.join("disks");
-
         self.inner
-            .runtime
-            .snapshot_mgr
-            .restore_disks(box_id, name, &disks_dir)?;
+            .with_disk_admission(async {
+                let box_id = self.inner.id().as_str();
+                let disks_dir = self.inner.config.box_home.join("disks");
 
-        tracing::info!(
-            box_id = %self.inner.id(),
-            snapshot = %name,
-            "Restored snapshot"
-        );
+                self.inner
+                    .runtime
+                    .snapshot_mgr
+                    .restore_disks(box_id, name, &disks_dir)?;
 
-        Ok(())
+                tracing::info!(
+                    box_id = %self.inner.id(),
+                    snapshot = %name,
+                    "Restored snapshot"
+                );
+
+                Ok(())
+            })
+            .await
     }
 }
 

@@ -26,7 +26,6 @@ use crate::event_listener::EventListener;
 use crate::fs::BindMountHandle;
 use crate::litebox::copy::{CopyOptions, CopySourceKind};
 use crate::litebox::{BoxConnection, BoxTunnel, SshConfig, SshStatus, TunnelOptions};
-#[cfg(test)]
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -268,6 +267,17 @@ impl BoxImpl {
             BoxliteError::Internal(format!("box {} is missing lock_id", self.id()))
         })?;
         self.runtime.disk_lock_manager.retrieve(lock_id)
+    }
+
+    /// Hold disk admission and recheck ownership before running disk work.
+    pub(crate) async fn with_disk_admission<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
+    where
+        Fut: Future<Output = BoxliteResult<R>>,
+    {
+        let locker = self.disk_locker()?;
+        let _lock = LockGuard::new_async(locker.as_ref()).await;
+        self.validate_disk_owner(locker.id())?;
+        fut.await
     }
 
     /// A waiter can retain an unlinked lock's FD after removal and ID reuse.
