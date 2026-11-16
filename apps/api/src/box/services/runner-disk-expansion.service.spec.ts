@@ -1162,9 +1162,12 @@ describe('RunnerDiskExpansionService round', () => {
     warnSpy.mockRestore()
   })
 
-  it('still grows the disk when the performance cooldown gate query fails', async () => {
+  it('still grows the disk size-only when the performance cooldown gate query fails', async () => {
     const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
-    const { service, gcpDiskClient } = makeService({ perfGateQueryError: new Error('db blip') })
+    const { service, gcpDiskClient } = makeService({
+      perfGateQueryError: new Error('db blip'),
+      diskSnapshot: { sizeGb: '100', provisionedIops: '50000', provisionedThroughput: '250' },
+    })
 
     await service.evaluateAndConfirm()
 
@@ -1173,6 +1176,7 @@ describe('RunnerDiskExpansionService round', () => {
       expect.objectContaining({ 'disk.expansion_result': 'perf_gate_query_failed' }),
     )
     expect(gcpDiskClient.resizeDisk).toHaveBeenCalledWith(ref, 250)
+    expect(gcpDiskClient.getDisk).not.toHaveBeenCalled()
     warnSpy.mockRestore()
   })
 })

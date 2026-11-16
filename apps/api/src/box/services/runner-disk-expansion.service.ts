@@ -798,6 +798,7 @@ export class RunnerDiskExpansionService {
         ...expansionLogBase(runner, ref),
         'disk.expansion_result': 'perf_gate_query_failed',
       })
+      return { fields: undefined, attributes: {} }
     }
     if (perfCooldownActive) {
       return { fields: undefined, attributes: {} }
