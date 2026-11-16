@@ -79,6 +79,38 @@ describeIfRedis('BoxRequestReplayService (real Redis)', () => {
     await cleanup(keyOf('createBox', key))
   })
 
+  // A pending record whose completion deadline has passed reports an unknown
+  // outcome: the caller must not redispatch on a maybe-executed request.
+  it('reports unknown and blocks redispatch once the completion deadline passes', async () => {
+    const key = randomUUID()
+    const fp = fingerprintOf('POST', '/boxes', {})
+    const first = await service.session(org, user, 'createBox', key, fp)
+    expect(first.isOwner).toBe(true)
+    await redis.hset(keyOf('createBox', key), 'expected_response_at', '1')
+
+    await expect(service.session(org, user, 'createBox', key, fp)).rejects.toMatchObject({
+      status: 422,
+      response: expect.objectContaining({ code: 'idempotency_outcome_unknown' }),
+    })
+    await cleanup(keyOf('createBox', key))
+  })
+
+  // A corrupt stored body is unusable: replaying it would send garbage, and
+  // deleting it would re-dispatch, so the conservative unknown applies.
+  it('treats a corrupt stored response as unknown', async () => {
+    const key = randomUUID()
+    const fp = fingerprintOf('POST', '/boxes', {})
+    const first = await service.session(org, user, 'createBox', key, fp)
+    expect(first.isOwner).toBe(true)
+    await redis.hset(keyOf('createBox', key), 'response', 'not-json{')
+
+    await expect(service.session(org, user, 'createBox', key, fp)).rejects.toMatchObject({
+      status: 422,
+      response: expect.objectContaining({ code: 'idempotency_outcome_unknown' }),
+    })
+    await cleanup(keyOf('createBox', key))
+  })
+
   it('blocks a concurrent same-key caller with 409 while the owner is pending', async () => {
     const key = randomUUID()
     const fp = fingerprintOf('POST', '/boxes', {})

@@ -19,6 +19,8 @@ import { SystemRole } from '../user/enums/system-role.enum'
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
   fixRequestBody: jest.fn(),
+  // Identity wrapper: the tests call the capture callback directly.
+  responseInterceptor: (fn: unknown) => fn,
 }))
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid'), validate: jest.fn(() => true) }))
 
@@ -173,6 +175,41 @@ describe('BoxliteProxyController', () => {
     expect(res.type).toHaveBeenCalledWith('application/json')
     expect(res.send).toHaveBeenCalledWith('{"execution_id":"exec-original"}')
     expect(createProxyMiddleware).not.toHaveBeenCalled()
+  })
+
+  // The runner already produced the response when the replay write fails:
+  // the client must still get it, and the logger keeps the failure visible.
+  it('ends the proxied response even when saving the replay record fails', async () => {
+    const owner = new ReplaySession(undefined, { key: 'k', owner: 'o' }, undefined)
+    jest.spyOn(owner, 'complete').mockRejectedValue(new Error('redis write failed'))
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { boxService, autoResume } = makeHarness()
+    const sessionStub = { session: jest.fn().mockResolvedValue(owner) }
+    const gated = new (BoxliteProxyController as any)(
+      boxService,
+      { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) },
+      autoResume,
+      { prepare: jest.fn(), revoke: jest.fn() },
+      sessionStub,
+    ) as BoxliteProxyController
+    const warnSpy = jest.spyOn((gated as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn')
+
+    const req = { url: '/api/v1/boxes/public-box/exec', method: 'POST', body: { command: '/bin/echo' } }
+    await gated.proxyExec(
+      activeAuth as never,
+      'public-box',
+      'key-1',
+      req as never,
+      new EventEmitter() as never,
+      jest.fn(),
+    )
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const proxyRes = proxyOptions.on?.proxyRes as (p: unknown, q: unknown, r: unknown, s: unknown) => Promise<void>
+    const clientRes = { setHeader: jest.fn(), write: jest.fn(), end: jest.fn(), headersSent: false }
+    await proxyRes(Buffer.from('{"execution_id":"e1"}'), { statusCode: 201, headers: {} }, req, clientRes)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to record replay response'))
+    warnSpy.mockRestore()
   })
 
   it('passes a POST exec without a key directly to the proxy middleware', async () => {
