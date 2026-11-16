@@ -31,6 +31,7 @@ describe('Cloud create-only nesting', () => {
       { getCode } as any,
       {} as any,
       { refFor: jest.fn().mockResolvedValue('alpine') } as any,
+      {} as any,
     )
     return { action, box, lock, startBox, createBox, runnerInfo, update, policy, getCode }
   }
