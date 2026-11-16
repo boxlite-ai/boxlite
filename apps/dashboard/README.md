@@ -672,7 +672,8 @@ The summary reads `GET /organization/:id/wallet` (`ongoingBalanceCents`,
 `automaticTopUp`) and `GET /organization/:id/plan` (`planName`, `status`,
 `includedQuotaCents`, `quotaRemainingCents`). An empty plan response means no
 subscription; a null allowance means unlimited. Both queries are scoped to the
-selected organization and owner membership.
+selected organization and owner membership. Previous-organization placeholder
+responses stay hidden until both current-organization reads finish.
 
 Use `/dashboard/boxes?preview=new-user` for an unsubscribed new account with
 zero wallet balance and no Boxes. Existing onboarding and payment flows are unchanged.

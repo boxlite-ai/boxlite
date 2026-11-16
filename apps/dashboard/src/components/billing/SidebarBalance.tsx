@@ -26,7 +26,7 @@ export function SidebarBalance({ expanded }: { expanded: boolean }) {
     return null
 
   const failed = wallet.isError || plan.isError
-  const ready = wallet.isSuccess && plan.isSuccess
+  const ready = wallet.isSuccess && plan.isSuccess && !wallet.isPlaceholderData && !plan.isPlaceholderData
   const warning = ready ? balanceWarning(wallet.data, plan.data) : null
   const remaining = plan.data?.quotaRemainingCents
   const total = plan.data?.includedQuotaCents
