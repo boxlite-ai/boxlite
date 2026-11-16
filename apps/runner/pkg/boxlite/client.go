@@ -53,15 +53,15 @@ type Client struct {
 	awsAccessKeyId      string
 	awsSecretAccessKey  string
 	volumeBackend       string
-	// mountRunner and probeRunner are the test seams for the NFS mount path:
+	// testMountRunner and testProbeRunner are the test seams for the NFS mount path:
 	// the concurrency test counts mount commands without a real server, and
 	// the readiness probe reads a host binary (mountpoint) a dev machine may
 	// not have. nil means the real exec runs — every production path lands
 	// there because NewClient sets neither.
-	mountRunner func(*exec.Cmd) error
-	probeRunner func(context.Context, string) (bool, error)
+	testMountRunner func(*exec.Cmd) error
+	testProbeRunner func(context.Context, string) (bool, error)
 	// writeRecordSeam replaces the box volume mount record write when set —
-	// the same posture as mountRunner replacing the mount exec: a test uses
+	// the same posture as testMountRunner replacing the mount exec: a test uses
 	// it to fail one specific record write without touching the filesystem.
 	// nil means the real write runs — every production path lands there
 	// because NewClient sets none of the seams.

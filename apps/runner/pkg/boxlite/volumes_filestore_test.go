@@ -45,7 +45,7 @@ func useVolumeMountBasePath(t *testing.T, dir string) {
 // installFakeMountpoint replaces the `mountpoint` binary with a script that
 // appends its path argument to a log file and exits with code. The reclaim
 // teardown (unmountAndRemoveDir) probes with the real exec path, not the
-// probeRunner seam, so on a host without util-linux the only host-independent
+// testProbeRunner seam, so on a host without util-linux the only host-independent
 // way to observe "the probe ran on this path" is to be the binary it runs.
 // The log path is handed over through the environment because the probe
 // command inherits the process environment.
@@ -123,8 +123,8 @@ func TestNfsMountCmdIsNotSystemdWrappedAndIsContextBound(t *testing.T) {
 func TestFilestoreMountFailureCarriesBoxAndVolumeContext(t *testing.T) {
 	c := filestoreTestClient(t)
 	useVolumeMountBasePath(t, t.TempDir())
-	c.probeRunner = func(context.Context, string) (bool, error) { return false, nil }
-	c.mountRunner = func(*exec.Cmd) error { return errors.New("exit status 32") }
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return false, nil }
+	c.testMountRunner = func(*exec.Cmd) error { return errors.New("exit status 32") }
 
 	_, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{{
 		VolumeId:  "vol1",
@@ -299,14 +299,14 @@ type fakeFilestoreMounts struct {
 
 func installFakeFilestoreMounts(c *Client) *fakeFilestoreMounts {
 	f := &fakeFilestoreMounts{mounted: make(map[string]bool)}
-	c.mountRunner = func(cmd *exec.Cmd) error {
+	c.testMountRunner = func(cmd *exec.Cmd) error {
 		f.mounts.Add(1)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.mounted[cmd.Args[len(cmd.Args)-1]] = true
 		return nil
 	}
-	c.probeRunner = func(_ context.Context, path string) (bool, error) {
+	c.testProbeRunner = func(_ context.Context, path string) (bool, error) {
 		f.probes.Add(1)
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -833,7 +833,7 @@ func TestStartReplayFailureKeepsExistingRecordEntries(t *testing.T) {
 	// The filestore root probes mounted (its work is done); the object-storage
 	// mount root's probe is the injected failure, so getVolumeMounts dies on
 	// the second volume of the list.
-	c.probeRunner = func(_ context.Context, path string) (bool, error) {
+	c.testProbeRunner = func(_ context.Context, path string) (bool, error) {
 		if strings.Contains(path, volumeMountPrefix) {
 			return false, fmt.Errorf("injected fuse ensure failure")
 		}
@@ -903,10 +903,10 @@ func TestStartReplayRewritesTheFullRecord(t *testing.T) {
 	c.volumeBackend = volumeBackendS3
 	installFakeFilestoreMounts(c)
 	// Every probe answers mounted. The object-storage FUSE mount exec runs
-	// through cmd.Run, not the mountRunner seam, so the fake mount marking can
+	// through cmd.Run, not the testMountRunner seam, so the fake mount marking can
 	// never close the loop with the fake probe for it — "already mounted" is
 	// the only host-independent way through.
-	c.probeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
 
 	fsRoot := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
 	s3Root := filepath.Join(base, volumeMountPrefix+"vol-x")
@@ -1013,7 +1013,7 @@ func TestFilestoreTargetRequiredWhenAlreadyMounted(t *testing.T) {
 		{Instance: "ml", Server: "10.0.0.7"},
 	} {
 		c := filestoreTestClient(t)
-		c.probeRunner = func(context.Context, string) (bool, error) { return true, nil }
+		c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
 
 		err := c.ensureFilestoreMounted(context.Background(), ref, filepath.Join(t.TempDir(), "mounted"), "boxlite-filestore-ml")
 		if err == nil || !strings.Contains(err.Error(), "requires both server and export") {
@@ -1028,7 +1028,7 @@ func TestFilestoreMountTimeoutBlocksRetryUntilCompletion(t *testing.T) {
 	fake := installFakeFilestoreMounts(c)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	c.mountRunner = func(cmd *exec.Cmd) error {
+	c.testMountRunner = func(cmd *exec.Cmd) error {
 		fake.mounts.Add(1)
 		close(started)
 		<-release
@@ -1085,7 +1085,7 @@ func TestFilestoreMountTimeoutBlocksRetryUntilCompletion(t *testing.T) {
 func TestFilestorePreparationTimeoutBlocksRetryUntilCompletion(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	c := filestoreTestClient(t)
-	c.probeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	c.testProbeRunner = func(context.Context, string) (bool, error) { return true, nil }
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var prepares atomic.Int64
