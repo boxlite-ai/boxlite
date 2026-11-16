@@ -99,7 +99,48 @@ impl AgentBackend for TestBackend {
             )),
         }
     }
-    async fn events(&self, _: &AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        Ok(Box::pin(futures::stream::empty()))
+    async fn events(&self, options: &AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
+        use futures::StreamExt;
+        match options.after.as_deref() {
+            Some("open-error") => Err(BoxliteError::Network("test open failed".into())),
+            Some("pending") => Ok(Box::pin(futures::stream::pending())),
+            Some("read-error") => Ok(Box::pin(futures::stream::iter(vec![
+                Ok(AgentEvent {
+                    cursor: None,
+                    agent_id: self.id().into(),
+                    turn_id: None,
+                    kind: "first".into(),
+                    data: serde_json::json!({}),
+                }),
+                Err(BoxliteError::Network("test read failed".into())),
+            ]))),
+            Some("events") => Ok(Box::pin(
+                futures::stream::iter(vec![
+                    Ok(AgentEvent {
+                        cursor: None,
+                        agent_id: self.id().into(),
+                        turn_id: None,
+                        kind: "first".into(),
+                        data: serde_json::json!({}),
+                    }),
+                    Ok(AgentEvent {
+                        cursor: None,
+                        agent_id: self.id().into(),
+                        turn_id: None,
+                        kind: "second".into(),
+                        data: serde_json::json!({}),
+                    }),
+                ])
+                .chain(futures::stream::pending()),
+            )),
+            _ => Ok(Box::pin(futures::stream::empty())),
+        }
+    }
+    async fn turn_events(
+        &self,
+        _: &str,
+        options: &AgentEventsOptions,
+    ) -> BoxliteResult<AgentEventStream> {
+        self.events(options).await
     }
 }

@@ -639,6 +639,8 @@ pub struct EventQueue {
     pub cv: Condvar,
     /// Set by `runtime_free`; signals drainers to exit and producers to drop.
     pub closed: AtomicBool,
+    /// Wakes asynchronous producers waiting on external streams at shutdown.
+    pub(crate) close_signal: tokio::sync::watch::Sender<bool>,
 }
 
 impl EventQueue {
@@ -647,6 +649,7 @@ impl EventQueue {
             inner: Mutex::new(VecDeque::new()),
             cv: Condvar::new(),
             closed: AtomicBool::new(false),
+            close_signal: tokio::sync::watch::channel(false).0,
         }
     }
 
@@ -657,6 +660,7 @@ impl EventQueue {
             self.closed.store(true, Ordering::Release);
             std::mem::take(&mut *events)
         };
+        self.close_signal.send_replace(true);
         self.cv.notify_all();
         drop(pending);
     }

@@ -245,6 +245,7 @@ typedef struct CAgentSendOptions {
 typedef void (*CAgentTurnCb)(struct CAgentTurn*, const CBoxliteError*, void*);
 
 // JSON and error pointers are borrowed for callback dispatch only.
+// For event subscriptions, a null JSON pointer ends the stream exactly once.
 // Copy their contents to retain them after the callback returns.
 typedef void (*CAgentJsonCb)(const char*, const CBoxliteError*, void*);
 
@@ -257,6 +258,9 @@ typedef struct CAgentWaitOptions {
 typedef struct CAgentEventsOptions {
   const char *after;
 } CAgentEventsOptions;
+
+// On success, receives an owned subscription; release it with boxlite_agent_events_free.
+typedef void (*CAgentEventsOpenCb)(struct CAgentEvents*, const CBoxliteError*, void*);
 
 // Box export completion.
 typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
@@ -1020,22 +1024,22 @@ enum BoxliteErrorCode boxlite_agent_turn_interrupt(struct CAgentTurn *turn_arg,
                                                    void *user_data_arg,
                                                    CBoxliteError *out_error);
 
-// Open the agent's events, after an opaque cursor where the adapter supports it.
-// out and out_error may be null or writable. out is cleared on error.
-enum BoxliteErrorCode boxlite_agent_events(struct CAgent *_handle,
-                                           const struct CAgentEventsOptions *_options,
-                                           CAgentJsonCb _cb,
-                                           void *_user_data,
-                                           struct CAgentEvents **out,
+// Open events; on_open receives the handle after the stream is connected.
+// Keep user_data alive until the terminal on_event returns, or on_open on failure.
+enum BoxliteErrorCode boxlite_agent_events(struct CAgent *handle,
+                                           const struct CAgentEventsOptions *options,
+                                           CAgentEventsOpenCb on_open,
+                                           CAgentJsonCb on_event,
+                                           void *user_data,
                                            CBoxliteError *out_error);
 
-// Open this turn's view of the agent's events.
-// out and out_error may be null or writable. out is cleared on error.
-enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
-                                                const struct CAgentEventsOptions *_options,
-                                                CAgentJsonCb _cb,
-                                                void *_user_data,
-                                                struct CAgentEvents **out,
+// Open this turn's events; on_open receives the handle after connection.
+// Keep user_data alive until the terminal on_event returns, or on_open on failure.
+enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *handle,
+                                                const struct CAgentEventsOptions *options,
+                                                CAgentEventsOpenCb on_open,
+                                                CAgentJsonCb on_event,
+                                                void *user_data,
                                                 CBoxliteError *out_error);
 
 // Read a consistent agent state snapshot.
@@ -1078,7 +1082,8 @@ void boxlite_agent_free(struct CAgent *handle);
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_turn_free(struct CAgentTurn *handle);
 
-// Release only the local handle. Does not close an agent or interrupt a turn.
+// Signal cancellation without waiting. Queued events precede the terminal callback.
+// Keep user_data alive until that callback returns. Never interrupts agent work.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
 

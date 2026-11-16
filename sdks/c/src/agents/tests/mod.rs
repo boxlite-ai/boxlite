@@ -198,3 +198,5 @@ fn c_calls_and_getters_reach_core_through_drain() {
         let _ = std::fs::remove_dir_all(home);
     }
 }
+
+mod subscriptions;

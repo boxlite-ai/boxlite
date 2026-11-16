@@ -192,15 +192,6 @@ static void done_cb(const CBoxliteError *error, void *data) {
   (void)data;
   callbacks++;
 }
-#define CHECK_UNIMPLEMENTED(call, operation)                                   \
-  do {                                                                         \
-    assert((call) == Unsupported);                                             \
-    assert(error.code == Unsupported);                                         \
-    assert(error.message != NULL);                                             \
-    assert(strstr(error.message, operation " is not implemented") != NULL);    \
-    boxlite_error_free(&error);                                                \
-  } while (0)
-
 #define CHECK_INVALID(call, operation)                                         \
   do {                                                                         \
     assert((call) == InvalidArgument);                                         \
@@ -253,16 +244,10 @@ int main(void) {
   CHECK_INVALID(
       boxlite_agent_turn_interrupt(NULL, NULL, done_cb, NULL, &error),
       "turn.interrupt");
-  struct CAgentEvents *events = (struct CAgentEvents *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_events(NULL, &events_options, json_cb, NULL,
-                                           &events, &error),
-                      "agent.events");
-  assert(events == NULL);
-  events = (struct CAgentEvents *)&callbacks;
-  CHECK_UNIMPLEMENTED(
-      boxlite_agent_turn_events(NULL, NULL, json_cb, NULL, &events, &error),
-      "turn.events");
-  assert(events == NULL);
+  CHECK_INVALID(boxlite_agent_events(NULL, &events_options, NULL, json_cb, NULL,
+                                     &error), "agent.events");
+  CHECK_INVALID(boxlite_agent_turn_events(NULL, NULL, NULL, json_cb, NULL,
+                                          &error), "turn.events");
   char *json = (char *)&callbacks;
   CHECK_INVALID(boxlite_agent_state(NULL, &json, &error), "agent.state");
   assert(json == NULL);

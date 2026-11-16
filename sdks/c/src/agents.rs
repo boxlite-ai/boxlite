@@ -4,6 +4,9 @@ use std::ffi::{CStr, c_char, c_void};
 use std::future::Future;
 use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use futures::StreamExt;
 
 use boxlite::BoxliteError;
 
@@ -31,9 +34,20 @@ pub struct CAgentTurn {
     queue: Arc<EventQueue>,
 }
 /// Event subscription. Freeing it does not cancel agent work.
-#[derive(Debug)]
 pub struct CAgentEvents {
-    _private: (),
+    cancel: Arc<SubscriptionCancel>,
+}
+
+struct SubscriptionCancel {
+    cancelled: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl Drop for CAgentEvents {
+    fn drop(&mut self) {
+        self.cancel.cancelled.store(true, Ordering::Release);
+        self.cancel.notify.notify_one();
+    }
 }
 
 /// Initial agent settings. Null strings mean omitted; config_json uses the
@@ -92,11 +106,15 @@ pub type CAgentCb = Option<unsafe extern "C" fn(*mut CAgent, *const CBoxliteErro
 pub type CAgentTurnCb =
     Option<unsafe extern "C" fn(*mut CAgentTurn, *const CBoxliteError, *mut c_void)>;
 /// JSON and error pointers are borrowed for callback dispatch only.
+/// For event subscriptions, a null JSON pointer ends the stream exactly once.
 /// Copy their contents to retain them after the callback returns.
 pub type CAgentJsonCb =
     Option<unsafe extern "C" fn(*const c_char, *const CBoxliteError, *mut c_void)>;
 /// The error pointer is borrowed for callback dispatch only.
 pub type CAgentDoneCb = Option<unsafe extern "C" fn(*const CBoxliteError, *mut c_void)>;
+/// On success, receives an owned subscription; release it with boxlite_agent_events_free.
+pub type CAgentEventsOpenCb =
+    Option<unsafe extern "C" fn(*mut CAgentEvents, *const CBoxliteError, *mut c_void)>;
 
 macro_rules! checked {
     ($result:expr, $out_error:expr) => {
@@ -697,42 +715,165 @@ pub unsafe extern "C" fn boxlite_agent_turn_interrupt(
     }
 }
 
-/// Open the agent's events, after an opaque cursor where the adapter supports it.
-/// out and out_error may be null or writable. out is cleared on error.
+/// Open events; on_open receives the handle after the stream is connected.
+/// Keep user_data alive until the terminal on_event returns, or on_open on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_events(
-    _handle: *mut CAgent,
-    _options: *const CAgentEventsOptions,
-    _cb: CAgentJsonCb,
-    _user_data: *mut c_void,
-    out: *mut *mut CAgentEvents,
+    handle: *mut CAgent,
+    options: *const CAgentEventsOptions,
+    on_open: CAgentEventsOpenCb,
+    on_event: CAgentJsonCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    if !out.is_null() {
-        unsafe {
-            *out = ptr::null_mut();
+    unsafe {
+        if handle.is_null() || on_open.is_none() || on_event.is_none() {
+            write_error(out_error, null_pointer_error("handle, on_open or on_event"));
+            return BoxliteErrorCode::InvalidArgument;
         }
+        let options = checked!(events_options(options), out_error);
+        let handle = &*handle;
+        let core = handle.core.clone();
+        open_subscription(
+            handle.runtime.clone(),
+            handle.queue.clone(),
+            async move { core.events(options).await },
+            on_open.unwrap(),
+            on_event.unwrap(),
+            user_data as usize,
+        );
+        BoxliteErrorCode::Ok
     }
-    unsafe { not_implemented("agent.events", out_error) }
 }
 
-/// Open this turn's view of the agent's events.
-/// out and out_error may be null or writable. out is cleared on error.
+/// Open this turn's events; on_open receives the handle after connection.
+/// Keep user_data alive until the terminal on_event returns, or on_open on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_events(
-    _handle: *mut CAgentTurn,
-    _options: *const CAgentEventsOptions,
-    _cb: CAgentJsonCb,
-    _user_data: *mut c_void,
-    out: *mut *mut CAgentEvents,
+    handle: *mut CAgentTurn,
+    options: *const CAgentEventsOptions,
+    on_open: CAgentEventsOpenCb,
+    on_event: CAgentJsonCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    if !out.is_null() {
-        unsafe {
-            *out = ptr::null_mut();
+    unsafe {
+        if handle.is_null() || on_open.is_none() || on_event.is_none() {
+            write_error(out_error, null_pointer_error("handle, on_open or on_event"));
+            return BoxliteErrorCode::InvalidArgument;
         }
+        let options = checked!(events_options(options), out_error);
+        let handle = &*handle;
+        let core = handle.core.clone();
+        open_subscription(
+            handle.runtime.clone(),
+            handle.queue.clone(),
+            async move { core.events(options).await },
+            on_open.unwrap(),
+            on_event.unwrap(),
+            user_data as usize,
+        );
+        BoxliteErrorCode::Ok
     }
-    unsafe { not_implemented("turn.events", out_error) }
+}
+
+unsafe fn events_options(
+    options: *const CAgentEventsOptions,
+) -> Result<boxlite::agents::AgentEventsOptions, BoxliteError> {
+    Ok(boxlite::agents::AgentEventsOptions {
+        after: match options.as_ref() {
+            Some(options) => optional_string(options.after, "after")?,
+            None => None,
+        },
+    })
+}
+
+fn open_subscription(
+    runtime: Arc<TokioRuntime>,
+    queue: Arc<EventQueue>,
+    open: impl Future<Output = Result<boxlite::agents::AgentEventStream, BoxliteError>> + Send + 'static,
+    on_open: unsafe extern "C" fn(*mut CAgentEvents, *const CBoxliteError, *mut c_void),
+    on_event: unsafe extern "C" fn(*const c_char, *const CBoxliteError, *mut c_void),
+    data: usize,
+) {
+    let task_runtime = runtime.clone();
+    let mut closed = queue.close_signal.subscribe();
+    runtime.spawn(async move {
+        let _guard = crate::archive::TokioRuntimeDropGuard::new(task_runtime);
+        if *closed.borrow() {
+            return;
+        }
+        let result = tokio::select! {
+            result = open => result,
+            _ = closed.changed() => return,
+        };
+        let mut stream = match result {
+            Ok(stream) => stream,
+            Err(error) => {
+                push_event(
+                    &queue,
+                    RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+                        deliver::<()>(Err(error), |_, error| {
+                            on_open(ptr::null_mut(), error, data as *mut c_void)
+                        });
+                    })),
+                )
+                .await;
+                return;
+            }
+        };
+        let cancel = Arc::new(SubscriptionCancel {
+            cancelled: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        });
+        let handle = Box::new(CAgentEvents {
+            cancel: cancel.clone(),
+        });
+        push_event(
+            &queue,
+            RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+                on_open(Box::into_raw(handle), ptr::null(), data as *mut c_void);
+            })),
+        )
+        .await;
+
+        // One producer owns the stream and posts the terminal callback after
+        // all earlier pushes finish; free only wakes it, even on a full queue.
+        let terminal = loop {
+            if cancel.cancelled.load(Ordering::Acquire) {
+                break None;
+            }
+            if *closed.borrow() {
+                return;
+            }
+            tokio::select! {
+                _ = closed.changed() => return,
+                _ = cancel.notify.notified() => break None,
+                item = stream.next() => match item {
+                    Some(Ok(event)) => {
+                        let value = boxlite::agents::records::event(&event);
+                        push_event(&queue, RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+                            deliver_json(Ok(value), on_event, data);
+                        }))).await;
+                    }
+                    Some(Err(error)) => break Some(error),
+                    None => break None,
+                }
+            }
+        };
+        push_event(
+            &queue,
+            RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+                match terminal {
+                    Some(error) => deliver::<()>(Err(error), |_, error| {
+                        on_event(ptr::null(), error, data as *mut c_void)
+                    }),
+                    None => on_event(ptr::null(), ptr::null(), data as *mut c_void),
+                }
+            })),
+        )
+        .await;
+    });
 }
 
 /// Read a consistent agent state snapshot.
@@ -884,7 +1025,8 @@ pub unsafe extern "C" fn boxlite_agent_turn_free(handle: *mut CAgentTurn) {
     }
 }
 
-/// Release only the local handle. Does not close an agent or interrupt a turn.
+/// Signal cancellation without waiting. Queued events precede the terminal callback.
+/// Keep user_data alive until that callback returns. Never interrupts agent work.
 /// handle must be null or a live, uniquely owned pointer returned by this SDK.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_events_free(handle: *mut CAgentEvents) {
@@ -893,16 +1035,6 @@ pub unsafe extern "C" fn boxlite_agent_events_free(handle: *mut CAgentEvents) {
             drop(Box::from_raw(handle));
         }
     }
-}
-
-unsafe fn not_implemented(operation: &str, out_error: *mut CBoxliteError) -> BoxliteErrorCode {
-    unsafe {
-        write_error(
-            out_error,
-            BoxliteError::Unsupported(format!("{operation} is not implemented")),
-        );
-    }
-    BoxliteErrorCode::Unsupported
 }
 
 #[cfg(test)]
