@@ -4,13 +4,25 @@ The internal encryption package protects secret values and routing policy with p
 
 ## Scope
 
-This Go module contains two library packages, `internal/encryption` and
+This Go module contains `internal/encryption`, `internal/server`, and
 `internal/attest` ([runner attestation](#runner-attestation)). It has no server
 entry point, HTTP endpoints, persistence, or deployment resources yet.
 The existing API encryption service and stored values remain unchanged.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
+
+## Server configuration and write authentication
+
+The service configuration and write authentication middleware are available for
+the server skeleton. Google mode validates token signature, audience, expiry,
+issuer, verified email, and the caller allowlist. Dev mode uses an exact bearer
+token and is permitted only in local and dev environments. The server entry
+point and routes are delivered separately.
+
+Google-mode bearer tokens with signatures shorter than 32 bytes are rejected
+before validation; signatures and claims still require verification. `PORT` must
+resolve to a nonzero TCP port so the service does not silently select one.
 
 ## Calling the package
 
