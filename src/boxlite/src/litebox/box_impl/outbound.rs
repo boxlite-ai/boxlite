@@ -3,9 +3,12 @@
 use super::*;
 use crate::net::{
     OutboundApplicationState, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
-    OutboundSnapshot,
+    OutboundSnapshot, OutboundStatus,
 };
 use crate::runtime::options::OutboundNetworkConfig;
+
+// Bound observation independently of an updater and of custom backend behavior.
+const STATUS_READBACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,16 +26,99 @@ pub(crate) struct PendingOutbound {
 
 impl BoxImpl {
     pub(super) fn persisted_outbound(&self) -> BoxliteResult<OutboundSnapshot> {
-        let control = self.runtime.box_manager.outbound_control(&self.config.id)?;
-        Ok(OutboundSnapshot {
-            policy: self
-                .state
-                .read()
+        let (state, control) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        Ok(self.snapshot_from_state(&state, control.as_ref()))
+    }
+
+    fn snapshot_from_state(
+        &self,
+        state: &BoxState,
+        control: Option<&OutboundControl>,
+    ) -> OutboundSnapshot {
+        OutboundSnapshot {
+            policy: state
                 .outbound_policy
                 .clone()
                 .unwrap_or_else(|| (&self.config.options.network).into()),
-            revision: control.map_or_else(OutboundRevision::initial, |value| value.revision),
-        })
+            revision: control
+                .map_or_else(OutboundRevision::initial, |value| value.revision.clone()),
+        }
+    }
+
+    pub(super) async fn read_outbound_status(&self) -> BoxliteResult<OutboundStatus> {
+        // GET must remain readable while an updater owns the operation lock.
+        // Policy/control come from one SQLite row version; no reconciliation occurs here.
+        let (state, control) = self.runtime.box_manager.outbound_state(&self.config.id)?;
+        let mut status = OutboundStatus {
+            persisted: self.snapshot_from_state(&state, control.as_ref()),
+            pending_revision: control
+                .as_ref()
+                .and_then(|value| value.pending.as_ref())
+                .map(|pending| pending.candidate.revision.clone()),
+            observed: None,
+            application_state: OutboundApplicationState::Uncertain,
+            observation_error: None,
+        };
+        if state.status != BoxStatus::Running {
+            status.observation_error = Some("box is not running".into());
+            return Ok(status);
+        }
+        let backend = if let Some(live) = self.live.get() {
+            let cached = self.state.read();
+            if cached.status != BoxStatus::Running
+                || cached.pid != state.pid
+                || cached.started_at != state.started_at
+            {
+                status.observation_error =
+                    Some("Box handle belongs to an earlier VM; use runtime.get()".into());
+                return Ok(status);
+            }
+            live.network.clone()
+        } else if matches!(
+            self.config.options.network,
+            crate::runtime::options::NetworkSpec::Disabled
+        ) {
+            None
+        } else {
+            let config = crate::net::NetworkBackendConfig {
+                outbound_disabled: status.persisted.policy.mode
+                    == crate::runtime::options::NetworkMode::Disabled,
+                allow_net: status.persisted.policy.allow_net.clone(),
+                socket_path: self.layout.net_backend_socket_path(),
+                secrets: self.config.options.secrets.clone(),
+                ca_dir: self.layout.ca_dir(),
+                rate_limit: self.config.options.advanced.network_rate_limit,
+            };
+            self.runtime.network_factory.create(&config).map(Arc::from)
+        };
+        let backend = backend
+            .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
+        let observation =
+            tokio::time::timeout(STATUS_READBACK_TIMEOUT, backend.outbound_snapshot())
+                .await
+                .unwrap_or_else(|_| {
+                    Err(BoxliteError::Network(
+                        "outbound status readback timed out after 10s".into(),
+                    ))
+                });
+        match observation {
+            Err(error @ BoxliteError::Unsupported(_)) => return Err(error),
+            Err(error) => status.observation_error = Some(error.to_string()),
+            Ok(observed) => {
+                status.application_state = match observed.application_state {
+                    OutboundApplicationState::Pending => OutboundApplicationState::Pending,
+                    OutboundApplicationState::Confirmed
+                        if status.pending_revision.is_none()
+                            && observed.snapshot == status.persisted =>
+                    {
+                        OutboundApplicationState::Confirmed
+                    }
+                    _ => OutboundApplicationState::Uncertain,
+                };
+                status.observed = Some(observed);
+            }
+        }
+        Ok(status)
     }
 
     pub(super) async fn replace_outbound_control(
@@ -99,6 +185,12 @@ impl BoxImpl {
                     }
                 }
                 Ok(OutboundReplaceOutcome::Applied) => {}
+            }
+            // Test-only cancellation point after the ACK, before durable commit.
+            #[cfg(test)]
+            if let Some(entered) = &self.outbound_before_persist {
+                entered.notify_one();
+                std::future::pending::<()>().await;
             }
             if let Err(error) = self.confirm_outbound(&candidate) {
                 return self.restore_outbound(backend, previous, &candidate, error).await;

@@ -186,6 +186,13 @@ impl BoxManager {
         self.store.outbound_control(id.as_str())
     }
 
+    pub(crate) fn outbound_state(
+        &self,
+        id: &BoxID,
+    ) -> BoxliteResult<(BoxState, Option<super::box_impl::outbound::OutboundControl>)> {
+        self.store.outbound_state(id.as_str())
+    }
+
     pub(crate) fn save_outbound_control(
         &self,
         id: &BoxID,

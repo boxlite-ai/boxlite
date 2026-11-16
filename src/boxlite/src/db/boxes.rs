@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use crate::litebox::box_impl::outbound::OutboundControl;
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
@@ -185,10 +186,7 @@ impl BoxStore {
     // Combined operations
     // ========================================================================
 
-    pub(crate) fn outbound_control(
-        &self,
-        box_id: &str,
-    ) -> BoxliteResult<Option<crate::litebox::box_impl::outbound::OutboundControl>> {
+    pub(crate) fn outbound_control(&self, box_id: &str) -> BoxliteResult<Option<OutboundControl>> {
         let body: Option<String> =
             db_err!(self.db.conn().query_row(
             "SELECT json_extract(json, '$.outbound_control') FROM box_state WHERE id = ?1",
@@ -196,30 +194,51 @@ impl BoxStore {
         ).optional())?
             .ok_or_else(|| BoxliteError::NotFound(box_id.into()))?;
         body.map(|body| {
-            let control: crate::litebox::box_impl::outbound::OutboundControl =
-                serde_json::from_str(&body).map_err(|e| {
-                    BoxliteError::Database(format!("invalid outbound control for {box_id}: {e}"))
-                })?;
-            if let Some(pending) = &control.pending {
-                crate::net::OutboundReplacement::new(
-                    pending.expected.clone(),
-                    pending.candidate.clone(),
-                )
-                .map_err(|e| {
-                    BoxliteError::Database(format!(
-                        "invalid pending outbound control for {box_id}: {e}"
-                    ))
-                })?;
-            }
-            Ok(control)
+            let control: OutboundControl = serde_json::from_str(&body).map_err(|e| {
+                BoxliteError::Database(format!("invalid outbound control for {box_id}: {e}"))
+            })?;
+            validate_outbound_control(box_id, control)
         })
         .transpose()
+    }
+
+    /// Read policy, lifecycle identity and control metadata from one row version.
+    pub(crate) fn outbound_state(
+        &self,
+        box_id: &str,
+    ) -> BoxliteResult<(BoxState, Option<OutboundControl>)> {
+        #[derive(serde::Deserialize)]
+        struct Stored {
+            #[serde(flatten)]
+            state: BoxState,
+            #[serde(default)]
+            outbound_control: Option<OutboundControl>,
+        }
+        let body: String = db_err!(
+            self.db
+                .conn()
+                .query_row(
+                    "SELECT json FROM box_state WHERE id = ?1",
+                    params![box_id],
+                    |row| row.get(0),
+                )
+                .optional()
+        )?
+        .ok_or_else(|| BoxliteError::NotFound(box_id.into()))?;
+        let stored: Stored = serde_json::from_str(&body).map_err(|e| {
+            BoxliteError::Database(format!("invalid outbound state for {box_id}: {e}"))
+        })?;
+        let control = stored
+            .outbound_control
+            .map(|value| validate_outbound_control(box_id, value))
+            .transpose()?;
+        Ok((stored.state, control))
     }
 
     pub(crate) fn save_outbound_control(
         &self,
         box_id: &str,
-        control: Option<&crate::litebox::box_impl::outbound::OutboundControl>,
+        control: Option<&OutboundControl>,
         policy: Option<&crate::runtime::options::OutboundNetworkConfig>,
     ) -> BoxliteResult<()> {
         let control =
@@ -420,6 +439,21 @@ impl BoxStore {
 
         Ok(reset_ids)
     }
+}
+
+fn validate_outbound_control(
+    box_id: &str,
+    control: OutboundControl,
+) -> BoxliteResult<OutboundControl> {
+    if let Some(pending) = &control.pending {
+        crate::net::OutboundReplacement::new(pending.expected.clone(), pending.candidate.clone())
+            .map_err(|e| {
+            BoxliteError::Database(format!(
+                "invalid pending outbound control for {box_id}: {e}"
+            ))
+        })?;
+    }
+    Ok(control)
 }
 
 /// Get system boot ID (unique per boot).

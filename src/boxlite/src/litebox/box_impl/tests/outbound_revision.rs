@@ -18,6 +18,8 @@ enum Reply {
     Delayed,
     Held,
     Unsupported,
+    ReadError,
+    NoStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -50,8 +52,12 @@ fn replacement(expected: &str, candidate: OutboundSnapshot) -> OutboundReplaceme
 #[async_trait::async_trait]
 impl NetworkBackend for RevisionBackend {
     async fn outbound_snapshot(&self) -> BoxliteResult<OutboundSnapshotStatus> {
-        if matches!(*self.reply.lock().unwrap(), Reply::Unsupported) {
-            return Err(BoxliteError::Unsupported("old backend".into()));
+        let reply = *self.reply.lock().unwrap();
+        match reply {
+            Reply::Unsupported => return Err(BoxliteError::Unsupported("old backend".into())),
+            Reply::ReadError => return Err(BoxliteError::Network("backend unavailable".into())),
+            Reply::NoStatus => return std::future::pending().await,
+            _ => {}
         }
         Ok(self.observed.lock().unwrap().clone())
     }
@@ -543,4 +549,167 @@ async fn outbound_revision_old_backend_compatibility_cannot_downgrade_versioned_
         Err(BoxliteError::Unsupported(_))
     ));
     assert_eq!(backend.legacy_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn outbound_status_does_not_wait_for_a_pending_writer() {
+    let (fixture, backend) = fixture(Reply::Held).await;
+    let bx = &fixture.box_impl;
+    let facade = crate::litebox::NetworkHandle::new(bx.clone());
+    let first = facade.replace_outbound_snapshot(replacement(
+        "initial",
+        snapshot("rev-b", NetworkMode::Disabled),
+    ));
+    tokio::pin!(first);
+    assert!(futures::poll!(&mut first).is_pending());
+    tokio::time::timeout(Duration::from_secs(2), backend.entered.notified())
+        .await
+        .unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(1), facade.outbound_status()).await;
+    let persisted = tokio::time::timeout(Duration::from_secs(1), facade.outbound_snapshot()).await;
+    backend.release.add_permits(1);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), &mut first)
+            .await
+            .unwrap()
+            .unwrap(),
+        OutboundReplaceOutcome::Applied
+    );
+    let status = status.expect("status waited for the update lock").unwrap();
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Uncertain
+    );
+    assert_eq!(status.pending_revision.unwrap().as_str(), "rev-b");
+    assert_eq!(status.persisted.revision.as_str(), "initial");
+    assert_eq!(
+        persisted
+            .expect("persisted read waited for the update lock")
+            .unwrap()
+            .revision
+            .as_str(),
+        "initial"
+    );
+    assert_eq!(
+        facade.outbound_status().await.unwrap().application_state,
+        OutboundApplicationState::Confirmed
+    );
+}
+
+#[tokio::test]
+async fn outbound_status_reports_confirmed_candidate_as_uncertain_until_persisted() {
+    let (fixture, backend) = fixture(Reply::Pending).await;
+    let bx = &fixture.box_impl;
+    assert!(
+        bx.replace_outbound_snapshot(replacement(
+            "initial",
+            snapshot("rev-b", NetworkMode::Disabled)
+        ))
+        .await
+        .is_err()
+    );
+    let status = bx.outbound_status().await.unwrap();
+    assert_eq!(status.application_state, OutboundApplicationState::Pending);
+    backend.observed.lock().unwrap().application_state = OutboundApplicationState::Confirmed;
+    let db = database(bx);
+    db.execute_batch("CREATE TRIGGER reject_status_writes BEFORE UPDATE ON box_state BEGIN SELECT RAISE(ABORT, 'GET changed state'); END;").unwrap();
+    let status = bx.outbound_status().await.unwrap();
+    let persisted = bx.outbound_snapshot().await.unwrap();
+    db.execute_batch("DROP TRIGGER reject_status_writes")
+        .unwrap();
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Uncertain
+    );
+    assert_eq!(status.persisted.revision.as_str(), "initial");
+    assert_eq!(status.observed.unwrap().snapshot.revision.as_str(), "rev-b");
+    assert_eq!(persisted.revision.as_str(), "initial");
+    assert!(
+        control(bx).unwrap().pending.is_some(),
+        "GET reconciled a pending attempt"
+    );
+}
+
+#[tokio::test]
+async fn outbound_status_preserves_failures_and_does_not_confirm_stored_configuration_alone() {
+    let (fixture, backend) = fixture(Reply::ReadError).await;
+    let bx = &fixture.box_impl;
+    let status = bx.outbound_status().await.unwrap();
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Uncertain
+    );
+    assert!(status.observed.is_none());
+    assert!(
+        status
+            .observation_error
+            .unwrap()
+            .contains("backend unavailable")
+    );
+    *backend.reply.lock().unwrap() = Reply::Unsupported;
+    assert!(matches!(
+        bx.outbound_status().await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+    *backend.reply.lock().unwrap() = Reply::Ack;
+    backend.observed.lock().unwrap().snapshot = snapshot("divergent", NetworkMode::Disabled);
+    assert_eq!(
+        bx.outbound_status().await.unwrap().application_state,
+        OutboundApplicationState::Uncertain
+    );
+}
+
+#[tokio::test]
+async fn outbound_status_does_not_boot_a_stopped_handle_or_use_an_older_live_epoch() {
+    let (fixture, backend) = fixture(Reply::Unsupported).await;
+    let bx = &fixture.box_impl;
+    let mut state = bx.runtime.box_manager.update_box(bx.id()).unwrap();
+    state.started_at = state
+        .started_at
+        .map(|value| value + chrono::Duration::seconds(1));
+    bx.runtime.box_manager.save_box(bx.id(), &state).unwrap();
+    let status = bx.outbound_status().await.unwrap();
+    assert!(status.observed.is_none());
+    assert!(status.observation_error.unwrap().contains("earlier VM"));
+    state.force_status(BoxStatus::Stopped);
+    bx.runtime.box_manager.save_box(bx.id(), &state).unwrap();
+    let recovered = BoxImpl::new(
+        bx.config.clone(),
+        state,
+        bx.runtime.clone(),
+        bx.runtime.shutdown_token.child_token(),
+    );
+    assert!(!recovered.live.initialized());
+    let status = recovered.outbound_status().await.unwrap();
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Uncertain
+    );
+    assert!(status.observation_error.unwrap().contains("not running"));
+    assert!(!recovered.live.initialized());
+    assert!(backend.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn outbound_status_bounds_a_backend_that_never_returns() {
+    let (fixture, _) = fixture(Reply::NoStatus).await;
+    tokio::time::pause();
+    let status = fixture.box_impl.outbound_status();
+    tokio::pin!(status);
+    assert!(futures::poll!(&mut status).is_pending());
+    tokio::time::advance(Duration::from_secs(9)).await;
+    assert!(futures::poll!(&mut status).is_pending());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let status = status.await.unwrap();
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Uncertain
+    );
+    assert!(status.observed.is_none());
+    assert!(
+        status
+            .observation_error
+            .unwrap()
+            .contains("timed out after 10s")
+    );
 }

@@ -417,6 +417,11 @@ impl NetworkHandle {
         self.network_backend.outbound_snapshot().await
     }
 
+    /// Compare persisted and observed state without booting a VM or changing policy.
+    pub async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
+        self.network_backend.outbound_status().await
+    }
+
     /// Apply a trusted coordinator's complete candidate with a revision precondition.
     pub async fn replace_outbound_snapshot(
         &self,

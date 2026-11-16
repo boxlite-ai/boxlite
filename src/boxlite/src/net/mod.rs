@@ -32,7 +32,7 @@ mod outbound;
 
 pub use outbound::{
     OutboundApplicationState, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
-    OutboundSnapshot, OutboundSnapshotStatus,
+    OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus,
 };
 
 pub use gvproxy::GvproxyBackend;

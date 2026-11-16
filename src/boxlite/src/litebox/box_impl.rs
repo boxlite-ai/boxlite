@@ -167,6 +167,8 @@ pub(crate) struct BoxImpl {
     background_starts_finished: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     background_start_finished: Arc<tokio::sync::Notify>,
+    #[cfg(test)]
+    outbound_before_persist: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl BoxImpl {
@@ -210,6 +212,8 @@ impl BoxImpl {
             background_starts_finished: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(test)]
             background_start_finished: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            outbound_before_persist: None,
         }
     }
 
@@ -1888,9 +1892,12 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
+        self.read_outbound_status().await
+    }
+
     async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
-        self.with_operation(async { self.persisted_outbound() })
-            .await
+        self.persisted_outbound()
     }
 
     async fn replace_outbound_snapshot(
@@ -1972,6 +1979,8 @@ mod tests {
 
     mod execution_recovery;
     mod operation_lock;
+    #[cfg(feature = "gvproxy")]
+    mod outbound_recovery;
     mod outbound_revision;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {

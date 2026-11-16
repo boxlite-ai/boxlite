@@ -214,7 +214,36 @@ A versioned call, or a Box already using versioned state, cannot silently fall b
 Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
-The full live/persisted status resource and coordinator recovery acceptance remain separate verification steps.
+
+### Runtime readback and coordinator recovery
+
+`NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.
+It reports `persisted`, optional `observed`, overall `application_state`, optional `pending_revision`, and optional `observation_error` outside user policy JSON.
+The durable policy, revision, pending attempt, and VM identity come from one SQLite row version.
+Neither this status call nor `outbound_snapshot` acquires the mutating Box operation lock, so reads remain available during a pending update.
+Both calls leave pending records and policy unchanged.
+
+Overall `confirmed` requires an exact policy/revision match, a confirmed backend phase, and no durable pending attempt.
+A pending backend phase remains `pending`; any mismatch or unresolved attempt is `uncertain`.
+Backend observation has a ten-second bound; a failed observation retains durable intent and a diagnostic without claiming live confirmation.
+An unsupported backend returns an explicit unsupported error.
+A stopped Box returns uncertainty without starting a VM; a handle from an older VM epoch cannot query through its cached backend.
+A newly acquired running handle can read the existing control socket without booting or attaching the guest.
+
+After coordinator loss, a surviving backend can report the confirmed pending candidate while durable policy still identifies its predecessor.
+GET preserves that divergence as uncertainty.
+A subsequent mutating operation can reconcile the matching confirmed candidate before evaluating the caller's precondition; a caller using the predecessor then receives `PreconditionFailed`.
+When the backend restarts from committed policy, matching the old durable revision still does not resolve the pending attempt.
+A new unconditional complete intent can replace that uncertain state with a fresh candidate through CAS.
+
+Recovery acceptance uses real SQLite storage and a real gvproxy instance over its Unix control socket.
+A test-only cancellation point stops the coordinator after a matching backend ACK and before durable commit, then reacquires the Box handle with the backend surviving or restarting.
+The VM and guest session remain test fixtures; this checks the control and persistence boundary, rather than an operating-system process crash or guest-VM boot.
+Run these checks with real dependencies:
+
+```sh
+make test:unit:rust FILTER=outbound_recovery RUST_UNIT_CORE_ARGS='-p boxlite --all-features --lib'
+```
 
 ### Runtime bootstrap identity
 

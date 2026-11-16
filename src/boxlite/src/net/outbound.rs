@@ -76,6 +76,19 @@ pub struct OutboundSnapshotStatus {
     pub application_state: OutboundApplicationState,
 }
 
+/// Runtime readback comparing durable intent with backend observation.
+/// Reading status never reconciles a pending attempt or changes policy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboundStatus {
+    pub persisted: OutboundSnapshot,
+    pub observed: Option<OutboundSnapshotStatus>,
+    pub application_state: OutboundApplicationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_revision: Option<OutboundRevision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_error: Option<String>,
+}
+
 /// Validated internal compare-and-swap operation with a coordinator-owned ID.
 #[derive(Clone, Debug)]
 pub struct OutboundReplacement {

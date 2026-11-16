@@ -189,6 +189,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn outbound_status(&self) -> BoxliteResult<crate::net::OutboundStatus> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support revisioned outbound status".into(),
+        ))
+    }
+
     async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
         Err(BoxliteError::Unsupported(
             "this backend does not support revisioned outbound control".into(),
