@@ -87,6 +87,12 @@ def _install_boxlite_stub() -> None:
     module.SnapshotOptions = _Noop
     module.CopyOptions = _Noop
     sys.modules["boxlite"] = module
+    native = types.ModuleType("boxlite.boxlite")
+    native._api_version = json.loads(
+        (SERVER_PATH.parents[2] / "src/boxlite/src/rest/api_version.json").read_text()
+    )
+    module.__version__ = native._api_version
+    sys.modules["boxlite.boxlite"] = native
 
 
 _install_boxlite_stub()
