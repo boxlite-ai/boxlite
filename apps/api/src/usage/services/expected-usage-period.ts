@@ -4,6 +4,7 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { memoryGiBOf } from '../../box/utils/memory-allocation'
 
 /** The resources an open usage period charges for. */
 export interface UsagePeriodShape {
@@ -16,6 +17,7 @@ export interface UsagePeriodShape {
 /** The box fields that decide what its open period should charge. */
 export interface BillableBox extends UsagePeriodShape {
   state: BoxState
+  memoryMib?: number | null
 }
 
 export type ExpectedOpenPeriod = UsagePeriodShape | null
@@ -45,10 +47,8 @@ export const BOX_STATES_BILLING_DISK_ONLY: BoxState[] = [BoxState.STOPPING, BoxS
 // box whose state moved between the scan and the repair — and there the period
 // it would close is a drifted one it was picked up to correct anyway.
 
-// Box resources are integers, while usage-period resources are double
-// precision. Normal writes therefore compare exactly; this tolerance is a
-// defensive guard for non-canonical period rows, preventing an immaterial
-// fractional difference from causing an unnecessary close/reopen split.
+// CPU allocations and usage periods use double precision. This tolerance
+// prevents immaterial floating-point differences from splitting a period.
 const RESOURCE_EPSILON = 1e-6
 
 /**
@@ -66,7 +66,7 @@ export function expectedOpenPeriod(box: BillableBox | null | undefined): Expecte
     return null
   }
   if (box.state === BoxState.STARTED) {
-    return { cpu: box.cpu, gpu: box.gpu, mem: box.mem, disk: box.disk }
+    return { cpu: box.cpu, gpu: box.gpu, mem: memoryGiBOf(box), disk: box.disk }
   }
   if (BOX_STATES_BILLING_DISK_ONLY.includes(box.state)) {
     return { cpu: 0, gpu: 0, mem: 0, disk: box.disk }

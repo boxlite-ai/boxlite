@@ -26,8 +26,8 @@ on:
   workflow_call:
     inputs:
       libboxlite_source:
-        required: false
-        default: release
+        description: 'Explicitly choose artifact for matching-commit deployments or release for published SDKs.'
+        required: true
         type: string
       ref:
         required: false

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -33,18 +34,51 @@ type ExecutorConfig struct {
 	// ArchiveStore and MigrateWorkDir are only needed for box migration. A
 	// runner deployed without object-store credentials leaves ArchiveStore nil
 	// and fails migration jobs explicitly instead of failing to start.
-	ArchiveStore   storage.ArchiveStore
-	MigrateWorkDir string
+	ArchiveStore      storage.ArchiveStore
+	MigrateWorkDir    string
+	CheckpointWorkDir string
 }
 
 // Executor handles job execution
 type Executor struct {
-	log            *slog.Logger
-	client         *apiclient.APIClient
-	backend        backend.BoxBackend
-	collector      *metrics.Collector
-	archiveStore   storage.ArchiveStore
-	migrateWorkDir string
+	log               *slog.Logger
+	client            *apiclient.APIClient
+	backend           backend.BoxBackend
+	collector         *metrics.Collector
+	archiveStore      storage.ArchiveStore
+	migrateWorkDir    string
+	checkpointWorkDir string
+	operationMu       sync.Mutex
+	boxOperations     map[string]*boxOperation
+}
+
+type boxOperation struct {
+	mutex sync.Mutex
+	users int
+}
+
+func (e *Executor) lockBox(id string) func() {
+	e.operationMu.Lock()
+	if e.boxOperations == nil {
+		e.boxOperations = make(map[string]*boxOperation)
+	}
+	operation := e.boxOperations[id]
+	if operation == nil {
+		operation = &boxOperation{}
+		e.boxOperations[id] = operation
+	}
+	operation.users++
+	e.operationMu.Unlock()
+	operation.mutex.Lock()
+	return func() {
+		operation.mutex.Unlock()
+		e.operationMu.Lock()
+		defer e.operationMu.Unlock()
+		operation.users--
+		if operation.users == 0 {
+			delete(e.boxOperations, id)
+		}
+	}
 }
 
 // NewExecutor creates a new job executor
@@ -55,17 +89,23 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	}
 
 	return &Executor{
-		log:            cfg.Logger.With(slog.String("component", "executor")),
-		client:         apiClient,
-		backend:        cfg.Backend,
-		collector:      cfg.Collector,
-		archiveStore:   cfg.ArchiveStore,
-		migrateWorkDir: cfg.MigrateWorkDir,
+		log:               cfg.Logger.With(slog.String("component", "executor")),
+		client:            apiClient,
+		backend:           cfg.Backend,
+		collector:         cfg.Collector,
+		archiveStore:      cfg.ArchiveStore,
+		migrateWorkDir:    cfg.MigrateWorkDir,
+		checkpointWorkDir: cfg.CheckpointWorkDir,
 	}, nil
 }
 
 // Execute processes a job and updates its status
 func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
+	if job.Type == apiclient.JOBTYPE_EXPORT_CHECKPOINT || job.Type == apiclient.JOBTYPE_UPLOAD_CHECKPOINT || job.Type == apiclient.JOBTYPE_IMPORT_CHECKPOINT {
+		// Native export cancellation stops waiting, not capture. The accepted
+		// job owns its files and BOX slot until native work actually returns.
+		ctx = context.WithoutCancel(ctx)
+	}
 	// Extract trace context from job to continue distributed trace
 	ctx = e.extractTraceContext(ctx, job)
 
@@ -111,11 +151,17 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	// Report status to API
 	if err := e.updateJobStatus(ctx, job.GetId(), status, resultMetadata, errorMessage); err != nil {
 		jobLog.ErrorContext(ctx, "Failed to update job status", "error", err)
+	} else {
+		e.acknowledgeCheckpointUpload(ctx, job)
 	}
 }
 
 // executeJob dispatches to the appropriate handler based on job type
 func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, error) {
+	if job.ResourceType == "BOX" {
+		unlock := e.lockBox(job.ResourceId)
+		defer unlock()
+	}
 	// Create a span for the job execution
 	tracer := otel.Tracer("runner")
 	ctx, span := tracer.Start(ctx, fmt.Sprintf("execute_%s", job.GetType()),
@@ -157,6 +203,12 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.rollbackImportBox(ctx, job)
 	case apiclient.JOBTYPE_DISCARD_EXPORTED_BOX:
 		resultMetadata, err = e.discardExportedBox(ctx, job)
+	case apiclient.JOBTYPE_EXPORT_CHECKPOINT:
+		resultMetadata, err = e.exportCheckpoint(ctx, job)
+	case apiclient.JOBTYPE_UPLOAD_CHECKPOINT:
+		resultMetadata, err = e.uploadCheckpoint(ctx, job)
+	case apiclient.JOBTYPE_IMPORT_CHECKPOINT:
+		resultMetadata, err = e.importCheckpoint(ctx, job)
 	default:
 		err = fmt.Errorf("unknown job type: %s", job.GetType())
 	}

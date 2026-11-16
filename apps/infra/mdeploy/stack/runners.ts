@@ -122,6 +122,11 @@ export type RunnerRequest = {
    * be converged onto it, and that path reads fields, not the boot script.
    */
   registryProxyHost: $util.Input<string> | null
+  /**
+   * The bucket box checkpoints are archived in, which hosts write on export and
+   * read on restore. Null on a cloud that keeps none (see `CheckpointArchives`).
+   */
+  checkpointBucket: $util.Output<string> | null
   /** Values every host reads. */
   environment: Record<string, $util.Input<string>>
   /** Names it reads by reference: its own registration key, and the admin key. */

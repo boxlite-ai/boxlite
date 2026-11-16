@@ -47,12 +47,12 @@ async fn assert_quota(bx: &boxlite::LiteBox, cpus: f64) {
 #[ignore = "requires KVM and a writable delegated cgroup v2 CPU controller"]
 async fn fractional_cpus_enforces_shared_budget_and_survives_restart_snapshot_clone_import() {
     let t = BoxTestBase::with_options(BoxOptions {
-        cpus: Some(0.5),
+        cpus: Some(0.125),
         ..common::alpine_opts()
     })
     .await;
     t.bx.start().await.unwrap();
-    assert_quota(&t.bx, 0.5).await;
+    assert_quota(&t.bx, 0.125).await;
     assert_eq!(t.exec_stdout("nproc", &[]).await.trim(), "1");
 
     for workers in [1, 2] {
@@ -74,8 +74,8 @@ async fn fractional_cpus_enforces_shared_budget_and_survives_restart_snapshot_cl
             after["nr_throttled"] - before["nr_throttled"]
         );
         assert!(
-            (0.3..=0.7).contains(&used_cores),
-            "expected aggregate 0.5 CPU, measured {used_cores}"
+            (0.075..=0.175).contains(&used_cores),
+            "expected aggregate 0.125 CPU, measured {used_cores}"
         );
         assert!(after["nr_throttled"] > before["nr_throttled"]);
         assert_eq!(load.wait().await.unwrap().exit_code, 0);
@@ -89,13 +89,13 @@ async fn fractional_cpus_enforces_shared_budget_and_survives_restart_snapshot_cl
     let restored = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
     restored.snapshots().restore("limited").await.unwrap();
     restored.start().await.unwrap();
-    assert_quota(&restored, 0.5).await;
+    assert_quota(&restored, 0.125).await;
 
     // Stop invalidates the handle; reconnect reads the saved configuration.
     restored.stop().await.unwrap();
     let reconnected = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
     reconnected.start().await.unwrap();
-    assert_quota(&reconnected, 0.5).await;
+    assert_quota(&reconnected, 0.125).await;
     reconnected.stop().await.unwrap();
 
     let source = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
@@ -104,7 +104,7 @@ async fn fractional_cpus_enforces_shared_budget_and_survives_restart_snapshot_cl
         .await
         .unwrap();
     cloned.start().await.unwrap();
-    assert_quota(&cloned, 0.5).await;
+    assert_quota(&cloned, 0.125).await;
     cloned.stop().await.unwrap();
     let archive_dir = tempfile::tempdir().unwrap();
     let archive = source
@@ -113,7 +113,7 @@ async fn fractional_cpus_enforces_shared_budget_and_survives_restart_snapshot_cl
         .unwrap();
     let imported = t.runtime.import_box(archive, None).await.unwrap();
     imported.start().await.unwrap();
-    assert_quota(&imported, 0.5).await;
+    assert_quota(&imported, 0.125).await;
     imported.stop().await.unwrap();
     t.runtime
         .remove(imported.id().as_str(), true)

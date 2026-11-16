@@ -72,7 +72,9 @@ mod virtio;
 mod vm;
 
 pub use chipset::{BusKind, Conflict};
-pub use config::{DiskConfig, DiskFormat, FsConfig, FsShareConfig, VmConfig};
+pub use config::{
+    DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
+};
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
 pub use vm::{StopHandle, Vm, VmExit};

@@ -177,21 +177,15 @@ func (ca *BoxCA) generateHostCert(hostname string, now time.Time) (*tls.Certific
 
 // injectSecretHeaders injects configured secret headers for the matching host.
 // It overwrites only headers present in the original request, including empty values.
-// If Header is "Authorization" (case-insensitive) or empty, the value is prefixed with "Bearer ".
+// Rust validates templates and supplies defaults before sending this configuration.
 func injectSecretHeaders(req *http.Request, originalHeaders http.Header, secrets []SecretConfig) {
 	for _, s := range secrets {
-		headerName := s.Header
-		if headerName == "" {
-			headerName = "Authorization"
+		for headerName, template := range s.Headers {
+			if _, present := originalHeaders[http.CanonicalHeaderKey(headerName)]; !present {
+				continue
+			}
+			req.Header.Set(headerName, strings.Replace(template, "{value}", s.Value, 1))
 		}
-		if _, present := originalHeaders[http.CanonicalHeaderKey(headerName)]; !present {
-			continue
-		}
-		val := s.Value
-		if strings.EqualFold(headerName, "Authorization") {
-			val = "Bearer " + val
-		}
-		req.Header.Set(headerName, val)
 	}
 }
 

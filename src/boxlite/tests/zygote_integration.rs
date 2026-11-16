@@ -13,9 +13,9 @@
 mod common;
 
 use boxlite::BoxCommand;
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use boxlite_shared::BoxliteError;
+use common::TestRuntime as BoxliteRuntime;
 use std::sync::Arc;
 use std::time::Duration;
 

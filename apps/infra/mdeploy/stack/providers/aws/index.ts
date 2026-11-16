@@ -95,8 +95,10 @@ export const awsStackProviders = ({
     api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain, dashboardDomain }),
     edge: ({ host: where, network, dependsOn }) =>
       awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), dns, dependsOn }),
-    // No wildcard record or certificate for it on this cloud.
+    // No wildcard record or certificate for it on this cloud. Nor a data disk:
+    // a runner keeps box state on the root disk, so there is nothing to resize.
     servesUserDomain: () => false,
+    resizeRunnerDisks: () => false,
     /*
      * Not deployed on this cloud, and said so rather than thrown.
      *

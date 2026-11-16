@@ -1719,9 +1719,9 @@ test('cloud E2E requires the dev identity lane and forwards its scoped credentia
   const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
   const caller = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
   const steps = workflow.jobs.e2e.steps
-  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev)')
+  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev and stage)')
   assert.ok(identity, 'dev must execute the cross-org and readonly identity cases')
-  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' }}")
+  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}")
   assert.equal(identity.env.BOXLITE_E2E_PROFILE, 'p2')
   assert.equal(identity.env.BOXLITE_E2E_READONLY_PROFILE, 'p2_readonly')
   assert.equal(identity.env.BOXLITE_E2E_FOREIGN_PROFILE, 'p1')
@@ -1977,11 +1977,11 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The same fourteen the input sweep below counts: five `config.yml` loads,
-  // deploy-infra's four, mdeploy-all's three, and two manual SDK builds. The exact count, not a
+  // The same twelve the input sweep below counts: five `config.yml` loads,
+  // deploy-infra's four, mdeploy-all's one, and two manual SDK builds. The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 14, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 12, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -2023,12 +2023,12 @@ test('every reusable workflow is called with the inputs it declares', () => {
   }
   // Every local `uses:` in the directory, not just the deploy path's: five
   // build workflows load `config.yml`, `deploy-infra.yml` calls four, and
-  // mdeploy-all makes three, and the manual Runner and Go builds each call
+  // mdeploy-all calls only its commit image builder, and the manual Runner and Go builds each call
   // build-c to pair their SDK sources with the native library from that commit.
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 14, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 12, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**
@@ -2040,7 +2040,7 @@ test('every reusable workflow is called with the inputs it declares', () => {
  * sentinel went with `mdeploy-all.yml`'s `auto_promote_from`: a promotion's
  * source is dev, and there is no longer a choice that binds a job to nothing.
  */
-const ENVIRONMENTS = ['dev', 'prod']
+const ENVIRONMENTS = ['dev', 'stage', 'prod']
 
 test('every workflow that selects a deployment Environment does so from an allowlist', () => {
   // The rule is stated once in .github/workflows/README.md and enforced here across every
@@ -2120,7 +2120,7 @@ test('every workflow that selects a deployment Environment does so from an allow
     // line. Listed here deliberately: the point of pinning the set is that a
     // seventh deploy workflow is a reviewed addition rather than one that
     // appeared.
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild-release.yml', 'mbuild.yml', 'mdeploy-all.yml'],
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy-all.yml'],
     'the swept set no longer matches the deployment workflows',
   )
 })
@@ -2174,14 +2174,14 @@ test('every step that asks mstage for a session is given a token to answer with'
     }
   }
 
-  // Eight: mbuild's session check and mbuild-release's two; then the five in
+  // Six: mbuild's session check; then the five in
   // mdeploy-all's three tool-reaching jobs — `plan`'s `--check` read,
   // `build-runner`'s session check and its build, `deploy`'s session check and
   // its apply.
   // The exact count, not a floor: a step that stops being swept is exactly the
   // drop this exists to catch, and one that appears is a tool call nobody
   // reviewed. Adding a legitimate one means changing this number with it.
-  assert.equal(checked, 8, `expected every session-checking step swept, saw ${checked}`)
+  assert.equal(checked, 6, `expected every session-checking step swept, saw ${checked}`)
 })
 
 test('API publishing builds once and promotes that exact image without rebuilding', () => {

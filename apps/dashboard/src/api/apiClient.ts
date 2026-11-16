@@ -5,6 +5,14 @@
  */
 
 import type { FirstRunUseCase } from '@/lib/first-run'
+import type {
+  CiSettings,
+  CiConnectInput,
+  CiWebStart,
+  CiConnectResult,
+  CiConnectConfiguration,
+  CiRunners,
+} from './ci-types'
 import { BillingApiClient } from '@/billing-api/billingApiClient'
 import { DashboardConfig } from '@/types/DashboardConfig'
 import {
@@ -27,10 +35,13 @@ import {
   WebhooksApi,
   UsageApi as CoreUsageApi,
   NetworkMode,
+  User,
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
-import type { DomainList, HeldDomain } from './domain-types'
+import type { DomainList, HeldDomain, CustomDomain, CustomDomainList } from './domain-types'
+import type { Checkpoint, CheckpointPage } from './checkpoint-types'
+import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
 
 // A burst of in-flight requests can all 401 at once when the access token goes
 // invalid; this in-page guard ensures at most one re-login redirect per page
@@ -89,6 +100,200 @@ export interface PromptDraft {
 const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
 
 export class ApiClient {
+  public async register(turnstileToken: string): Promise<User> {
+    return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
+      .data
+  }
+  public async getCiRepositories(
+    organization: string,
+    context: import('./ci-types').CiRepositoryContext,
+    page: number,
+    signal?: AbortSignal,
+  ): Promise<import('./ci-types').CiRepositoryPage> {
+    const route =
+      context.kind === 'binding'
+        ? `connections/${encodeURIComponent(context.id)}/repositories`
+        : `connect/${encodeURIComponent(context.id)}/accounts/${context.account}/repositories`
+    return (
+      await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/${route}`, {
+        ...this.v1Config(),
+        params: { page, limit: 25 },
+        signal,
+      })
+    ).data
+  }
+
+  public async getCiRunners(organization: string, page: number, limit: number, name?: string): Promise<CiRunners> {
+    return (
+      await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/runners`, {
+        ...this.v1Config(),
+        params: { page, limit, ...(name?.trim() ? { name: name.trim() } : {}) },
+      })
+    ).data
+  }
+  public async updateCiConnection(organization: string, binding: string, allowPrivate: boolean): Promise<void> {
+    await this.http.patch(
+      `/v1/${encodeURIComponent(organization)}/ci/connections/${encodeURIComponent(binding)}`,
+      { allow_private_repositories: allowPrivate },
+      this.v1Config(),
+    )
+  }
+  public async deleteCiConnection(organization: string, binding: string): Promise<void> {
+    await this.http.delete(
+      `/v1/${encodeURIComponent(organization)}/ci/connections/${encodeURIComponent(binding)}`,
+      this.v1Config(),
+    )
+  }
+  public async getCiSettings(organization: string): Promise<CiSettings> {
+    return (await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/settings`, this.v1Config())).data
+  }
+  public async setCiCapacity(organization: string, maximum: number | null): Promise<CiSettings> {
+    return (
+      await this.http.patch(
+        `/v1/${encodeURIComponent(organization)}/ci/settings`,
+        { max_concurrent_jobs: maximum },
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async getCiConnectConfiguration(organization: string): Promise<CiConnectConfiguration> {
+    return (await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/connect/configuration`, this.v1Config()))
+      .data
+  }
+  public async startCiConnect(organization: string, input: CiConnectInput): Promise<CiWebStart> {
+    return (await this.http.post(`/v1/${encodeURIComponent(organization)}/ci/connect/web`, input, this.v1Config())).data
+  }
+  public async getCiConnect(organization: string, id: string): Promise<CiConnectResult> {
+    return (
+      await this.http.get(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}`,
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async cancelCiConnect(organization: string, id: string): Promise<CiConnectResult> {
+    return (
+      await this.http.delete(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}`,
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async selectCiAccount(
+    organization: string,
+    id: string,
+    account: number,
+    allowPrivate: boolean,
+  ): Promise<CiConnectResult> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/accounts`,
+        { account_id: account, allow_private_repositories: allowPrivate },
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async completeCiConnect(
+    organization: string,
+    id: string,
+    input: { code: string; state: string },
+  ): Promise<CiConnectResult> {
+    try {
+      return (
+        await this.http.post(
+          `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/complete`,
+          input,
+          this.v1Config(),
+        )
+      ).data
+    } catch {
+      // Axios errors can retain the submitted code in request configuration.
+      throw new Error('GitHub authorization could not be completed. Restart connect.')
+    }
+  }
+
+  public async selectCiConnect(organization: string, id: string, installation: number): Promise<CiConnectResult> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/select`,
+        { installation_id: installation },
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async completeCiInstallation(
+    organization: string,
+    id: string,
+    input: { installation_id: number; state: string },
+  ): Promise<CiConnectResult> {
+    try {
+      return (
+        await this.http.post(
+          `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/installation`,
+          input,
+          this.v1Config(),
+        )
+      ).data
+    } catch {
+      throw new Error('GitHub installation could not be verified. Restart connect.')
+    }
+  }
+
+  public async getCheckpointCapabilities(): Promise<{ checkpoints_enabled: boolean }> {
+    return (await this.http.get('/v1/config', this.v1Config())).data.capabilities
+  }
+
+  public async listCheckpoints(org: string): Promise<Checkpoint[]> {
+    const checkpoints: Checkpoint[] = []
+    const seen = new Set<string>()
+    let pageToken: string | undefined
+    do {
+      const { data } = await this.http.get<CheckpointPage>(`/v1/${encodeURIComponent(org)}/checkpoints`, {
+        ...this.v1Config(),
+        ...(pageToken ? { params: { page_token: pageToken } } : {}),
+      })
+      checkpoints.push(...data.checkpoints)
+      pageToken = data.next_page_token || undefined
+      if (pageToken && seen.has(pageToken)) throw new Error('Checkpoint server repeated a pagination token')
+      if (pageToken) seen.add(pageToken)
+    } while (pageToken)
+    return checkpoints
+  }
+
+  public async createCheckpoint(org: string, source: string, name?: string): Promise<Checkpoint> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(org)}/checkpoints`,
+        {
+          source_box_id: source,
+          ...(name ? { name } : {}),
+        },
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async removeCheckpoint(org: string, key: string): Promise<void> {
+    await this.http.delete(`/v1/${encodeURIComponent(org)}/checkpoints/${encodeURIComponent(key)}`, this.v1Config())
+  }
+
+  public async createBoxFromCheckpoint(
+    org: string,
+    key: string,
+    name?: string,
+  ): Promise<{ box_id: string; name?: string }> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(org)}/boxes`,
+        {
+          checkpoint_id: key,
+          ...(name ? { name } : {}),
+        },
+        this.v1Config(),
+      )
+    ).data
+  }
+
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {
     return (await this.http.get(`/organizations/${encodeURIComponent(org)}/onboarding`, this.v1Config())).data
   }
@@ -190,10 +395,12 @@ export class ApiClient {
         // message is only for display. A rejection the API describes (say, an
         // unverified email) must not be flattened into an anonymous error here.
         const responseCode = error?.response?.data?.code
+        const retryAfter = Number(error?.response?.headers?.['retry-after'])
 
         throw BoxliteError.fromString(String(errorMessage), {
           cause: error instanceof Error ? error : undefined,
           code: typeof responseCode === 'string' ? responseCode : undefined,
+          retryAfterSeconds: Number.isSafeInteger(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
         })
       },
     )
@@ -284,23 +491,127 @@ export class ApiClient {
     return (await this.http.post(`/v1/${encodeURIComponent(organizationId)}/domains`, { name }, this.v1Config())).data
   }
 
-  /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */
-  public async setBoxInboundMode(organizationId: string, boxId: string, mode: NetworkMode): Promise<void> {
-    await this.http.put(this.v1BoxPath(organizationId, boxId, '/network/inbound'), { mode }, this.v1Config())
+  public async listCustomDomains(org: string): Promise<CustomDomainList> {
+    return (await this.http.get(`/organizations/${encodeURIComponent(org)}/custom-domains`, this.v1Config())).data
   }
 
-  /**
-   * A public URL for one port of the box, through the route `box.network.tunnel()`
-   * uses. It needs inbound access, declares the port public, and resumes a
-   * stopped box that has auto-resume.
-   */
-  public async getTunnelUrl(organizationId: string, boxId: string, port: number): Promise<string> {
-    const response = await this.http.post<{ uri: string }>(
-      this.v1BoxPath(organizationId, boxId, '/network/tunnel'),
-      undefined,
-      { ...this.v1Config(), params: { port } },
+  public async createCustomDomain(org: string, hostname: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(`/organizations/${encodeURIComponent(org)}/custom-domains`, { hostname }, this.v1Config())
+    ).data
+  }
+
+  public async verifyCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/verify`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async prepareCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/prepare`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async advanceCustomDomain(org: string, id: string): Promise<CustomDomain> {
+    return (
+      await this.http.post(
+        `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}/advance`,
+        {},
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async deleteCustomDomain(org: string, id: string): Promise<void> {
+    await this.http.delete(
+      `/organizations/${encodeURIComponent(org)}/custom-domains/${encodeURIComponent(id)}`,
+      this.v1Config(),
     )
-    return response.data.uri
+  }
+
+  public async bindDomain(org: string, hostname: string, box: string, port: number): Promise<HeldDomain> {
+    return (
+      await this.http.put(
+        `/v1/${encodeURIComponent(org)}/domains/${encodeURIComponent(hostname)}/target`,
+        { type: 'box', box, port },
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async unbindDomain(org: string, hostname: string): Promise<void> {
+    await this.http.delete(
+      `/v1/${encodeURIComponent(org)}/domains/${encodeURIComponent(hostname)}/target`,
+      this.v1Config(),
+    )
+  }
+
+  /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */
+  public async setBoxInboundMode(
+    organizationId: string,
+    boxId: string,
+    mode: NetworkMode,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.http.put(
+      this.v1BoxPath(organizationId, boxId, '/network/inbound'),
+      { mode },
+      { ...this.v1Config(), timeout: 30_000, signal },
+    )
+  }
+
+  /** The Console creates public tunnels only; private requests never reach the server. */
+  public async prepareBoxTunnel(
+    organizationId: string,
+    boxId: string,
+    port: number,
+    isPublic: boolean,
+    signal?: AbortSignal,
+  ): Promise<TunnelDescriptor> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new TunnelRequestError('Enter a port from 1 to 65535.')
+    if (!isPublic) throw new TunnelRequestError('Private tunnel creation is not available in the Console.')
+    signal?.throwIfAborted()
+    try {
+      const response = await this.http.post<unknown>(
+        this.v1BoxPath(organizationId, boxId, '/network/tunnel'),
+        { isPublic },
+        { ...this.v1Config(), params: { port }, signal, timeout: 30_000 },
+      )
+      return readTunnelDescriptor(response.data)
+    } catch (error) {
+      throw tunnelOperationError(error, 'create')
+    }
+  }
+
+  /** Revocation remains available when the Box is stopped or inbound is disabled. */
+  public async revokeBoxTunnel(
+    organizationId: string,
+    boxId: string,
+    port: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new TunnelRequestError('Enter a port from 1 to 65535.')
+    try {
+      await this.http.delete(this.v1BoxPath(organizationId, boxId, '/network/tunnel'), {
+        ...this.v1Config(),
+        params: { port },
+        signal,
+        timeout: 30_000,
+      })
+    } catch (error) {
+      throw tunnelOperationError(error, 'revoke')
+    }
   }
 
   /** Starts a login shell on a pseudo-terminal; returns its execution id. */

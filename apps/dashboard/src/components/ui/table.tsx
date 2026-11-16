@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
     <div className="flex-1 w-full overflow-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-background">
-      <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props} />
+      <table ref={ref} className={cn('w-full caption-bottom text-body', className)} {...props} />
     </div>
   ),
 )
@@ -73,7 +73,7 @@ const TableCell = React.forwardRef<
   <td
     ref={ref}
     className={cn(
-      'bg-inherit px-4 py-3 align-middle text-sm tracking-normal [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+      'bg-inherit px-4 py-3 align-middle text-body tracking-normal [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
       sticky && cn('sticky', 'z-[1]', sticky === 'left' ? 'left-0' : 'right-0'),
       className,
     )}
@@ -84,7 +84,7 @@ TableCell.displayName = 'TableCell'
 
 const TableCaption = React.forwardRef<HTMLTableCaptionElement, React.HTMLAttributes<HTMLTableCaptionElement>>(
   ({ className, ...props }, ref) => (
-    <caption ref={ref} className={cn('mt-4 text-sm text-muted-foreground', className)} {...props} />
+    <caption ref={ref} className={cn('mt-4 text-body text-muted-foreground', className)} {...props} />
   ),
 )
 TableCaption.displayName = 'TableCaption'

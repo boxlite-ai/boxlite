@@ -108,6 +108,7 @@ func testSecrets() []SecretConfig {
 			Hosts:       []string{"api.example.com"},
 			Placeholder: "<BOXLITE_SECRET:k>",
 			Value:       "real-value",
+			Headers:     map[string]string{"Authorization": "Bearer {value}"},
 		},
 	}
 }
@@ -697,14 +698,14 @@ func TestMitmProxy_HeaderInjection_CustomAndDefault(t *testing.T) {
 			Hosts:       []string{"api.example.com"},
 			Placeholder: "<BOXLITE_SECRET:openai>",
 			Value:       "sk-real-openai-key",
-			Header:      "Authorization",
+			Headers:     map[string]string{"Authorization": "Bearer {value}"},
 		},
 		{
 			Name:        "gemini",
 			Hosts:       []string{"api.example.com"},
 			Placeholder: "<BOXLITE_SECRET:gemini>",
 			Value:       "AIza-real-key",
-			Header:      "x-goog-api-key",
+			Headers:     map[string]string{"x-goog-api-key": "{value}"},
 		},
 	}
 
@@ -802,7 +803,11 @@ func TestMitmProxy_HeaderInjection_RequiresRequestHeader(t *testing.T) {
 				w.WriteHeader(http.StatusNoContent)
 			})
 			defer cleanup()
-			client := dialThroughMITM(t, ca, "api.example.com", addr, []SecretConfig{{Header: tc.header, Value: "real-key"}})
+			template := "{value}"
+			if strings.EqualFold(tc.header, "Authorization") {
+				template = "Bearer {value}"
+			}
+			client := dialThroughMITM(t, ca, "api.example.com", addr, []SecretConfig{{Headers: map[string]string{tc.header: template}, Value: "real-key"}})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, "GET", "https://api.example.com/public", nil)

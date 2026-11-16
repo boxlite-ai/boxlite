@@ -30,7 +30,7 @@ func TestAppDomainAuthCallbackRequiresWarningAcceptance(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := gin.New()
-			engine.Use((&Proxy{config: &config.Config{ProxyAppDomain: appDomain}}).browserWarningMiddleware())
+			engine.Use((&Proxy{config: &config.Config{ProxyDomain: "proxy.boxlite.test", ProxyAppDomain: appDomain}}).browserWarningMiddleware())
 			engine.Any("/*path", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
 			request := httptest.NewRequest(http.MethodGet, "http://"+tc.host+loginCallbackPath, nil)
 			request.Header.Set("User-Agent", browserUserAgent)
@@ -55,7 +55,7 @@ func TestAppDomainAuthCallbackRequiresWarningAcceptance(t *testing.T) {
 func TestAccessTokenKeepsWarningAndReturnsToTokenURL(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use((&Proxy{config: &config.Config{}}).browserWarningMiddleware())
+	engine.Use((&Proxy{config: &config.Config{ProxyDomain: "proxy.test"}}).browserWarningMiddleware())
 	engine.Any("/*path", func(ctx *gin.Context) {
 		if ctx.Request.URL.Path == ACCEPT_PREVIEW_PAGE_WARNING_PATH {
 			handleAcceptProxyWarning(ctx, false)
@@ -100,7 +100,7 @@ func unescapeHTML(value string) string {
 func TestWarningPageUsesPublicSchemeBehindTLSTermination(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use((&Proxy{config: &config.Config{ProxyProtocol: "https", EnableTLS: false}}).browserWarningMiddleware())
+	engine.Use((&Proxy{config: &config.Config{ProxyDomain: "proxy.test", ProxyProtocol: "https", EnableTLS: false}}).browserWarningMiddleware())
 	handler := sanitizeTunnelRequests(engine)
 	host := "3000-d-416243644566313233343536.proxy.test"
 

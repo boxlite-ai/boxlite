@@ -604,7 +604,11 @@ fn injected_host_read_stop_timeout_retains_guest_ram_until_shutdown_retry() {
         }
         event => panic!("expected Fs stop timeout, got {event:?}"),
     }
-    let error = rig.workers.shutdown().unwrap_err();
+    let error = rig
+        .workers
+        .shutdown()
+        .map_err(crate::Error::from)
+        .unwrap_err();
     assert!(matches!(error, crate::error::Error::VirtioWorker(error)
         if error.kind() == std::io::ErrorKind::TimedOut));
     drop(guest);

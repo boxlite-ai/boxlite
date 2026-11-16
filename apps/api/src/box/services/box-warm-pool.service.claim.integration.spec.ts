@@ -38,7 +38,8 @@ const SHARED_SPEC = {
   env: {},
 }
 
-describeIfDatabase('BoxWarmPoolService.fetchWarmPoolBox (integration, real Postgres)', () => {
+describeIfDatabase.each([2, 0.5])('BoxWarmPoolService.fetchWarmPoolBox (Postgres, %s CPU)', (cpu) => {
+  const spec = { ...SHARED_SPEC, cpu }
   let dataSource: DataSource
   let boxes: Repository<Box>
   let warmPools: Repository<WarmPool>
@@ -117,13 +118,13 @@ describeIfDatabase('BoxWarmPoolService.fetchWarmPoolBox (integration, real Postg
   })
 
   async function insertPool(gpu: number): Promise<void> {
-    await warmPools.save(warmPools.create({ ...SHARED_SPEC, target: REGION, gpu, gpuType: '', pool: 1 }))
+    await warmPools.save(warmPools.create({ ...spec, target: REGION, gpu, gpuType: '', pool: 1 }))
   }
 
   async function insertWarmBox(gpu: number): Promise<string> {
     const box = new Box(REGION, `warm-gpu-${gpu}`)
     Object.assign(box, {
-      ...SHARED_SPEC,
+      ...spec,
       gpu,
       runnerId,
       organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -135,7 +136,7 @@ describeIfDatabase('BoxWarmPoolService.fetchWarmPoolBox (integration, real Postg
 
   function fetchFor(gpu: number) {
     return service.fetchWarmPoolBox({
-      ...SHARED_SPEC,
+      ...spec,
       target: REGION,
       gpu,
       organizationId: 'org-1',

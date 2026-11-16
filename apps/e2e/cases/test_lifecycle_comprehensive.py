@@ -17,7 +17,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from conftest import drain, wait_until_unlisted
 
 
 # ── stop / start preserves data ────────────────────────────────────
@@ -118,18 +118,16 @@ async def test_box_info_reflects_state(rt, image):
 
 @pytest.mark.asyncio
 async def test_rapid_create_remove_no_leak(rt, image):
-    """Creating and immediately removing 5 boxes in sequence should not
-    leave orphans in the box list."""
+    """Every one of 5 boxes created and force-removed in sequence must leave
+    `list_info()` within 60 seconds. A cloud remove returns before the runner
+    destroys the box, so a single read right after it can still list the box."""
     created_ids = []
     for _ in range(5):
         b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
         created_ids.append(b.id)
         await rt.remove(b.id, force=True)
 
-    # None of the created boxes should appear in the list
-    boxes = await rt.list_info()
-    live_ids = {b.id for b in boxes}
-    leaked = [bid for bid in created_ids if bid in live_ids]
+    leaked = await wait_until_unlisted(rt, created_ids)
     assert not leaked, f"rapid create-remove leaked boxes: {leaked}"
 
 

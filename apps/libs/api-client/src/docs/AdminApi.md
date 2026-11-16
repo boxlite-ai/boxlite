@@ -9,6 +9,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminGetBoxOverview**](#admingetboxoverview) | **GET** /admin/boxes/{id} | Get box placement, health, and jobs|
 |[**adminGetComponentIdentities**](#admingetcomponentidentities) | **GET** /admin/component-identities | Get API and runner version identities|
 |[**adminGetJobOverview**](#admingetjoboverview) | **GET** /admin/jobs/{id} | Get a job with sanitized failure category|
+|[**adminGetOrganizationNestedVirtualization**](#admingetorganizationnestedvirtualization) | **GET** /admin/organizations/{organizationId}/nested-virtualization | Read organization nesting allowlist|
 |[**adminGetOrganizationOverview**](#admingetorganizationoverview) | **GET** /admin/organizations/{organizationId} | Get organization operational detail|
 |[**adminGetRegion**](#admingetregion) | **GET** /admin/regions/{id} | Get region capacity and health|
 |[**adminGetRunnerById**](#admingetrunnerbyid) | **GET** /admin/runners/{id} | Get runner by ID|
@@ -21,6 +22,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
 |[**adminQueryUsage**](#adminqueryusage) | **GET** /admin/usage | Query recorded resource usage with fixed snapshot pagination|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
+|[**adminSetOrganizationNestedVirtualization**](#adminsetorganizationnestedvirtualization) | **PUT** /admin/organizations/{organizationId}/nested-virtualization | Set organization nesting allowlist|
 |[**adminUpdateRunnerScheduling**](#adminupdaterunnerscheduling) | **PATCH** /admin/runners/{id}/scheduling | Update runner scheduling status|
 
 # **adminCreateRunner**
@@ -273,6 +275,56 @@ const { status, data } = await apiInstance.adminGetJobOverview(
 |-------------|-------------|------------------|
 |**200** |  |  -  |
 |**404** | Job not found |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminGetOrganizationNestedVirtualization**
+> AdminOrganizationNestedVirtualization adminGetOrganizationNestedVirtualization()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; //
+
+const { status, data } = await apiInstance.adminGetOrganizationNestedVirtualization(
+    organizationId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **organizationId** | [**string**] |  | |
+
+
+### Return type
+
+**AdminOrganizationNestedVirtualization**
+
+### Authorization
+
+[bearer](../README.md#bearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -571,6 +623,7 @@ let createdTo: string; //Exclusive RFC 3339 instant, at most milliseconds. (opti
 let createdFrom: string; //Inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
 let boxCountScope: 'all'; //Count every retained Box state; omit to keep the existing active-state count. (optional) (default to undefined)
 let organizationId: string; //Exact organization UUID; avoids name search and cannot be combined with q. (optional) (default to undefined)
+let include: 'memberEmails'; //Add up to 200 member emails to each organization; omit to keep the existing fields. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListOrganizationsOverview(
     q,
@@ -579,7 +632,8 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
     createdTo,
     createdFrom,
     boxCountScope,
-    organizationId
+    organizationId,
+    include
 );
 ```
 
@@ -594,6 +648,7 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
 | **createdFrom** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
 | **boxCountScope** | [**&#39;all&#39;**] | Count every retained Box state; omit to keep the existing active-state count. | (optional) defaults to undefined|
 | **organizationId** | [**string**] | Exact organization UUID; avoids name search and cannot be combined with q. | (optional) defaults to undefined|
+| **include** | [**&#39;memberEmails&#39;**] | Add up to 200 member emails to each organization; omit to keep the existing fields. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -971,6 +1026,60 @@ const { status, data } = await apiInstance.adminRecoverBox(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Recovery initiated |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminSetOrganizationNestedVirtualization**
+> AdminOrganizationNestedVirtualization adminSetOrganizationNestedVirtualization(adminSetOrganizationNestedVirtualizationRequest)
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration,
+    AdminSetOrganizationNestedVirtualizationRequest
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let organizationId: string; //
+let adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest; //
+
+const { status, data } = await apiInstance.adminSetOrganizationNestedVirtualization(
+    organizationId,
+    adminSetOrganizationNestedVirtualizationRequest
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **adminSetOrganizationNestedVirtualizationRequest** | **AdminSetOrganizationNestedVirtualizationRequest**|  | |
+| **organizationId** | [**string**] |  | |
+
+
+### Return type
+
+**AdminOrganizationNestedVirtualization**
+
+### Authorization
+
+[bearer](../README.md#bearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

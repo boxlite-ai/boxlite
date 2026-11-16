@@ -164,50 +164,6 @@ export const VolumesApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
-         * @summary Get volume details by name
-         * @param {string} name Name of the volume
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getVolumeByName: async (name: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'name' is not null or undefined
-            assertParamExists('getVolumeByName', 'name', name)
-            const localVarPath = `/volumes/by-name/{name}`
-                .replace('{name}', encodeURIComponent(String(name)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary List all volumes
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -304,20 +260,6 @@ export const VolumesApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Get volume details by name
-         * @param {string} name Name of the volume
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getVolumeByName(name: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<VolumeDto>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getVolumeByName(name, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['VolumesApi.getVolumeByName']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary List all volumes
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -374,17 +316,6 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
-         * @summary Get volume details by name
-         * @param {string} name Name of the volume
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getVolumeByName(name: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<VolumeDto> {
-            return localVarFp.getVolumeByName(name, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary List all volumes
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -435,18 +366,6 @@ export class VolumesApi extends BaseAPI {
      */
     public getVolume(volumeId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return VolumesApiFp(this.configuration).getVolume(volumeId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Get volume details by name
-     * @param {string} name Name of the volume
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getVolumeByName(name: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return VolumesApiFp(this.configuration).getVolumeByName(name, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

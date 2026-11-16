@@ -162,6 +162,189 @@ fn context_precedence_matches_docker_including_host_overrides() {
 }
 
 #[test]
+fn embedded_stays_listed_after_a_default_login() {
+    let home = TempDir::new().unwrap();
+    std::fs::write(
+        home.path().join("credentials.toml"),
+        "[profiles.default]\nurl = 'https://default.example.test'\napi_key = 'default-secret'\n",
+    )
+    .unwrap();
+    let output = cli(&home).args(["context", "ls"]).assert().success();
+    let stdout = String::from_utf8_lossy(&output.get_output().stdout);
+    let row = stdout
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("embedded"))
+        .expect("context ls always lists the reserved embedded context");
+    assert!(row.ends_with("embedded"), "{row}");
+    cli(&home)
+        .args(["context", "use", "embedded"])
+        .assert()
+        .success()
+        .stdout("embedded\n");
+}
+
+#[test]
+fn every_selector_reaches_the_embedded_context() {
+    let home = TempDir::new().unwrap();
+    for (environment, flags) in [
+        (None, &["--context", "embedded"][..]),
+        (None, &["--profile", "embedded"][..]),
+        (Some("BOXLITE_CONTEXT"), &[][..]),
+        (Some("BOXLITE_PROFILE"), &[][..]),
+    ] {
+        let mut command = cli(&home);
+        if let Some(variable) = environment {
+            command.env(variable, "embedded");
+        }
+        command
+            .args(flags)
+            .args(["context", "show"])
+            .assert()
+            .success()
+            .stdout("embedded\n");
+    }
+    // An empty home used to answer "context `embedded` not found".
+    cli(&home)
+        .args(["--context", "embedded", "list"])
+        .assert()
+        .success();
+    assert!(home.path().join("boxes").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn embedded_runs_locally_beside_a_default_login_and_ignores_the_api_key() {
+    let home = TempDir::new().unwrap();
+    let server = Server::start().await;
+    cli(&home)
+        .args(["auth", "login", "--url", &server.url, "--api-key-stdin"])
+        .write_stdin("default-key\n")
+        .assert()
+        .success();
+    cli(&home)
+        .args(["context", "use", "embedded"])
+        .assert()
+        .success();
+    server.requests.lock().unwrap().clear();
+    cli(&home)
+        .env("BOXLITE_API_KEY", "ambient-key")
+        .args(["list"])
+        .assert()
+        .success();
+    assert_eq!(*server.requests.lock().unwrap(), []);
+    assert!(home.path().join("boxes").exists());
+
+    // A URL override still outranks the saved context, like any saved name.
+    cli(&home)
+        .env("BOXLITE_REST_URL", &server.url)
+        .args(["list"])
+        .assert()
+        .success();
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+
+    cli(&home)
+        .args(["context", "use", "default"])
+        .assert()
+        .success();
+    server.requests.lock().unwrap().clear();
+    cli(&home).args(["list"]).assert().success();
+    assert_eq!(
+        *server.requests.lock().unwrap(),
+        [(
+            "/v1/tenant/boxes".to_string(),
+            "Bearer default-key".to_string()
+        )]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn login_cannot_store_credentials_under_the_embedded_name() {
+    let home = TempDir::new().unwrap();
+    let server = Server::start().await;
+    cli(&home)
+        .args([
+            "--context",
+            "embedded",
+            "auth",
+            "login",
+            "--url",
+            &server.url,
+            "--api-key-stdin",
+        ])
+        .write_stdin("key\n")
+        .assert()
+        .failure()
+        .stderr(contains("reserved for the embedded runtime"));
+    assert!(!home.path().join("credentials.toml").exists());
+    assert_eq!(*server.requests.lock().unwrap(), []);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stored_embedded_login_keeps_working_until_it_is_logged_out() {
+    let home = TempDir::new().unwrap();
+    let server = Server::start().await;
+    let stored = format!(
+        "[profiles.embedded]\nurl = '{}'\napi_key = 'stored-key'\n",
+        server.url
+    );
+    let credential_path = home.path().join("credentials.toml");
+    std::fs::write(&credential_path, &stored).unwrap();
+
+    cli(&home)
+        .args(["--context", "embedded", "list"])
+        .assert()
+        .success()
+        .stderr(contains("reserved for the embedded runtime"));
+    assert_eq!(
+        *server.requests.lock().unwrap(),
+        [("/v1/boxes".to_string(), "Bearer stored-key".to_string())]
+    );
+    assert!(!home.path().join("boxes").exists());
+
+    let listing = cli(&home).args(["context", "ls"]).assert().success();
+    let stdout = String::from_utf8_lossy(&listing.get_output().stdout);
+    let rows: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.split_whitespace().next() == Some("embedded"))
+        .collect();
+    assert_eq!(rows.len(), 1, "{stdout}");
+    assert!(rows[0].ends_with(&server.url), "{stdout}");
+    cli(&home)
+        .args(["context", "ls", "--quiet"])
+        .assert()
+        .success()
+        .stdout("default\nembedded\n");
+
+    // Re-login is refused too; the stored record is left as it was.
+    cli(&home)
+        .args([
+            "--context",
+            "embedded",
+            "auth",
+            "login",
+            "--url",
+            &server.url,
+            "--api-key-stdin",
+        ])
+        .write_stdin("new-key\n")
+        .assert()
+        .failure()
+        .stderr(contains("reserved for the embedded runtime"));
+    assert_eq!(std::fs::read_to_string(&credential_path).unwrap(), stored);
+
+    cli(&home)
+        .args(["--context", "embedded", "auth", "logout", "--yes"])
+        .assert()
+        .success();
+    server.requests.lock().unwrap().clear();
+    cli(&home)
+        .args(["--context", "embedded", "list"])
+        .assert()
+        .success();
+    assert_eq!(*server.requests.lock().unwrap(), []);
+    assert!(home.path().join("boxes").exists());
+}
+
+#[test]
 fn use_warns_about_overrides_but_saves_its_positional_context() {
     let home = TempDir::new().unwrap();
     credentials(&home);
@@ -201,7 +384,7 @@ fn listing_marks_effective_context_without_exposing_credentials() {
         .args(["context", "ls", "--quiet"])
         .assert()
         .success()
-        .stdout("cloud\ndefault\nstaging\n");
+        .stdout("cloud\ndefault\nembedded\nstaging\n");
 }
 
 #[test]

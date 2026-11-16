@@ -39,7 +39,7 @@ async fn exec_stdout(handle: &boxlite::LiteBox, cmd: BoxCommand) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn copy_in_hands_files_to_the_box_user() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()
@@ -164,7 +164,7 @@ async fn copy_in_hands_files_to_the_box_user() {
 #[tokio::test(flavor = "multi_thread")]
 async fn streaming_copy_in_hands_files_to_the_box_user() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+    let runtime = common::TestRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
         ..Default::default()

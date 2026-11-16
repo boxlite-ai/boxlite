@@ -93,6 +93,12 @@ BoxLite attempts to restore the previous policy. A timeout, lost response, or
 failed rollback can leave live and stored state different: retry the complete
 policy. `inspect` reports the last persisted policy, not an independent traffic probe.
 
+Re-enabling the NIC does not finish guest ARP resolution that was pending while
+traffic was disabled. A new request may wait for the guest's next ARP retry, so
+an immediate one-second probe can time out even after the update succeeds.
+Allow a recovery budget for successful traffic checks; the policy integration
+test uses five seconds for allowed requests and one second for denied requests.
+
 Persisting the replacement does not retain a separate list for later re-enabling.
 Normal restart uses the latest saved policy. Defaults here mean an empty outbound
 allowlist, not a lookup of earlier, organization, or system configuration.

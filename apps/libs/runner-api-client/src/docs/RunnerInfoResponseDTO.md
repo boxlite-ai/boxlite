@@ -7,6 +7,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **appVersion** | **string** |  | [optional] [default to undefined]
 **metrics** | [**RunnerMetrics**](RunnerMetrics.md) |  | [optional] [default to undefined]
+**nestedVirtualizationEnabled** | **boolean** |  | [optional] [default to undefined]
 **serviceHealth** | [**Array&lt;RunnerServiceInfo&gt;**](RunnerServiceInfo.md) |  | [optional] [default to undefined]
 **supportsPrivileged** | **boolean** |  | [optional] [default to undefined]
 
@@ -18,6 +19,7 @@ import { RunnerInfoResponseDTO } from './api';
 const instance: RunnerInfoResponseDTO = {
     appVersion,
     metrics,
+    nestedVirtualizationEnabled,
     serviceHealth,
     supportsPrivileged,
 };

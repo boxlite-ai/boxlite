@@ -114,7 +114,7 @@ describe('OrganizationMembers', () => {
   it('invites by email alone, as an owner with no role assignments', async () => {
     await renderPage()
 
-    const openDialog = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Invite Member'))
+    const openDialog = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Invite member'))
     await act(async () => openDialog?.click())
 
     const email = document.querySelector<HTMLInputElement>('#email')

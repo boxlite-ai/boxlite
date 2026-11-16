@@ -17,6 +17,7 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 )
 
 type closeWriteConn struct {
@@ -88,7 +89,7 @@ func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
 
-	boxID, port, err := (&Proxy{}).tunnelTarget(request)
+	boxID, port, err := (&Proxy{config: &config.Config{ProxyDomain: "proxy.test"}}).tunnelTarget(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestTunnelTargetAcceptsPort22222(t *testing.T) {
 		request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 		request.Host = port + "-d-416243644566313233343536.proxy.test:443"
 
-		boxID, target, err := (&Proxy{}).tunnelTarget(request)
+		boxID, target, err := (&Proxy{config: &config.Config{ProxyDomain: "proxy.test"}}).tunnelTarget(request)
 		if err != nil || boxID != "AbCdEf123456" || target != 22222 {
 			t.Fatalf("tunnelTarget(%s) = %s:%d, %v; want AbCdEf123456:22222", port, boxID, target, err)
 		}
@@ -115,7 +116,7 @@ func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	if err := publicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	proxy := &Proxy{boxInboundCache: publicCache}
+	proxy := &Proxy{config: &config.Config{ProxyDomain: "proxy.test"}, boxInboundCache: publicCache}
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
 	response := httptest.NewRecorder()
@@ -163,6 +164,7 @@ func TestTunnelConnectRenewsBoxActivityBeforeStreaming(t *testing.T) {
 	clientConfig := apiclient.NewConfiguration()
 	clientConfig.Servers[0].URL = api.URL
 	proxy := &Proxy{
+		config:                     &config.Config{ProxyDomain: "proxy.test"},
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
 		boxInboundCache:            publicCache,
 		boxRunnerCache:             runnerCache,

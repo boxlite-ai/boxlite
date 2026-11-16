@@ -25,6 +25,7 @@ import { RunnerDto } from '../../box/dto/runner.dto'
 import { RunnerState } from '../../box/enums/runner-state.enum'
 import { RunnerEvents } from '../../box/constants/runner-events'
 import { NotificationEmitter } from './notification-emitter.abstract'
+import { UserService } from '../../user/user.service'
 
 @WebSocketGateway({
   path: '/api/socket.io/',
@@ -41,6 +42,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
     private readonly apiKeyStrategy: ApiKeyStrategy,
     private readonly organizationUserService: OrganizationUserService,
     @InjectRedis() private readonly redis: Redis,
+    private readonly userService: UserService,
   ) {
     super()
   }
@@ -66,6 +68,14 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
         const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
         if (!userId) {
           return next(new UnauthorizedException())
+        }
+        try {
+          if (!(await this.userService.findOne(userId))) return next(new UnauthorizedException())
+        } catch (error) {
+          this.logger.error('Notification user lookup failed', error)
+          // A transport close triggers Socket.IO's retry; finish middleware to clean up the pending socket.
+          socket.conn.close()
+          return next(new Error('Notification service unavailable'))
         }
 
         // Join the user room for user scoped notifications

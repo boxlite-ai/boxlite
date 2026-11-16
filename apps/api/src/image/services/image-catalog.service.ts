@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { In, IsNull, Repository } from 'typeorm'
 import { supportedImages } from '../../box/constants/curated-images.constant'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -362,6 +363,21 @@ export class ImageCatalogService {
 
     const inUse = candidates.filter((box) => catalogNameOf(box.image) === image.name)
     if (inUse.length === 0) {
+      const checkpoints = await this.imageRepository.manager.getRepository(Checkpoint).find({
+        where: { organizationId: organization.id },
+        select: ['id', 'environment', 'archive'],
+      })
+      const retained = checkpoints.filter(
+        (checkpoint) =>
+          checkpoint.environment.imageIsOrgOwned !== false &&
+          [checkpoint.environment.image, checkpoint.archive?.pinnedImage].some(
+            (ref) => ref && catalogNameOf(ref) === image.name,
+          ),
+      )
+      if (retained.length)
+        throw new ConflictException(
+          `Image '${image.name}' cannot be removed while checkpoint(s) can still boot from it: ${retained.map((item) => item.id).join(', ')}`,
+        )
       return
     }
 

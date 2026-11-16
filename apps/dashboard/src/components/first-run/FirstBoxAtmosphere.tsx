@@ -170,7 +170,7 @@ export default function FirstBoxAtmosphere({ children, animated = true }: { chil
       element.width = bounds.width * density
       element.height = bounds.height * density
       ctx.setTransform(density, 0, 0, density, 0, 0)
-      ctx.font = '11px "IBM Plex Mono", monospace'
+      ctx.font = `11px ${style.getPropertyValue('--font-mono')}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       paint()

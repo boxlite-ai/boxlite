@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ResourceEmptyState, ResourceFilter } from '@/components/ResourceLayout'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
 import {
   FormDialogContent as DialogContent,
   FormDialogHeader as DialogHeader,
@@ -23,7 +31,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
-import { KeyRound, Trash } from '@/components/ui/icon'
+import { Server, Trash } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -91,7 +99,7 @@ export const PROVIDERS: Provider[] = [
           href="https://github.com/settings/tokens/new?scopes=read:packages&description=BoxLite%20pull"
           target="_blank"
           rel="noreferrer"
-          className="text-foreground underline-offset-4 hover:underline"
+          className="resource-guide-link"
         >
           github.com/settings/tokens
         </a>{' '}
@@ -113,7 +121,7 @@ export const PROVIDERS: Provider[] = [
           href="https://hub.docker.com/settings/security"
           target="_blank"
           rel="noreferrer"
-          className="text-foreground underline-offset-4 hover:underline"
+          className="resource-guide-link"
         >
           Account settings → Security
         </a>
@@ -142,7 +150,7 @@ export const PROVIDERS: Provider[] = [
 
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
-const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
+const ROW_GRID = 'grid min-w-[680px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_110px] items-center gap-6'
 
 /** The same Covers label is used for display and local filtering. */
 function registryCoverage(prefix?: string): string {
@@ -170,7 +178,8 @@ export function RegistriesPanel() {
   const [filter, setFilter] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedOrganization, organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
-  const { data: credentials = [], error: listError, isLoading } = useRegistriesQuery()
+  const { data: inventory, error: listError, isFetching, refetch } = useRegistriesQuery()
+  const credentials = inventory ?? []
   const { byId } = useBoxesByImageQuery()
   const createRegistry = useCreateRegistryMutation()
   const updateRegistry = useUpdateRegistryMutation()
@@ -186,10 +195,6 @@ export function RegistriesPanel() {
 
   // A deploy without a secret store answers 501: not a failure to show as one.
   const unsupported = listError instanceof BoxliteError && /not configured|unsupported/i.test(listError.message)
-
-  useEffect(() => {
-    if (listError && !unsupported) handleApiError(listError, 'Failed to fetch registry credentials')
-  }, [listError, unsupported])
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<RegistryCredential | null>(null)
@@ -306,8 +311,8 @@ export function RegistriesPanel() {
             label="Filter registries"
             value={filter}
             onChange={setFilter}
-            count={isLoading || listError ? '—' : rows.length}
-            disabled={isLoading}
+            count={inventory === undefined ? '—' : rows.length}
+            disabled={inventory === undefined}
           />
           {canWrite && (
             <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
@@ -317,20 +322,23 @@ export function RegistriesPanel() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="resource-content scroll-edge">
+        {listError && inventory !== undefined && (
+          <ResourceErrorNotice
+            title="Could not refresh registries. Showing previously loaded data."
+            retrying={isFetching}
+            onRetry={() => void refetch()}
+          />
+        )}
         {unsupported ? (
-          <div className="py-10 text-center font-mono text-meta text-muted-foreground">
-            Private registries are not enabled in this environment. Public images still work.
-          </div>
+          <ResourceEmptyState
+            title="Private registries unavailable"
+            icon={<Server />}
+            description="Private registries are not enabled in this environment. Public images still work."
+          />
         ) : (
           <>
-            <div
-              className={cn(
-                ROW_GRID,
-                'resource-list-head',
-                !isLoading && !listError && credentials.length === 0 && 'hidden',
-              )}
-            >
+            <div className={cn(ROW_GRID, 'resource-list-head', rows.length === 0 && 'hidden')}>
               <span>Registry</span>
               <span>Covers</span>
               <span>Username</span>
@@ -340,7 +348,9 @@ export function RegistriesPanel() {
 
             {rows.map((credential) => (
               <div key={credential.id} className={cn(ROW_GRID, 'resource-list-row')}>
-                <span className="resource-name">{credential.registryHost}</span>
+                <ResourceIdentity icon={<Server />}>
+                  <span className="resource-name">{credential.registryHost}</span>
+                </ResourceIdentity>
                 <span className="truncate font-mono text-meta text-muted-foreground">
                   {registryCoverage(credential.repositoryPrefix)}
                 </span>
@@ -354,6 +364,7 @@ export function RegistriesPanel() {
                 <div className="flex items-center justify-end gap-1">
                   {canWrite && (
                     <AsciiButton
+                      variant="quiet"
                       size="sm"
                       type="button"
                       onClick={() => {
@@ -369,7 +380,7 @@ export function RegistriesPanel() {
                   )}
                   {canDelete && (
                     <AsciiButton
-                      variant="danger"
+                      variant="quiet-danger"
                       size="icon"
                       aria-label={`Remove the credential for ${credential.registryHost}`}
                       type="button"
@@ -384,33 +395,30 @@ export function RegistriesPanel() {
               </div>
             ))}
 
-            {isLoading ? (
-              <p role="status" className="px-4 py-12 text-body text-muted-foreground">
-                Loading registries…
-              </p>
-            ) : listError ? (
-              <div className="py-10 text-center font-mono text-meta text-muted-foreground">
-                Credentials could not be loaded.
-              </div>
-            ) : (
-              !isLoading &&
-              credentials.length === 0 && (
+            {inventory === undefined ? (
+              listError ? (
+                <ResourceErrorState
+                  title="Could not load private registries"
+                  retrying={isFetching}
+                  onRetry={() => void refetch()}
+                />
+              ) : (
+                <ResourceLoadingState title="Loading registries…" />
+              )
+            ) : rows.length === 0 ? (
+              credentials.length === 0 ? (
                 <ResourceEmptyState
                   title="No private registries connected"
-                  icon={<KeyRound className="size-6" />}
+                  icon={<Server />}
                   description="Connect a registry to pull private images. Public images work without credentials."
                 />
+              ) : (
+                <ResourceFilterEmptyState
+                  title={`No registries match “${filter.trim()}”`}
+                  onClear={() => setFilter('')}
+                />
               )
-            )}
-
-            {!listError && !isLoading && credentials.length > 0 && rows.length === 0 && (
-              <div className="flex flex-col items-center gap-3 py-10 text-center text-meta text-muted-foreground">
-                <span>No registries match “{filter.trim()}”</span>
-                <AsciiButton size="sm" onClick={() => setFilter('')}>
-                  Clear filter
-                </AsciiButton>
-              </div>
-            )}
+            ) : null}
           </>
         )}
       </div>
@@ -448,7 +456,7 @@ export function RegistriesPanel() {
                 </Select>
               </div>
 
-              <ol className="list-decimal space-y-1 pl-5 font-mono text-meta text-muted-foreground">
+              <ol className="list-decimal space-y-1 pl-5 font-sans text-meta text-muted-foreground">
                 {provider.steps.map((step, index) => (
                   <li key={index}>{step}</li>
                 ))}
@@ -477,7 +485,7 @@ export function RegistriesPanel() {
                   onChange={(event) => setForm({ ...form, password: event.target.value })}
                   required
                 />
-                <p id="registry-secret-help" className="font-mono text-meta text-muted-foreground">
+                <p id="registry-secret-help" className="font-sans text-meta text-muted-foreground">
                   Cannot be viewed after saving.
                 </p>
               </div>
@@ -493,7 +501,7 @@ export function RegistriesPanel() {
                   spellCheck={false}
                   className="font-mono"
                 />
-                <p id="registry-prefix-help" className="font-mono text-meta leading-relaxed text-muted-foreground">
+                <p id="registry-prefix-help" className="font-sans text-meta leading-relaxed text-muted-foreground">
                   Covers <span className="text-foreground">{scope}</span>. Leave empty for the whole registry. Longest
                   matching prefix takes precedence.
                 </p>
@@ -519,7 +527,7 @@ export function RegistriesPanel() {
               Remove the credential for {pendingDelete?.registryHost}/{pendingDelete?.repositoryPrefix}*?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
-              <div className="space-y-2 font-mono text-meta">
+              <div className="space-y-2 font-sans text-meta">
                 <p>
                   New boxes will no longer be able to pull private images it covers. It is refused while any box still
                   pulls through it.

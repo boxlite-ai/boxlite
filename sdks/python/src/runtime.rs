@@ -171,6 +171,13 @@ impl PyBoxlite {
         })
     }
 
+    #[getter]
+    fn checkpoints(&self) -> crate::checkpoints::PyCheckpointHandle {
+        crate::checkpoints::PyCheckpointHandle {
+            handle: Arc::new(self.runtime.checkpoints()),
+        }
+    }
+
     /// Return the runtime-scoped named-volume handle.
     ///
     /// The handle exposes asynchronous create, list, get, and remove operations

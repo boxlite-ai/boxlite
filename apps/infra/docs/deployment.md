@@ -34,23 +34,43 @@ gh workflow run mdeploy-all.yml --ref main   -f stage=dev -f ref='#123' -f compo
 ```
 
 Replace `#123` with the intended PR, or use a full commit SHA. Review the resolved SHA, stage identity,
-artifact identities and complete resource diff. Then dispatch that reviewed SHA with `apply=true`.
-A fresh PR ref can resolve to a different merge commit; pin the reviewed SHA when applying.
+artifact identities and complete resource diff. For a branch-contained SHA or release, reuse that ref with `apply=true`.
+For a PR, repeat `#123` and compare its newly resolved merge SHA with the preview before approving the Environment.
+A moved PR/base can change that merge SHA; a merge candidate outside the selected branch cannot be reapplied as a bare SHA.
 
 | Ref | Allowed stages | Artifact path |
 | --- | --- | --- |
-| Full SHA or open PR `#number` | `dev` | Ensure commit images and runner build exist |
+| Full SHA | `dev`, `stage` | Ensure commit images and runner build exist; the commit must belong to the selected workflow branch |
+| Open PR `#number` | `dev`, `stage` | Use the current open, mergeable PR's merge commit for images and runner build |
+| Stable `vX.Y.Z` tag | `stage` | Resolve to a commit on the selected branch; use commit images and runner build |
 | Published `vX.Y.Z` release | `dev`, `prod` | Version-qualified images and published runner release |
 
-Release dispatches run from `main`. Production accepts releases only. For a protected production apply:
+Dev/prod release dispatches run from `main`. Production accepts releases only. For a protected production apply:
 
 ```bash
 gh workflow run mdeploy-all.yml --ref main   -f stage=prod -f ref=vX.Y.Z -f components=api+runner -f apply=true -f confirm=true
 ```
 
-Run a preview of that release first. `components=api` or `runner` narrows artifact preparation,
+Stage candidate dispatches may use a workflow branch and accept its full SHAs or open PR merge candidates.
+Stage also accepts stable tags as commit references: it resolves the tag once, then builds or reuses artifacts for that SHA.
+It does not require a GitHub Release or use its published Runner assets.
+Dev/prod published stable releases still run from `main`; RC inputs remain refused.
+Dev/prod import existing release images from GHCR; stage is an independent deployment target.
+Production still requires a stable release on main, its published Runner assets and protected apply confirmation.
+Example stage preview after its prerequisites and artifacts are prepared:
+
+```bash
+gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='<full-main-sha>' -f components=api+runner -f apply=false
+gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f components=api+runner -f apply=false
+```
+
+Run a preview of the chosen ref first. `components=api` or `runner` narrows artifact preparation,
 not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
-Image releases are published/promoted through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
+Image releases are published to GHCR through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
+Release deployment imports these existing images into the target stage's AR/ECR repository,
+verifies manifest digests and enforces the target scan policy. It never starts a release build.
+Missing GHCR images stop planning and print the manual publication command; authentication and
+network failures remain registry errors. See the [release runbook](release.md).
 
 ### Caller attribution
 
@@ -68,8 +88,8 @@ is separate from current mdeploy orchestration.
 
 ## Deploy an existing stack
 
-Local deployment uses the same stage configuration and artifact identities. Publish or promote
-images first with [mbuild](../mbuild/README.md), and prepare the selected [runner artifact](runners.md).
+Local deployment uses the same stage configuration and artifact identities. Prepare images first
+with [mbuild](../mbuild/README.md), and prepare the selected [runner artifact](runners.md).
 The following example assumes release images `vX.Y.Z-<sha>` and runner release `X.Y.Z` already exist:
 
 ```bash
@@ -77,6 +97,7 @@ export BOXLITE_IMAGE_TAG='vX.Y.Z-<full-commit-sha>'
 export VERSION='X.Y.Z'
 npm run mstage login -- --stage dev
 npm run mstage env digest -- --stage dev
+npm run mbuild import-release -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite --stage dev
 npm run mbuild verify -- --tag <full-commit-sha> --version vX.Y.Z --stage dev
 npm run mdeploy -- --stage dev --diff
 npm run mdeploy -- --stage dev
@@ -85,6 +106,16 @@ npm run mdeploy -- --stage dev
 Substitute real values and inspect the preview before the last command. Add `--confirm` for a
 protected stage. For a commit runner build, use the selectors in the [runner runbook](runners.md).
 `mdeploy --local-env` bypasses store loading and is an explicit diagnostic option, not the default.
+
+## Fractional CPU upgrade
+
+Apply the CPU-column migration first.
+Upgrade every Runner, including migration destinations, with its matching Runtime/C ABI before deploying the API that accepts fractions, then deploy the dashboard.
+See the [fractional CPU data contract](../../../docs/contributing/architecture/platform/schema.md#fractional-cpu-allocations) for storage and metering behavior.
+
+Migration lock acquisition times out after five seconds; retry in a maintenance window if needed.
+Rollback to integer columns refuses fractional or out-of-range rows rather than rounding allocations.
+After fractional Boxes exist, retain compatible API and Runner versions; disabling new fractional creation alone does not make older binaries safe.
 
 ## Secrets & credentials
 

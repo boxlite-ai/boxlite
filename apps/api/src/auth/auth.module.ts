@@ -25,6 +25,10 @@ import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
 import { McpDelegation } from './mcp-delegation'
 import { AuditModule } from '../audit/audit.module'
+import { RegistrationController } from './registration.controller'
+import { RegistrationService } from './registration.service'
+import { RegistrationJwtGuard } from './registration-jwt.guard'
+import { TurnstileService } from './turnstile.service'
 @Module({
   imports: [
     PassportModule.register({
@@ -39,8 +43,11 @@ import { AuditModule } from '../audit/audit.module'
     RegionModule,
     AuditModule,
   ],
-  controllers: [LogoutController, AccountLinkController],
+  controllers: [LogoutController, AccountLinkController, RegistrationController],
   providers: [
+    RegistrationService,
+    RegistrationJwtGuard,
+    TurnstileService,
     AccountLinkService,
     ApiKeyStrategy,
     {

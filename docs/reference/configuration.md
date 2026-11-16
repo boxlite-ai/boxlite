@@ -128,9 +128,10 @@ inside the box cannot change that.
 - `value`: real secret value
 - `hosts`: required, at least one host; `*.example.com` matches one subdomain level
 - `placeholder`: optional dummy value for the guest, defaults to `<BOXLITE_SECRET:{name}>`
-- `header`: optional target header, defaults to `Authorization`. Rust `Secret` on
-  a local runtime only for now: the Python, Node, Go and C SDKs have no such
-  parameter, and the cloud API and `boxlite serve` reject a request that sets it.
+- `headers`: required, non-empty map from header names to templates. Each template
+  contains exactly one `{value}` and no other braces; all entries use this secret's value.
+  Missing, null and empty maps are rejected by every SDK and create API, including
+  Go nil/empty maps and C zero entries. No Authorization template is supplied automatically.
 
 **Proxy behavior:**
 
@@ -143,14 +144,22 @@ inside the box cannot change that.
 
 Header names match case-insensitively on the original request, before outbound
 hop-by-hop cleanup. The value need not contain a placeholder.
-`Authorization` is written as `Bearer {value}`; any other header as `{value}`.
+Each present target header receives its rendered template. Substitution happens
+once: braces inside the secret value are not interpreted.
 
-| API | `hosts` | `header` |
+| API | `hosts` | `headers` |
 | --- | --- | --- |
-| OpenAI | `api.openai.com` | default |
-| Anthropic | `api.anthropic.com` | default, or `x-api-key` |
-| GitHub | `api.github.com` | default |
-| Gemini | `generativelanguage.googleapis.com` | `x-goog-api-key` |
+| OpenAI | `api.openai.com` | `{"Authorization": "Bearer {value}"}` |
+| Anthropic | `api.anthropic.com` | `{"x-api-key": "{value}"}` |
+| GitHub | `api.github.com` | `{"Authorization": "Bearer {value}"}` |
+| Gemini | `generativelanguage.googleapis.com` | `{"x-goog-api-key": "{value}"}` |
+| Discord | `discord.com` | `{"Authorization": "Bot {value}"}` |
+
+Stored header names, templates and rendered values receive the same validation
+on creation, activation and import. Legacy host-conflict handling remains
+separate. Restart stops a running box first, then starts it. If stored secret
+headers are invalid, start rejects the configuration after the VM has stopped;
+the stored data remains intact only if stop did not remove the box.
 
 Pick the header the SDK in the box actually sends. If the configured header is
 absent, no credential is injected and the upstream may return 401.
@@ -158,28 +167,45 @@ absent, no credential is injected and the upstream may return 401.
 **Create rejects:**
 - `hosts` empty, or holding an empty entry
 - an empty `placeholder`
-- a `header` that is not a valid header name, or is one of `Host`, `Connection`,
-  `Proxy-Authorization`, `Keep-Alive`, `TE`, `Trailer`, `Upgrade`,
+- a header name that is not a valid HTTP token, or is one of `Host`, `Connection`,
+  `Proxy-Connection`, `Proxy-Authenticate`, `Proxy-Authorization`, `Keep-Alive`,
+  `TE`, `Trailer`, `Upgrade`,
   `Content-Length`, `Transfer-Encoding`
-- two secrets writing the same `header` on the same `hosts` entry. Overlap between
+- duplicate case-insensitive header names within one secret, or two secrets
+  writing the same header on the same host; repeated hosts within one secret are deduplicated. Overlap between
   a wildcard and an exact host is not detected; the last secret wins.
+- templates missing `{value}`, repeating it, or containing other braces
+- ASCII control bytes 0–31 except HTAB (9), and DEL (127), in templates or rendered values; spaces and HTAB are allowed
 
-These rules apply when a box is created. A box that already exists keeps starting,
-and asking for it by name adopts it; if two of its secrets write the same header on
-a host, the last one wins and a warning is logged.
+Creation applies all these rules. Stored configurations remain readable as metadata.
+Start of a new VM and import validate stored secret headers before
+activation or installation. Running legacy boxes keep running until stopped;
+reattaching to stop them does not validate headers.
+
+Restart performs stop first. For boxes not removed on stop, rejected activation
+leaves the box stopped with its stored data intact. Missing, null or empty headers
+produce `secret "x" has no headers; recreate the box with headers`.
+On a local runtime, `auto_delete > 0`, or legacy `auto_remove=true` when
+`auto_delete` is unset, removes the box and its data on stop unless clone dependencies prevent deletion.
+Restart then reports that the box disappeared without calling start.
+Back up data before restarting such legacy boxes.
+
+Other legacy header conflicts retain their existing last-writer behavior and warning.
 
 Recovering a cloud box recreates it, so a stored secret that breaks these rules
-fails recovery with an error and the old box is kept. Fix the secret, then retry.
+fails validation before destroying the old box. Header names, templates, rendered
+values, and conflicts are checked first, so invalid stored configuration keeps
+the old box intact. Fix the secret, then retry.
 
 **Not supported:**
 - APIs that take the key in the query or body
-- Basic authentication and request signing such as AWS SigV4
-- `Authorization` schemes other than `Bearer`, such as `Bot` or `Token`
+- Automatic credential encoding and request signing such as AWS SigV4
 
 **Migrating from placeholder substitution:** the proxy no longer searches requests
 for placeholders. A placeholder in a header other than the configured one, the
 query, or the body now reaches the upstream unchanged. Move those keys to a header
-and declare it, or keep using `Authorization: Bearer`, which needs no change.
+and declare it. To use Bearer authentication, explicitly set
+`"headers": {"Authorization": "Bearer {value}"}`.
 Requests without the configured header remain anonymous; any existing value,
 including an empty value, triggers injection on a matching host.
 
@@ -204,7 +230,29 @@ including an empty value, triggers injection on a matching host.
 - Under `mode` `"disabled"` a secret does nothing: no network backend is
   created, so nothing is injected and no host becomes reachable. The
   placeholder environment variable is still injected into the guest.
-- C SDK users configure secrets with `boxlite_options_add_secret()`.
+- C SDK users pass parallel header-name and template arrays to
+  `boxlite_options_add_secret_with_headers()` with at least one entry.
+  The old `boxlite_options_add_secret()` symbol remains available for ABI compatibility,
+  but its headerless secret is rejected when creating a box.
+
+**Required-headers upgrade notice:** local SDK and `boxlite serve` users must recreate
+existing boxes that have secrets, supplying explicit headers. Metadata queries still
+work. Restart stops a running legacy box first; if stop retains the box, start rejects missing headers and its stored data remains intact.
+Recreation with explicit headers is required.
+
+Back up data before restarting legacy boxes configured for removal on stop.
+Local `auto_delete > 0`, or legacy `auto_remove=true` when `auto_delete` is unset,
+deletes the box and its data unless clone dependencies prevent deletion.
+If deleted, restart reports that the box disappeared instead of starting it.
+
+Import still rejects invalid headers before changing stored-data state.
+Running legacy boxes keep running until stopped. The cloud database was confirmed to contain no such boxes;
+local SQLite stores were not checked.
+
+The development-only singular `header` field is not migrated. Recreate those
+boxes with `headers`, for example `{"X-Key": "{value}"}`. For Bearer authentication,
+use `{"Authorization": "Bearer {value}"}`. An unconverted singular field does not
+satisfy the required-headers contract.
 
 ### `advanced.capabilities`
 
@@ -227,7 +275,7 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 
 ### `cpus: float`
 
-CPU allocation, default `1`, from `0.01` to `16` with the bundled kernel, in increments of `0.001`.
+CPU allocation, default `1`, from `0.125` to `16` with the bundled kernel, in increments of `0.001`.
 Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
 Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
@@ -237,9 +285,9 @@ cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
 cpus=2    # 2 guest vCPUs, no additional bandwidth quota
 ```
 
-Fractional values require a Linux execution host, the jailer, and writable cgroup v2 CPU quotas.
+Fractional values require a Linux execution host and the jailer; enforcement also needs writable cgroup v2 CPU quotas.
 Local macOS execution rejects them; macOS REST clients can request them from a supporting Linux server.
-Quota-write failures prevent startup; cgroup membership remains best-effort and can leave a running Box without enforcement.
+A quota-write failure is logged at error level and does not prevent startup; like best-effort cgroup membership, it can leave a running Box without enforcement.
 Information queries return the configured allocation.
 Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
 

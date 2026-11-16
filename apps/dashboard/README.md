@@ -5,6 +5,34 @@ through Nx as the `dashboard` project.
 
 ## New-account email policy
 
+First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without
+public `turnstile` settings, the console loads business providers directly and the
+API keeps automatic local registration.
+
+With verification enabled, the console checks `GET /users/me` after OIDC sign-in,
+before loading organizations or connecting notifications. A `registration_required`
+response opens the first-account verification screen at the current URL. Turnstile
+produces a single-use challenge;
+`POST /auth/register` validates it on the server before creating the local account.
+Existing accounts enter the console without a challenge. Email ownership verification
+remains in the Auth0 login Action.
+
+The console reads the public widget sitekey and `signup` action from `/config`.
+Failed or expired challenges are discarded. A lost registration response triggers
+another user check before a new challenge is requested. Service failures allow
+retry or sign-out without restarting the Auth0 login flow.
+
+Account creation requests time out after 30 seconds; account checks and verification
+script loading time out after 10 seconds. A timed-out creation request follows the
+same account check as a lost response, without automatically resending the token.
+Failed script loads release their shared loader so verification can be retried.
+
+With verification enabled, each newly mounted identity must pass a fresh account
+check, even when user data is cached. Once admitted, the console stays mounted
+during background revalidation and transient failures, preserving open terminals.
+An explicit `registration_required`
+or email rejection still blocks access and shows the relevant recovery screen.
+
 When the API rejects account creation with `disposable_email`, `email_required`,
 or `invalid_email`, the console explains the email problem and offers
 **Sign out and use another email**. These responses do not restart authentication
@@ -12,13 +40,33 @@ or offer a retry with the same identity. The explicit action uses `/logout` to e
 the identity-provider session and return to the existing manual sign-in screen.
 Other authorization failures keep their existing error handling.
 
+## Managed checkpoints
+
+**Boxes → Checkpoints** lists reusable disk archives captured from eligible stopped Boxes.
+The inventory shows Name, ID, Source Box, Status, Archive size, Created and Actions.
+A successful identity lookup distinguishes deleted sources from lookup failures.
+Saved disk capacity is not returned by the API and has no placeholder column.
+
+**New Checkpoint** uses the shared form dialog and themed Source Box selector.
+Sources must be stopped with matching desired state, without pending transitions,
+mounted volumes or attached secrets. Server admission refusals remain in the dialog.
+Names are optional; invalid names show their accepted format beside the field.
+
+Ready checkpoints enable **New Box**. Restoration inherits saved execution settings;
+success identifies the created Box in a toast and keeps the inventory open.
+Deletion requires the exact checkpoint name; refusals retain the draft and deleting records permit cleanup retries.
+Capture, restoration and deletion require Box-write permission; read-only members retain inspection.
+Queries and dialogs stay scoped to the selected organization, so old results cannot affect a new selection.
+API, SDK and CLI recovery remain separate. The mock preview supports capture, restoration and deletion.
+See [Checkpoint controls and recovery](#checkpoint-controls-and-recovery) for request states.
+
 ## SSH access
 
-The left **Network** section shows SSH state and its switch. The switch only
+The **Network** section shows SSH state and its switch. The switch only
 enables or disables saved configuration; it does not generate keys or change
 inbound. Status refreshes on click, window focus, and every 30 seconds while
 visible and idle. Reads skip pending operations and preserve mutation errors.
-Unknown/loading states cannot be toggled. The header and sidebar share one
+Unknown/loading states cannot be toggled. The header and Network section share one
 controller and component-scoped private keys.
 
 **Connect via SSH**, beside start/stop, first opens an access confirmation.
@@ -134,7 +182,7 @@ not automatically retried. Pending operations block overlapping actions and clos
 detail refreshes during mutations wait for the mutation to finish. Stale reads and
 responses after stop, permission, account, endpoint or scope changes are ignored.
 The title/close control stays fixed while the dialog body scrolls. Command lines
-wrap without changing copied content. The terminal remains mounted throughout.
+wrap without changing copied content. The overview remains mounted throughout.
 
 Tests cover consent, conditional creation, request ordering, permissions, partial
 success, same-key retry, stale responses, storage isolation and reset cancellation.
@@ -143,6 +191,40 @@ saved configuration across Disable/Enable, and hides disabled listener identity 
 the real service. It exercises the real Dashboard but does not start an SSH server
 or prove a live cloud SSH handshake.
 
+## Box overview and terminal
+
+Each Box has two pages, linked by **Overview** and **Terminal**. The existing
+`/dashboard/boxes/:boxId` URL opens Overview; `/terminal` opens the dedicated
+shell page. The current destination is marked for assistive technology.
+
+Both routes keep the shared identity, lifecycle actions, SSH controls and navigation stable.
+CPU, memory and disk appear inside Overview and describe provisioned capacity.
+Configuration, optional mounted Volumes and Network use compact aligned fields.
+Long technical values wrap within their fields. Terminal does not fetch Overview catalogs.
+
+Terminal uses the available content height. Its toolbar includes the themed text-size
+selector, Clear terminal, Scroll to bottom, Maximize and Restore controls.
+Sizes are 12, 13, 14 and 16px; resizing and maximizing preserve the mounted shell buffer.
+Covered application controls become inert while maximized. Escape remains terminal input.
+The shared header provides Start to authorized members when the Box state permits it.
+See [Terminal viewport controls](#terminal-viewport-controls) for font and restoration behavior.
+
+Only an explicit execution-exit frame reports **Session ended**. A dropped
+socket reports **Connection lost**, and connection establishment times out after
+30 seconds. Failed attempts request shell deletion, including shells whose start
+finishes after timeout or unmount. Cleanup is best-effort if the API refuses it.
+**Reconnect** starts a fresh shell. Leaving Terminal for Overview ends its shell;
+returning starts another one.
+
+Container resize notifications coalesce into one animation-frame measurement,
+skip hidden containers, and send only changed character dimensions. Font readiness
+also schedules a fit. These checks bound layout work; they do not establish
+producer backpressure or a throughput benchmark.
+
+Run `make test:apps:dashboard FILTER=Box` for box page, session,
+and lifecycle checks. The local UI preview may use a simulated transport and
+does not prove live guest-shell connectivity.
+
 ## ASCII action buttons
 
 Use `AsciiButton` from `components/ascii` for console actions. It delegates to
@@ -150,16 +232,16 @@ Use `AsciiButton` from `components/ascii` for console actions. It delegates to
 styles; raw buttons remain appropriate for tabs and custom choices. Use native
 links for route navigation.
 
-| Purpose | Variant / size | Appearance |
-| --- | --- | --- |
-| Main create or submit action | `primary` / default | 36px high, monochrome fill |
-| Row action | `secondary` / `sm` | 28px high, neutral border |
-| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
-| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
-| Final destructive confirmation | `dangerSolid` | Solid red |
+| Purpose                        | Variant / size            | Appearance                                |
+| ------------------------------ | ------------------------- | ----------------------------------------- |
+| Main create or submit action   | `primary` / default       | 36px high, monochrome fill                |
+| Row action                     | `quiet` / `sm`            | 28px high, neutral hover                 |
+| Icon action or overflow menu   | `quiet` / `icon`          | 28px square; `icon-lg` is 40px for mobile |
+| Destructive row action         | `quiet-danger` / `sm` or `icon` | Red text/icon, subtle hover        |
+| Final destructive confirmation | `dangerSolid`             | Solid red                                 |
 
-Keep square corners and the shared monospace font. Secondary actions use a cyan
-border with a neutral surface on hover/open; they do not turn solid cyan.
+Keep square corners and the shared sans-serif interface font. Secondary actions use neutral
+borders and surfaces; persistent open and selected states remain stronger than hover.
 Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
 outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
 
@@ -229,12 +311,12 @@ refetch this list.
 
 Run these from `apps/`:
 
-| Command | What it does |
-| --- | --- |
-| `yarn nx run dashboard:dev` | Dev server on `:3000`, proxying `/api` to `http://localhost:3001` |
-| `yarn nx run dashboard:build` | Production build, with a typecheck pass |
-| `yarn nx run dashboard:test` | Vitest suite |
-| `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard` |
+| Command                                 | What it does                                                      |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `yarn nx run dashboard:dev`             | Dev server on `:3000`, proxying `/api` to `http://localhost:3001` |
+| `yarn nx run dashboard:build`           | Production build, with a typecheck pass                           |
+| `yarn nx run dashboard:test`            | Vitest suite                                                      |
+| `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard`                 |
 
 `npm run start:mock` (from `apps/`) serves the console against the MSW handlers
 in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end in
@@ -329,25 +411,19 @@ produces a toast that offers "Delete 0" and a confirmation for "these 0 selected
 volumes". If a new bulk action arrives with a different eligibility rule, the
 predicate becomes the union of them; it must never go back to a bare boolean.
 
-## Empty states carry the first action
+## Empty-state presentation
 
-A resource table with no rows is not a blank page and not a takeover: it keeps
-the page's own chrome and puts the first useful action inside the table's empty
-state. The Boxes page is the worked example — an account with no boxes gets the
-table's empty state with a button into the onboarding guide, rather than the
-page being replaced by a separate panel.
+Resource inventories retain their page header and toolbar when empty.
+Creation stays in the toolbar under its existing permission guard; guidance explains the next step.
+Search misses offer Clear filter. Loading and failed requests use distinct shared states.
+Refresh failures preserve cached data and expose Retry.
+See [Resource request feedback](#resource-request-feedback) and [Contextual documentation links](#contextual-documentation-links).
 
-The rule this follows: an empty list still has to say what the page is about and
-what to do next, and any dialog it opens must be the same one the rest of the UI
-opens. A second entry point to the same guide is a bug, not a convenience —
-mounting one twice has already caused duplicate API keys to be minted
-(issue #1491).
-
-## Private registries are a tab of Images
+## Private registries belong to Images
 
 Someone who needs a private image is already on the Images page, so the
-credentials that let a box pull one are its second tab, not a top-level item.
-That is also how the API nests them (`/api/images/registries`). Each tab is its
+credentials that let a Box pull one are its second child destination.
+That is also how the API nests them (`/api/images/registries`). Each destination has its
 own route, `/dashboard/images` and `/dashboard/images/registries`, so a box's
 pull error can link straight to the second; the old `/dashboard/registries`
 redirects there. The static `registries` segment is routed before `:idOrRef`,
@@ -357,14 +433,12 @@ as the API orders its routes, or it would read as an image named "registries".
 
 The API has no create for an image: one enters the catalog when a box first
 starts from it. So the Images page has no "New image" button, which would
-promise a registration step that does not exist. One description below the title
-explains the active tab: built-in/used images or private-registry credentials.
-The Private registries tab provides credential setup with one toolbar Connect
+promise a registration step that does not exist. Each destination has a description below its title.
+Private registries provides credential setup with one toolbar Connect
 action, including an empty list. Images has no independent New box action; use
 Boxes to start from a new reference, or a catalog row action to prefill its image.
-Quota information stays in the usage meter. The inline "How to add an image"
-control expands the registry → New box → successful start steps on demand.
-Its registry link preserves query parameters, including a suggested registry to connect.
+Quota information shows custom-image count and total image size separately.
+“How to add an image” opens the task-specific Use your own image guide.
 Feature descriptions carry definitions, and empty states give a brief next action.
 The list and usage refresh on mount and every 30 seconds in the foreground,
 since image registration may finish after the Box startup notification.
@@ -397,9 +471,9 @@ configure additional system images, so three is not a fixed UI limit.
 
 Some fields are set once and never cleared. `upstreamMissingAt` is written the
 first time a pull finds a digest gone from its registry, and nothing resets it
-if the registry gets it back. The image page therefore says "Gone upstream 5h
-ago", with "BoxLite's copy still starts boxes" on hover, rather than a present
-tense "Missing" that would turn false the moment the registry recovered.
+if the registry gets it back. The image page therefore says "Gone upstream", with the observation time and
+cache-dependent startup guidance available on hover, focus, or in version
+details, rather than a present-tense "Missing" that becomes false when the registry recovers.
 Likewise the pin history says "unpins are not recorded", because the API
 writes no event when a tag is unpinned, and a history that dropped a tag
 without saying so would look like a bug.
@@ -407,7 +481,7 @@ without saying so would look like a bug.
 Pinning checks what the API will refuse before sending: a name that is not OCI
 tag syntax, and a name already pinned, which the API refuses even for the same
 version because there is no move. Repointing a tag is an unpin and a pin, and
-the page says so where the tags are listed.
+the Pin dialog explains this rule.
 
 The same page lists every box that still references the image, stopped ones
 included: those are exactly the boxes that block its removal. And who pinned a
@@ -490,7 +564,7 @@ can be removed but not given another role. The member whose personal
 organization this is has no remove action, because the API refuses that
 removal.
 
-The profile menu's Organization entry opens two tabs. General shows the editable
+The Management navigation's Organization entry opens two tabs. General shows the editable
 name and copyable ID. Member combines members and outgoing invitations in one
 table, with Member, Invited, and Expired statuses. Owners can invite, remove members,
 and cancel invitations. Expired invitations offer Remove (with confirmation) and
@@ -498,7 +572,7 @@ Resend. Resending creates a new invitation with the same permissions and the cur
 default lifetime, then removes the expired record. Creation failure preserves the
 old row; cleanup failure reports that the new invitation exists and refreshes both
 rows, so the owner can remove the expired one. The old link remains unusable.
-The page shows the current organization's name; switching stays in the profile menu.
+The page shows the current organization's name; use the header switcher to change organizations.
 The Member tab can be bookmarked at
 `/dashboard/settings?tab=member`; older `/dashboard/members` links redirect there.
 
@@ -517,15 +591,15 @@ an invitation ID redirects to the current organization's Member tab without acce
 
 The new selection is saved only after membership validation succeeds. If switching
 fails, acceptance still succeeds. The page explains that joining succeeded and
-asks the user to switch through the profile menu. The console keeps the previous
+asks the user to switch through the header organization switcher. The console keeps the previous
 organization both on screen and for the next reload.
 
-## The organization you pick is the one you come back to
+## Organization selection persists for the session
 
-A user in more than one organization switches between them from the profile
-menu, which marks the personal one. The pick is kept in `localStorage`, so the
-next login opens the same organization; if the user was removed from it in the
-meantime, the console falls back to their personal organization.
+Users switch organizations from the header switcher. The selection is kept in
+`sessionStorage` for the authenticated user. Reload and token renewal restore it,
+and explicit logout clears it. A new login does not treat the legacy `localStorage`
+ID as a confirmed selection. See [Organization context](#organization-context).
 
 ## New-user onboarding
 
@@ -578,9 +652,21 @@ connection-help footer. Successful requests clear filtering and show a reservati
 Late results from a previous organization invalidate that organization's cache
 without showing a success notification in the current organization.
 
+The **All domains** tab lists held platform and customer hostnames; **Custom domains**
+shows setup progress and the separate one-domain allowance, including drafts but excluding replaced configurations.
+**Get DNS configuration** creates or resumes a draft and automatically continues preparation until all three records are available.
+Preparation errors require explicit retry; reopening an incomplete draft does not resume preparation automatically.
+**Configured, verify** checks DNS explicitly; successful confirmation closes the dialog, while failed checks retain records and errors.
+
+The API task continues confirmed HTTPS setup. The page reads incomplete setup status every minute while visible;
+DNS dialogs and pending actions pause these reads. Opening confirmed details reads status without advancing setup.
+An incomplete confirmed setup with an error offers **Retry**, which sends one advance request and respects server backoff.
+**Ready** means setup is complete with an active subscription; **Setup completed** indicates completion without confirmed active eligibility.
+Neither label implies a bound Box port. Viewing, unbinding and confirmed deletion remain available after subscription expiry.
+See the [customer-domain guide](../../docs/concepts/networking.md#bring-your-own-domain) for DNS configuration and ownership transfer.
+
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
-
 
 ## Neutral dark surfaces
 
@@ -591,7 +677,6 @@ keep their hues. Use these tokens instead of blue-gray literal backgrounds.
 Light theme values are independent and unchanged by the dark palette.
 
 For opt-in empty mock fixtures, see the desktop review section below.
-
 
 ## Desktop review: code surfaces, payment identity and empty resources
 
@@ -606,7 +691,7 @@ and code whitespace remain unchanged. Console templates scroll with the page.
 The selected template panel keeps its content height, and sticky positioning is
 only enabled on desktop windows at least 800px high; shorter windows use normal flow.
 
-Resource lists share `ResourceEmptyState`: a 48px neutral thin-line icon tile, 18px
+Resource lists share `ResourceEmptyState`: a neutral thin-line icon in a 48px slot, shared
 heading, body copy below it, then optional secondary guide links. Creation stays
 in the page toolbar under its existing permission guard. Images directs users to
 Boxes; billing records have no creation CTA. Search misses, loading and errors
@@ -646,33 +731,33 @@ in localStorage, with an in-memory fallback when storage is unavailable.
 Hover the compact logo for 350ms to preview the full sidebar as an overlay;
 content keeps its position. Moving into the menu keeps it open; leaving closes it
 after 150ms, unless a child has keyboard focus. Escape dismisses the preview and
-returns focus to the logo. The top Collapse button also dismisses the preview;
-clicking the logo pins the expanded sidebar.
+returns focus to the logo. The top Pin button keeps the preview expanded;
+clicking the logo also pins the expanded sidebar.
 Hover never changes the saved preference; touch uses the explicit click control.
-Images has an independent disclosure for its existing Images and Private
-registries routes. Child links use 14px thin-line icons, a shared inset and
+Boxes discloses All Boxes and Checkpoints. Images discloses Image library and Private
+registries. Child links use 14px thin-line icons, a shared inset and
 full-width selection; primary icons remain 18px. Navigation data accepts
 second-level children without adding speculative destinations. Entering a child route reveals its group; the active
 route remains highlighted when the whole sidebar collapses.
 
 The desktop sidebar spans the viewport height (minus any announcement). Its logo
 shows the full wordmark when expanded and the icon when compact. The right column
-contains a 48px header and route content; API Keys is separated from the account
-by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+contains a 64px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the header prioritizes organization context and the mobile menu.
 Welcome keeps its simplified header.
 
-Management is a primary disclosure after Domains, with Billing and Organization
+Management is a primary disclosure after Applications, with Billing and Organization
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
-Organization switching, theme and logout remain in the account menu.
+Organization switching is in the header; theme and logout are in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
-Quickstart as the last action. Collapse sits beside the logo in both pinned
-expansion and hover preview, and is hidden in the compact rail without a preview.
+Quickstart as the last action. Collapse sits beside the logo in pinned expansion; Pin occupies that position in
+hover preview. Both are hidden in the compact rail without a preview.
 Clicking the compact logo expands navigation without changing the route.
-Keyboard focus moves to the replacement toggle. Selected navigation uses the
-accent surface, distinct from the quieter hover surface.
+Keyboard focus moves to the replacement toggle. Selected navigation uses a quiet neutral surface with icon feedback,
+distinct from transient hover.
 
 Dashboard owns `--app-header-height`, `--app-banner-height` and
 `--app-content-height`. List/detail/fullscreen layouts consume these variables
@@ -680,12 +765,12 @@ to reserve the actual header (48px desktop, 60px mobile/Welcome) and announcemen
 height consistently. Preserve `min-w-0` on the content region when adding routes.
 
 Infrastructure groups Boxes, Images, Volumes and Domains, with an expanded-only
-section label. Management remains a separate primary entry. Compact navigation
+section label. Applications contains CI → Runners / Connects, including compact-rail expansion, hover preview, active-child highlighting and mobile menu destinations. Management remains a separate primary entry. Compact navigation
 keeps the group accessible name without squeezing in a visual label.
 
 Expanded navigation highlights only the current child, using the same full row
 width as primary items. Active parents retain foreground emphasis without a
-second selection rectangle. Child indentation comes from padding, with no tree line.
+second selection rectangle. Primary and secondary labels align; text scale and spacing distinguish hierarchy without a tree line.
 
 Sidebar branding always renders the same 43.2px-high wordmark asset
 (20% above the original 36px). Compact mode clips the text area instead of substituting a differently padded icon image, so
@@ -710,3 +795,477 @@ Clicking Images in a compact rail reveals its children. Quota metadata uses read
 12px type. Template columns use a 240px minimum in the available content width;
 short Quickstart code blocks expand naturally. Billing and box details retain all
 data and actions while removing excess whitespace and dotted leaders.
+
+## Measured visual rules
+
+These rules came out of a full crawl of the console. Each has a check that keeps it true.
+
+```
+ rule                         kept true by
+ ───────────────────────────  ───────────────────────────────────────────────
+ six font sizes, no others    src/design-language.test.ts   (ceiling 0, plus 8 display numerals)
+ text contrast 4.5:1          scripts/ui-audit  ──► axe-core color-contrast
+ 24px hit targets             scripts/ui-audit  ──► axe-core target-size
+ no sideways page scroll      scripts/ui-audit  ──► page-hscroll at 390px and 320px
+ whole-pixel rows             scripts/ui-audit  ──► subpixel
+ one line per shared edge     scripts/ui-audit  ──► double-edge
+```
+
+**Type scale.** Text uses `text-label`, `text-meta`, `text-body`, `text-em`, `text-section` or
+`text-page`. Tailwind's stock sizes (`text-sm`, `text-xs`, …) and arbitrary `text-[Npx]` sizes are
+not allowed; the ratchet test counts both. The only exception is display numerals of 32px and over
+on the welcome screens and the stat tile. Line heights in the scale are whole pixels (page 32px,
+body 20px, meta 18px): a ratio such as 1.15 made the title 32.2px tall and blurred every 1px rule
+below it.
+
+**Contrast.** Enabled text reaches 4.5:1 on its surface in both themes.
+
+| Token or surface | Rule |
+| --- | --- |
+| `--muted-foreground` (light) | 42% lightness: 5.00:1 on `--card`, 4.66:1 on `--accent` |
+| `--brand-foreground` | Dark text. White on the brand cyan is 2.5:1; the dark value is 7.3:1 |
+| `--destructive-solid` | Fill for buttons with white text, 4.67:1 in both themes. `--destructive` stays for text and tints |
+| Code blocks | `readableCodeTheme` in `src/lib/readable-code-theme.ts` moves each Prism token colour to the closest value that passes |
+| Terminal | Its surface stays black in both themes; the separate header uses dashboard theme tokens for status and controls |
+
+A row that is busy is not dimmed: opacity pulled its text under 4.5:1. The status cell shows the
+spinner.
+
+**Hit targets.** A control is at least 24px in each direction. Small glyph buttons (copy, close)
+keep their glyph size and get a 24px box. Links inside a sentence are exempt.
+
+**Phone widths.** A list that cannot fit keeps its columns with a `min-w` and scrolls sideways
+inside its own box; the page never scrolls sideways. Volumes, Images, Private registries and API
+keys do this. Hostnames and names truncate with a `title`; they do not break mid-word.
+
+**Segmented controls.** Each segment carries a full border and overlaps its left neighbour by one
+pixel, so shared edges are one line. Compact choices mark selection with a neutral fill and stronger label.
+Page tabs use a persistent underline and semantic icons.
+
+**Wording.** Buttons, headers, tabs, dialog titles and labels use sentence case, with product
+nouns capitalised (Box, Volume, Checkpoint, API key). A dialog's title is the label of the button
+that opens it: New Box, New Volume, New Checkpoint, New API key. Units are vCPU, GiB and MiB. A
+destructive confirmation names its object, for example `Delete “web-api”?`.
+
+**Copy actions.** Every copy goes through `copyToClipboard` (`src/lib/copy-text.ts`) or the
+`useCopyToClipboard` hook, and shows success only when the write happened.
+
+**Page titles.** Each page calls `usePageTitle`, so the tab reads `Volumes · BoxLite`.
+
+**Focus.** `src/index.css` gives every focusable element a 2px ring-coloured outline by default.
+Components that draw their own indicator still do; unifying those is not done yet.
+
+To re-measure, see [`scripts/ui-audit/README.md`](./scripts/ui-audit/README.md). The crawl needs a
+local Chrome and the mock preview, so it is a manual check and not part of `make test`.
+
+## GitHub CI dashboard and browser connect
+
+Primary navigation places **CI** in **Applications**, after Infrastructure, in both
+the sidebar and mobile menu. CI uses rail destinations on desktop and tabs on mobile.
+**Runners** (`/dashboard/ci`)
+lists actual JIT Boxes, with state, image, resources and links to Box details.
+Resources shows vCPU, RAM in GiB and configured disk capacity in GiB.
+It uses Box socket events and three-second polling during transitions, with a
+five-second fallback during socket loss or errors and ten-second refresh for
+journal-only capacity changes. It uses the same organization
+access as Box reads. Each JIT Box row uses the same thin-line state-accented Box icon as the Boxes table.
+Explicit status text remains separate from the icon.
+The CI cube is also used in the empty runner view; the page title has no icon.
+Name filtering shares a toolbar with the compact capacity summary, using the same
+380×36px shared ResourceFilter as Boxes and Images, with a solid border, muted icon
+and sans-serif input.
+The 128-character limit and existing pagination remain. It searches case-insensitive literal substrings across
+all pages, resets pagination on edits and preserves organization-wide capacity.
+Clearing the input restores the inventory; matching count is independent of page size.
+
+Capacity appears beside the Runners filter as `CI slots used / limit`, using Images'
+compact monospace usage-summary styling with decorative quota ticks and no surrounding panel.
+**Edit limit** opens a centered modal for owners.
+It shows occupied scheduler slots against the effective shared limit; reservations
+and workers awaiting Box cleanup count, even before a Box row exists. Confirmed
+Box absence releases a slot even if GitHub runner cleanup remains pending.
+Zero displays Paused, unlimited capacity has no percentage, and lowering the limit
+below current usage preserves the actual count without terminating existing jobs.
+Leave the maximum blank to inherit Commerce, or use zero to pause new workers.
+Other Boxes consume the same commercial account allowance. Repository limits are
+not exposed. GitHub owns job logs; use existing Box tools for worker inspection.
+
+**Connects** (`/dashboard/ci/connects`) uses a registry-style table for GitHub accounts;
+owners can connect a personal account or organization.
+Each connection has a quiet **Update** action beside its trash control.
+It edits private-repository permission on the existing verified binding; changing
+GitHub account identity still requires authorization. A changed policy refreshes
+the listener catalog. Delivered jobs continue and original cleanup remains available;
+workers awaiting JIT configuration may be retired under the new policy.
+Public repositories authorized for the App are enabled by default. **Allow private
+repositories** additionally permits installed private repositories; it starts unchecked. For Organization accounts,
+BoxLite automatically creates or synchronizes its dedicated GitHub runner group;
+users do not repeat the setting in GitHub. The existing inventory wake performs
+this asynchronously; the connection remains provisioning until remote policy and
+repository membership pass readback. A GitHub failure retries with the saved
+desired policy. Failed API saves retain the dialog and checkbox, and successful
+saves refresh only the original organization.
+
+Deleting a connection requires confirmation and waits for the server before removing
+the row. It stops new admissions, cancels stored unfinished authorizations for that
+matching CI App plus every unfinished browser grant in this BoxLite organization, and preserves running-worker cleanup and the shared capacity setting.
+A new verified connection can reconnect later. Switching BoxLite organizations
+does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
+successful browser authorization lead to Connects. `start:mock` includes synthetic
+JIT Boxes and deletable connections for local presentation checks.
+Neither tab has a manual Refresh control. Connects fetches on entry and after
+successful additions/updates/deletions; it does not poll the connection list.
+
+Connect GitHub starts dedicated identity OAuth immediately. While requesting the
+authorization URL, the existing button shows its loading state without adding a
+temporary Cancel beside it. Failures release the button for retry, and browser
+restoration invalidates late start results. After login, the
+normal CI page opens an account dialog using shared AsciiButton, form dialogs and thin-line
+icons. OAuth-visible personal/owner choices show **Install**, **Connect**, or a
+green Check for an existing connection. The Connects table contains only
+connections and has no redundant Status column. Switch account is clickable text
+beside Signed in as; it cancels the unfinished grant and forces GitHub's account
+picker. Committed connections remain intact. Closing, Escape, Back and browser
+restoration keep the UI usable and ignore obsolete asynchronous results.
+
+Install sends the verified selected account ID and type to GitHub's account-specific
+permissions page, avoiding another account/organization picker. GitHub still asks
+for installation permissions and repository selection. Resume retains the selected
+target and fresh installation state; completion independently rechecks ownership,
+the installed account and matching CI App. Existing installations bind directly.
+The browser allows only the fixed GitHub installation routes and validates target
+ID/type, attempt-bound state and query uniqueness before redirecting.
+
+Missing organization? explains organization OAuth approval and SSO prerequisites;
+an installed CI App alone does not guarantee visibility. Review GitHub access,
+then reconnect. Provider errors never imply an organization is uninstalled.
+The API uses separate `CI_GITHUB_OAUTH_CLIENT_ID` and
+`CI_GITHUB_OAUTH_CLIENT_SECRET` configuration for identity, requesting only
+`read:user read:org`. Personal/Organization CI Apps supply runner permissions.
+The BoxLite login stays unchanged when choosing another GitHub identity.
+
+Only attempt ID, original BoxLite organization and expiry enter session storage.
+The bootstrap strips callback code/state before app and telemetry modules load.
+Code exchange runs once under StrictMode; authenticated resume supports reload
+without exchanging the code again. Installation state, selected App/account and
+user tokens stay on the API. The setup callback is verified before auto-binding.
+Sessions can connect several owned accounts within the same original five-minute
+window. Close/Switch cancels unfinished authorization; connected rows remain.
+
+Run `make test:apps:dashboard` and `make build:apps:dashboard` from the repository
+root. Local DOM/HTTP tests do not replace a real App connect and workflow run on
+the deployed API and Dashboard.
+
+Capacity design and verification plan: [Runners capacity meter](../../docs/contributing/investigations/2026-11-06-ci-capacity-meter.md).
+
+```mermaid
+sequenceDiagram
+    actor U as Account owner
+    participant D as Dashboard
+    participant A as BoxLite API
+    participant P as PostgreSQL
+    participant G as Identity OAuth App
+    participant C as Selected CI GitHub App
+    U->>D: Connect GitHub account and private-repository policy
+    D->>A: Authenticated web start under original account
+    A->>P: Store actor, App, state hash and encrypted verifier
+    A-->>D: Fixed authorize URL with S256 challenge
+    D->>G: Authorize in browser
+    G-->>D: Fixed callback with code and state
+    D->>D: Scrub URL before app and telemetry load
+    D->>A: Complete under original BoxLite account
+    A->>P: Validate state and atomically claim once, erase verifier
+    A->>G: Exchange code with verifier and OAuth Client Secret
+    A->>G: Read OAuth-visible owner memberships
+    D->>A: Select owned account
+    A->>C: Verify installation with the corresponding App JWT
+    A->>P: Recheck owner and commit binding, default quota and wake
+    A-->>D: Connected with durable Listener setup state
+    Note over D,A: Browser metadata never grants binding authority
+```
+
+Browser connect recovery keeps routing metadata after an ambiguous network failure;
+**Retry authorization status** reads the existing grant without exchanging the OAuth
+code again. A late response can clear only its own attempt. Opening Back to Connects
+in another tab preserves the current grant. If browser storage cannot select the
+original BoxLite organization, the callback retains the result and offers an explicit
+retry. A failed cancellation offers **Discard local authorization** with a warning
+that the server grant may remain active until expiry.
+
+A recovered pending connection checks authorization status once per second until
+GitHub completes it or the browser grant expires. Closing the dialog or switching
+organizations stops those checks. A failed status request pauses polling and offers
+**Retry authorization status** without repeating the OAuth code exchange.
+
+CI tabs expose their corresponding tab panels to assistive technology. A failed
+later Runners page keeps Previous available so the user can return to loaded rows.
+
+### CI repository access
+
+Expand an installed account in Connect GitHub, or a connected row in Connects,
+to view repositories authorized for its original Personal or Org App. Lists load
+one page on demand and show both Public and Private repositories, independently
+of CI eligibility. Update and expanded rows offer **Install app for repos**, opening
+the existing installation configuration in GitHub. For example, add `acme/api`
+there, return to BoxLite, and the account refreshes to page one without deleting
+its connection or discarding an unsaved Private checkbox. Ordinary focus does
+not poll repository lists. Errors retain Retry and the settings link; a failed
+later page retains Previous. CI URLs and OAuth callback routes remain unchanged.
+
+## Interface typography
+
+The console self-hosts Inter for interface text and Commit Mono for exact technical values and code. Navigation, labels, search fields and table headings use the sans role; identifiers and commands retain the monospace role. Font provenance and licenses are in `public/fonts/README.md`. Use the shared Tailwind font roles rather than hard-coded family names. Quickstart code surfaces use the structural border token in both themes. Terminal-specific font loading is handled in the Box terminal migration.
+
+Desktop mock comparisons: [list before](../../docs/contributing/investigations/assets/console-typography/main-boxes-light.png), [list after](../../docs/contributing/investigations/assets/console-typography/topic01-boxes-light.png), [Quickstart before](../../docs/contributing/investigations/assets/console-typography/main-quickstart-light.png), [Quickstart after](../../docs/contributing/investigations/assets/console-typography/topic01-quickstart-light.png), and [dark Quickstart](../../docs/contributing/investigations/assets/console-typography/topic01-quickstart-dark.png). These 1440 × 900 screenshots isolate typography and code surfaces against main `ed367805d`; navigation and resource workflows are separate changes.
+
+
+## Sidebar navigation hierarchy
+
+Checkpoints belongs to the Boxes group. Primary and secondary labels align; text scale and spacing communicate hierarchy. A quiet neutral fill and an accented icon identify the selected destination. The same Checkpoint outline is shared with existing list rows, which retain their status text and actions.
+
+Hovering the compact logo temporarily expands the sidebar. Keyboard users activate Expand navigation to open it; focusing a rail link shows its tooltip. Pin keeps it open; leaving a preview restores the compact rail without changing routes. Only one compact tooltip can be visible, and tooltips clear when labels expand. Selected icon effects respect reduced motion.
+
+Desktop mock examples: [expanded navigation](../../docs/contributing/investigations/assets/console-navigation/topic02-navigation-dark.png) and [temporary hover preview](../../docs/contributing/investigations/assets/console-navigation/topic02-hover-dark.png). Captured at 1440 × 900 from the navigation topic preview; the accompanying Tab changes are delivered separately.
+
+In the compact rail, an active parent link includes its current child in its
+accessible name, such as “Boxes, current section: Checkpoints”. The parent is
+not marked as the current page when its destination differs from the current route.
+
+## Tabs and selection feedback
+
+Content tabs use a persistent underline. Compact choices, such as theme and chart/list mode, use a selected surface. Hover previews interaction without replacing selected feedback. Navigation links preserve route semantics; in-page tabs retain tab/panel keyboard behavior. Icon effects respect reduced motion. Billing, Organization and Quickstart use the same choice rules.
+
+Desktop mock evidence: [previous tabs](../../docs/contributing/investigations/assets/console-tabs/topic02-tabs-before-light.png), [updated light tabs](../../docs/contributing/investigations/assets/console-tabs/topic02-tabs-light.png), and [updated dark tabs](../../docs/contributing/investigations/assets/console-tabs/topic02-tabs-dark.png). The comparison isolates this change against the sidebar parent; both versions already use Inter and Commit Mono. Billing tabs retain arrow-key navigation and their associated panels.
+
+## Finding resources and reading quotas
+
+API keys use the shared list filter and match names case-insensitively after trimming whitespace. The result count reflects visible keys; a filter miss offers Clear filter while the first-use state retains creation guidance. Revocation still targets the selected key by user, name and organization.
+
+The Domains toolbar reserves a separate column for Request domain; quota and limit explanations occupy the following row so they cannot displace the action on desktop. Decorative quota ticks accompany exact counts and are omitted for unknown or unlimited limits. Boxes fleet counts remain independent of the list filter and appear only at ten or more Boxes, in a compact summary strip.
+
+Desktop mock comparisons: [API keys before](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-keys-before.png), [after](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-keys-after.png), [filtered](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-keys-filtered.png); [Domains before](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-domains-before.png) and [after](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-domains-after.png); [Boxes before](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-boxes-before.png) and [after](../../docs/contributing/investigations/assets/console-resource-toolbar/toolbar-boxes-after.png). Both revisions use the same temporary synthetic fixtures (three keys, fourteen Boxes, one domain at its limit). These screenshots isolate toolbar changes against the navigation parent; fixture injection is not shipped.
+
+## Resource icon state accents
+
+Box and Volume icons show restrained lifecycle accents while retaining adjacent status text and existing action rules. Only transitional work animates; pending Volume work stays static. Domain accents mean a binding exists, not that DNS or the endpoint is healthy. Unknown states remain neutral. Decorative SVGs are hidden from assistive technology, and reduced-motion preferences disable their animations.
+
+Desktop mock comparisons use the same built-in fixtures on the toolbar parent and this revision: [Boxes before](../../docs/contributing/investigations/assets/console-resource-icons/resource-icons-boxes-before.png) and [after](../../docs/contributing/investigations/assets/console-resource-icons/resource-icons-boxes-after.png); [Volumes before](../../docs/contributing/investigations/assets/console-resource-icons/resource-icons-volumes-before.png), [after](../../docs/contributing/investigations/assets/console-resource-icons/resource-icons-volumes-after.png), and [dark](../../docs/contributing/investigations/assets/console-resource-icons/resource-icons-volumes-dark.png). These static images illustrate state accents; transient motion is verified in the browser and suppressed under reduced motion.
+
+## Resource row layout
+
+Resource names and icons share a single horizontal identity region. Boxes expose Image, CPU and Memory as separate desktop columns; full technical values remain available through their titles. Status and actions retain fixed space. Members show invitation sender and expiry in separate owner-only columns instead of stacking them below the email. API keys, Volumes and Domains use the same identity geometry and quiet row actions. Shared list rows are 48px high.
+
+Name copying reuses the clipboard hook: success appears after the write completes, failure leaves the name uncopied, and the action does not navigate the row.
+
+Desktop mock evidence: [Boxes before](../../docs/contributing/investigations/assets/console-row-layout/rows-boxes-before.png), [after](../../docs/contributing/investigations/assets/console-row-layout/rows-boxes-after.png), [dark](../../docs/contributing/investigations/assets/console-row-layout/rows-boxes-dark.png); [Members before](../../docs/contributing/investigations/assets/console-row-layout/rows-members-before.png) and [after](../../docs/contributing/investigations/assets/console-row-layout/rows-members-after.png). Both revisions use the same built-in mock records; these screenshots isolate the row layout from the icon parent.
+
+Image rows use full curated references with quieter registry/version context, shared identities and compact quota ticks beside exact custom-image counts; total image bytes remain separately visible. Registry rows follow the same identity and action treatment. Billing document and wallet transaction types use readable title case, with dates and amounts retaining monospace alignment; wallet statuses reuse the shared marker without changing their existing vocabulary. [Image list before](../../docs/contributing/investigations/assets/console-row-layout/rows-images-before.png) and [after](../../docs/contributing/investigations/assets/console-row-layout/rows-images-after.png).
+
+### Resource request feedback
+
+ResourceLayout owns the shared placement of loading, empty, and failed inventories. Initial requests use an assembling Box with a static reduced-motion fallback. Image and registry inventories distinguish missing data from an empty successful response: initial failures offer Retry, while refresh failures retain cached rows with an inline recovery notice. Transport details stay out of user-facing messages. Filters remain disabled until an inventory exists.
+Resource tables retain a minimum readable width in narrow desktop containers. Boxes keep the sticky header and records in one scrolling region so horizontal scrolling cannot misalign columns. Member tables use a wider minimum for owner-only invitation columns.
+
+Boxes, Volumes, Domains, and API Keys use the same request-state distinction. First-request failures offer Retry instead of an empty inventory. Background refresh errors retain loaded records, and an active retry disables its recovery button. Domain permission messages remain separate from request failures.
+
+Boxes filters query the server, so they remain editable after a failed request even when no inventory is cached. Changing a search can recover independently of Retry. Client-side inventory filters still wait for data.
+
+### Contextual documentation links
+
+Feature guide links lead to the task named by their label, rather than the documentation landing page. Volumes opens the Cloud Volumes guide; image help and the template picker open Use your own image; SSH opens its Cloud connection guide. These destinations live in `constants/ExternalLinks.ts` so changes can be reviewed centrally.
+
+API Key and Webhook empty states no longer advertise generic home-page links as setup instructions. The profile menu still offers the documentation home. Guide links use the shared colored, underlined treatment, keeping them distinct from secondary action buttons.
+
+The source scan catches inline URLs and appended paths; it does not prove a destination's meaning or availability. When updating a guide, open the destination and check its content against the UI task.
+
+
+### Inspecting image versions
+
+Image details presents Tags, Versions, referencing Boxes, and pin history as single-line rows beneath a compact summary. The detail page offers View SDK example instead of duplicate Box creation controls. Curated images retain their short reference in SDK examples; organization images use their existing start reference.
+
+Select a version digest to inspect and copy its complete digest, original pull reference, first-seen timestamp, and recorded upstream status. A missing upstream digest remains a past observation: only runners that cached the version can still start it; other runners need an available version pinned under a new alias. The Versions table scrolls horizontally in narrow containers, reserving space for the digest and upstream marker. Full provenance remains available in the dialog.
+
+Pinning guidance belongs in the Pin a tag dialog. Pin/unpin permissions, OCI tag validation, API error feedback, and running Box behavior are unchanged. Referencing Boxes retain their detail links and status indicators. The page scrolls naturally instead of placing its tables in a second vertical scrolling region.
+
+### Checkpoint controls and recovery
+
+Checkpoint creation and Box restoration use the shared form dialog, field styles and footer actions. Source Box is a themed selector; eligibility filtering, fixed-source rechecks, permissions and organization-switch guards remain unchanged. Invalid names explain their accepted format without discarding the draft. Deletion requires the exact checkpoint name and retains the confirmation after a refusal.
+
+The inventory uses the shared single-line row layout with source links, explicit status markers and a disk-and-clock glyph. A failed source lookup leaves the source identifier visible; only a successful lookup can identify a deleted source. Empty filtered results offer Clear filter.
+
+Initial capability and inventory failures share one recovery region and Retry retries failed requests. Refresh failures retain cached inventory, including a previously empty result. Recovery buttons are disabled during their own requests. Capability-disabled feedback remains distinct from a request failure, and retains Retry capabilities if refreshing that cached result fails. The inventory scrolls locally below its minimum width so names and actions remain readable. Creating-state motion respects reduced motion; failed-status details remain available to keyboard users.
+
+### CI runner capacity and recovery
+
+Runners use single-line resource rows, explicit status text and fixed 25-row pagination. Server-side search stays editable after a failed request. Initial failures show a retry state; refresh failures retain cached rows, including a successful empty inventory. Cached page counts remain available after a refresh failure, allowing navigation to another page. Paging stays locked during active requests; placeholder data does not provide a page count. Polling and socket invalidation remain active.
+
+Owners edit the concurrency limit in a centered modal. Numeric text stays editable until submission validates it; zero pauses new jobs, and “Use account limit” clears the draft to inherit the account allowance. Cancellation discards the draft. Saving locks dismissal and duplicate submission, while failures keep the draft available for correction. Focus returns to Edit limit when the modal closes.
+
+### CI GitHub connection management
+
+Connects filters account names locally and uses the shared table, empty, loading and retry states. Refresh failures retain existing connections. Repository details expand within the account row, and policy updates use the themed checkbox and form dialog. Failed updates retain the draft; pending mutations remain scoped to the original organization. The callback recovery screen keeps the same authorization and storage-recovery behavior with aligned typography and buttons.
+
+Mock previews support `?preview=ci-empty` and `?preview=ci-repositories`; the latter includes enough repositories to exercise paging. These fixtures run only with dashboard mocking enabled and do not change production APIs.
+
+The GitHub account picker keeps account names on their own full-width row below
+the small-screen breakpoint; account type and actions follow on a second row.
+Desktop rows retain aligned columns. Expanded repository details span both layouts.
+
+### Terminal viewport controls
+
+Terminal text size uses the shared themed selector. Changing size refits the existing xterm instance without reconnecting or replacing its buffer. The terminal loads the configured monospace font before applying it; a failed font request keeps a usable fallback and the active shell.
+
+Maximize expands the current terminal in place; Restore returns to its prior layout. Both actions return keyboard focus to the existing terminal so typing continues without an extra click. Covered application controls become inert, and page scrolling is restored when leaving maximized mode or unmounting. Press Ctrl+Shift+F6 inside the terminal to focus the Maximize/Restore button, then Enter to activate it. This shortcut is displayed while maximized; ordinary Escape, Tab and F6 remain available to terminal applications. These viewport controls do not change shell authentication, permission checks, reconnection, or runner lifecycle.
+
+### Stable Box detail views
+
+Overview and Terminal share one Box header, lifecycle actions, SSH controls and tab position. The route selects the content pane; entering Terminal does not request the Overview image or volume catalogs. Leaving Terminal still unmounts its shell, while maximizing inside Terminal preserves it. Changing Box or organization resets Box-scoped UI state.
+
+Overview presents provisioned CPU, memory and disk without implying measured usage. Configuration and activity share a compact panel; mounted volumes remain conditional. Long references wrap inside their fields. The status label reuses the list's presentation, including Pulling image. Existing lifecycle permissions and mutation behavior remain intact.
+
+### Inspecting Box network policy
+
+The Overview Network section distinguishes disabled, unrestricted, restricted,
+and unknown outbound policies. Expand a restricted policy to inspect the exact
+API-reported destination rules; rules may contain hostnames or CIDRs. The
+console does not infer live traffic, reachability, or open guest ports.
+
+Domains lists organization-owned bindings targeting this Box, including the
+destination port. Other Boxes, application targets, and unbound domains are
+excluded. Management permission is required to fetch and display bindings.
+Loading, empty results, and failures remain distinct; refresh failures retain
+known bindings with a retry action. Organization changes never reuse the previous
+organization’s bindings as placeholder data. Only HTTP(S) URLs without embedded
+credentials receive copy/open actions.
+
+### Explicit tunnel request contracts
+
+`ApiClient.prepareBoxTunnel(org, box, port, isPublic, signal)` sends an explicit
+public access mode and validates the returned URI and descriptor. Private
+creation is unavailable in the Console: private requests are refused locally before
+any HTTP request. A capability read cannot guarantee which server handles a subsequent
+write during rolling deployments. This frontend change uses existing API endpoints.
+
+`revokeBoxTunnel` deletes the declaration for a port without checking Box state
+or inbound access. Both methods reject ports outside 1–65535 before making a
+request and apply bounded request timeouts. They do not automatically retry
+mutations. Refusals are distinguished from uncertain outcomes: transport failures
+or malformed creation responses may follow a successful server mutation. Error
+objects never retain the response or token. URI values must be strings; URL-parser
+coercion cannot turn a malformed response into a usable descriptor. Public descriptors
+must have a null token.
+
+The Overview Create tunnel action uses these methods directly.
+
+### Creating and revoking tunnels
+
+Create tunnel first checks whether the Box can serve a tunnel and whether inbound
+access is enabled. Enabling inbound also restores previously configured tunnels
+under their existing access policies. Unknown inbound state offers Refresh status;
+the console never guesses that a failed enable request succeeded.
+
+The port form explicitly discloses public access before submission: anyone with the
+URL can access the port. It offers no Private option or access-token controls. The
+configured result shows its exact port and public access mode. Closing the dialog does not
+revoke access. The console clears its local result on Box, organization, client,
+or permission changes and aborts outstanding requests, including inbound enablement.
+Cancellation stops the client from waiting; it cannot undo a mutation already
+accepted by the server. Reopen the Box to read its current inbound state.
+
+Revoke by port remains available for stopped Boxes and disabled inbound access.
+A result-specific revoke targets that exact port. Uncertain creation locks the
+submitted port and offers revocation instead of retrying creation. Existing
+connections can survive revocation; new requests are blocked after cache expiry.
+
+### Shared control surfaces
+
+Text fields, selectors and resource filters share a neutral inset surface. Floating
+menus and tooltips use the same shallow elevation; dialogs and sheets use a deeper
+shadow. Hard corners, structural borders, and existing keyboard-focus rings remain.
+Form bodies show subtle scroll edges only when more content is available. Resource
+names use the technical-value font while preset labels remain interface text.
+
+Grouped inputs and textareas inherit their InputGroup surface and focus ring; the inner controls remain transparent without an inset shadow. Standalone fields retain their subtle inset surface.
+
+### Content tabs and template filters
+
+Image views, SDK example languages and Webhook views use the shared underline
+tabs and semantic icons. Template categories remain compact selected choices,
+with category icons and wrapping at constrained widths. Selecting a language
+still changes only the displayed example; selecting an Image view preserves its
+existing route behavior. The SDK example's Quickstart link uses the shared link color.
+
+### Billing history refresh feedback
+
+The Wallet tab retains loaded invoices and credit activity while refreshing. A failed refresh shows a retry notice above the cached table; first-load failure uses the shared resource error state instead of an empty table. Pagination remains available when the cached response includes its page count.
+
+An unsuccessful refresh does not mean the wallet has no records. Both histories keep their existing query keys and payment operations; Retry repeats only the read request.
+
+### Management section hierarchy
+
+Billing and Organization section headings share the resource heading layout: a quiet uppercase label, optional count, divider and optional action. Existing SectionTitle callers delegate to the shared heading so dense management panels use one hierarchy.
+
+Interface labels use the sans-serif role. Currency, quota and plan-comparison values use monospace with tabular figures for scanning; this does not change amounts or billing behavior.
+
+### Resource review scenarios
+
+With mock mode enabled, add `?preview=resource-empty`, `?preview=resource-error`, or `?preview=resource-loading` to a resource page. These opt-in handlers produce empty collections, failed reads, or pending reads across the resource families. Remove the parameter and reload to return to normal fixtures. Empty CI responses retain zero-used capacity and valid account/CI limits, so the summary and Edit limit remain available.
+
+`/dashboard/boxes?preview=fleet` adds seven Boxes on initial load, allowing review of the fleet statistics threshold. The web-api fixture includes outbound allow rules for Network inspection. Preview handlers run only through the mock worker; they do not change backend behavior.
+
+A filtered Box list with no matches uses the same clear-filter state as other resources. Clear filter preserves unrelated filters and returns to the list; a truly empty account retains its creation guidance.
+
+### Recovery regression coverage
+
+The dashboard suite exercises clipboard success and refusal, public tunnel descriptor
+validation and actionable errors, lifecycle labels, and keyboard access to checkpoint
+and runner failure reasons. CI tests also cover repository disclosure without changing
+the selected account, missing runner metadata, and explicit retries that retain cached
+connections and runners. These tests use the existing frontend API contracts.
+
+## Organization context
+
+After authentication, users with multiple organizations select an organization before
+organization business providers mount. One organization enters directly; zero
+organizations offers refresh and another-account recovery. Invitation and email
+verification URLs complete their existing scoped flow before this gate applies.
+
+The 64px Console header displays the active organization. Multiple memberships
+open a compact switcher showing names and complete IDs; search appears above five
+memberships. The profile menu contains account actions, not another organization list. On mobile,
+API Keys remains available in the navigation menu while its header shortcut is hidden.
+
+Selection is stored in tab-local sessionStorage with the authenticated user ID.
+Reload and token renewal restore a valid confirmation; explicit logout clears it.
+The legacy localStorage ID is a compatibility hint, not a login confirmation.
+A missing or removed selection returns multiple-membership users to the chooser.
+The server remains responsible for authorizing every organization API request.
+
+Switching validates membership without changing the current permission context,
+saves the session, then performs a full document navigation. This discards in-memory
+query state and connections. Resource lists retain their section without query/hash;
+Box and Image details return to their lists. Settings and billing switches land on
+Boxes, avoiding a destination that may require permissions the new member lacks.
+Non-list pages ask before discarding edits or terminal connections. Running Boxes
+continue running. This conservative route warning is not general form-dirty tracking;
+list-page modal editors already block access to the header.
+
+A failed membership request or session write leaves the current context intact and
+shows a retryable error. Failed invitation entry can be retried through the header.
+Email verification waits for organization selection and does not replay the token
+when React effects rerun. GitHub CI authorization callbacks save the authenticated
+user’s organization session before returning to Connects, including attempts started
+before the session selection rollout. Storage failure keeps a retry action on the callback.
+
+### Local organization review
+
+From `apps/`, run:
+
+```sh
+VITE_MOCK_MULTIPLE_ORGANIZATIONS=true node scripts/start-dashboard.mjs --target=mock --host 127.0.0.1 --port 3187
+```
+
+The existing MSW worker supplies three synthetic memberships. Without the flag,
+mock mode has one organization. Mock resource fixtures are shared: these previews
+verify navigation and UI, not backend resource isolation. Review with real accounts
+having distinct memberships and resources before production rollout.

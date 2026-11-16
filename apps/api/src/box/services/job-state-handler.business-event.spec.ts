@@ -25,7 +25,7 @@ describe('JobStateHandlerService business events', () => {
     const redisLockProvider = { unlock: jest.fn().mockResolvedValue(undefined) } as any
     // A failed create or start asks for the pull failure's reason; pass the job's own through.
     const pullFailures = { reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) } as any
-    return new JobStateHandlerService(boxRepository, redisLockProvider, {} as any, pullFailures)
+    return new JobStateHandlerService(boxRepository, redisLockProvider, {} as any, pullFailures, {} as any)
   }
 
   function job(type: JobType, status: JobStatus, errorMessage?: string): Job {

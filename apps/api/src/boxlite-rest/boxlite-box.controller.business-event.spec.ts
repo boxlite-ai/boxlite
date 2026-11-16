@@ -6,6 +6,7 @@
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxState } from '../box/enums/box-state.enum'
 import { Context } from '../common/context/context'
+import { subscribeBusinessEvents } from '../common/utils/business-event.util'
 
 const organization = { id: '11111111-1111-4111-8111-111111111111' }
 const authContext = { organization, organizationId: organization.id }
@@ -30,13 +31,51 @@ function makeController() {
     toBoxDto: jest.fn().mockResolvedValue(startedBox),
   }
   const commerceBoxLimitService = { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(3) }
-  const controller = new BoxliteBoxController(boxService as never, {} as never, commerceBoxLimitService as never)
+  const controller = new BoxliteBoxController(
+    boxService as never,
+    {} as never,
+    commerceBoxLimitService as never,
+    {} as never,
+  )
   return { controller, boxService }
 }
 
 describe('BoxliteBoxController business event actor', () => {
   // UserContext builds this from the request: who called, and how.
   const ctx = Context.user({ userId: 'user-1', authMethod: 'api_key' })
+
+  it.each([false, true])('records an admitted checkpoint request even when waiting fails: %s', async (waitFails) => {
+    const observed: Readonly<Record<string, string>>[] = []
+    const dispose = subscribeBusinessEvents((event) => observed.push(event))
+    const recovery = { createBox: jest.fn().mockResolvedValue(startedBox) }
+    const waiter = { waitForStarted: jest.fn().mockResolvedValue(startedBox) }
+    if (waitFails) waiter.waitForStarted.mockRejectedValue(new Error('wait failed'))
+    const controller = new BoxliteBoxController(
+      {} as never,
+      waiter as never,
+      { resolveMaxCreatedBoxes: async () => 3 } as never,
+      recovery as never,
+    )
+    try {
+      await controller.createBox(authContext as never, { checkpoint_id: 'base' } as never, ctx).catch(() => undefined)
+      expect(observed).toEqual([
+        expect.objectContaining({
+          'event.name': 'box.create',
+          'event.outcome': 'requested',
+          'correlation.id': startedBox.id,
+        }),
+      ])
+      expect(observed[0]).toMatchObject({ 'user.id': 'user-1' })
+      observed.length = 0
+      recovery.createBox.mockRejectedValue(new Error('admission failed'))
+      await expect(
+        controller.createBox(authContext as never, { checkpoint_id: 'base' } as never, ctx),
+      ).rejects.toThrow()
+      expect(observed).toEqual([])
+    } finally {
+      dispose()
+    }
+  })
 
   it('creates, starts, stops and deletes a box as the calling user', async () => {
     const { controller, boxService } = makeController()

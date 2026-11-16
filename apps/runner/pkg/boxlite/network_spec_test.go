@@ -136,11 +136,11 @@ func TestCreateRejectsMissingOutboundPolicyBeforeSideEffects(t *testing.T) {
 func TestRecoverRejectsUnrecreatableSecretsBeforeDestroy(t *testing.T) {
 	enabled := true
 	cases := map[string][]dto.SecretDTO{
-		"no hosts":   {{Name: "a", Value: "real-value"}},
-		"empty host": {{Name: "a", Value: "real-value", Hosts: []string{""}}},
+		"no hosts":   {{Name: "a", Value: "real-value", Headers: map[string]string{"Authorization": "Bearer {value}"}}},
+		"empty host": {{Name: "a", Value: "real-value", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{""}}},
 		"same host and header": {
-			{Name: "a", Value: "real-value", Hosts: []string{"api.example.com"}},
-			{Name: "b", Value: "real-value", Hosts: []string{"API.example.com"}},
+			{Name: "a", Value: "real-value", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"api.example.com"}},
+			{Name: "b", Value: "real-value", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"API.example.com"}},
 		},
 	}
 	for name, secrets := range cases {
@@ -169,7 +169,7 @@ func TestRecoverRejectsMissingOutboundPolicyBeforeDestroy(t *testing.T) {
 
 func TestValidateRecreatableSecretsAllowsHostRepeatedWithinOneSecret(t *testing.T) {
 	err := validateRecreatableSecrets([]dto.SecretDTO{
-		{Name: "a", Value: "real-value", Hosts: []string{"api.example.com", "API.example.com"}},
+		{Name: "a", Value: "real-value", Headers: map[string]string{"Authorization": "Bearer {value}"}, Hosts: []string{"api.example.com", "API.example.com"}},
 	})
 	if err != nil {
 		t.Fatal(err)

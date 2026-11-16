@@ -650,8 +650,10 @@ const docTemplate = `{
                     }
                 },
                 "cpuQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "description": "CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.",
+                    "type": "number",
+                    "maximum": 16,
+                    "minimum": 0.125
                 },
                 "entrypoint": {
                     "type": "array",
@@ -679,14 +681,18 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "memoryQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "type": "number",
+                    "minimum": 0.125
                 },
                 "metadata": {
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
                     }
+                },
+                "nestedVirtualization": {
+                    "description": "Requires explicit authorization on the Runner process; omitted means off.",
+                    "type": "boolean"
                 },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
@@ -808,8 +814,10 @@ const docTemplate = `{
             ],
             "properties": {
                 "cpuQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "description": "CPU allocation in cores (0.125–16), in increments of 0.001; omitted means 1.",
+                    "type": "number",
+                    "maximum": 16,
+                    "minimum": 0.125
                 },
                 "env": {
                     "type": "object",
@@ -828,8 +836,8 @@ const docTemplate = `{
                     "minimum": 0
                 },
                 "memoryQuota": {
-                    "type": "integer",
-                    "minimum": 1
+                    "type": "number",
+                    "minimum": 0.125
                 },
                 "osUser": {
                     "type": "string"
@@ -893,6 +901,9 @@ const docTemplate = `{
                 },
                 "metrics": {
                     "$ref": "#/definitions/RunnerMetrics"
+                },
+                "nestedVirtualizationEnabled": {
+                    "type": "boolean"
                 },
                 "serviceHealth": {
                     "type": "array",
@@ -988,10 +999,17 @@ const docTemplate = `{
         "dto.SecretDTO": {
             "type": "object",
             "required": [
+                "headers",
                 "name",
                 "value"
             ],
             "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "hosts": {
                     "type": "array",
                     "items": {

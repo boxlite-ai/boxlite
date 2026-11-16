@@ -274,8 +274,7 @@ fn enable_controllers(cgroup_path: &Path) -> Result<(), JailerError> {
     Ok(())
 }
 
-/// CFS period for `cpu.max`, in microseconds (the kernel default).
-const CPU_PERIOD_US: u64 = 100_000;
+use crate::runtime::cpu_count::CPU_PERIOD_US;
 
 /// Apply the explicit aggregate Box CPU bandwidth, preserving stricter legacy limits.
 pub(crate) fn set_cpu_max(
@@ -291,12 +290,7 @@ pub(crate) fn set_cpu_max(
 }
 
 fn cpu_quota_us(cpus: crate::runtime::cpu_count::CpuCount, limits: &ResourceLimits) -> u64 {
-    // The legacy quota is max_cpu_time cores over a one-second period.
-    // Compare equivalent budgets at the explicit limit's 100 ms period.
-    let requested = u64::from(cpus.millicpu()) * (CPU_PERIOD_US / 1000);
-    limits.max_cpu_time.map_or(requested, |limit| {
-        requested.min(limit.saturating_mul(CPU_PERIOD_US))
-    })
+    cpus.cfs_quota_us(limits.max_cpu_time)
 }
 
 /// Apply resource limits to a cgroup.
@@ -497,7 +491,7 @@ mod tests {
     #[test]
     fn fractional_cpus_quota_respects_precision_and_legacy_budget() {
         let mut limits = ResourceLimits::default();
-        for (cores, quota) in [(0.01, 1_000), (0.125, 12_500), (2.0, 200_000)] {
+        for (cores, quota) in [(0.125, 12_500), (0.126, 12_600), (2.0, 200_000)] {
             assert_eq!(
                 cpu_quota_us(
                     crate::runtime::cpu_count::CpuCount::new(cores).unwrap(),

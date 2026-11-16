@@ -17,6 +17,20 @@ use crate::CAdvancedBoxOptions;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::util::c_str_to_string;
 
+/// Set nested virtualization for a new box. Runtime experimental authorization
+/// is checked by create; the value is saved with the existing BoxConfig.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_nested_virtualization(
+    opts: *mut CAdvancedBoxOptions,
+    enabled: c_int,
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { opts.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+    handle.options.nested_virtualization = enabled != 0;
+    BoxliteErrorCode::Ok
+}
+
 /// Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
 /// Copies the path; invalid input leaves the previous option unchanged.
 #[unsafe(no_mangle)]

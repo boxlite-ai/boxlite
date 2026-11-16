@@ -25,8 +25,12 @@ import type { PosthogConfig } from './posthog-config';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RateLimitConfig } from './rate-limit-config';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { TurnstileConfig } from './turnstile-config';
 
 export interface BoxliteConfiguration {
+    'turnstile'?: TurnstileConfig;
     /**
      * BoxLite version
      */

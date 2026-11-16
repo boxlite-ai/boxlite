@@ -210,6 +210,7 @@ describe('OrganizationService.handleUserEmailVerifiedEvent', () => {
     await service.handleUserEmailVerifiedEvent(payload)
 
     expect(entityManager.save).toHaveBeenCalledWith(
+      Organization,
       expect.objectContaining({ suspended: false, suspensionReason: null, suspendedAt: null }),
     )
   })

@@ -158,6 +158,14 @@ export type StackProviders = {
    */
   servesUserDomain: () => boolean
   /**
+   * Whether this cloud's runners keep box state on a data disk the control
+   * plane can grow online. Asked before the API is placed, because the API is
+   * granted the resize capability only where a disk exists to grow — a grant
+   * bounded to resources the cloud does not create would be a permission that
+   * silently matched nothing.
+   */
+  resizeRunnerDisks: () => boolean
+  /**
    * No host, like the runner: on the cloud that deploys it this is a managed
    * service rather than a cluster task, so it takes its placement from the
    * network directly. The other cloud answers with the inactive handle.
@@ -464,6 +472,10 @@ export const deployStack = ({
     // full hostnames still use the stored ownership record.
     ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
     S3_DEFAULT_BUCKET: storage.name,
+    // Storage may precede runner rollout. Admission requires a separate opt-in.
+    CHECKPOINTS_ENABLED: inputs.apiEnvironment.CHECKPOINTS_ENABLED ?? 'false',
+    // Supply the archive prefix wherever storage provides the dedicated bucket.
+    ...(storage.checkpoints.active ? { CHECKPOINT_ARCHIVE_PREFIX: storage.checkpoints.archivePrefix } : {}),
   }
   assertOneChannelPerName({
     workload: 'API',
@@ -499,7 +511,7 @@ export const deployStack = ({
     domain: inputs.domain,
     environment: apiEnvironment,
     secrets: inputs.apiSecrets,
-    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials }),
+    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials, resizeRunnerDisks: providers.resizeRunnerDisks() }),
   })
 
   const proxyEnvironment = {
@@ -587,6 +599,7 @@ export const deployStack = ({
     apiUrl: api.address,
     otlpUrl: collector.otlpUrl,
     registryProxyHost,
+    checkpointBucket: storage.checkpoints.active ? storage.checkpoints.bucket : null,
     environment: runnerEnvironment,
     secrets: inputs.runnerSecrets,
   })
@@ -614,19 +627,28 @@ export const deployStack = ({
  * List its own bucket, which is the boot probe; create, tag and delete the
  * volume buckets it owns, which is bounded by the storage module's prefix; vend
  * a scoped credential for one of them; read telemetry back, which exists only
- * where a stage keeps any; and write registry passwords it cannot read back,
- * which exists only where the registry proxy does. Nothing here names an ARN or
- * a role — the provider bundle expands each sentence into its cloud's own
- * grants.
+ * where a stage keeps any; write registry passwords it cannot read back, which
+ * exists only where the registry proxy does; and delete checkpoint archives,
+ * which exists only where the storage module keeps a checkpoint bucket. Nothing
+ * here names an ARN or a role — the provider bundle expands each sentence into
+ * its cloud's own grants.
+ *
+ * A provider names each grant by its place in this list, so a new capability
+ * goes last: inserted earlier, it would move the grants after it to new
+ * resources, and replacing a non-authoritative IAM member deletes the binding
+ * its replacement holds.
  */
 export const capabilitiesFor = ({
   storage,
   clickhouse,
   registryCredentials,
+  resizeRunnerDisks,
 }: {
   storage: Storage
   clickhouse: ClickHouse
   registryCredentials: RegistryCredentialStore
+  /** Whether this cloud's runners carry a data disk, asked of the provider bundle. */
+  resizeRunnerDisks: boolean
 }): ApiCapability[] => [
   { kind: 'list-own-bucket', storage },
   { kind: 'manage-volume-buckets', storage },
@@ -635,4 +657,8 @@ export const capabilitiesFor = ({
   ...(registryCredentials.active
     ? ([{ kind: 'write-registry-credentials', store: registryCredentials }] as ApiCapability[])
     : []),
+  ...(storage.checkpoints.active
+    ? ([{ kind: 'manage-checkpoint-archives', checkpoints: storage.checkpoints }] as ApiCapability[])
+    : []),
+  ...(resizeRunnerDisks ? ([{ kind: 'resize-runner-disks' }] as ApiCapability[]) : []),
 ]

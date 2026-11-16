@@ -170,6 +170,24 @@ export interface VolumeHandle {
   remove(id: string, force?: boolean | null): Promise<void>;
 }
 
+/** Independent managed disk archive, local or organization scoped. */
+export interface CheckpointInfo {
+  id: string;
+  name: string;
+  sourceBoxId: string;
+  createdAt: string;
+  sizeBytes: number;
+  state: "creating" | "ready" | "failed" | "deleting";
+  errorReason?: string;
+}
+
+export interface CheckpointHandle {
+  create(source: string, name?: string | null): Promise<CheckpointInfo>;
+  list(): Promise<CheckpointInfo[]>;
+  get(key: string): Promise<CheckpointInfo>;
+  remove(key: string, force?: boolean | null): Promise<void>;
+}
+
 /** A registry login the server pulls private images with. Has no password. */
 export interface RegistryCredential {
   /** UUID that {@link RegistryHandle.remove} takes. */
@@ -282,6 +300,7 @@ export interface JsSecret {
   value: string;
   hosts?: string[];
   placeholder?: string;
+  headers: Record<string, string>;
 }
 
 export interface JsSecurityOptions {
@@ -317,6 +336,8 @@ export interface JsAdvancedBoxOptions {
 export interface JsBoxOptions {
   image?: string;
   rootfsPath?: string;
+  /** REST-managed checkpoint to create from; leave every other option unset. */
+  checkpoint?: string;
   cpus?: number;
   memoryMib?: number;
   diskSizeGb?: number;
@@ -766,6 +787,7 @@ export interface JsBoxlite {
   metrics(): Promise<JsRuntimeMetrics>;
   readonly images: ImageHandle;
   readonly volumes: VolumeHandle;
+  readonly checkpoints: CheckpointHandle;
   /**
    * The organization's domains.
    *

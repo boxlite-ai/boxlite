@@ -39,23 +39,23 @@ npm run --silent mstage config get -- --stage dev
 `get` reads the supplied environment variable before the file and emits a stage-keyed JSON object.
 Neither command needs cloud credentials; GitHub writes require an authenticated `gh` session.
 
-| Module | Responsibility |
-| --- | --- |
-| `login` | Check or establish declared provider sessions |
-| `aws` | Resolve stage identity/region or execute under that identity |
-| `config` | Carry a stage declaration to/from its CI environment |
-| `env` | Read/write the encrypted stage environment |
-| `state` | Recover a stopped deployment's lock/checkpoint |
+| Module   | Responsibility                                               |
+| -------- | ------------------------------------------------------------ |
+| `login`  | Check or establish declared provider sessions                |
+| `aws`    | Resolve stage identity/region or execute under that identity |
+| `config` | Carry a stage declaration to/from its CI environment         |
+| `env`    | Read/write the encrypted stage environment                   |
+| `state`  | Recover a stopped deployment's lock/checkpoint               |
 
 mstage does not build artifacts or declare resources. Those belong to
 [mbuild](../mbuild/README.md) and [mdeploy](../mdeploy/README.md).
 
 ## The stage environment
 
-| Home | Bootstrap record | Encrypted values | Encryption key |
-| --- | --- | --- | --- |
-| AWS | SSM `/sst/bootstrap` | S3 `secret/<app>/<stage>.json` | SSM `/sst/passphrase/<app>/<stage>` |
-| GCP | Secret Manager `mstage-bootstrap` | GCS `secret/<app>/<stage>.json` | Secret Manager `mstage-passphrase-<app>-<stage>` |
+| Home | Bootstrap record                  | Encrypted values                | Encryption key                                   |
+| ---- | --------------------------------- | ------------------------------- | ------------------------------------------------ |
+| AWS  | SSM `/sst/bootstrap`              | S3 `secret/<app>/<stage>.json`  | SSM `/sst/passphrase/<app>/<stage>`              |
+| GCP  | Secret Manager `mstage-bootstrap` | GCS `secret/<app>/<stage>.json` | Secret Manager `mstage-passphrase-<app>-<stage>` |
 
 Both backends use AES-256-GCM. Bootstrap must establish the bucket and key first.
 A shared storage format does not migrate cloud resources or rewrite cloud-specific values.
@@ -100,6 +100,15 @@ GCP addresses may include `/versions/<version>`. Write with `--json`; plaintext
 where an address belongs is refused.
 
 Creating the secret and granting runtime read access remain the owner's responsibility.
+The base catalog declares hosted CI credentials as optional references consumed only
+by the API: `CI_GITHUB_APP_PRIVATE_KEY`, `CI_GITHUB_WEBHOOK_SECRET` and
+`CI_SECRET_ENCRYPTION_KEY`. They stay optional when CI is unconfigured; mdeploy
+requires all three references once the App identity is configured. Browser connect uses optional `CI_GITHUB_OAUTH_CLIENT_ID` as a plain API value and
+`CI_GITHUB_OAUTH_CLIENT_SECRET` in both API/secret groups as a reference. This is
+a separate identity OAuth App from the CI Apps. Existing CI App client-secret
+fields remain optional for legacy grants. See the
+[hosted CI setup](../mdeploy/README.md#hosted-github-ci-listener).
+
 On AWS, check execution-role policy, permissions boundary and any customer-managed KMS key;
 on GCP, check the runtime service account's access. mdeploy refuses references in groups it
 would consume directly as values. See [`src/environment/secret-address.ts`](src/environment/secret-address.ts).
@@ -133,10 +142,10 @@ Prefer refresh to reconcile cloud state before the next apply. If checkpoint rep
 resource outcome before changing pending operations; deleting a record does not undo a cloud action.
 Protected-stage recovery requires `--confirm`.
 
-| Home | Checkpoint | Lock |
-| --- | --- | --- |
-| AWS | `app/<app>/<stage>.json` | `lock/<app>/<stage>.json` |
-| GCP | `.pulumi/stacks/<app>/<stage>.json` | Pulumi lock objects for that stack |
+| Home | Checkpoint                          | Lock                               |
+| ---- | ----------------------------------- | ---------------------------------- |
+| AWS  | `app/<app>/<stage>.json`            | `lock/<app>/<stage>.json`          |
+| GCP  | `.pulumi/stacks/<app>/<stage>.json` | Pulumi lock objects for that stack |
 
 `unlock` reports the holder and rechecks before deleting. `edit` refuses a held lock, malformed
 checkpoint, or detected concurrent change, and preserves a rejected local edit for inspection.
@@ -152,12 +161,12 @@ npm run mstage aws whoami -- --stage dev
 npm run mstage aws region -- --stage dev
 ```
 
-| Provider | Credential path |
-| --- | --- |
-| GCP | Both gcloud CLI credentials and Application Default Credentials (ADC) |
-| AWS | SDK default credential chain, optionally followed by stage role assumption |
-| GitHub | Existing `gh` CLI session |
-| Auth0 | Existing `auth0` CLI session for the active tenant |
+| Provider | Credential path                                                            |
+| -------- | -------------------------------------------------------------------------- |
+| GCP      | Both gcloud CLI credentials and Application Default Credentials (ADC)      |
+| AWS      | SDK default credential chain, optionally followed by stage role assumption |
+| GitHub   | Existing `gh` CLI session                                                  |
+| Auth0    | Existing `auth0` CLI session for the active tenant                         |
 
 `login --stage` evaluates that stage's requirements. Without a stage it merges all declared
 requirements. In an interactive terminal it can offer sign-in; CI reports missing sessions and exits.
@@ -169,13 +178,13 @@ flag. Child processes receive resolved credentials so tools that cannot read the
 session can still operate. An identity check establishes who the credentials represent, not whether
 they have permission for every subsequent operation.
 
-| Value | Precedence |
-| --- | --- |
-| Stage | `--stage`, then `MSTAGE_STAGE`, otherwise error |
-| App | `--app`, then `MSTAGE_APP`, then `mstage.env.json` |
-| Region | `--region`, stage declaration, `AWS_REGION`, `AWS_DEFAULT_REGION`, otherwise error |
-| AWS role | `--role-arn`, `MSTAGE_AWS_ROLE_ARN`, stage declaration |
-| Role session name | `--role-session-name`, `MSTAGE_AWS_ROLE_SESSION_NAME`, then `mstage` |
+| Value             | Precedence                                                                         |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| Stage             | `--stage`, then `MSTAGE_STAGE`, otherwise error                                    |
+| App               | `--app`, then `MSTAGE_APP`, then `mstage.env.json`                                 |
+| Region            | `--region`, stage declaration, `AWS_REGION`, `AWS_DEFAULT_REGION`, otherwise error |
+| AWS role          | `--role-arn`, `MSTAGE_AWS_ROLE_ARN`, stage declaration                             |
+| Role session name | `--role-session-name`, `MSTAGE_AWS_ROLE_SESSION_NAME`, then `mstage`               |
 
 For unattended Auth0 tools, `signInWithClientCredentials` from `mstage/auth` accepts
 `('auth0', { domain, clientId, clientSecret })`. It replaces the CLI session for that tenant;

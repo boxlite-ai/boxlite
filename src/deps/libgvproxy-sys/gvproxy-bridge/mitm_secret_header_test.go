@@ -19,7 +19,7 @@ const (
 func headerTestSecrets() []SecretConfig {
 	return []SecretConfig{{
 		Name: "k", Hosts: []string{testSecretHost},
-		Placeholder: testSecretPlaceholder, Value: testSecretValue,
+		Placeholder: testSecretPlaceholder, Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: testSecretValue,
 	}}
 }
 
@@ -213,7 +213,7 @@ func TestMitmProxy_InvalidSecretValueIsNotLogged(t *testing.T) {
 		t.Error("upstream must not receive the request")
 	})
 	defer cleanup()
-	secrets := []SecretConfig{{Name: "k", Hosts: []string{testSecretHost}, Placeholder: testSecretPlaceholder, Value: value}}
+	secrets := []SecretConfig{{Name: "k", Hosts: []string{testSecretHost}, Placeholder: testSecretPlaceholder, Headers: map[string]string{"Authorization": "Bearer {value}"}, Value: value}}
 	client := dialThroughMITM(t, newTestCA(t), testSecretHost, addr, secrets)
 
 	req, err := http.NewRequest("GET", "https://"+testSecretHost+"/", nil)

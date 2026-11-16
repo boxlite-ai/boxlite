@@ -119,8 +119,8 @@ A port can have several names: binding a new one leaves the others in place.
 `unbind` stops routing a name: requests that start afterwards get
 `404`, connections already open run until they close, and the port's
 generated URL stays public until the tunnel is revoked. An unbound name is
-still the organization's — nobody else can claim it, it still counts against
-the organization's domain allowance, and the same organization can bind it
+still the organization's; platform names still count against the platform allowance,
+and the same organization can bind it
 again to any of its box ports. Destroying the box, including later cleanup of its
 database row, preserves the binding: `domain ls` still shows the original Box ID
 and port until explicit unbind or rebind. A destroy request first changes the
@@ -134,8 +134,9 @@ its names; another organization can then request them. If organization deletion
 fails, ownership and bindings remain intact.
 
 `domain ls` lists every full hostname the organization holds with what it routes to.
-The default table adds the allowance (`limit`, `used`, `remaining`) and `min_length`,
-the shortest new name allowed, in its footer. JSON and YAML output contain only
+The default table adds the platform allowance (`limit`, `used`, `remaining`) and `min_length`,
+the shortest new platform name allowed, in its footer. Custom domains appear in
+the same list without using that allowance. JSON and YAML output contain only
 the domain rows as an array; quiet output contains only hostnames.
 The REST list includes the allowance and also provides `domain_suffix` for the request
 preview, or null when requests are unavailable.
@@ -143,9 +144,40 @@ A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of
 the platform's own names or the API's collection names (`boxes`, `images`,
 `volumes`, `domains`); names held before `min_length` rose stay bindable.
-A box in a region served by its own proxy cannot take a platform name
-(`region_not_supported`): the app domain's wildcard record points at the
-default proxy only.
+A box in a region served by its own proxy cannot take a named domain
+(`region_not_supported`): named-domain traffic is served by the default proxy.
+
+#### Bring your own domain
+
+On an enabled GCP deployment, an organization with an active subscription can add one hostname in
+**Dashboard → Domains → Custom domains**. Live drafts occupy this separate allowance; delete an existing configuration before adding another hostname.
+Repeating the same hostname resumes its configuration. Custom domains do not consume platform-domain quota.
+
+1. Enter a public ASCII/Punycode subdomain such as `app.example.com` and click **Get DNS configuration**; apex domains and wildcards are unsupported.
+2. Add all three records: traffic CNAME, configuration-specific ownership TXT, and certificate authorization CNAME.
+3. Click **Configured, verify**; correct failed records and retry. A DNS timeout means the check was unavailable.
+4. After confirmation, the API continues HTTPS setup. Return when **Ready** to bind a Box port with a public tunnel and inbound access enabled.
+
+Use the platform hostname as the traffic CNAME target; no fixed IP is required, and admission has no suffix blacklist.
+In Cloudflare, use **DNS only** for both CNAME records. Keep the certificate authorization name distinct from the traffic name.
+If your DNS editor appends the zone suffix, enter relative names and verify the resulting full names.
+Keep the records after setup for routing and managed renewal.
+
+Preparation resumes automatically after creating a draft; preparation errors allow explicit retry without changing the ownership TXT.
+DNS verification requires confirmation. The page reads incomplete status every minute while visible; reads do not advance setup.
+The API task advances confirmed setups at startup and every minute while it runs, independently of the page.
+HTTPS errors offer **Retry**; certificate submission, issuance and map deployment may still be pending after DNS succeeds.
+**Setup completed** indicates completed HTTPS setup without confirmed active subscription eligibility; **Ready** also requires active eligibility.
+
+A newer application that verifies DNS transfers ownership and clears the previous Box binding; the old configuration becomes **Replaced**.
+Failed verification leaves the current owner unchanged. Repeated verification of the winner preserves its target.
+The new owner must complete HTTPS setup and bind its target before receiving traffic.
+
+Bind and route requests check subscription eligibility, cached for at most sixty seconds and never beyond the paid cycle.
+Suspension can take up to sixty seconds to affect new requests; existing connections are not forcibly disconnected.
+**Unbind** retains ownership and resources, though later DNS verification can transfer ownership.
+**Delete configuration** releases ownership and stops new requests before recoverable cloud cleanup; remove its DNS records afterward.
+Unconfirmed, unclaimed drafts expire after thirty idle days. See [deployment and maintenance](../../apps/infra/docs/gcp/deployment.md#customer-domain-https) for background execution requirements.
 
 Domain responses expose `hostname`, `url` and `target`; there is no short `name`
 field. CLI lists use `HOSTNAME`, including full-hostname output with `ls -q`.

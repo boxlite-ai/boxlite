@@ -10,6 +10,7 @@ export type RegistrationQuery = {
   createdTo?: string
   boxCountScope?: 'all'
   organizationId?: string
+  includeMemberEmails?: boolean
   limit: number
 }
 
@@ -50,14 +51,16 @@ const allow = (query: Record<string, unknown>, keys: string[]) => {
 }
 
 export const parseRegistrationQuery = (query: Record<string, unknown>): RegistrationQuery => {
-  allow(query, ['q', 'cursor', 'limit', 'createdFrom', 'createdTo', 'boxCountScope', 'organizationId'])
+  allow(query, ['q', 'cursor', 'limit', 'createdFrom', 'createdTo', 'boxCountScope', 'organizationId', 'include'])
   const search = text(query.q, 200)
   const createdFrom = instant(query.createdFrom)
   const createdTo = instant(query.createdTo)
   const boxCountScope = text(query.boxCountScope, 20)
   const organizationId = text(query.organizationId, 36)
+  const include = text(query.include, 32)
   if (organizationId !== undefined && (!isUUID(organizationId) || search !== undefined)) return invalid()
   if (boxCountScope !== undefined && boxCountScope !== 'all') return invalid()
+  if (include !== undefined && include !== 'memberEmails') return invalid()
   if ((search && search.length < 2) || (createdFrom && createdTo && createdFrom >= createdTo)) return invalid()
   return {
     query: search,
@@ -67,6 +70,7 @@ export const parseRegistrationQuery = (query: Record<string, unknown>): Registra
     createdTo,
     ...(boxCountScope ? { boxCountScope: 'all' as const } : {}),
     ...(organizationId ? { organizationId } : {}),
+    ...(include ? { includeMemberEmails: true } : {}),
   }
 }
 

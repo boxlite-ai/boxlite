@@ -45,6 +45,32 @@ const serviceWith = () => {
 }
 
 describe('AdminPlatformOverviewService', () => {
+  it('reports exact MiB allocations in admin list and detail responses', async () => {
+    const { service, boxes, jobs } = serviceWith()
+    const box = {
+      id: 'box-memory',
+      name: 'memory',
+      organizationId: 'org-1',
+      region: 'us',
+      state: BoxState.STARTED,
+      desiredState: BoxDesiredState.STARTED,
+      cpu: 1,
+      mem: 1,
+      memoryMib: 300,
+      disk: 10,
+      updatedAt: new Date(),
+    }
+    boxes.find.mockResolvedValue([box])
+    boxes.findOne.mockResolvedValue(box)
+    jobs.builder.getMany.mockResolvedValue([])
+    const page = await service.boxes({ limit: 10 })
+    const detail = await service.box(box.id, { jobLimit: 10 })
+    expect(page.items[0].memoryBytes).toBe('314572800')
+    expect(detail?.memoryBytes).toBe('314572800')
+    expect(boxes.find.mock.calls[0][0].select.memoryMib).toBe(true)
+    expect(boxes.findOne.mock.calls[0][0].select.memoryMib).toBe(true)
+  })
+
   it.each(['registry.test/team/python:3.13', null, undefined])(
     'returns the stored box image %s from existing list and detail queries',
     async (image) => {

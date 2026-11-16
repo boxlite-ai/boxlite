@@ -154,11 +154,13 @@ const WebhookEndpointDetails: React.FC = () => {
             </>
           ) : endpointData ? (
             <>
-              <h2 className="text-lg font-medium truncate min-w-0">{endpointData.description || 'Unnamed Endpoint'}</h2>
+              <h2 className="text-section font-medium truncate min-w-0">
+                {endpointData.description || 'Unnamed Endpoint'}
+              </h2>
               <Badge variant={endpointData.disabled ? 'secondary' : 'success'} className="shrink-0">
                 {endpointData.disabled ? 'Disabled' : 'Enabled'}
               </Badge>
-              <span className="text-sm text-muted-foreground shrink-0 hidden sm:inline">•</span>
+              <span className="text-body text-muted-foreground shrink-0 hidden sm:inline">•</span>
               <TimestampTooltip
                 timestamp={
                   typeof endpointData.createdAt === 'string'
@@ -166,7 +168,7 @@ const WebhookEndpointDetails: React.FC = () => {
                     : endpointData.createdAt.toISOString()
                 }
               >
-                <span className="text-sm text-muted-foreground cursor-default shrink-0 hidden sm:inline">
+                <span className="text-body text-muted-foreground cursor-default shrink-0 hidden sm:inline">
                   {relativeTime}
                 </span>
               </TimestampTooltip>
@@ -215,16 +217,16 @@ const WebhookEndpointDetails: React.FC = () => {
               <CardContent className="p-4 flex flex-col gap-4">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <div className="flex flex-col">
-                    <div className="text-muted-foreground text-xs mb-1">URL</div>
+                    <div className="text-muted-foreground text-meta mb-1">URL</div>
                     <Skeleton className="h-9 w-full" />
                   </div>
                   <div className="flex flex-col">
-                    <div className="text-muted-foreground text-xs mb-1">Signing Secret</div>
+                    <div className="text-muted-foreground text-meta mb-1">Signing Secret</div>
                     <Skeleton className="h-9 w-full" />
                   </div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground text-xs mb-1">Listening For</div>
+                  <div className="text-muted-foreground text-meta mb-1">Listening For</div>
                   <div className="flex flex-wrap gap-1.5">
                     <Skeleton className="h-5 w-24 rounded-full" />
                     <Skeleton className="h-5 w-32 rounded-full" />
@@ -280,24 +282,24 @@ const WebhookEndpointDetails: React.FC = () => {
               <CardContent className="p-4 flex flex-col gap-4">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <div className="flex flex-col">
-                    <div className="text-muted-foreground text-xs mb-1">URL</div>
+                    <div className="text-muted-foreground text-meta mb-1">URL</div>
                     <InputGroup className="pr-1">
-                      <InputGroupInput value={endpointData.url} readOnly className="font-mono text-sm" />
+                      <InputGroupInput value={endpointData.url} readOnly className="font-mono text-body" />
                       <CopyButton value={endpointData.url} size="icon-xs" tooltipText="Copy URL" />
                     </InputGroup>
                   </div>
                   <div className="flex flex-col">
-                    <div className="text-muted-foreground text-xs mb-1">Signing Secret</div>
+                    <div className="text-muted-foreground text-meta mb-1">Signing Secret</div>
                     {secret.loading ? (
                       <Skeleton className="h-9 w-full" />
                     ) : secret.error ? (
-                      <span className="text-sm text-muted-foreground">Failed to load</span>
+                      <span className="text-body text-muted-foreground">Failed to load</span>
                     ) : secret.data ? (
                       <InputGroup className="pr-1">
                         <InputGroupInput
                           value={isSecretRevealed ? secret.data.key : getMaskedToken(secret.data.key)}
                           readOnly
-                          className="font-mono text-sm"
+                          className="font-mono text-body"
                         />
                         <InputGroupButton
                           variant="ghost"
@@ -314,10 +316,10 @@ const WebhookEndpointDetails: React.FC = () => {
                 </div>
                 {endpointData.filterTypes && endpointData.filterTypes.length > 0 && (
                   <div>
-                    <div className="text-muted-foreground text-xs mb-1">Listening For</div>
+                    <div className="text-muted-foreground text-meta mb-1">Listening For</div>
                     <div className="flex flex-wrap gap-1.5">
                       {endpointData.filterTypes.map((eventType) => (
-                        <Badge key={eventType} variant="secondary" className="font-normal text-xs">
+                        <Badge key={eventType} variant="secondary" className="font-normal text-meta">
                           {eventType}
                         </Badge>
                       ))}

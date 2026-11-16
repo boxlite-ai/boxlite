@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
+import { SEGMENTED_LIST, SEGMENTED_TRIGGER } from '@/components/ui/tabs'
 import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
@@ -84,18 +86,18 @@ export function CostOverTime() {
         title="Cost Over Time"
         count={total > 0 ? formatMoney(total) : undefined}
         right={
-          <div className="flex items-center bg-card">
+          <div role="group" aria-label="Cost view" className={SEGMENTED_LIST}>
             {(['chart', 'list'] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setView(mode)}
-                className={`-ml-px border border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[1px] transition-colors first:ml-0 ${
-                  view === mode
-                    ? 'relative z-10 border-border-selected bg-background font-semibold text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
+                type="button"
+                aria-pressed={view === mode}
+                data-state={view === mode ? 'active' : 'inactive'}
+                className={SEGMENTED_TRIGGER}
               >
-                {mode}
+                <TabIcon name={mode === 'chart' ? 'chart' : 'list'} />
+                {mode === 'chart' ? 'Chart' : 'List'}
               </button>
             ))}
           </div>
@@ -132,7 +134,7 @@ export function CostOverTime() {
           <div className="px-[22px] py-5">
             <div className="mb-3 flex flex-wrap items-center gap-4">
               {Object.entries(chartConfig).map(([key, { label, color }]) => (
-                <span key={key} className="inline-flex items-center gap-1.5 font-mono text-[12px]">
+                <span key={key} className="inline-flex items-center gap-1.5 font-sans text-meta">
                   <span className="size-[9px] shrink-0" style={{ background: color }} />
                   <span className="text-foreground">{label}</span>
                 </span>
@@ -212,7 +214,7 @@ export function CostOverTime() {
         ) : (
           <div className="max-h-[240px] overflow-y-auto px-[22px] py-4">
             <div
-              className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+              className={`${ROW} border-b border-border pb-2 font-sans text-label uppercase tracking-[1px] text-muted-foreground`}
             >
               <span>Hour</span>
               <span className="text-right">Quota</span>
@@ -222,7 +224,7 @@ export function CostOverTime() {
             {hours.map((p) => (
               <div
                 key={p.time}
-                className={`${ROW} border-b border-border/40 py-[11px] font-mono text-[12px] transition-colors hover:bg-muted/30`}
+                className={`${ROW} border-b border-border/40 py-[11px] font-mono text-meta transition-colors hover:bg-muted/30`}
               >
                 <span className="text-foreground">{shortHour(p.time)}</span>
                 <span

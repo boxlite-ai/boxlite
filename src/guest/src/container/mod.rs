@@ -91,7 +91,7 @@ pub use lifecycle::Container;
 #[cfg(target_os = "linux")]
 pub(crate) use mount_override::validate_mount_override;
 #[cfg(target_os = "linux")]
-pub use spec::{ContainerDevices, MountOverride, UserMount};
+pub use spec::{ContainerCgroup, ContainerDevices, MountOverride, UserMount};
 #[cfg(target_os = "linux")]
 pub(crate) use zygote::CommandRejection;
 

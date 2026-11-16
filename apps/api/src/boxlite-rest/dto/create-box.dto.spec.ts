@@ -38,7 +38,7 @@ describe('CreateBoxDto cpu ceiling', () => {
 describe('CreateBoxDto resource minimums', () => {
   it.each([
     ['cpus', { cpus: 0 }],
-    ['memory_mib', { memory_mib: 128 }],
+    ['memory_mib', { memory_mib: 127 }],
     ['disk_size_gb', { disk_size_gb: 0 }],
   ])('rejects undersized %s with a min constraint', async (field, body) => {
     const errors = await validate(plainToInstance(CreateBoxDto, body))
@@ -48,7 +48,7 @@ describe('CreateBoxDto resource minimums', () => {
   })
 
   it('accepts values exactly at the minimum boundary', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { cpus: 1, memory_mib: 256, disk_size_gb: 1 }))
+    const errors = await validate(plainToInstance(CreateBoxDto, { cpus: 1, memory_mib: 128, disk_size_gb: 1 }))
 
     expect(errors).toHaveLength(0)
   })
@@ -60,11 +60,9 @@ describe('CreateBoxDto resource minimums', () => {
   })
 })
 
-// Resource sizes are integers end to end (integer DB columns); pin the
-// boundary so fractions never reach the warm-pool integer query.
+// Memory and disk retain integer storage; CPU allocations may be fractional.
 describe('CreateBoxDto resource integrality', () => {
   it.each([
-    ['cpus', { cpus: 1.5 }],
     ['memory_mib', { memory_mib: 256.5 }],
     ['disk_size_gb', { disk_size_gb: 1.5 }],
   ])('rejects fractional %s with an isInt constraint', async (field, body) => {
@@ -462,7 +460,13 @@ describe('CreateBoxDto secrets', () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         secrets: [
-          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+          {
+            name: 'openai',
+            value: 'sk-test',
+            hosts: ['api.openai.com'],
+            headers: { Authorization: 'Bearer {value}' },
+            placeholder: '<BOXLITE_SECRET:openai>',
+          },
         ],
       }),
     )
@@ -472,7 +476,11 @@ describe('CreateBoxDto secrets', () => {
 
   it('accepts a secret without a placeholder', async () => {
     const errors = await validate(
-      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }] }),
+      plainToInstance(CreateBoxDto, {
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      }),
     )
 
     expect(errors).toHaveLength(0)
@@ -494,7 +502,11 @@ describe('CreateBoxDto secrets', () => {
   })
 
   it('rejects a secret missing its name', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ value: 'sk-test', hosts: ['api.openai.com'] }] }))
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        secrets: [{ value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } }],
+      }),
+    )
 
     expect(errors).not.toHaveLength(0)
     // @ValidateNested({ each: true }) reports one child per array slot, and the

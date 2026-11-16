@@ -6,6 +6,7 @@
 import { ConflictException, NotFoundException, NotImplementedException } from '@nestjs/common'
 import { EntityManager, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { SecretStore } from '../stores/secret.store'
 import { RegistriesService } from './registries.service'
@@ -48,7 +49,11 @@ function build({
     delete: jest.fn(async () => credentials.delete()),
     update: jest.fn(async () => calls.push('update')),
     getRepository: jest.fn((entity) =>
-      entity === RegistryCredential ? credentials : { createQueryBuilder: () => builder },
+      entity === RegistryCredential
+        ? credentials
+        : entity === Checkpoint
+          ? { find: async () => [] }
+          : { createQueryBuilder: () => builder },
     ),
   }
   credentials.manager.transaction = jest.fn(async (_isolation, callback) => callback(manager)) as never

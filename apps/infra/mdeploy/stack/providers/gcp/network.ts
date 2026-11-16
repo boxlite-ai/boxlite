@@ -226,6 +226,12 @@ const ACCOUNTS: Record<WorkloadRole, string> = {
   'registry-proxy': 'RegistryProxyServiceAccount',
 }
 
+// The longer stage segment needs shorter artifacts; existing dev/prod IDs must not move.
+const STAGE_ACCOUNT_ARTIFACTS: Readonly<Record<string, string>> = {
+  'otel-collector': 'otel',
+  'registry-proxy': 'registry',
+}
+
 export const gcpNetworkProvider =
   ({ project, region, appShort }: { project: string; region: string; appShort: string }): NetworkProvider =>
   (request: NetworkRequest): Network => {
@@ -396,14 +402,17 @@ export const gcpNetworkProvider =
     const runAppRecords = [runAppApex, runAppWildcard]
 
     const accounts = Object.fromEntries(
-      Object.entries(ACCOUNTS).map(([role, resource]) => [
-        role,
-        new gcp.serviceaccount.Account(resource, {
-          project,
-          accountId: identityFor({ appShort, stage: $app.stage, artifact: role, action: 'run' }),
-          displayName: `BoxLite ${role} (${$app.stage})`,
-        }),
-      ]),
+      Object.entries(ACCOUNTS).map(([role, resource]) => {
+        const artifact = $app.stage === 'stage' ? (STAGE_ACCOUNT_ARTIFACTS[role] ?? role) : role
+        return [
+          role,
+          new gcp.serviceaccount.Account(resource, {
+            project,
+            accountId: identityFor({ appShort, stage: $app.stage, artifact, action: 'run' }),
+            displayName: `BoxLite ${role} (${$app.stage})`,
+          }),
+        ]
+      }),
     ) as Record<WorkloadRole, CloudResource>
 
     /*

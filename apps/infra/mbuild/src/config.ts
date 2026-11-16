@@ -446,19 +446,23 @@ const locate = ({
   }
 }
 
+/** Release publication reads build inputs without requiring a deployment environment. */
+export const loadArtifactConfig = ({
+  cwd = process.cwd(),
+  environment = process.env,
+}: { cwd?: string; environment?: NodeJS.ProcessEnv } = {}): BuildConfig => {
+  const base = locate({ cwd, override: environment.MSTAGE_ENV_CONFIG, filename: ENV_FILENAME })
+  return { path: base.path, basePath: base.path, ...parseBase(base.path, base.contents), stages: {} }
+}
+
 /** Both files. The same two mstage reads, and the stage file is literally the same one. */
 export const loadBuildConfig = ({
   cwd = process.cwd(),
   environment = process.env,
 }: { cwd?: string; environment?: NodeJS.ProcessEnv } = {}): BuildConfig => {
-  const base = locate({ cwd, override: environment.MSTAGE_ENV_CONFIG, filename: ENV_FILENAME })
+  const artifacts = loadArtifactConfig({ cwd, environment })
   const stages = locate({ cwd, override: environment.MSTAGE_CONFIG, filename: STAGE_FILENAME })
-  return parseBuildConfig({
-    basePath: base.path,
-    base: base.contents,
-    stagePath: stages.path,
-    stages: stages.contents,
-  })
+  return { ...artifacts, path: stages.path, stages: parseBuildStages(stages.path, stages.contents) }
 }
 
 /**

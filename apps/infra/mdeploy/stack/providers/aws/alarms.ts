@@ -14,8 +14,8 @@
 
 import type { AlarmProvider, AlarmRequest, AlarmSubjects, AlarmThreshold } from '../../alarms.ts'
 
-/** One minute, which is the finest a standard metric is published at. */
-const PERIOD_SECONDS = 60
+/** The default window: one minute, which is the finest a standard metric is published at. */
+const DEFAULT_PERIOD_SECONDS = 60
 
 /** The namespace the API's embedded metrics land in. */
 const APPLICATION_NAMESPACE = 'BoxLite'
@@ -24,12 +24,13 @@ const alarm = (
   name: string,
   threshold: AlarmThreshold,
   spec: Record<string, unknown>,
+  periodSeconds = DEFAULT_PERIOD_SECONDS,
 ): CloudResource =>
   new aws.cloudwatch.MetricAlarm(name, {
     comparisonOperator: 'GreaterThanOrEqualToThreshold',
     threshold: threshold.threshold,
     evaluationPeriods: threshold.periods,
-    period: PERIOD_SECONDS,
+    period: periodSeconds,
     // Silence is not a breach. See the note above.
     treatMissingData: 'notBreaching',
     ...spec,
@@ -62,5 +63,39 @@ export const awsAlarmProvider =
       metricName: 'RunnerUnreachable',
       statistic: 'Maximum',
       alarmDescription: 'A registered runner has stopped answering the control plane',
+    })
+
+    /*
+     * Both disk alarms read counters the control plane embeds in its own log
+     * lines (`RunnerUnreachable`'s shape, and for the same reason): expansion
+     * failures and critical pressure happen on hosts the alarms cannot reach,
+     * so the API that hears about them is what publishes them. The metrics
+     * arrive with the API task; the alarm existing first is what keeps a
+     * failure discovered in staging from being one nobody was listening for.
+     */
+    alarm(
+      'RunnerDiskExpansionFailingAlarm',
+      request.runnersDiskExpansionFailing,
+      {
+        namespace: APPLICATION_NAMESPACE,
+        metricName: 'RunnerDiskExpansionFailing',
+        statistic: 'Sum',
+        alarmDescription: 'Runner data-disk expansions are failing',
+      },
+      /*
+       * A quarter-hour window, matching the GCP side: the expansion loop is
+       * paced by the control plane's cron, so a single runner failing on
+       * every round produces one line a minute and never reaches a per-minute
+       * threshold. Three failures inside one 900-second window —
+       * `{threshold: 3, periods: 1}` — is the design's "≈15min 内 ≥3 次".
+       */
+      900,
+    )
+
+    alarm('RunnerDiskPressureCriticalAlarm', request.runnersDiskPressureCritical, {
+      namespace: APPLICATION_NAMESPACE,
+      metricName: 'RunnerDiskPressureCritical',
+      statistic: 'Sum',
+      alarmDescription: 'A runner is at critical data-disk usage',
     })
   }

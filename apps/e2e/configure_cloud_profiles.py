@@ -10,15 +10,15 @@ from lib.e2e_auth import api_key_permissions, credentials_path, discover_path_pr
 
 
 def configure(stage: str, url: str, environment, destination: Path) -> None:
-    if stage not in ("dev", "prod"):
-        raise RuntimeError("stage must be dev or prod")
+    if stage not in ("dev", "stage", "prod"):
+        raise RuntimeError("stage must be dev, stage or prod")
     target = urlsplit(url)
     if (target.scheme != "https" or not target.hostname or target.username or
             target.password or target.query or target.fragment):
         raise RuntimeError("API_URL must be an HTTPS API base URL without credentials, query or fragment")
     names = {"p1": f"BOXLITE_{stage.upper()}_API_KEY"}
-    if stage == "dev":
-        names.update(p2="BOXLITE_DEV_P2_API_KEY", p2_readonly="BOXLITE_DEV_P2_READONLY_API_KEY")
+    if stage in ("dev", "stage"):
+        names.update(p2=f"BOXLITE_{stage.upper()}_P2_API_KEY", p2_readonly=f"BOXLITE_{stage.upper()}_P2_READONLY_API_KEY")
     for secret in names.values():
         if not environment.get(secret):
             raise RuntimeError(f"Secret {secret} is not set")
@@ -42,7 +42,7 @@ def configure(stage: str, url: str, environment, destination: Path) -> None:
             raise RuntimeError(f"{name} requires write:boxes and delete:boxes")
         profiles[name] = dict(url=url.rstrip("/"), api_key=key, auth_method="api_key", path_prefix=prefix)
 
-    if stage == "dev":
+    if stage in ("dev", "stage"):
         if profiles["p1"]["path_prefix"] == profiles["p2"]["path_prefix"]:
             raise RuntimeError("p1 and p2 must belong to different organizations")
         if profiles["p2"]["path_prefix"] != profiles["p2_readonly"]["path_prefix"]:

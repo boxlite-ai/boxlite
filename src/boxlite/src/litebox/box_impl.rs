@@ -297,7 +297,7 @@ impl BoxImpl {
     /// For Configured boxes: full pipeline (filesystem, rootfs, spawn, connect, init)
     /// For Stopped boxes: restart pipeline (reuse rootfs, spawn, connect, init)
     ///
-    /// This is idempotent - calling start() on a Running box is a no-op.
+    /// A Running VM may still have an unstarted container; this starts its main command once.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
@@ -2312,6 +2312,15 @@ mod tests {
     // while the process keeps running and the runtime loses track of it.
     #[tokio::test]
     async fn test_stop_recovered_box_kills_orphan_process() {
+        assert_recovered_stop_kills_process(false).await;
+    }
+
+    #[tokio::test]
+    async fn test_stop_recovered_legacy_secret_kills_orphan_process() {
+        assert_recovered_stop_kills_process(true).await;
+    }
+
+    async fn assert_recovered_stop_kills_process(legacy_secret: bool) {
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -2341,6 +2350,11 @@ mod tests {
             },
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
+                secrets: if legacy_secret {
+                    vec![serde_json::from_str(r#"{"name":"x","value":"token","hosts":["api.test.com"],"placeholder":"dummy"}"#).unwrap()]
+                } else {
+                    vec![]
+                },
                 detach: false,
                 auto_delete: Some(0),
                 ..Default::default()
@@ -2386,6 +2400,12 @@ mod tests {
             !is_process_alive(pid),
             "stop() must kill the recovered shim process when self.live is None"
         );
+
+        if legacy_secret {
+            let fresh = runtime.get(id.as_str()).await.unwrap().unwrap();
+            let error = fresh.start().await.unwrap_err().to_string();
+            assert!(error.contains("recreate the box with headers"), "{error}");
+        }
 
         // ChildGuard's Drop reaps the (now-dead) child.
         drop(child);

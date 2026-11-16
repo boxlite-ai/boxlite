@@ -26,8 +26,7 @@ name: mbuild
 # Nobody publishes a commit by hand any more: `mdeploy-all.yml` is the one
 # rollout path, and this is its development leg — the images a dev deploy needs
 # for a commit that no release names. A release goes through
-# `mbuild-release.yml` instead, which refuses a version already in the
-# registry rather than skipping it.
+# `mbuild-release.yml` instead, which publishes to GHCR independently of a stage.
 #
 # That removes the reason the inputs below were an allowlist. The rule they
 # enforced — a free-text stage is a dispatcher reaching an Environment nobody
@@ -83,7 +82,7 @@ jobs:
   # either stage passes through here.
   declaration:
     name: read ${{ inputs.from }}
-    if: ${{ (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev') && inputs.command == 'promote' }}
+    if: ${{ (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev' || (inputs.stage || inputs.to) == 'stage') && inputs.command == 'promote' }}
     environment: ${{ inputs.from }}
     runs-on: ubuntu-latest
     outputs:
@@ -99,9 +98,9 @@ jobs:
     needs: [declaration]
     if: >-
       ${{ !cancelled() && !failure()
-      && (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev') }}
-    # The job that reaches a protected Environment reaches the cloud role behind
-    # it, so it runs from main and nowhere else. `!failure()` rather than a bare
+      && (github.ref == 'refs/heads/main' || (inputs.stage || inputs.to) == 'dev' || (inputs.stage || inputs.to) == 'stage') }}
+    # Dev and stage permit candidate branches; other stages run from main.
+    # `!failure()` rather than a bare
     # `needs`, because the job above is skipped for a publish and a skipped
     # dependency would otherwise skip this one too.
     environment: ${{ inputs.stage || inputs.to }}

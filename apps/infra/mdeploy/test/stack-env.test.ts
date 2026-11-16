@@ -26,7 +26,53 @@ const complete = {
 }
 
 const read = (environment: Record<string, string | undefined>) =>
-  readStackEnvironment({ environment, declaration, app: 'boxlite-app', stage: 'dev', region: 'ap-southeast-1', home: 'aws' })
+  readStackEnvironment({
+    environment,
+    declaration,
+    app: 'boxlite-app',
+    stage: 'dev',
+    region: 'ap-southeast-1',
+    home: 'aws',
+  })
+
+for (const home of ['aws', 'gcp'] as const) {
+  const deployment = (metadata: NodeJS.ProcessEnv) =>
+    readStackEnvironment({
+      environment: { ...complete, ...metadata },
+      declaration,
+      app: 'boxlite-app',
+      stage: 'dev',
+      region: 'ap-southeast-1',
+      home,
+    })
+  test(`${home} omits scheduler generation when invocation metadata is absent`, () => {
+    assert.equal(Object.hasOwn(deployment({}).apiEnvironment, 'CI_SCHEDULER_GENERATION'), false)
+  })
+  test(`${home} delivers the workflow run ID as the exact API scheduler generation`, () => {
+    const { apiEnvironment, proxyEnvironment, runnerEnvironment } = deployment({ GITHUB_RUN_ID: '9007199254740991' })
+    assert.equal(apiEnvironment.CI_SCHEDULER_GENERATION, '9007199254740991')
+    assert.equal(Object.hasOwn(apiEnvironment, 'GITHUB_RUN_ID'), false)
+    assert.equal(Object.hasOwn(proxyEnvironment, 'CI_SCHEDULER_GENERATION'), false)
+    assert.equal(Object.hasOwn(runnerEnvironment, 'CI_SCHEDULER_GENERATION'), false)
+  })
+  test(`${home} prefers an explicit scheduler generation over workflow metadata`, () => {
+    assert.equal(
+      deployment({ CI_SCHEDULER_GENERATION: '27', GITHUB_RUN_ID: '26' }).apiEnvironment.CI_SCHEDULER_GENERATION,
+      '27',
+    )
+    assert.equal(deployment({ CI_SCHEDULER_GENERATION: '1' }).apiEnvironment.CI_SCHEDULER_GENERATION, '1')
+  })
+  for (const key of ['CI_SCHEDULER_GENERATION', 'GITHUB_RUN_ID']) {
+    for (const value of ['', '0', '-1', '01', ' 1', '1 ', '1.5', '1e3', '9007199254740992', 'NaN']) {
+      test(`${home} rejects invalid ${key} invocation metadata ${JSON.stringify(value)}`, () => {
+        assert.throws(
+          () => deployment({ GITHUB_RUN_ID: '25', [key]: value }),
+          (error: unknown) => error instanceof StackEnvError && error.message.includes(key),
+        )
+      })
+    }
+  }
+}
 
 test('a complete environment resolves everything one deploy decides', () => {
   const resolved = read(complete)
@@ -60,10 +106,7 @@ test('a stage names a user domain of its own, in its own zone, or offers named a
     { domain: 'apps.example', dnsZoneId: 'user-zone' },
   )
   // A different registrable domain sits in a different zone, so the stage names it.
-  assert.throws(
-    () => read({ ...complete, STACK_USER_DOMAIN: 'apps.example' }),
-    /CLOUDFLARE_USER_ZONE_ID is required/,
-  )
+  assert.throws(() => read({ ...complete, STACK_USER_DOMAIN: 'apps.example' }), /CLOUDFLARE_USER_ZONE_ID is required/)
 })
 
 test("a user domain under the stage's registrable domain is refused", () => {
@@ -127,14 +170,18 @@ test('the manifest fingerprints the optional flag without exposing credential co
   assert.ok(config.envOptional.deploy?.includes('OTEL_OPENAPI_ENABLED'))
   assert.ok(config.envSelectGroup[config.envDigest!.group]!.includes('OTEL_OPENAPI_ENABLED'))
   for (const group of Object.values(config.envSelectGroup)) {
-    assert.ok(!group.some(key => key.startsWith('CLICKHOUSE_OPENAPI_LOG_READER')))
+    assert.ok(!group.some((key) => key.startsWith('CLICKHOUSE_OPENAPI_LOG_READER')))
   }
   assert.doesNotThrow(() => assertAddressesAreNotSpent(config))
 })
 
 test('a key nothing supplies stops the deploy, named, before anything is built', () => {
   for (const key of ['BOXLITE_IMAGE_TAG', 'STACK_DOMAIN', 'PROXY_DOMAIN', 'CLOUDFLARE_ZONE_ID']) {
-    assert.throws(() => read({ ...complete, [key]: undefined }), new RegExp(`${key} is required`), `${key} is not required`)
+    assert.throws(
+      () => read({ ...complete, [key]: undefined }),
+      new RegExp(`${key} is required`),
+      `${key} is not required`,
+    )
   }
 })
 
@@ -149,7 +196,13 @@ test('a tag that is not one full commit sha is refused', () => {
   // copy of mbuild's tag pattern, so a release image would have published fine
   // and then been refused here; it reads mbuild's constant now.
   assert.equal(read({ ...complete, BOXLITE_IMAGE_TAG: `v1.2.3-${SHA}` }).tag, `v1.2.3-${SHA}`)
-  for (const rejected of [`v1.2.3-${SHA.slice(1)}`, `1.2.3-${SHA}`, `v1.2.3-v1.2.3-${SHA}`, `${SHA}-v1.2.3`, `release-${SHA}`]) {
+  for (const rejected of [
+    `v1.2.3-${SHA.slice(1)}`,
+    `1.2.3-${SHA}`,
+    `v1.2.3-v1.2.3-${SHA}`,
+    `${SHA}-v1.2.3`,
+    `release-${SHA}`,
+  ]) {
     assert.throws(() => read({ ...complete, BOXLITE_IMAGE_TAG: rejected }), StackEnvError, `${rejected} was accepted`)
   }
 })
@@ -257,5 +310,32 @@ test('both engines read this one function rather than each reading the environme
   for (const source of entries) {
     assert.doesNotMatch(source, /process\.env\.BOXLITE_IMAGE_TAG/)
     assert.doesNotMatch(source, /process\.env\.STACK_DOMAIN/)
+  }
+})
+
+test('runner JSON cannot shadow direct values, secrets, or generated secret addresses', () => {
+  const declared = {
+    ...declaration,
+    groups: { ...declaration.groups, runner: ['BOXLITE_RUNNER_ENV', 'DIRECT', 'GHCR_TOKEN'], secret: ['GHCR_TOKEN'] },
+  }
+  for (const key of ['DIRECT', 'GHCR_TOKEN', 'GHCR_TOKEN_ARN']) {
+    assert.throws(
+      () =>
+        readStackEnvironment({
+          environment: {
+            ...complete,
+            DIRECT: 'direct',
+            GHCR_TOKEN: JSON.stringify({ address: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:ghcr-abcdef' }),
+            BOXLITE_RUNNER_ENV: JSON.stringify({ [key]: 'override' }),
+          },
+          declaration: declared,
+          app: 'boxlite-app',
+          stage: 'dev',
+          region: 'us-east-1',
+          home: 'aws',
+        }),
+      /BOXLITE_RUNNER_ENV/,
+      key,
+    )
   }
 })

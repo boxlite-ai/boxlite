@@ -20,23 +20,23 @@ module.exports = {
         xs: '480px',
       },
       fontFamily: {
-        // Two faces, two jobs: words are set in Inter, values in Plex Mono. The
-        // marketing site already pairs them this way; the console spoke only
-        // mono, which made every heading read as terminal output.
-        sans: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
-        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'SF Mono', 'monospace'],
-        display: ['Inter', 'system-ui', 'sans-serif'],
+        // Shared with native CSS and canvas consumers in index.css.
+        sans: ['var(--font-sans)'],
+        mono: ['var(--font-mono)'],
+        display: ['var(--font-sans)'],
       },
       fontSize: {
         // The console's type scale — six steps, nothing in between. Arbitrary
         // `text-[Npx]` values had grown to twenty-one distinct sizes, ten of
         // them within a 5px band; nothing on a page could line up with anything.
+        // Line heights are whole pixels: a ratio such as 1.15 made the page title 32.2px
+        // tall, which pushed every row below it onto a fractional pixel and blurred 1px rules.
         label: ['10px', { lineHeight: '1.2', letterSpacing: '0.12em' }],
-        meta: ['12px', { lineHeight: '1.45' }],
-        body: ['13px', { lineHeight: '1.5' }],
+        meta: ['12px', { lineHeight: '18px' }],
+        body: ['13px', { lineHeight: '20px' }],
         em: ['15px', { lineHeight: '1.4' }],
         section: ['20px', { lineHeight: '1.25', letterSpacing: '-0.01em' }],
-        page: ['28px', { lineHeight: '1.15', letterSpacing: '-0.02em' }],
+        page: ['28px', { lineHeight: '32px', letterSpacing: '-0.02em' }],
       },
       borderRadius: {
         // Square corners are a load-bearing part of the design; only pills/dots stay round.
@@ -81,12 +81,19 @@ module.exports = {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
         },
+        'control-hover': 'hsl(var(--control-hover))',
+        selection: {
+          DEFAULT: 'hsl(var(--selection))',
+          foreground: 'hsl(var(--selection-foreground))',
+        },
         brand: {
           DEFAULT: 'hsl(var(--brand))',
           foreground: 'hsl(var(--brand-foreground))',
         },
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',
+          // Fill for buttons that carry white text; dark enough for 4.5:1 in both themes.
+          solid: 'hsl(var(--destructive-solid))',
           foreground: 'hsl(var(--destructive-foreground))',
           background: 'hsl(var(--destructive-background))',
           separator: 'hsl(var(--destructive-separator))',

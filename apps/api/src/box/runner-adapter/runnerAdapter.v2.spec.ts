@@ -8,6 +8,22 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
 
 describe('RunnerAdapterV2 createBox', () => {
+  it.each([0.125, 0.126, 1.001, 1.5, 16])('preserves %s CPUs in the create job', async (cpu) => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await adapter.createBox({ id: 'box-cpu', cpu } as any, 'base')
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-cpu',
+      expect.objectContaining({ cpuQuota: cpu }),
+    )
+  })
   it.each([false, true])('forwards persisted guest privilege %s to the create job', async (privileged) => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
@@ -51,7 +67,13 @@ describe('RunnerAdapterV2 createBox', () => {
       disk: 3,
       volumes: [],
       secrets: [
-        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        {
+          name: 'openai',
+          value: 'sk-test',
+          hosts: ['api.openai.com'],
+          placeholder: '<BOXLITE_SECRET:openai>',
+          headers: { 'x-api-key': '{value}' },
+        },
       ],
       outboundEnabled: true,
       outboundAllowNet: undefined,
@@ -70,7 +92,13 @@ describe('RunnerAdapterV2 createBox', () => {
       'box-1',
       expect.objectContaining({
         secrets: [
-          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+          {
+            name: 'openai',
+            value: 'sk-test',
+            hosts: ['api.openai.com'],
+            placeholder: '<BOXLITE_SECRET:openai>',
+            headers: { 'x-api-key': '{value}' },
+          },
         ],
       }),
     )

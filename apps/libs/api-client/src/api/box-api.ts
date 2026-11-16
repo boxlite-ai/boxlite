@@ -26,19 +26,9 @@ import type { AttachTicket } from '../models';
 // @ts-ignore
 import type { Box } from '../models';
 // @ts-ignore
-import type { BoxLabels } from '../models';
-// @ts-ignore
 import type { CreateAttachTicket } from '../models';
 // @ts-ignore
-import type { MetricsResponse } from '../models';
-// @ts-ignore
 import type { PaginatedBoxes } from '../models';
-// @ts-ignore
-import type { PaginatedLogs } from '../models';
-// @ts-ignore
-import type { PaginatedTraces } from '../models';
-// @ts-ignore
-import type { TraceSpan } from '../models';
 // @ts-ignore
 import type { UpdateBoxStateDto } from '../models';
 /**
@@ -145,275 +135,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
             };
         },
         /**
-         * Retrieve OTEL logs for a box within a time range
-         * @summary Get box logs
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [page] Page number (1-indexed)
-         * @param {number} [limit] Number of items per page
-         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
-         * @param {string} [search] Search in log body
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxLogs: async (boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, severities?: Array<string>, search?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getBoxLogs', 'boxId', boxId)
-            // verify required parameter 'from' is not null or undefined
-            assertParamExists('getBoxLogs', 'from', from)
-            // verify required parameter 'to' is not null or undefined
-            assertParamExists('getBoxLogs', 'to', to)
-            const localVarPath = `/box/{boxId}/telemetry/logs`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (from !== undefined) {
-                localVarQueryParameter['from'] = (from as any instanceof Date) ?
-                    (from as any).toISOString() :
-                    from;
-            }
-
-            if (to !== undefined) {
-                localVarQueryParameter['to'] = (to as any instanceof Date) ?
-                    (to as any).toISOString() :
-                    to;
-            }
-
-            if (page !== undefined) {
-                localVarQueryParameter['page'] = page;
-            }
-
-            if (limit !== undefined) {
-                localVarQueryParameter['limit'] = limit;
-            }
-
-            if (severities) {
-                localVarQueryParameter['severities'] = severities;
-            }
-
-            if (search !== undefined) {
-                localVarQueryParameter['search'] = search;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * Retrieve OTEL metrics for a box within a time range
-         * @summary Get box metrics
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {Array<string>} [metricNames] Filter by metric names
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxMetrics: async (boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, metricNames?: Array<string>, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getBoxMetrics', 'boxId', boxId)
-            // verify required parameter 'from' is not null or undefined
-            assertParamExists('getBoxMetrics', 'from', from)
-            // verify required parameter 'to' is not null or undefined
-            assertParamExists('getBoxMetrics', 'to', to)
-            const localVarPath = `/box/{boxId}/telemetry/metrics`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (from !== undefined) {
-                localVarQueryParameter['from'] = (from as any instanceof Date) ?
-                    (from as any).toISOString() :
-                    from;
-            }
-
-            if (to !== undefined) {
-                localVarQueryParameter['to'] = (to as any instanceof Date) ?
-                    (to as any).toISOString() :
-                    to;
-            }
-
-            if (metricNames) {
-                localVarQueryParameter['metricNames'] = metricNames;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * Retrieve all spans for a specific trace
-         * @summary Get trace spans
-         * @param {string} boxId ID of the box
-         * @param {string} traceId ID of the trace
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxTraceSpans: async (boxId: string, traceId: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getBoxTraceSpans', 'boxId', boxId)
-            // verify required parameter 'traceId' is not null or undefined
-            assertParamExists('getBoxTraceSpans', 'traceId', traceId)
-            const localVarPath = `/box/{boxId}/telemetry/traces/{traceId}`
-                .replace('{boxId}', encodeURIComponent(String(boxId)))
-                .replace('{traceId}', encodeURIComponent(String(traceId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * Retrieve OTEL traces for a box within a time range
-         * @summary Get box traces
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [page] Page number (1-indexed)
-         * @param {number} [limit] Number of items per page
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxTraces: async (boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('getBoxTraces', 'boxId', boxId)
-            // verify required parameter 'from' is not null or undefined
-            assertParamExists('getBoxTraces', 'from', from)
-            // verify required parameter 'to' is not null or undefined
-            assertParamExists('getBoxTraces', 'to', to)
-            const localVarPath = `/box/{boxId}/telemetry/traces`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (from !== undefined) {
-                localVarQueryParameter['from'] = (from as any instanceof Date) ?
-                    (from as any).toISOString() :
-                    from;
-            }
-
-            if (to !== undefined) {
-                localVarQueryParameter['to'] = (to as any instanceof Date) ?
-                    (to as any).toISOString() :
-                    to;
-            }
-
-            if (page !== undefined) {
-                localVarQueryParameter['page'] = page;
-            }
-
-            if (limit !== undefined) {
-                localVarQueryParameter['limit'] = limit;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
          * 
          * @summary Get boxes for the authenticated runner
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -447,61 +168,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
 
             if (skipReconcilingBoxes !== undefined) {
                 localVarQueryParameter['skipReconcilingBoxes'] = skipReconcilingBoxes;
-            }
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary List all boxes
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [verbose] Include verbose output
-         * @param {string} [labels] JSON encoded labels to filter by
-         * @param {boolean} [includeErroredDeleted] Include errored and deleted boxes
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        listBoxes: async (xBoxLiteOrganizationID?: string, verbose?: boolean, labels?: string, includeErroredDeleted?: boolean, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            const localVarPath = `/box`;
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            if (verbose !== undefined) {
-                localVarQueryParameter['verbose'] = verbose;
-            }
-
-            if (labels !== undefined) {
-                localVarQueryParameter['labels'] = labels;
-            }
-
-            if (includeErroredDeleted !== undefined) {
-                localVarQueryParameter['includeErroredDeleted'] = includeErroredDeleted;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -698,151 +364,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
         },
         /**
          * 
-         * @summary Replace box labels
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {BoxLabels} boxLabels 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        replaceLabels: async (boxIdOrName: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('replaceLabels', 'boxIdOrName', boxIdOrName)
-            // verify required parameter 'boxLabels' is not null or undefined
-            assertParamExists('replaceLabels', 'boxLabels', boxLabels)
-            const localVarPath = `/box/{boxIdOrName}/labels`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'PUT', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(boxLabels, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Set box auto-delete interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        setAutoDeleteInterval: async (boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('setAutoDeleteInterval', 'boxIdOrName', boxIdOrName)
-            // verify required parameter 'interval' is not null or undefined
-            assertParamExists('setAutoDeleteInterval', 'interval', interval)
-            const localVarPath = `/box/{boxIdOrName}/autodelete/{interval}`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)))
-                .replace('{interval}', encodeURIComponent(String(interval)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Set box auto-stop interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        setAutostopInterval: async (boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxIdOrName' is not null or undefined
-            assertParamExists('setAutostopInterval', 'boxIdOrName', boxIdOrName)
-            // verify required parameter 'interval' is not null or undefined
-            assertParamExists('setAutostopInterval', 'interval', interval)
-            const localVarPath = `/box/{boxIdOrName}/autostop/{interval}`
-                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)))
-                .replace('{interval}', encodeURIComponent(String(interval)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication bearer required
-            // http bearer authentication required
-            await setBearerAuthToObject(localVarHeaderParameter, configuration)
-
-            // authentication oauth2 required
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            if (xBoxLiteOrganizationID != null) {
-                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
-            }
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Update box state
          * @param {string} boxId ID of the box
          * @param {UpdateBoxStateDto} updateBoxStateDto 
@@ -972,76 +493,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Retrieve OTEL logs for a box within a time range
-         * @summary Get box logs
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [page] Page number (1-indexed)
-         * @param {number} [limit] Number of items per page
-         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
-         * @param {string} [search] Search in log body
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getBoxLogs(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, severities?: Array<string>, search?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedLogs>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxLogs(boxId, from, to, xBoxLiteOrganizationID, page, limit, severities, search, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getBoxLogs']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * Retrieve OTEL metrics for a box within a time range
-         * @summary Get box metrics
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {Array<string>} [metricNames] Filter by metric names
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getBoxMetrics(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, metricNames?: Array<string>, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MetricsResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxMetrics(boxId, from, to, xBoxLiteOrganizationID, metricNames, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getBoxMetrics']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * Retrieve all spans for a specific trace
-         * @summary Get trace spans
-         * @param {string} boxId ID of the box
-         * @param {string} traceId ID of the trace
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getBoxTraceSpans(boxId: string, traceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<TraceSpan>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxTraceSpans(boxId, traceId, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getBoxTraceSpans']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * Retrieve OTEL traces for a box within a time range
-         * @summary Get box traces
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [page] Page number (1-indexed)
-         * @param {number} [limit] Number of items per page
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async getBoxTraces(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedTraces>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxTraces(boxId, from, to, xBoxLiteOrganizationID, page, limit, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.getBoxTraces']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
          * 
          * @summary Get boxes for the authenticated runner
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1054,22 +505,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxesForRunner(xBoxLiteOrganizationID, states, skipReconcilingBoxes, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.getBoxesForRunner']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary List all boxes
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [verbose] Include verbose output
-         * @param {string} [labels] JSON encoded labels to filter by
-         * @param {boolean} [includeErroredDeleted] Include errored and deleted boxes
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async listBoxes(xBoxLiteOrganizationID?: string, verbose?: boolean, labels?: string, includeErroredDeleted?: boolean, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<Box>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listBoxes(xBoxLiteOrganizationID, verbose, labels, includeErroredDeleted, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.listBoxes']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1115,51 +550,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.recoverBox(boxIdOrName, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxApi.recoverBox']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Replace box labels
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {BoxLabels} boxLabels 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async replaceLabels(boxIdOrName: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<BoxLabels>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.replaceLabels(boxIdOrName, boxLabels, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.replaceLabels']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Set box auto-delete interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async setAutoDeleteInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.setAutoDeleteInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.setAutoDeleteInterval']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Set box auto-stop interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Box>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.setAutostopInterval']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1225,64 +615,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
             return localVarFp.getBox(boxIdOrName, xBoxLiteOrganizationID, verbose, options).then((request) => request(axios, basePath));
         },
         /**
-         * Retrieve OTEL logs for a box within a time range
-         * @summary Get box logs
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [page] Page number (1-indexed)
-         * @param {number} [limit] Number of items per page
-         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
-         * @param {string} [search] Search in log body
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxLogs(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, severities?: Array<string>, search?: string, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedLogs> {
-            return localVarFp.getBoxLogs(boxId, from, to, xBoxLiteOrganizationID, page, limit, severities, search, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Retrieve OTEL metrics for a box within a time range
-         * @summary Get box metrics
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {Array<string>} [metricNames] Filter by metric names
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxMetrics(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, metricNames?: Array<string>, options?: RawAxiosRequestConfig): AxiosPromise<MetricsResponse> {
-            return localVarFp.getBoxMetrics(boxId, from, to, xBoxLiteOrganizationID, metricNames, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Retrieve all spans for a specific trace
-         * @summary Get trace spans
-         * @param {string} boxId ID of the box
-         * @param {string} traceId ID of the trace
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxTraceSpans(boxId: string, traceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<TraceSpan>> {
-            return localVarFp.getBoxTraceSpans(boxId, traceId, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Retrieve OTEL traces for a box within a time range
-         * @summary Get box traces
-         * @param {string} boxId ID of the box
-         * @param {Date} from Start of time range (ISO 8601)
-         * @param {Date} to End of time range (ISO 8601)
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {number} [page] Page number (1-indexed)
-         * @param {number} [limit] Number of items per page
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        getBoxTraces(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedTraces> {
-            return localVarFp.getBoxTraces(boxId, from, to, xBoxLiteOrganizationID, page, limit, options).then((request) => request(axios, basePath));
-        },
-        /**
          * 
          * @summary Get boxes for the authenticated runner
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1293,19 +625,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         getBoxesForRunner(xBoxLiteOrganizationID?: string, states?: string, skipReconcilingBoxes?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<Array<Box>> {
             return localVarFp.getBoxesForRunner(xBoxLiteOrganizationID, states, skipReconcilingBoxes, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary List all boxes
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [verbose] Include verbose output
-         * @param {string} [labels] JSON encoded labels to filter by
-         * @param {boolean} [includeErroredDeleted] Include errored and deleted boxes
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        listBoxes(xBoxLiteOrganizationID?: string, verbose?: boolean, labels?: string, includeErroredDeleted?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<Array<Box>> {
-            return localVarFp.listBoxes(xBoxLiteOrganizationID, verbose, labels, includeErroredDeleted, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1345,42 +664,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         recoverBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
             return localVarFp.recoverBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Replace box labels
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {BoxLabels} boxLabels 
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        replaceLabels(boxIdOrName: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<BoxLabels> {
-            return localVarFp.replaceLabels(boxIdOrName, boxLabels, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Set box auto-delete interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        setAutoDeleteInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.setAutoDeleteInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Set box auto-stop interval
-         * @param {string} boxIdOrName ID or name of the box
-         * @param {number} interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
-            return localVarFp.setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1439,68 +722,6 @@ export class BoxApi extends BaseAPI {
     }
 
     /**
-     * Retrieve OTEL logs for a box within a time range
-     * @summary Get box logs
-     * @param {string} boxId ID of the box
-     * @param {Date} from Start of time range (ISO 8601)
-     * @param {Date} to End of time range (ISO 8601)
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {number} [page] Page number (1-indexed)
-     * @param {number} [limit] Number of items per page
-     * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
-     * @param {string} [search] Search in log body
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getBoxLogs(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, severities?: Array<string>, search?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getBoxLogs(boxId, from, to, xBoxLiteOrganizationID, page, limit, severities, search, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Retrieve OTEL metrics for a box within a time range
-     * @summary Get box metrics
-     * @param {string} boxId ID of the box
-     * @param {Date} from Start of time range (ISO 8601)
-     * @param {Date} to End of time range (ISO 8601)
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {Array<string>} [metricNames] Filter by metric names
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getBoxMetrics(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, metricNames?: Array<string>, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getBoxMetrics(boxId, from, to, xBoxLiteOrganizationID, metricNames, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Retrieve all spans for a specific trace
-     * @summary Get trace spans
-     * @param {string} boxId ID of the box
-     * @param {string} traceId ID of the trace
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getBoxTraceSpans(boxId: string, traceId: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getBoxTraceSpans(boxId, traceId, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Retrieve OTEL traces for a box within a time range
-     * @summary Get box traces
-     * @param {string} boxId ID of the box
-     * @param {Date} from Start of time range (ISO 8601)
-     * @param {Date} to End of time range (ISO 8601)
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {number} [page] Page number (1-indexed)
-     * @param {number} [limit] Number of items per page
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public getBoxTraces(boxId: string, from: Date, to: Date, xBoxLiteOrganizationID?: string, page?: number, limit?: number, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).getBoxTraces(boxId, from, to, xBoxLiteOrganizationID, page, limit, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
      * 
      * @summary Get boxes for the authenticated runner
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -1511,20 +732,6 @@ export class BoxApi extends BaseAPI {
      */
     public getBoxesForRunner(xBoxLiteOrganizationID?: string, states?: string, skipReconcilingBoxes?: boolean, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).getBoxesForRunner(xBoxLiteOrganizationID, states, skipReconcilingBoxes, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary List all boxes
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [verbose] Include verbose output
-     * @param {string} [labels] JSON encoded labels to filter by
-     * @param {boolean} [includeErroredDeleted] Include errored and deleted boxes
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public listBoxes(xBoxLiteOrganizationID?: string, verbose?: boolean, labels?: string, includeErroredDeleted?: boolean, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).listBoxes(xBoxLiteOrganizationID, verbose, labels, includeErroredDeleted, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1566,45 +773,6 @@ export class BoxApi extends BaseAPI {
      */
     public recoverBox(boxIdOrName: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).recoverBox(boxIdOrName, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Replace box labels
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {BoxLabels} boxLabels 
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public replaceLabels(boxIdOrName: string, boxLabels: BoxLabels, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).replaceLabels(boxIdOrName, boxLabels, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Set box auto-delete interval
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {number} interval Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public setAutoDeleteInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).setAutoDeleteInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Set box auto-stop interval
-     * @param {string} boxIdOrName ID or name of the box
-     * @param {number} interval Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public setAutostopInterval(boxIdOrName: string, interval: number, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).setAutostopInterval(boxIdOrName, interval, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

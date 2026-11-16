@@ -121,12 +121,6 @@ export class MetricsInterceptor implements NestInterceptor {
               request.query?.force === 'true',
             )
             break
-          case '/api/box/:boxIdOrName/autostop/:interval':
-            this.captureSetAutostopInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
-            break
-          case '/api/box/:boxIdOrName/autodelete/:interval':
-            this.captureSetAutoDeleteInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
-            break
           case '/api/organizations/invitations/:invitationId/accept':
             this.captureAcceptInvitation(props, request.params.invitationId)
             break
@@ -186,9 +180,6 @@ export class MetricsInterceptor implements NestInterceptor {
         break
       case 'PUT':
         switch (request.route.path) {
-          case '/api/box/:boxIdOrName/labels':
-            this.captureUpdateBoxLabels(props, request.params.boxIdOrName)
-            break
           case '/api/v1/boxes/:boxId/network/inbound':
           case '/api/v1/:prefix/boxes/:boxId/network/inbound':
             this.captureUpdateInboundMode(props, request.params.boxId, request.body?.mode)
@@ -270,26 +261,6 @@ export class MetricsInterceptor implements NestInterceptor {
     this.capture('api_box_inbound_mode_updated', props, 'api_box_inbound_mode_update_failed', {
       box_id: boxId,
       box_inbound_mode: mode,
-    })
-  }
-
-  private captureSetAutostopInterval(props: CommonCaptureProps, boxId: string, interval: number) {
-    this.capture('api_box_autostop_interval_updated', props, 'api_box_autostop_interval_update_failed', {
-      box_id: boxId,
-      box_autostop_interval: interval,
-    })
-  }
-
-  private captureSetAutoDeleteInterval(props: CommonCaptureProps, boxId: string, interval: number) {
-    this.capture('api_box_autodelete_interval_updated', props, 'api_box_autodelete_interval_update_failed', {
-      box_id: boxId,
-      box_autodelete_interval: interval,
-    })
-  }
-
-  private captureUpdateBoxLabels(props: CommonCaptureProps, boxId: string) {
-    this.capture('api_box_labels_update', props, 'api_box_labels_update_failed', {
-      box_id: boxId,
     })
   }
 

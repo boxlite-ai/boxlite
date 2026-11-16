@@ -448,6 +448,14 @@ impl RuntimeImpl {
                 "Cannot create box: runtime has been shut down".into(),
             ));
         }
+        if matches!(
+            options.rootfs,
+            crate::runtime::options::RootfsSpec::Checkpoint(_)
+        ) {
+            return Err(BoxliteError::Unsupported(
+                crate::runtime::checkpoints::UNSUPPORTED_ON_LOCAL.into(),
+            ));
+        }
 
         // Check DB for existing name — use lookup_box to get full (config, state)
         // so we can build the LiteBox directly without a second lookup
@@ -2095,7 +2103,7 @@ mod tests {
     async fn create_rejects_cpus_outside_guest_kernel_range() {
         let (runtime, _dir) = create_test_runtime();
         let local = LocalRuntime(Arc::clone(&runtime));
-        for cpus in [0.0, 17.0, 24.0] {
+        for cpus in [0.0, 0.124, 17.0, 24.0] {
             let name = format!("cpus-{cpus}");
             let options = BoxOptions {
                 cpus: Some(cpus),
@@ -2104,7 +2112,7 @@ mod tests {
             let error = RuntimeBackend::create(&local, options, Some(name.clone()))
                 .await
                 .err()
-                .expect("cpus outside 0.01..=16 must be rejected at create");
+                .expect("cpus outside 0.125..=16 must be rejected at create");
 
             assert!(
                 matches!(error, BoxliteError::InvalidArgument(_)),
@@ -2378,7 +2386,10 @@ mod tests {
             hosts: vec![],
             placeholder: "<BOXLITE_SECRET:legacy>".to_string(),
             value: "real-value".to_string(),
-            header: None,
+            headers: Some(std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                "Bearer {value}".into(),
+            )])),
         }
     }
 

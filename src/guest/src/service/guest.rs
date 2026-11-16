@@ -227,6 +227,7 @@ mod tests {
     /// record still reaches disk, and the failure is reported afterwards.
     #[tokio::test]
     async fn shutdown_writes_exit_records_when_ssh_fails_to_quiesce() {
+        crate::test_syscalls::deny(nix::libc::SYS_sync);
         let root = tempfile::tempdir().expect("tempdir");
         let server = GuestServer::new(GuestLayout::with_base(root.path()));
         let exit_file = server.layout.shared().container("c1").exit_file();

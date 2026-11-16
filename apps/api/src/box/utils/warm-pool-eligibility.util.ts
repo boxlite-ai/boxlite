@@ -38,9 +38,12 @@ export function requiresFreshBox(
     | 'secrets'
     | 'privileged'
   >,
-  organization: { boxLimitedNetworkEgress?: boolean },
+  organization: { boxLimitedNetworkEgress?: boolean; nestedVirtualizationEnabled?: boolean },
   resolvedImage: Pick<ResolvedImage, 'isOrgOwned'>,
 ): boolean {
+  // A pre-created ordinary VM cannot receive the organization's nesting default.
+  if (organization.nestedVirtualizationEnabled === true) return true
+
   // The pool is curated-only, and this is the near side of that: a warm box is
   // created without an organization and handed to whichever one claims it, so a
   // box built from one tenant's image could be handed to another. Answering

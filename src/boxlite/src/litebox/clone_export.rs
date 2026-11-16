@@ -313,6 +313,11 @@ fn do_export_finalize(
     let image = match &config_options.rootfs {
         crate::runtime::options::RootfsSpec::Image(img) => img.clone(),
         crate::runtime::options::RootfsSpec::RootfsPath(path) => path.clone(),
+        crate::runtime::options::RootfsSpec::Checkpoint(_) => {
+            return Err(BoxliteError::Unsupported(
+                crate::runtime::checkpoints::UNSUPPORTED_ON_LOCAL.into(),
+            ));
+        }
     };
 
     let manifest = ArchiveManifest {

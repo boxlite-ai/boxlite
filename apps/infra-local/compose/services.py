@@ -190,8 +190,8 @@ staticPasswords:
   # Normal (non-admin) test user. Password is 'password'.
   # OIDC sub on first login = CgQ1Njc4EgVsb2NhbA (base64 of
   # protobuf-encoded {userID:'5678', connectorID:'local'}).
-  # API auto-creates the corresponding `user` row + Personal organization
-  # + organization_user owner-of-own-org on first login via jwt.strategy.
+  # Registration creates the `user` row + Personal organization after the
+  # Turnstile challenge; see README.md#local-registration for the dev widget.
   - email: 'test01@boxlite.dev'
     hash: '$2a$10$SihmD3KSn9pNA02TCkvTBe1EzYCog6bcf8ztMcI1m4rIGtJIV47ge'
     username: 'test01'

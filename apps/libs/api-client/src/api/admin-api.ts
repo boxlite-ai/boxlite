@@ -36,6 +36,8 @@ import type { AdminJobOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminOrganizationDetail } from '../models';
 // @ts-ignore
+import type { AdminOrganizationNestedVirtualization } from '../models';
+// @ts-ignore
 import type { AdminOrganizationOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRegionOverview } from '../models';
@@ -43,6 +45,8 @@ import type { AdminRegionOverview } from '../models';
 import type { AdminRegionOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRunner } from '../models';
+// @ts-ignore
+import type { AdminSetOrganizationNestedVirtualizationRequest } from '../models';
 // @ts-ignore
 import type { AdminUsageError } from '../models';
 // @ts-ignore
@@ -254,6 +258,44 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Read organization nesting allowlist
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationNestedVirtualization: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminGetOrganizationNestedVirtualization', 'organizationId', organizationId)
+            const localVarPath = `/admin/organizations/{organizationId}/nested-virtualization`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -508,14 +550,19 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
+         * @param {AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig} [include] Legacy Axios options, or: Add up to 200 member emails to each organization; omit to keep the existing fields.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, include?: AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // Legacy callers pass Axios options before the optional inventory filters.
             if (typeof boxCountScope === 'object' && boxCountScope !== null) {
                 options = boxCountScope;
                 boxCountScope = undefined;
+            }
+            if (typeof include === 'object' && include !== null) {
+                options = include;
+                include = undefined;
             }
             const localVarPath = `/admin/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
@@ -561,6 +608,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (organizationId !== undefined) {
                 localVarQueryParameter['organizationId'] = organizationId;
+            }
+
+            if (include !== undefined) {
+                localVarQueryParameter['include'] = include;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -921,6 +972,49 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Set organization nesting allowlist
+         * @param {string} organizationId 
+         * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSetOrganizationNestedVirtualization: async (organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminSetOrganizationNestedVirtualization', 'organizationId', organizationId)
+            // verify required parameter 'adminSetOrganizationNestedVirtualizationRequest' is not null or undefined
+            assertParamExists('adminSetOrganizationNestedVirtualization', 'adminSetOrganizationNestedVirtualizationRequest', adminSetOrganizationNestedVirtualizationRequest)
+            const localVarPath = `/admin/organizations/{organizationId}/nested-virtualization`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PUT', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(adminSetOrganizationNestedVirtualizationRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1035,6 +1129,19 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Read organization nesting allowlist
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetOrganizationNestedVirtualization(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationNestedVirtualization>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationNestedVirtualization(organizationId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationNestedVirtualization']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get organization operational detail
          * @param {string} organizationId Organization ID
          * @param {string} [memberCursor] Opaque member page cursor
@@ -1114,11 +1221,12 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
+         * @param {AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig} [include] Legacy Axios options, or: Add up to 200 member emails to each organization; omit to keep the existing fields.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options);
+        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, include?: AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, include, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationsOverview']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -1220,6 +1328,20 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Set organization nesting allowlist
+         * @param {string} organizationId 
+         * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminSetOrganizationNestedVirtualization(organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationNestedVirtualization>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminSetOrganizationNestedVirtualization(organizationId, adminSetOrganizationNestedVirtualizationRequest, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminSetOrganizationNestedVirtualization']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1293,6 +1415,16 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Read organization nesting allowlist
+         * @param {string} organizationId 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationNestedVirtualization(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationNestedVirtualization> {
+            return localVarFp.adminGetOrganizationNestedVirtualization(organizationId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get organization operational detail
          * @param {string} organizationId Organization ID
          * @param {string} [memberCursor] Opaque member page cursor
@@ -1357,11 +1489,12 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
+         * @param {AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig} [include] Legacy Axios options, or: Add up to 200 member emails to each organization; omit to keep the existing fields.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
-            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options).then((request) => request(axios, basePath));
+        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, include?: AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
+            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, include, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1442,6 +1575,17 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Set organization nesting allowlist
+         * @param {string} organizationId 
+         * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSetOrganizationNestedVirtualization(organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationNestedVirtualization> {
+            return localVarFp.adminSetOrganizationNestedVirtualization(organizationId, adminSetOrganizationNestedVirtualizationRequest, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -1515,6 +1659,17 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Read organization nesting allowlist
+     * @param {string} organizationId 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetOrganizationNestedVirtualization(organizationId: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationNestedVirtualization(organizationId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Get organization operational detail
      * @param {string} organizationId Organization ID
      * @param {string} [memberCursor] Opaque member page cursor
@@ -1584,11 +1739,12 @@ export class AdminApi extends BaseAPI {
      * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
      * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
      * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
+     * @param {AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig} [include] Legacy Axios options, or: Add up to 200 member emails to each organization; omit to keep the existing fields.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options).then((request) => request(this.axios, this.basePath));
+    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, include?: AdminListOrganizationsOverviewIncludeEnum | RawAxiosRequestConfig, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, include, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1676,6 +1832,18 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Set organization nesting allowlist
+     * @param {string} organizationId 
+     * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminSetOrganizationNestedVirtualization(organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminSetOrganizationNestedVirtualization(organizationId, adminSetOrganizationNestedVirtualizationRequest, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Update runner scheduling status
      * @param {string} id 
      * @param {*} [options] Override http request option.
@@ -1691,6 +1859,10 @@ export const AdminListOrganizationsOverviewBoxCountScopeEnum = {
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 export type AdminListOrganizationsOverviewBoxCountScopeEnum = typeof AdminListOrganizationsOverviewBoxCountScopeEnum[keyof typeof AdminListOrganizationsOverviewBoxCountScopeEnum];
+export const AdminListOrganizationsOverviewIncludeEnum = {
+    MEMBER_EMAILS: 'memberEmails',
+} as const;
+export type AdminListOrganizationsOverviewIncludeEnum = typeof AdminListOrganizationsOverviewIncludeEnum[keyof typeof AdminListOrganizationsOverviewIncludeEnum];
 export const AdminQueryUsageGranularityEnum = {
     WINDOW: 'window',
     HOUR: 'hour',

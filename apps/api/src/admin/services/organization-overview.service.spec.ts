@@ -18,6 +18,8 @@ const queryBuilder = () => {
     'addOrderBy',
     'setParameters',
     'take',
+    'addCommonTableExpression',
+    'from',
   ]) {
     builder[method] = jest.fn(() => builder)
   }
@@ -27,6 +29,7 @@ const queryBuilder = () => {
 }
 const repository = () => {
   const builder = queryBuilder()
+  const managerBuilder = queryBuilder()
   return {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(),
@@ -34,6 +37,8 @@ const repository = () => {
     builder,
     // Default snapshot: runs the callback with a manager that reports no usage rows.
     manager: {
+      builder: managerBuilder,
+      createQueryBuilder: jest.fn(() => managerBuilder),
       transaction: jest.fn(async (_level: unknown, run: (snapshot: unknown) => unknown) =>
         run({ find: jest.fn().mockResolvedValue([]) }),
       ),
@@ -126,6 +131,48 @@ describe('organization policy inventory reads', () => {
     expect(page.items[0]).toHaveProperty('boxCount', 0)
     expect(page.items[0]).toHaveProperty('memberCount', 0)
     expect(page.items[0]).toHaveProperty('impactState', 'not_impacted')
+  })
+
+  it('reads member emails for the page only when the list includes them', async () => {
+    const { service, organizations, memberships } = serviceWith()
+    const empty = { ...organization, id: '00000000-0000-4000-8000-000000000002' }
+    const nextPage = { ...organization, id: '00000000-0000-4000-8000-000000000003' }
+    organizations.builder.getMany.mockResolvedValue([organization, empty, nextPage])
+
+    const plain = await service.list({ limit: 2 })
+
+    expect(memberships.createQueryBuilder).toHaveBeenCalledTimes(1)
+    expect(memberships.manager.createQueryBuilder).not.toHaveBeenCalled()
+    for (const item of plain.items) expect(item).not.toHaveProperty('memberEmails')
+
+    // organizationStats() builds its members query first; the email ranking comes second.
+    const ranked = queryBuilder()
+    memberships.createQueryBuilder.mockReturnValueOnce(memberships.builder).mockReturnValueOnce(ranked)
+    memberships.manager.builder.getRawMany.mockResolvedValue([
+      { organizationId: organization.id, email: 'a@example.invalid' },
+      { organizationId: organization.id, email: 'b@example.invalid' },
+    ])
+
+    const included = await service.list({ limit: 2, includeMemberEmails: true })
+
+    expect(included.items).toEqual([
+      expect.objectContaining({
+        organizationId: organization.id,
+        memberEmails: ['a@example.invalid', 'b@example.invalid'],
+      }),
+      expect.objectContaining({ organizationId: empty.id, memberEmails: [] }),
+    ])
+    expect(ranked.where).toHaveBeenCalledWith(expect.any(String), { organizationIds: [organization.id, empty.id] })
+    expect(memberships.manager.builder.where).toHaveBeenCalledWith(expect.any(String), { memberEmailLimit: 200 })
+  })
+
+  it('skips the member email read for an empty page', async () => {
+    const { service, memberships } = serviceWith()
+
+    const page = await service.list({ limit: 50, includeMemberEmails: true })
+
+    expect(page.items).toEqual([])
+    expect(memberships.manager.createQueryBuilder).not.toHaveBeenCalled()
   })
 
   it('counts retained destroyed and archived rows without changing impact', async () => {

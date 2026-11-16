@@ -33,13 +33,15 @@ ENV NX_SKIP_NX_CACHE=true
 COPY apps/api/ api/
 COPY apps/dashboard/ dashboard/
 
+COPY apps/libs/ci-listener/ libs/ci-listener/
 COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 # The MCP endpoint builds its tools from these specs; the API build bundles them as assets.
 COPY openapi/box.openapi.yaml openapi/admin.openapi.yaml ../openapi/
 
-RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && node --check dist/apps/api/main.js
+RUN yarn nx build api --configuration=production --nxBail=true --output-style=stream && \
+  node --check dist/apps/api/main.js && node --test api/test/production-metadata.cjs
 
 RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=production --nxBail=true --output-style=stream
 

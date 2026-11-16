@@ -44,6 +44,10 @@ import Redis from 'ioredis'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
+
+/** Disk usage at or above this percentage is logged as critical pressure. */
+const RUNNER_DISK_CRITICAL_THRESHOLD = 90
 
 @Injectable()
 export class RunnerService {
@@ -367,7 +371,12 @@ export class RunnerService {
     },
     appVersion?: string,
     supportsPrivileged?: boolean,
-    context?: { signal?: AbortSignal; infoFailed?: boolean },
+    context?: {
+      signal?: AbortSignal
+      infoFailed?: boolean
+      nestedVirtualizationEnabled?: boolean
+    },
+    dataDiskRef?: RunnerDataDiskRef,
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     // A timed-out attempt can resume here after its retry has committed.
@@ -389,6 +398,7 @@ export class RunnerService {
 
     if (!context?.infoFailed) {
       updateData.supportsPrivileged = supportsPrivileged === true
+      updateData.nestedVirtualizationEnabled = context?.nestedVirtualizationEnabled === true
     }
 
     if (domain) {
@@ -405,6 +415,14 @@ export class RunnerService {
 
     if (appVersion) {
       updateData.appVersion = appVersion
+    }
+
+    // Refreshed whenever a heartbeat carries it, never nulled when it does
+    // not: an older runner binary reporting no disk must not erase the
+    // identity a newer one reported (the expansion controller skips runners
+    // without one, so a wiped identity would silently stop expansion).
+    if (dataDiskRef !== undefined) {
+      updateData.dataDiskRef = dataDiskRef
     }
 
     if (serviceHealth !== undefined) {
@@ -435,6 +453,16 @@ export class RunnerService {
       updateData.cpu = metrics.cpu
       updateData.memoryGiB = metrics.memoryGiB
       updateData.diskGiB = metrics.diskGiB
+
+      const diskUsage = updateData.currentDiskUsagePercentage ?? 0
+      if (diskUsage >= RUNNER_DISK_CRITICAL_THRESHOLD) {
+        this.logger.warn({
+          'event.name': 'runner.disk_pressure',
+          'disk.pressure_level': 'critical',
+          runnerId,
+          diskUsagePercentage: diskUsage,
+        }, `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`)
+      }
 
       updateData.availabilityScore = this.calculateAvailabilityScore(runnerId, {
         cpuLoadAverage: updateData.currentCpuLoadAverage,
@@ -567,7 +595,11 @@ export class RunnerService {
                     runnerInfo?.metrics,
                     runnerInfo?.appVersion,
                     runnerInfo?.supportsPrivileged,
-                    { signal: abortController.signal, infoFailed: runnerInfoFailed },
+                    {
+                      signal: abortController.signal,
+                      infoFailed: runnerInfoFailed,
+                      nestedVirtualizationEnabled: runnerInfo?.nestedVirtualizationEnabled,
+                    },
                   )
                 })(),
                 new Promise((_, reject) => {

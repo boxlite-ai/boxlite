@@ -523,7 +523,7 @@ export const gcpEdgeProvider =
         project,
         loadBalancingScheme: 'EXTERNAL_MANAGED',
         protocol: 'TCP',
-        healthChecks: [health.id],
+        healthChecks: health.id,
         /*
          * One backend per zone, because a standalone NEG is zonal.
          *

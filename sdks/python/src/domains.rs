@@ -126,7 +126,7 @@ impl PyDomain {
     }
 }
 
-/// Every domain the organization holds, with the allowance they count against.
+/// Every held domain, with the allowance counted only against platform domains.
 #[pyclass(name = "DomainList")]
 #[derive(Clone)]
 pub(crate) struct PyDomainList {

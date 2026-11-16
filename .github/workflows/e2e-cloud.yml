@@ -1,12 +1,15 @@
 # E2E suite against a deployed cloud stack — SDK → API → Runner → VM.
 #
-# Builds Python SDK, Node SDK, and the CLI from source using
+# By default builds Python SDK, Node SDK, and the CLI from source using
 # BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
 # matter inside the runner, not the SDK client), then runs the REST
 # e2e pytest suite against the stage selected by `stage`.
 #
 # Dev also builds C, Go and Rust clients for the shared subdomain cases.
 # Legacy C/Go entry and coverage cases remain excluded below.
+# An optional tag downloads released Python/Node SDKs and CLI instead.
+# Dev retains its C/Go/Rust clients using release SDKs and the published C library;
+# only the Rust SDK and acceptance driver programs still need compilation.
 #
 # Does NOT build or deploy the API or runner — the stage is assumed to
 # be already running the version you want to test against.
@@ -16,12 +19,14 @@
 #   dev    api.dev.boxlite.ai, the whole suite. Creates and deletes
 #          boxes freely, probes quotas, and sweeps boxes earlier runs
 #          stranded (see the sweep step).
+#   stage  api.stage.boxlite.ai, separate identities and full suite;
+#          no automatic sweep or dev shared-subdomain fixture.
 #   prod   api.boxlite.ai, `-m smoke` only: the handful of cases marked
 #          in apps/e2e/pytest.ini as safe against a paying stage — one
 #          box at a time, no quota probing, no deliberate error storms.
 #          Nothing is swept there; prod holds customers' boxes.
 #
-# Both legs really create boxes on the stage they target, so a prod run
+# All stages really create boxes on the stage they target, so a prod run
 # costs prod capacity. That is the point — a smoke that mocks the thing
 # it is meant to verify verifies nothing — but it is why prod is a
 # deliberate, narrow subset rather than the full suite.
@@ -32,9 +37,11 @@
 #
 #   dev    BOXLITE_DEV_API_KEY
 #          BOXLITE_DEV_P2_API_KEY, BOXLITE_DEV_P2_READONLY_API_KEY
+#   stage  BOXLITE_STAGE_API_KEY
+#          BOXLITE_STAGE_P2_API_KEY, BOXLITE_STAGE_P2_READONLY_API_KEY
 #   prod   BOXLITE_PROD_API_KEY
 #
-# Both are named, not inherited, so a run can only ever hold the key for
+# All are named, not inherited, so a run can only ever hold the key for
 # the stage it targets. The repo also carries an older, unreferenced
 # BOXLITE_API_KEY — that one is a *dev* key, so it is no substitute for
 # BOXLITE_PROD_API_KEY: pointing the prod leg at it would authenticate
@@ -42,7 +49,7 @@
 # added before the prod leg can run at all; until then it resolves to empty
 # and the credential step says so by name.
 #
-# The main suite reads [profiles.p1]. Dev additionally tests private access
+# The main suite reads [profiles.p1]. Dev and stage additionally test private access
 # with p2 as owner, p2_readonly in the same org, and p1 in a different org.
 # Profiles are written to ~/.boxlite/credentials.toml and every request is
 # `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
@@ -51,6 +58,7 @@
 #
 # Optional repo variables (Settings → Variables → Actions):
 #   - BOXLITE_DEV_API_URL    dev target;  defaults to api.dev.boxlite.ai
+#   - BOXLITE_STAGE_API_URL stage target; defaults to api.stage.boxlite.ai
 #   - BOXLITE_PROD_API_URL   prod target; defaults to api.boxlite.ai
 #
 # Required repository variable for dev subdomain tests:
@@ -108,7 +116,7 @@
 # smaller blast radius: only `-m smoke` ever runs with it.
 
 name: E2E cloud
-run-name: E2E cloud against ${{ inputs.stage || 'dev' }}
+run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format(' using {0}', inputs.tag) || '' }}
 
 on:
   workflow_call:
@@ -123,10 +131,14 @@ on:
         required: true
         type: string
       stage:
-        description: 'Stage to test. Only dev is deployed this way.'
+        description: 'Stage to test: dev, stage or prod.'
         required: false
         type: string
         default: dev
+      tag:
+        description: 'Release client tag, e.g. v0.13.1 (blank = build from source).'
+        required: false
+        type: string
       sweep:
         description: 'Reclaim boxes earlier runs stranded (dev only).'
         required: false
@@ -148,6 +160,15 @@ on:
       BOXLITE_DEV_P2_READONLY_API_KEY:
         description: 'Dev read-only key in p2 organization. Required at runtime on dev.'
         required: false
+      BOXLITE_STAGE_API_KEY:
+        description: 'Stage key for p1.'
+        required: false
+      BOXLITE_STAGE_P2_API_KEY:
+        description: 'Stage key for p2 in a different organization.'
+        required: false
+      BOXLITE_STAGE_P2_READONLY_API_KEY:
+        description: 'Stage read-only key in the p2 organization.'
+        required: false
       BOXLITE_PROD_API_KEY:
         # Declared, not required: the call path only ever targets dev. It is
         # here so the same expression resolves on both triggers.
@@ -155,6 +176,10 @@ on:
         required: false
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Release client tag, e.g. v0.13.1 (blank = build from source)'
+        required: false
+        type: string
       stage:
         description: 'Stage to test'
         required: true
@@ -162,6 +187,7 @@ on:
         type: choice
         options:
           - dev
+          - stage
           - prod
       api_url:
         description: 'API base URL (blank = the stage default)'
@@ -179,7 +205,7 @@ on:
         type: string
         required: false
       sweep:
-        description: 'Reclaim boxes earlier runs stranded (ignored for prod)'
+        description: 'Reclaim boxes earlier runs stranded (dev only)'
         type: boolean
         required: true
         default: true
@@ -218,13 +244,14 @@ concurrency:
 env:
   BOXLITE_DEPS_STUB: '1'
   STAGE: ${{ inputs.stage || 'dev' }}
+  RELEASE_TAG: ${{ inputs.tag || '' }}
 
 jobs:
   # workflow_call has a string stage; restrict it to supported test stages.
   # Both call and dispatch remain deliberate runs by repository writers.
   e2e:
     name: E2E suite (${{ inputs.stage || 'dev' }})
-    if: ${{ contains(fromJSON('["dev", "prod"]'), inputs.stage || 'dev') }}
+    if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -233,9 +260,10 @@ jobs:
       # default, so the workflow still runs with nothing configured.
       API_URL: >-
         ${{ inputs.api_url
-            || ((inputs.stage || 'dev') == 'prod'
-                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai')
-                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai')) }}
+            || (inputs.stage == 'stage' && (vars.BOXLITE_STAGE_API_URL || 'https://api.stage.boxlite.ai'))
+            || (inputs.stage == 'prod' && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai'))
+            || ((inputs.stage || 'dev') == 'dev' && (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai'))
+            || '' }}
       # Blank keeps apps/e2e/lib/images.py deriving the ref from
       # apps/box-images/VERSION, which is right whenever the stage runs the
       # commit under test. A stage pinned to an older box image needs this.
@@ -247,6 +275,21 @@ jobs:
           # inputs.ref is undefined and github.sha is the ref chosen in the
           # UI — the same commit either way, never the caller's default.
           ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Validate client release
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh validate
+
+      - name: Checkout release SDK sources for subdomain clients
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
+        uses: actions/checkout@v5
+        with:
+          repository: boxlite-ai/boxlite
+          ref: ${{ inputs.tag }}
+          path: target/e2e-release
           persist-credentials: false
 
       - name: Require the shared subdomain (dev)
@@ -285,6 +328,9 @@ jobs:
           BOXLITE_DEV_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_API_KEY || '' }}
           BOXLITE_DEV_P2_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_API_KEY || '' }}
           BOXLITE_DEV_P2_READONLY_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_READONLY_API_KEY || '' }}
+          BOXLITE_STAGE_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_API_KEY || '' }}
+          BOXLITE_STAGE_P2_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_API_KEY || '' }}
+          BOXLITE_STAGE_P2_READONLY_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_READONLY_API_KEY || '' }}
           BOXLITE_PROD_API_KEY: ${{ inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY || '' }}
         run: python3 apps/e2e/configure_cloud_profiles.py
 
@@ -312,23 +358,31 @@ jobs:
 
       # ── System deps ──────────────────────────────────────────────
       - name: Install system dependencies
+        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends protobuf-compiler
 
       # ── Rust toolchain ───────────────────────────────────────────
       - name: Setup Rust toolchain
+        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
         uses: dtolnay/rust-toolchain@stable
 
       # ── CLI (cargo build, warms the shared boxlite core) ─────────
       # Only the CLI cases need the binary, and `-m smoke` selects none of
       # them, so the prod leg skips the build rather than paying for it.
       - name: Build CLI
-        if: ${{ (inputs.stage || 'dev') != 'prod' }}
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
         run: |
           cargo build --release -p boxlite-cli
           sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
           boxlite --version
+
+      - name: Install release CLI
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh cli
 
       # ── Node SDK (napi-rs) ───────────────────────────────────────
       - name: Setup Node.js
@@ -338,7 +392,7 @@ jobs:
           node-version: '20'
 
       - name: Build Node SDK (napi + tsc)
-        if: ${{ (inputs.stage || 'dev') != 'prod' }}
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
         run: |
           cd sdks/node
           npm install --ignore-scripts
@@ -346,27 +400,56 @@ jobs:
           npm run build
           ls -lh native/ dist/
 
+      - name: Install release Node SDK
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh node
+
       - name: Setup Go for subdomain clients
         if: ${{ (inputs.stage || 'dev') == 'dev' }}
         uses: actions/setup-go@v5
         with:
-          go-version-file: sdks/go/go.mod
+          go-version-file: ${{ inputs.tag != '' && 'target/e2e-release/sdks/go/go.mod' || 'sdks/go/go.mod' }}
           cache: false
 
       - name: Build C, Go and Rust subdomain clients
-        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') == 'dev' }}
         run: |
           sudo apt-get install -y --no-install-recommends llvm
           make build:e2e:drivers SETUP_DONE=1
 
+      - name: Build release C, Go and Rust subdomain clients
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/ci/install-e2e-release.sh c
+          make build:e2e:release-drivers
+
       # ── Python SDK (maturin + PyO3) ──────────────────────────────
       - name: Build & install Python SDK
+        if: ${{ inputs.tag == '' }}
         run: |
           cd sdks/python
           pip install --break-system-packages --quiet maturin
           maturin build --release
           pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
-          pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout greenlet
+
+      - name: Setup Python for release wheel
+        if: ${{ inputs.tag != '' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install release Python SDK
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/install-e2e-release.sh python
+
+      - name: Install pytest dependencies
+        run: pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout greenlet
 
       # ── Run pytest ───────────────────────────────────────────────
       # --ignore rationale:
@@ -387,8 +470,8 @@ jobs:
       #
       # The identity lane reuses these builds but owns its boxes in p2's org.
       # A separate pytest process keeps the session runtime and auth cache scoped.
-      - name: Run identity E2E (dev)
-        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+      - name: Run identity E2E (dev and stage)
+        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
         timeout-minutes: 5
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'

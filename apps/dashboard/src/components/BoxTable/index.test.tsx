@@ -7,9 +7,12 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
+import { Box, BoxDesiredState, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import { BoxTable } from './index'
 import { type BoxTableProps } from './types'
+import { toast } from 'sonner'
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -205,6 +208,39 @@ describe('BoxTable pagination controls', () => {
     expect(props.handleRecover).not.toHaveBeenCalled()
   })
 
+  it('opens checkpoint capture for the selected Box from More without opening its row', async () => {
+    const box = { ...makeBox('capture-source'), desiredState: BoxDesiredState.STOPPED }
+    const onCreateCheckpoint = vi.fn()
+    const props = renderBoxTable({ data: [box], onCreateCheckpoint })
+    await act(async () => {
+      document
+        .querySelector('[aria-label="More"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
+    })
+    const action = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.trim() === 'Checkpoint',
+    )
+    expect(action).toBeDefined()
+    await act(async () => action!.click())
+    expect(onCreateCheckpoint).toHaveBeenCalledWith(box)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('does not offer checkpoint capture for a source changing state', async () => {
+    const box = { ...makeBox('busy-source'), desiredState: BoxDesiredState.STARTED }
+    renderBoxTable({ data: [box], onCreateCheckpoint: vi.fn() })
+    await act(async () => {
+      document
+        .querySelector('[aria-label="More"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
+    })
+    expect(
+      Array.from(document.querySelectorAll('[role="menuitem"]')).some(
+        (item) => item.textContent?.trim() === 'Checkpoint',
+      ),
+    ).toBe(false)
+  })
+
   it('does not navigate when the click ends a text selection over a row', () => {
     const onRowClick = vi.fn()
     renderBoxTable({ onRowClick, data: [makeBox('1')] })
@@ -258,6 +294,40 @@ describe('BoxTable pagination controls', () => {
 
     expect(writeText).toHaveBeenCalledWith('box-1')
     expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it.each(['rejected', 'unavailable'])('reports a %s clipboard without claiming a copied name', async (failure) => {
+    const rejection = Promise.reject(new Error('Clipboard denied'))
+    void rejection.catch(() => {})
+    const writeText = vi.fn().mockReturnValue(rejection)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: failure === 'unavailable' ? undefined : { writeText },
+      configurable: true,
+    })
+    const props = renderBoxTable({ data: [makeBox('clipboard')] })
+    const button = getRequiredElement<HTMLButtonElement>('button[title="Copy name"]')
+
+    await act(async () => button.click())
+
+    expect(toast.error).toHaveBeenCalledWith(
+      failure === 'unavailable' ? 'Clipboard not supported' : 'Failed to copy to clipboard',
+    )
+    expect(button.querySelector('.lucide-check')).toBeNull()
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('waits for the clipboard before showing copy success', async () => {
+    let completeCopy = () => {}
+    const writeText = vi.fn().mockReturnValue(new Promise<void>((resolve) => (completeCopy = resolve)))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    renderBoxTable({ data: [makeBox('clipboard')] })
+    const button = getRequiredElement<HTMLButtonElement>('button[title="Copy name"]')
+
+    await act(async () => button.click())
+    expect(button.querySelector('.lucide-check')).toBeNull()
+
+    await act(async () => completeCopy())
+    expect(button.querySelector('.lucide-check')).not.toBeNull()
   })
 
   it('lets the user choose how many boxes are shown per page', () => {

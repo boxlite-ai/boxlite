@@ -15,12 +15,19 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { RunnerDataDiskRef } from './runner-data-disk-ref';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { RunnerHealthMetrics } from './runner-health-metrics';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { RunnerServiceHealth } from './runner-service-health';
 
 export interface RunnerHealthcheck {
+    /**
+     * Runner runtime authorizes nested virtualization
+     */
+    'nestedVirtualizationEnabled'?: boolean;
     /**
      * Runner preserves the guest privileged creation option
      */
@@ -33,6 +40,10 @@ export interface RunnerHealthcheck {
      * Health status of individual services on the runner
      */
     'serviceHealth'?: Array<RunnerServiceHealth>;
+    /**
+     * Cloud identity of the runner data disk; absent when the runner has none (AWS or local)
+     */
+    'dataDiskRef'?: RunnerDataDiskRef;
     /**
      * Runner domain
      */

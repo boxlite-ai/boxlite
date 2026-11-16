@@ -101,7 +101,7 @@ const Experimental: React.FC = () => {
   return (
     <div className="px-6 py-2">
       <div className="mb-2 h-12">
-        <h1 className="text-2xl font-medium">Experimental Features</h1>
+        <h1 className="text-page font-medium">Experimental Features</h1>
 
         <Card className="mt-4">
           <CardHeader>OpenTelemetry (OTEL) Configuration</CardHeader>
@@ -122,7 +122,7 @@ const Experimental: React.FC = () => {
                   value={endpoint}
                   onChange={(e) => setEndpoint(e.target.value)}
                 />
-                <p className="text-sm text-muted-foreground mt-1 pl-1">The OpenTelemetry collector endpoint URL.</p>
+                <p className="text-body text-muted-foreground mt-1 pl-1">The OpenTelemetry collector endpoint URL.</p>
               </div>
 
               <div className="space-y-3 max-w-2xl">
@@ -195,7 +195,7 @@ const Experimental: React.FC = () => {
                   </div>
                 </div>
 
-                <p className="text-sm text-muted-foreground mt-1 pl-1">
+                <p className="text-body text-muted-foreground mt-1 pl-1">
                   Optional headers to send with OTEL requests (e.g., authentication tokens).
                 </p>
               </div>

@@ -5,6 +5,10 @@
 import { forwardRef } from 'react'
 import {
   Activity as LucideActivity,
+  CircleDollarSign as LucideCircleDollarSign,
+  FlaskConical as LucideFlaskConical,
+  List as LucideList,
+  Wallet as LucideWallet,
   AlertCircle as LucideAlertCircle,
   AlertCircleIcon as LucideAlertCircleIcon,
   AlertTriangle as LucideAlertTriangle,
@@ -78,6 +82,7 @@ import {
   Info as LucideInfo,
   InfoIcon as LucideInfoIcon,
   KeyRound as LucideKeyRound,
+  LayoutDashboard as LucideLayoutDashboard,
   LifeBuoyIcon as LucideLifeBuoyIcon,
   Link2 as LucideLink2,
   ListChecks as LucideListChecks,
@@ -89,6 +94,7 @@ import {
   MailIcon as LucideMailIcon,
   MapPinned as LucideMapPinned,
   Maximize2 as LucideMaximize2,
+  Minimize2 as LucideMinimize2,
   MegaphoneIcon as LucideMegaphoneIcon,
   MemoryStick as LucideMemoryStick,
   MemoryStickIcon as LucideMemoryStickIcon,
@@ -101,6 +107,7 @@ import {
   MoreHorizontalIcon as LucideMoreHorizontalIcon,
   MoreVertical as LucideMoreVertical,
   PanelLeft as LucidePanelLeft,
+  Pin as LucidePin,
   Pause as LucidePause,
   Pencil as LucidePencil,
   Play as LucidePlay,
@@ -131,6 +138,7 @@ import {
   Trash as LucideTrash,
   Trash2 as LucideTrash2,
   TrashIcon as LucideTrashIcon,
+  UserRound as LucideUserRound,
   Users as LucideUsers,
   UsersIcon as LucideUsersIcon,
   UsersRound as LucideUsersRound,
@@ -242,6 +250,7 @@ export const Mail = thinIcon(LucideMail)
 export const MailIcon = thinIcon(LucideMailIcon)
 export const MapPinned = thinIcon(LucideMapPinned)
 export const Maximize2 = thinIcon(LucideMaximize2)
+export const Minimize2 = thinIcon(LucideMinimize2)
 export const MegaphoneIcon = thinIcon(LucideMegaphoneIcon)
 export const MemoryStick = thinIcon(LucideMemoryStick)
 export const MemoryStickIcon = thinIcon(LucideMemoryStickIcon)
@@ -254,6 +263,7 @@ export const MoreHorizontal = thinIcon(LucideMoreHorizontal)
 export const MoreHorizontalIcon = thinIcon(LucideMoreHorizontalIcon)
 export const MoreVertical = thinIcon(LucideMoreVertical)
 export const PanelLeft = thinIcon(LucidePanelLeft)
+export const Pin = thinIcon(LucidePin)
 export const Pause = thinIcon(LucidePause)
 export const Pencil = thinIcon(LucidePencil)
 export const Play = thinIcon(LucidePlay)
@@ -285,6 +295,7 @@ export const Trash = thinIcon(LucideTrash)
 export const Trash2 = thinIcon(LucideTrash2)
 export const TrashIcon = thinIcon(LucideTrashIcon)
 export const Users = thinIcon(LucideUsers)
+export const UserRound = thinIcon(LucideUserRound)
 export const UsersIcon = thinIcon(LucideUsersIcon)
 export const UsersRound = thinIcon(LucideUsersRound)
 export const Wrench = thinIcon(LucideWrench)
@@ -296,3 +307,9 @@ export const Globe = thinIcon(LucideGlobe)
 export const Braces = thinIcon(LucideBraces)
 
 export const Layers = thinIcon(LucideLayers)
+export const LayoutDashboard = thinIcon(LucideLayoutDashboard)
+
+export const CircleDollarSign = thinIcon(LucideCircleDollarSign)
+export const FlaskConical = thinIcon(LucideFlaskConical)
+export const List = thinIcon(LucideList)
+export const Wallet = thinIcon(LucideWallet)

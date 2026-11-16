@@ -1,0 +1,24 @@
+{
+  "name": "github-ci-runner",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "github-ci-runner/src",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@nx/webpack:webpack",
+      "options": {
+        "outputPath": "dist/apps/github-ci-runner",
+        "main": "github-ci-runner/src/main.ts",
+        "tsConfig": "github-ci-runner/tsconfig.app.json",
+        "target": "node",
+        "compiler": "tsc",
+        "webpackConfig": "github-ci-runner/webpack.config.cjs",
+        "externalDependencies": "none",
+        "generatePackageJson": false,
+        "sourceMap": false,
+        "optimization": false
+      }
+    }
+  },
+  "tags": []
+}

@@ -66,7 +66,7 @@ function Legend({ stats, total }: { stats: EndpointStats; total: number }) {
   return (
     <div className="flex items-center gap-4 flex-wrap">
       {SEGMENTS.map(({ key, label, dotColor }) => (
-        <div key={key} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div key={key} className="flex items-center gap-1.5 text-meta text-muted-foreground">
           <div className={cn('w-2 h-2 rounded-full', dotColor)} />
           <span>
             {label} {stats[key]}

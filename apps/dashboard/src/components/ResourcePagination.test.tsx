@@ -11,7 +11,7 @@ afterEach(() => {
   act(() => root.unmount())
   document.body.innerHTML = ''
 })
-function render(pageIndex: number, pageCount: number, totalItems: number, locked = false) {
+function render(pageIndex: number, pageCount: number, totalItems: number, locked = false, showPageSizeSelector = true) {
   const host = document.createElement('div')
   document.body.append(host)
   const change = vi.fn()
@@ -25,6 +25,7 @@ function render(pageIndex: number, pageCount: number, totalItems: number, locked
         totalItems={totalItems}
         isPagingLocked={locked}
         itemRangeLabel="Records"
+        showPageSizeSelector={showPageSizeSelector}
         onPaginationChange={change}
       />,
     )
@@ -50,4 +51,10 @@ it('locks pagination during replacement requests', () => {
   const { host, change } = render(1, 3, 60, true)
   act(() => host.querySelector<HTMLButtonElement>('[title="Next"]')!.click())
   expect(change).not.toHaveBeenCalled()
+})
+it('keeps fixed-size paging without offering unsupported page sizes', () => {
+  const { host, change } = render(0, 2, 26, false, false)
+  expect(host.querySelector('[aria-label="Rows per page"]')).toBeNull()
+  act(() => host.querySelector<HTMLButtonElement>('[title="Next"]')!.click())
+  expect(change).toHaveBeenCalledWith({ pageIndex: 1, pageSize: 25 })
 })

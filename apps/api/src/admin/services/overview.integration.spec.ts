@@ -315,4 +315,32 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
     expect(detail).toMatchObject({ createdBy: '00000000-0000-4000-8000-0000000000ff', creator: null })
     expect(detail).not.toHaveProperty('usage')
   })
+
+  it('returns at most 200 non-empty member emails per organization only when included', async () => {
+    const creator = '00000000-0000-4000-8000-0000000000ff'
+    const inserted = await dataSource.getRepository(Organization).insert([
+      { name: 'Mailing members', createdBy: creator },
+      { name: 'Mailing empty', createdBy: creator },
+    ])
+    const [withMembers, withoutMembers] = inserted.identifiers.map((row) => row.id as string)
+    // member-000 has no email and sorts first, so ranking before filtering would return 199.
+    const users = Array.from({ length: 202 }, (_, index) => {
+      const id = `member-${String(index).padStart(3, '0')}`
+      return { id, name: id, email: index === 0 ? '' : `${id}@example.invalid`, publicKeys: [] }
+    })
+    await dataSource.getRepository(User).insert(users)
+    await dataSource
+      .getRepository(OrganizationUser)
+      .insert(users.map((user) => ({ organizationId: withMembers, userId: user.id })))
+
+    const plain = await organizations.list({ query: 'Mailing', limit: 50 })
+    const included = await organizations.list({ query: 'Mailing', limit: 50, includeMemberEmails: true })
+
+    for (const item of plain.items) expect(item).not.toHaveProperty('memberEmails')
+    const emails = new Map(included.items.map((item) => [item.organizationId, item.memberEmails]))
+    expect(emails.get(withMembers)).toEqual(users.slice(1, 201).map((user) => user.email))
+    expect(emails.get(withoutMembers)).toEqual([])
+    // toEqual ignores undefined properties, so this compares every other field.
+    expect(included.items.map((item) => ({ ...item, memberEmails: undefined }))).toEqual(plain.items)
+  })
 })

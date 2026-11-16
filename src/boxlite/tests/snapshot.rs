@@ -16,7 +16,8 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use boxlite::runtime::options::BoxliteOptions;
-use boxlite::{BoxCommand, BoxliteRuntime, LiteBox, SnapshotOptions};
+use boxlite::{BoxCommand, LiteBox, SnapshotOptions};
+use common::TestRuntime as BoxliteRuntime;
 use tokio_stream::StreamExt;
 
 // ============================================================================

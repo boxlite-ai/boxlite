@@ -1,4 +1,4 @@
-//! Membership-error compatibility through the real shim/jailer/bubblewrap path.
+//! Membership- and quota-error compatibility through the real shim/jailer/bubblewrap path.
 //! Requires root and mount namespaces; quota enforcement has separate KVM acceptance.
 
 use super::ShimSpawner;
@@ -8,7 +8,7 @@ use nix::mount::{MsFlags, mount};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::{fs, path::Path};
 
-fn assert_spawn_survives_membership_failure(membership_target: Option<&Path>) {
+fn assert_spawn_survives_cgroup_failure(membership_target: Option<&Path>, quota_writable: bool) {
     assert_eq!(unsafe { libc::geteuid() }, 0, "test requires root");
     assert!(crate::jailer::bwrap::is_available(), "test requires bwrap");
 
@@ -31,6 +31,10 @@ fn assert_spawn_survives_membership_failure(membership_target: Option<&Path>) {
     }
     if let Some(target) = membership_target {
         symlink(target, group.join("cgroup.procs")).unwrap();
+    }
+    if !quota_writable {
+        // A directory in place of the file makes the quota write fail.
+        fs::create_dir(group.join("cpu.max")).unwrap();
     }
     mount(
         Some(cgroups.path()),
@@ -62,15 +66,17 @@ fn assert_spawn_survives_membership_failure(membership_target: Option<&Path>) {
         cpus: Some(0.5),
         ..Default::default()
     };
-    let config = "membership failure must preserve exec";
+    let config = "cgroup failure must preserve exec";
     let result =
         ShimSpawner::new(&binary, &layout, "membership-test", &options).spawn(config, true);
-    assert_eq!(
-        fs::read_to_string(group.join("cpu.max")).unwrap(),
-        "50000 100000",
-        "production startup must write the quota before attempting membership"
-    );
-    let mut spawned = result.expect("membership failure must not prevent child exec");
+    if quota_writable {
+        assert_eq!(
+            fs::read_to_string(group.join("cpu.max")).unwrap(),
+            "50000 100000",
+            "production startup must write the quota before attempting membership"
+        );
+    }
+    let mut spawned = result.expect("cgroup failure must not prevent child exec");
     assert!(spawned.child.wait().unwrap().success());
     assert_eq!(
         fs::read_to_string(layout.logs_dir().join("executed")).unwrap(),
@@ -82,11 +88,17 @@ fn assert_spawn_survives_membership_failure(membership_target: Option<&Path>) {
 #[test]
 #[ignore = "requires Linux root, mount namespaces, and bubblewrap"]
 fn fractional_cpus_missing_membership_file_allows_exec() {
-    assert_spawn_survives_membership_failure(None);
+    assert_spawn_survives_cgroup_failure(None, true);
 }
 
 #[test]
 #[ignore = "requires Linux root, mount namespaces, and bubblewrap"]
 fn fractional_cpus_membership_write_failure_allows_exec() {
-    assert_spawn_survives_membership_failure(Some(Path::new("/dev/full")));
+    assert_spawn_survives_cgroup_failure(Some(Path::new("/dev/full")), true);
+}
+
+#[test]
+#[ignore = "requires Linux root, mount namespaces, and bubblewrap"]
+fn fractional_cpus_quota_write_failure_allows_exec() {
+    assert_spawn_survives_cgroup_failure(None, false);
 }

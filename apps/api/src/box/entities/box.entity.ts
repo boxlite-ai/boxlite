@@ -165,7 +165,7 @@ export class Box {
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
 
-  @Column({ type: 'int', default: 2 })
+  @Column({ type: 'double precision', default: 2 })
   cpu = 2
 
   @Column({ type: 'int', default: 0 })
@@ -173,6 +173,10 @@ export class Box {
 
   @Column({ type: 'int', default: 4 })
   mem = 4
+
+  // Authoritative for new writes; mem remains the rounded legacy GiB projection.
+  @Column({ name: 'memory_mib', type: 'int', nullable: true })
+  memoryMib?: number | null
 
   @Column({ type: 'int', default: 10 })
   disk = 10
@@ -272,9 +276,14 @@ export class Box {
         throw new Error(`Box ${this.id} is not in a valid state to be started. State: ${this.state}`)
       case BoxDesiredState.STOPPED:
         if (
-          [BoxState.STARTED, BoxState.STOPPING, BoxState.STOPPED, BoxState.ERROR, BoxState.RESIZING].includes(
-            this.state,
-          )
+          [
+            BoxState.STARTED,
+            BoxState.STOPPING,
+            BoxState.STOPPED,
+            BoxState.RESTORING,
+            BoxState.ERROR,
+            BoxState.RESIZING,
+          ].includes(this.state)
         ) {
           break
         }

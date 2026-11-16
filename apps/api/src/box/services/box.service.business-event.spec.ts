@@ -26,7 +26,10 @@ function makeService() {
   const service = Object.create(BoxService.prototype) as BoxService
   Object.assign(service as any, {
     findOneByIdOrName: jest.fn().mockResolvedValue(startedBox),
-    boxRepository: { updateWhere: jest.fn().mockResolvedValue(startedBox) },
+    boxRepository: {
+      findWithCheckpointState: jest.fn().mockResolvedValue({ box: startedBox, checkpointState: null }),
+      updateWhere: jest.fn().mockResolvedValue(startedBox),
+    },
     eventEmitter: { emit: jest.fn() },
     logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
   })
@@ -38,7 +41,10 @@ function makeCreateService() {
   Object.assign(service as any, {
     getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
     getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-    organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+    organizationService: {
+      assertOrganizationIsNotSuspended: jest.fn(),
+      isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+    },
     organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
     redis: { exists: jest.fn().mockResolvedValue(1) },
     logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },

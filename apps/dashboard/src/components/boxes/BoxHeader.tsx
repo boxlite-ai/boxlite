@@ -69,7 +69,7 @@ export function BoxHeader({
           ) : box ? (
             <>
               <div className="flex items-center gap-1 min-w-0">
-                <h2 className="font-display text-base font-medium truncate">{getBoxDisplayName(box)}</h2>
+                <h2 className="font-display text-em font-medium truncate">{getBoxDisplayName(box)}</h2>
                 <CopyButton value={getBoxDisplayName(box)} tooltipText="Copy name" size="icon-xs" />
               </div>
               <BoxState pill state={box.state} errorReason={box.errorReason} recoverable={box.recoverable} />

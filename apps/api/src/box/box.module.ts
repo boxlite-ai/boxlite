@@ -58,10 +58,29 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
 import { Tunnel } from './entities/tunnel.entity'
 import { Domain } from './entities/domain.entity'
 import { DomainService } from './services/domain.service'
+import { CustomDomainMaintenanceController } from './controllers/custom-domain-maintenance.controller'
+import { CustomDomainController } from './controllers/custom-domain.controller'
+import { CustomDomainService } from './services/custom-domain.service'
+import { CustomDomainSubscriptionService } from './services/custom-domain-subscription.service'
+import { CustomDomainDnsService } from './services/custom-domain-dns.service'
+import { CustomDomainGcpService } from './services/custom-domain-gcp.service'
+import { CustomDomainWorkflowService } from './services/custom-domain-workflow.service'
+import { CustomDomainSchedulerService } from './services/custom-domain-scheduler.service'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
 import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
+import { Checkpoint } from './entities/checkpoint.entity'
+import { CheckpointService } from './services/checkpoint.service'
+import { CheckpointJobReceiver } from './services/checkpoint-job-receiver.service'
+import { CheckpointOperation } from './entities/checkpoint-operation.entity'
+import { BoxCheckpointState } from './entities/box-checkpoint-state.entity'
+import { CheckpointRecoverService } from './services/checkpoint-recover.service'
+import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
+import { RunnerDiskExpansion } from './entities/runner-disk-expansion.entity'
+import { RunnerDiskUsageSample } from './entities/runner-disk-usage-sample.entity'
+import { RunnerDiskExpansionService } from './services/runner-disk-expansion.service'
+import { GcpDiskClient } from './services/gcp-disk-client'
 
 @Module({
   imports: [
@@ -82,10 +101,27 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
       BoxMigration,
       Tunnel,
       Domain,
+      Checkpoint,
+      CheckpointOperation,
+      BoxCheckpointState,
+      RunnerDiskExpansion,
+      RunnerDiskUsageSample,
     ]),
   ],
-  controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
+  controllers: [
+    BoxController,
+    RunnerController,
+    PreviewController,
+    VolumeController,
+    JobController,
+    CustomDomainController,
+    CustomDomainMaintenanceController,
+  ],
   providers: [
+    CheckpointService,
+    CheckpointArchiveStore,
+    CheckpointRecoverService,
+    CheckpointJobReceiver,
     BoxService,
     BoxManager,
     BoxWarmPoolService,
@@ -112,7 +148,15 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
     BoxMigrationJobReceiver,
     TunnelService,
     DomainService,
+    CustomDomainService,
+    CustomDomainSubscriptionService,
+    CustomDomainDnsService,
+    CustomDomainGcpService,
+    CustomDomainWorkflowService,
+    CustomDomainSchedulerService,
     AttachTicketService,
+    RunnerDiskExpansionService,
+    GcpDiskClient,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
@@ -129,6 +173,8 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
     },
   ],
   exports: [
+    CheckpointService,
+    CheckpointRecoverService,
     BoxService,
     TunnelService,
     DomainService,

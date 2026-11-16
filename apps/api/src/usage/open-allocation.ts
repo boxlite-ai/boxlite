@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { identityString, quantityString, timestampString } from './usage-event'
+import { billingMemoryString, identityString, quantityString, timestampString } from './usage-event'
 
 /**
  * A still-open usage period, in the shape `BoxUsagePeriod` has before its
@@ -57,7 +57,7 @@ export function toOpenAllocationDto(allocation: OpenAllocation): OpenAllocationD
     startAt: timestampString(allocation.startAt, 'startAt'),
     cpu: quantityString(allocation.cpu, 'cpu'),
     gpu: quantityString(allocation.gpu, 'gpu'),
-    mem: quantityString(allocation.mem, 'mem'),
+    mem: billingMemoryString(allocation.mem),
     disk: quantityString(allocation.disk, 'disk'),
   }
 }

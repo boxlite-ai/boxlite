@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, MoreThan, Not, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
+import { memoryMibOf } from '../../box/utils/memory-allocation'
 import { Job } from '../../box/entities/job.entity'
 import { Runner } from '../../box/entities/runner.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
@@ -26,6 +27,7 @@ type BoxSummary = Pick<
   | 'state'
   | 'cpu'
   | 'mem'
+  | 'memoryMib'
   | 'disk'
   | 'updatedAt'
 >
@@ -273,6 +275,7 @@ export class AdminPlatformOverviewService {
         state: true,
         cpu: true,
         mem: true,
+        memoryMib: true,
         disk: true,
         updatedAt: true,
       },
@@ -302,6 +305,7 @@ export class AdminPlatformOverviewService {
         state: true,
         cpu: true,
         mem: true,
+        memoryMib: true,
         disk: true,
         updatedAt: true,
       },
@@ -371,7 +375,7 @@ export class AdminPlatformOverviewService {
       observedState: box.state,
       health: healthForBox(box.state, box.desiredState),
       cpuMillis: box.cpu * 1000,
-      memoryBytes: String(BigInt(box.mem) * BigInt(GIB)),
+      memoryBytes: String(BigInt(memoryMibOf(box)) * BigInt(1024 * 1024)),
       storageBytes: String(BigInt(box.disk) * BigInt(GIB)),
       activeJobCount,
       observedAt: isoTimestamp(box.updatedAt),

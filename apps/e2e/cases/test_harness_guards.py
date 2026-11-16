@@ -1,10 +1,11 @@
 """Tests for the suite's own guards — no stage required.
 
-These cover the two mechanisms that keep e2e runs from accumulating boxes in a
+These cover the guards that keep e2e runs from accumulating boxes in a
 shared organization, both of which are otherwise invisible until they fail in
 the way they are meant to prevent:
 
   * the lifetime this suite puts on every box it creates (`conftest`)
+  * checkpoint cleanup through pending state changes and completed deletion
   * the rule that decides what `apps/e2e/sweep.py` deletes
 
 Every case here is pure: no API, no box, no credential. They belong in this
@@ -15,12 +16,16 @@ rejects) got shipped in the first place.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import boxlite
 import pytest
+import test_checkpoints as checkpoint_case
 
 from conftest import (
     E2E_AUTO_DELETE_SECONDS,
@@ -28,6 +33,7 @@ from conftest import (
     E2E_BOX_NAME_PREFIX,
     bound_box_lifetime,
     e2e_box_name,
+    wait_until_unlisted,
     with_bounded_lifetime,
 )
 
@@ -67,6 +73,128 @@ def test_lifetime_defaults_are_applied_when_the_caller_sets_neither():
     bound_box_lifetime(options)
     assert options.auto_stop == E2E_AUTO_STOP_SECONDS
     assert options.auto_delete == E2E_AUTO_DELETE_SECONDS
+
+
+def test_checkpoint_lifetime_options_remain_inherited():
+    options = boxlite.BoxOptions(checkpoint="saved")
+    bound_box_lifetime(options)
+    assert options.auto_stop is None
+    assert options.auto_delete is None
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_cleanup_waits_for_pending_stop_and_stable_id_deletion():
+    names = {}
+    attempts = 0
+    deleting = False
+    gone = False
+    deletion_reads = 0
+
+    async def get_info(key):
+        nonlocal gone, deletion_reads
+        if key == names["copy"] or gone:
+            return None
+        if deleting:
+            # Deletion admission renames the Box before it is destroyed.
+            if key == names["source"]:
+                return None
+            assert key == "source-id"
+            deletion_reads += 1
+            if deletion_reads == 2:
+                gone = True
+                return None
+        return SimpleNamespace(id="source-id")
+
+    async def remove(key, force):
+        nonlocal attempts, deleting
+        assert key == "source-id" and force
+        attempts += 1
+        if attempts == 1:
+            raise boxlite.InvalidArgumentError("Box state change in progress")
+        deleting = True
+
+    async def remove_checkpoint(key, force):
+        assert key == names["archive"] and force
+        assert gone, "Checkpoint cleanup preceded actual Box deletion"
+
+    runtime = SimpleNamespace(
+        get_info=get_info,
+        remove=remove,
+        checkpoints=SimpleNamespace(remove=AsyncMock(side_effect=remove_checkpoint)),
+    )
+    resources = checkpoint_case.checkpoint_resources.__wrapped__(runtime)
+    created_names, owned = await anext(resources)
+    names.update(created_names)
+    owned.add(names["source"])
+    with pytest.raises(StopAsyncIteration):
+        await anext(resources)
+    assert attempts == 2
+    assert deletion_reads == 2
+    runtime.checkpoints.remove.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_operation", ["read", "remove", "deletion"])
+async def test_checkpoint_cleanup_bounds_blocked_operations(monkeypatch, blocked_operation):
+    monkeypatch.setattr(checkpoint_case, "LIFECYCLE_TIMEOUT_SECONDS", 0.01)
+    names = {}
+    accepted = False
+    blocked = asyncio.Event()
+
+    async def get_info(key):
+        if key == names["copy"]:
+            return None
+        if blocked_operation == "read" or accepted:
+            await blocked.wait()
+        return SimpleNamespace(id="source-id")
+
+    async def remove(key, force):
+        nonlocal accepted
+        if blocked_operation == "remove":
+            await blocked.wait()
+        accepted = True
+
+    runtime = SimpleNamespace(
+        get_info=get_info,
+        remove=remove,
+        checkpoints=SimpleNamespace(remove=AsyncMock()),
+    )
+    resources = checkpoint_case.checkpoint_resources.__wrapped__(runtime)
+    created_names, owned = await anext(resources)
+    names.update(created_names)
+    owned.add(names["source"])
+    with pytest.raises(AssertionError, match="Checkpoint E2E cleanup failed"):
+        await asyncio.wait_for(anext(resources), timeout=1)
+    runtime.checkpoints.remove.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [boxlite.InvalidArgumentError, boxlite.InvalidStateError])
+async def test_checkpoint_cleanup_preserves_unrelated_errors(error_type):
+    names = {}
+
+    async def get_info(key):
+        if key == names["source"]:
+            return None
+        return SimpleNamespace(id="owned-id")
+
+    runtime = SimpleNamespace(
+        get_info=get_info,
+        remove=AsyncMock(side_effect=[
+            boxlite.InvalidArgumentError("Box state change in progress"),
+            error_type("permission denied"),
+        ]),
+        checkpoints=SimpleNamespace(remove=AsyncMock()),
+    )
+    resources = checkpoint_case.checkpoint_resources.__wrapped__(runtime)
+    created_names, owned = await anext(resources)
+    names.update(created_names)
+    owned.add(names["copy"])
+    with pytest.raises(AssertionError, match="permission denied"):
+        await anext(resources)
+    # One busy-state retry, then one unrelated error; cleanup must still continue.
+    assert runtime.remove.await_count == 2
+    runtime.checkpoints.remove.assert_awaited_once_with(names["archive"], force=True)
 
 
 @pytest.mark.parametrize("field", ["auto_stop", "auto_delete"])
@@ -214,6 +342,31 @@ def offline_sweep(monkeypatch):
     return calls
 
 
+def test_sweep_reads_every_inventory_page(monkeypatch, offline_sweep):
+    replies = iter([
+        (200, {"boxes": [{"box_id": "first"}], "next_page_token": "cursor+/="}),
+        (200, {"boxes": [{"box_id": "last"}]}),
+    ])
+
+    def request_json(method, path):
+        offline_sweep.append(path)
+        return next(replies)
+
+    monkeypatch.setattr(sweep_mod, "request_json", request_json)
+    assert [box["box_id"] for box in sweep_mod._list_boxes()] == ["first", "last"]
+    assert offline_sweep == ["/v1/boxes", "/v1/boxes?pageToken=cursor%2B%2F%3D"]
+
+
+def test_sweep_refuses_partial_inventory(monkeypatch, offline_sweep):
+    replies = iter([
+        (200, {"boxes": [{"box_id": "first"}], "next_page_token": "next"}),
+        (503, {"message": "unavailable"}),
+    ])
+    monkeypatch.setattr(sweep_mod, "request_json", lambda *args: next(replies))
+    with pytest.raises(SystemExit, match="HTTP 503"):
+        sweep_mod._list_boxes()
+
+
 def test_waiting_ends_when_the_box_reports_not_found(monkeypatch, offline_sweep):
     replies = iter([(200, None), (404, None)])
 
@@ -258,3 +411,45 @@ def test_a_transient_error_is_not_read_as_gone(monkeypatch, offline_sweep):
     monkeypatch.setattr(sweep_mod, "request_json", request_json)
     assert sweep_mod._wait_until_gone(["abcdefghijkl"]) == ["abcdefghijkl"]
     assert offline_sweep, "the settle loop never asked the control plane"
+
+
+class _SettlingRuntime:
+    """A runtime whose `list_info` keeps a removed box for a few reads.
+
+    That is what a cloud stage does: the API answers the force remove before
+    the runner has destroyed the box, so the box stays listed until the next
+    reconcile marks it destroyed.
+    """
+
+    def __init__(self, box_id: str, listed_reads: int | None):
+        self._box_id = box_id
+        self._listed_reads = listed_reads
+        self.reads = 0
+
+    async def list_info(self):
+        self.reads += 1
+        if self._listed_reads is None or self.reads <= self._listed_reads:
+            return [type("Info", (), {"id": self._box_id})()]
+        return []
+
+
+async def test_a_removed_box_still_listed_during_teardown_is_not_a_leak():
+    rt = _SettlingRuntime("abcdefghijkl", listed_reads=2)
+    assert await wait_until_unlisted(rt, ["abcdefghijkl"], timeout=5, interval=0) == []
+    assert rt.reads == 3
+
+
+async def test_a_box_still_listed_after_the_settle_window_is_a_leak():
+    rt = _SettlingRuntime("abcdefghijkl", listed_reads=None)
+    leaked = await wait_until_unlisted(rt, ["abcdefghijkl", "mnopqrstuvwx"], timeout=0.05, interval=0.01)
+    assert leaked == ["abcdefghijkl"]
+
+
+class _FailingListRuntime:
+    async def list_info(self):
+        raise RuntimeError("list failed")
+
+
+async def test_a_list_error_is_not_read_as_unlisted():
+    with pytest.raises(RuntimeError, match="list failed"):
+        await wait_until_unlisted(_FailingListRuntime(), ["abcdefghijkl"], timeout=5, interval=0)

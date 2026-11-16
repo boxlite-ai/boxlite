@@ -153,11 +153,13 @@ const gcpHosts = ({
   zone,
   run,
   prefix,
+  stage,
 }: {
   project: string
   zone: string
   run: RunCommand
   prefix: string
+  stage: string
 }): Host[] => {
   const listed = run('gcloud', [
     'compute',
@@ -170,7 +172,12 @@ const gcpHosts = ({
   ])
   if (!listed.ok) throw new RunnerUpdateError(`could not list the fleet: ${listed.stderr || '(no stderr)'}`)
   return (JSON.parse(listed.stdout) as { name: string; labels?: Record<string, string> }[])
-    .map(({ name, labels }) => ({ target: name, label: name, policyLabel: labels?.['boxlite-runner'] }))
+    .map(({ name, labels }) => {
+      if (labels?.['boxlite-stage'] !== stage) {
+        throw new RunnerUpdateError(`${name} has no matching stage label; reconcile the fleet through mdeploy`)
+      }
+      return { target: name, label: name, policyLabel: labels['boxlite-runner'] }
+    })
     .sort(compareHostsIn(prefix))
 }
 
@@ -287,6 +294,7 @@ export const updateRunners = async ({
           zone: zoneIn(scope.region as string, scope.zone ?? null),
           run,
           prefix,
+          stage: scope.stage as string,
         }),
     named,
   )
@@ -351,7 +359,10 @@ export const updateRunners = async ({
       if (
         JSON.stringify(actual) !== JSON.stringify(expected) ||
         policy.instanceFilter?.all ||
-        policy.instanceFilter?.inclusionLabels?.some((entry: any) => Object.keys(entry.labels ?? {}).length !== 1) ||
+        policy.instanceFilter?.inclusionLabels?.some(
+          (entry: any) =>
+            Object.keys(entry.labels ?? {}).length !== 2 || entry.labels?.['boxlite-stage'] !== scope.stage,
+        ) ||
         policy.instanceFilter?.exclusionLabels?.length ||
         policy.instanceFilter?.inventories?.length ||
         policy.rollout?.minWaitDuration !== batch.rollout.minWaitDuration ||

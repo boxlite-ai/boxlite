@@ -107,8 +107,10 @@ export function ThisCycleCard() {
 
         {!unlimited && (
           <div className="border-t border-border px-[22px] py-4">
-            <div className="flex items-center gap-4 font-mono text-[12px]">
-              <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Quota used</span>
+            <div className="flex items-center gap-4 font-mono text-meta">
+              <span className="w-[100px] shrink-0 font-sans uppercase tracking-[0.5px] text-muted-foreground">
+                Quota used
+              </span>
               <span className="w-[140px] shrink-0 tabular-nums text-foreground">
                 {formatAmount(plan.quotaConsumedCents)} used
               </span>
@@ -120,8 +122,8 @@ export function ThisCycleCard() {
 
         {concurrencyLimit != null && runningBoxes != null && (
           <div className="border-t border-border px-[22px] py-4">
-            <div className="flex items-center gap-4 font-mono text-[12px]">
-              <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">
+            <div className="flex items-center gap-4 font-mono text-meta">
+              <span className="w-[100px] shrink-0 font-sans uppercase tracking-[0.5px] text-muted-foreground">
                 Concurrent boxes
               </span>
               <span className="w-[140px] shrink-0 tabular-nums text-foreground">

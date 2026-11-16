@@ -75,7 +75,7 @@ test('both clouds can be federated, and each only when it is the one', () => {
  * with a message about a stale local session on a machine nobody signed in on
  * — far enough from the cause to be worth naming here.
  */
-const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml', 'mbuild-release.yml']
+const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml']
 
 test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
   for (const name of GCP_FEDERATING_WORKFLOWS) {
@@ -123,7 +123,6 @@ test('the AWS role is composed from the account id, as every other workflow does
   for (const [name, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
-    ['mbuild-release.yml', read('mbuild-release.yml')],
   ] as const) {
     // The stage half may be an expression or a literal — mbuild-release's two
     // jobs each serve one fixed stage, and naming it is clearer there than
@@ -196,7 +195,6 @@ test('every job that reads a declaration is given one first', () => {
   for (const [file, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
-    ['mbuild-release.yml', read('mbuild-release.yml')],
   ] as const) {
     /*
      * Every tool below reads `.mstage.config.json`, and on a runner the only
@@ -318,9 +316,9 @@ test('a callee trusts no ref it was handed, and resolves none of its own', () =>
   )
 })
 
-test('the only stage a deploy workflow runs for off main is dev', () => {
+test('only dev and stage deploy workflows run off main', () => {
   /*
-   * dev is shaken out from the branch that is changing it, so its jobs run
+   * Dev and stage are shaken out from the branch that is changing them, so their jobs run
    * wherever they were dispatched. Every other stage reaches a protected
    * Environment and the cloud role behind it, and runs from main alone.
    *
@@ -340,6 +338,7 @@ test('the only stage a deploy workflow runs for off main is dev', () => {
     assert.ok(guards.length > 0, `${name} guards no job by branch`)
     for (const guard of guards) {
       assert.match(guard, /== 'dev'/, `${name} leaves main for a stage it does not name:\n${guard}`)
+      assert.match(guard, /== 'stage'/, `${name} does not give stage the dev branch policy`)
       assert.equal(
         /!= 'prod'/.test(guard),
         false,

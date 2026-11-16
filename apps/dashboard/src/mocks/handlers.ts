@@ -6,7 +6,11 @@
 
 import { onboardingHandlers } from './onboarding-handlers'
 import { domainHandlers } from './domain-handlers'
+import { checkpointHandlers, createMockCheckpointBox } from './checkpoint-handlers'
 import { sshHandlers } from './ssh-handlers'
+import { tunnelHandlers } from './tunnel-handlers'
+import { ciHandlers } from './ci-handlers'
+import { resourceStateHandlers } from './resource-state-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -35,6 +39,7 @@ import {
   MOCK_IMAGE_LIMIT,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
+  MOCK_USER,
   MOCK_PAGINATED_BOXES,
   MOCK_REGISTRY_CREDENTIALS,
   buildBox,
@@ -87,16 +92,46 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...resourceStateHandlers(API_URL),
+  ...ciHandlers(),
   ...sshHandlers,
+  ...tunnelHandlers,
   ...domainHandlers(),
+  ...checkpointHandlers,
   ...onboardingHandlers(API_URL),
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
-  http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/users/me`, () =>
+    HttpResponse.json({
+      id: MOCK_USER.sub,
+      name: MOCK_USER.name,
+      email: MOCK_USER.email,
+      publicKeys: [],
+      createdAt: new Date(0).toISOString(),
+    }),
+  ),
+  http.get(`${API_URL}/organizations`, () =>
+    HttpResponse.json(
+      import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true'
+        ? [
+            { ...MOCK_ORGANIZATION, name: 'Personal organization' },
+            { ...MOCK_ORGANIZATION, id: 'demo-acme', name: 'Acme AI', isDefaultForAuthenticatedUser: false },
+            {
+              ...MOCK_ORGANIZATION,
+              id: 'demo-research',
+              name: 'Research Collective',
+              isDefaultForAuthenticatedUser: false,
+            },
+          ]
+        : [MOCK_ORGANIZATION],
+    ),
+  ),
   http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
-    params.organizationId === MOCK_ORGANIZATION.id
-      ? HttpResponse.json(MOCK_ORGANIZATION)
+    params.organizationId === MOCK_ORGANIZATION.id ||
+    (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
+      ['demo-acme', 'demo-research'].includes(String(params.organizationId)))
+      ? HttpResponse.json({ ...MOCK_ORGANIZATION, id: params.organizationId })
       : new HttpResponse(null, { status: 404 }),
   ),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
@@ -156,8 +191,19 @@ export const handlers = [
   // The Box API's create, which the New Box dialog calls on the page's own
   // origin. The box pulls for a moment, then starts; reaching STARTED is what
   // puts its image in the catalog, as the API's registrar does.
-  http.post('*/v1/:organizationId/boxes', async ({ request }) => {
-    const body = (await request.json()) as { name?: string; image?: string; cpus?: number; memory_mib?: number }
+  http.post('*/v1/:organizationId/boxes', async ({ params, request }) => {
+    const body = (await request.json()) as {
+      checkpoint_id?: string
+      name?: string
+      image?: string
+      cpus?: number
+      memory_mib?: number
+    }
+    if (body.checkpoint_id !== undefined) {
+      if (!body.checkpoint_id || Object.keys(body).some((key) => key !== 'checkpoint_id' && key !== 'name'))
+        return HttpResponse.json({ message: 'Expected a checkpoint selector and optional name' }, { status: 400 })
+      return createMockCheckpointBox(String(params.organizationId), body.checkpoint_id, body.name)
+    }
     const image = body.image || 'ghcr.io/boxlite-ai/boxlite-agent-base:mock'
     const id = `mock-box-${Math.abs(Date.now() % 100000000)}`
     const box = buildBox({
@@ -213,17 +259,6 @@ export const handlers = [
     const { mode } = (await request.json()) as { mode: NetworkMode }
     box.network.inbound = { mode, allow_net: [] }
     return HttpResponse.json(box.network.inbound)
-  }),
-  // Refuses without inbound access, like the real route.
-  http.post(`${API_URL}/v1/:prefix/boxes/:boxId/network/tunnel`, ({ params, request }) => {
-    const boxId = String(params.boxId)
-    const box = MOCK_BOXES.find((b) => b.id === boxId)
-    if (box?.network?.inbound.mode !== NetworkMode.ENABLED) return new HttpResponse(null, { status: 409 })
-    const port = new URL(request.url).searchParams.get('port')
-    // Mirrors the real hex-encoded direct-preview host shape. Hand-rolled
-    // rather than via Buffer, which does not exist in the browser.
-    const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-    return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful

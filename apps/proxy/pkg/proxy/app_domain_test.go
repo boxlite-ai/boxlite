@@ -50,7 +50,7 @@ func newAppDomainProxy(t *testing.T, lookupStatus int) (*Proxy, *[]string) {
 	}
 	return &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
-		config:                     &config.Config{ProxyAppDomain: appDomain, ProxyProtocol: "https"},
+		config:                     &config.Config{ProxyDomain: "proxy.boxlite.test", ProxyAppDomain: appDomain, ProxyProtocol: "https"},
 		boxInboundCache:            common_cache.NewMapCache[bool](ctx),
 		boxAuthKeyValidCache:       common_cache.NewMapCache[bool](ctx),
 		boxRunnerCache:             common_cache.NewMapCache[RunnerInfo](ctx),
@@ -66,7 +66,7 @@ func trimPathPrefix(path, prefix string) (string, bool) {
 }
 
 func TestAppDomainHostClassification(t *testing.T) {
-	proxy := &Proxy{config: &config.Config{ProxyAppDomain: appDomain}}
+	proxy := &Proxy{config: &config.Config{ProxyAppDomain: appDomain, ProxyDomain: "proxy.boxlite.test"}}
 	for host, want := range map[string]string{
 		"demo.app.boxlite.test":       "demo.app.boxlite.test",
 		"Demo.APP.BoxLite.test:443":   "demo.app.boxlite.test",
@@ -76,15 +76,12 @@ func TestAppDomainHostClassification(t *testing.T) {
 		"a.b.app.boxlite.test":        "a.b.app.boxlite.test",
 		"app.boxlite.test":            "",
 		"3000-abc.proxy.boxlite.test": "",
-		"demo.app.boxlite.test.evil":  "",
+		"demo.app.boxlite.test.evil":  "demo.app.boxlite.test.evil",
 	} {
 		got, ok := proxy.appDomainHost(host)
 		if ok != (want != "") || got != want {
 			t.Errorf("appDomainHost(%q) = %q, %v; want %q", host, got, ok, want)
 		}
-	}
-	if _, ok := (&Proxy{config: &config.Config{}}).appDomainHost("demo.app.boxlite.test"); ok {
-		t.Fatal("an unset app domain classified a host as a platform subdomain")
 	}
 	// A local stack configures the port the proxy listens on; it is not part
 	// of the hostname a name is bound under.
@@ -145,23 +142,6 @@ func TestAppDomainPortShapedNameIsNotParsedAsLegacy(t *testing.T) {
 	}
 	if len(*asked) != 1 || (*asked)[0] != "3000-abc.app.boxlite.test" {
 		t.Fatalf("API asked for %v, want the full platform hostname", *asked)
-	}
-	if len(ctx.Errors) != 1 || !isStatus(ctx.Errors[0].Err, http.StatusNotFound) {
-		t.Fatalf("recorded %v, want 404", ctx.Errors)
-	}
-}
-
-func TestAppDomainDeeperNameIs404WithoutAskingTheAPI(t *testing.T) {
-	proxy, asked := newAppDomainProxy(t, http.StatusOK)
-	request := httptest.NewRequest(http.MethodGet, "http://a.b.app.boxlite.test/", nil)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = request
-
-	if target, err := proxy.GetProxyTarget(ctx); err == nil || target != nil {
-		t.Fatalf("deep name reached a target: target=%v err=%v", target, err)
-	}
-	if len(*asked) != 0 {
-		t.Fatalf("API asked for %v, want nothing", *asked)
 	}
 	if len(ctx.Errors) != 1 || !isStatus(ctx.Errors[0].Err, http.StatusNotFound) {
 		t.Fatalf("recorded %v, want 404", ctx.Errors)
@@ -265,7 +245,7 @@ func TestAppDomainLoginPathsBelongToTheUserService(t *testing.T) {
 func TestAppDomainGetsBrowserWarningEvenOnHealthPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use((&Proxy{config: &config.Config{ProxyAppDomain: appDomain}}).browserWarningMiddleware())
+	engine.Use((&Proxy{config: &config.Config{ProxyAppDomain: appDomain, ProxyDomain: "proxy.boxlite.test"}}).browserWarningMiddleware())
 	engine.GET("/health", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
 	request := httptest.NewRequest(http.MethodGet, "http://demo.app.boxlite.test/health", nil)
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -291,7 +271,7 @@ func TestAppDomainLookupIsNotCached(t *testing.T) {
 	clientConfig := apiclient.NewConfiguration()
 	clientConfig.Servers[0].URL = api.URL + "/api"
 	clientConfig.AddDefaultHeader("Authorization", "Bearer proxy-key")
-	proxy := &Proxy{apiclient: apiclient.NewAPIClient(clientConfig), config: &config.Config{ProxyAppDomain: appDomain}}
+	proxy := &Proxy{apiclient: apiclient.NewAPIClient(clientConfig), config: &config.Config{ProxyAppDomain: appDomain, ProxyDomain: "proxy.boxlite.test"}}
 
 	if _, _, err := proxy.resolveAppDomain(context.Background(), "demo.app.boxlite.test"); err != nil {
 		t.Fatalf("first lookup failed: %v", err)

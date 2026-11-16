@@ -94,7 +94,7 @@ async function publicationAudit(): Promise<{ cwd: string | undefined; args: stri
         return { code: 1, stdout: 'audit probe', stderr: '' }
       }
       assert.equal(file, 'gcloud', 'a failed audit must precede image commands')
-      return { code: 0, stdout: args.includes('repositories') ? 'True' : '', stderr: '' }
+      return { code: 0, stdout: args.includes('repositories') ? 'True' : '[]', stderr: '' }
     },
   }), AuditFailedError)
   assert.ok(observed, 'capture the audit invocation from real publication code')

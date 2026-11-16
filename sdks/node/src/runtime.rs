@@ -293,6 +293,13 @@ impl JsBoxlite {
         })
     }
 
+    #[napi(getter)]
+    pub fn checkpoints(&self) -> crate::checkpoints::JsCheckpointHandle {
+        crate::checkpoints::JsCheckpointHandle {
+            handle: Arc::new(self.runtime.checkpoints()),
+        }
+    }
+
     /// Get the runtime volume handle.
     #[napi(getter)]
     pub fn volumes(&self) -> Result<JsVolumeHandle> {
