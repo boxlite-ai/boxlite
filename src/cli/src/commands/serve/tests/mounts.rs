@@ -114,7 +114,7 @@ async fn approved_source_reaches_box_lookup() {
     let source = root.path().canonicalize().unwrap();
     let mut state = lifecycle_state();
     state.mount_sources =
-        super::super::mount_sources::MountSources::new(&[source.clone()]).unwrap();
+        super::super::mount_sources::MountSources::new(std::slice::from_ref(&source)).unwrap();
     let (status, body) = status_of(
         add_mount(
             State(Arc::new(state)),

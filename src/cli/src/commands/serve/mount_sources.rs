@@ -93,7 +93,7 @@ mod tests {
         let root = temp.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("allowed")).unwrap();
         assert!(MountSources::default().pin(&root).is_err());
-        let grants = MountSources::new(&[root.clone()]).unwrap();
+        let grants = MountSources::new(std::slice::from_ref(&root)).unwrap();
         assert!(grants.pin(&root.join("allowed")).is_ok());
         assert!(grants.pin(&root.join("../outside")).is_err());
         assert!(grants.pin(Path::new("/etc")).is_err());
@@ -108,7 +108,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("root");
         std::fs::create_dir_all(root.join("source")).unwrap();
-        let grants = MountSources::new(&[root.clone()]).unwrap();
+        let grants = MountSources::new(std::slice::from_ref(&root)).unwrap();
         let source = grants.pin(&root.join("source")).unwrap();
         let inode = source.metadata().unwrap().ino();
         std::fs::rename(&root, root.with_file_name("moved")).unwrap();
