@@ -1,6 +1,6 @@
 # Outbound transport and policy update foundation
 
-**Status:** Accepted; implementation and traffic validation are pending.
+**Status:** Accepted design. The problem observations below describe the linked baseline commits; current implementation and verification are documented in the outbound contract.
 
 Design: https://github.com/boxlite-ai/boxlite/issues/2715
 

@@ -211,6 +211,22 @@ A newly requested unconditional complete replacement may use the observed revisi
 The existing unconditional setter retains its old-backend path only while no versioned control metadata exists.
 A versioned call, or a Box already using versioned state, cannot silently fall back to that path.
 
+### Revision-aware REST transport
+
+The Rust REST backend carries `outbound_snapshot`, `outbound_status`, and conditional replacement through the same typed NetworkHandle API.
+The policy GET decodes user policy and one strong ETag; the separate status GET retains durable/live comparison and pending evidence.
+A response claiming confirmation must contain matching durable and completed live snapshots with no pending attempt.
+
+Internal replacement uses `PUT /boxes/{id}/network/outbound/snapshot`, one expected token in `If-Match`, and the candidate in `X-Boxlite-Outbound-Revision`.
+Only policy enters the JSON request body.
+HTTP 200 requires one strong matching ETag and the complete matching policy; 412 remains a distinct rejected-precondition outcome.
+Missing, weak, duplicated, malformed, or mismatched acknowledgements cannot establish application.
+Unsupported routes never trigger the old policy setter, whose unconditional request shape remains unchanged.
+Revision control exchanges have a ten-second total bound, including response reading.
+
+Socket-backed REST tests run requests through NetworkHandle and the real HTTP encoder/decoder.
+They cover exact request metadata, matching and rejected acknowledgements, old peers, invalid stored policy, and contradictory confirmed status.
+
 Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
