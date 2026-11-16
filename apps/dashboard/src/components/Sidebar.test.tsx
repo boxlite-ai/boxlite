@@ -11,6 +11,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { Sidebar } from './Sidebar'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 
+vi.mock('./billing/SidebarBalance', () => ({ SidebarBalance: () => null }))
+
 vi.mock('posthog-js/react', () => ({
   usePostHog: () => ({ capture: vi.fn(), reset: vi.fn() }),
 }))
