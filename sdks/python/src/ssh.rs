@@ -207,6 +207,8 @@ impl PySshHandle {
     }
 
     /// Enable saved configuration on a running box; preserve healthy connections.
+    /// A valid handle to a configured or stopped box raises InvalidStateError
+    /// without changing saved SSH intent.
     fn enable<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -224,7 +226,10 @@ impl PySshHandle {
         })
     }
 
-    /// Stop SSH and disconnect clients. Repeatable; never starts the VM.
+    /// Stop SSH and disconnect clients on a running box. Repeatable while running.
+    /// A valid handle to a configured or stopped box raises InvalidStateError
+    /// without changing saved SSH intent.
+    /// Never starts the VM; disable while running to persist the disabled switch.
     fn disable<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
