@@ -7,15 +7,15 @@ const out = <T>(value: T): any => ({ value, apply: (render: (value: T) => unknow
 
 for (const checkpointAccess of [false, true]) {
   test(`GCP API grants checkpoint object access only with its capability (${checkpointAccess})`, (t) => {
-    const resources: { kind: string; name: string; args: any }[] = []
+    const resources: { kind: string; name: string; args: any; options: any }[] = []
     const constructor = (kind: string) =>
       class {
         id: any
         name: any
         address = out('192.0.2.1')
         dnsResourceRecords = [{ name: '_verify.example.invalid', type: 'CNAME', data: 'verify.example.invalid' }]
-        constructor(name: string, args: any) {
-          resources.push({ kind, name, args })
+        constructor(name: string, args: any, options?: any) {
+          resources.push({ kind, name, args, options })
           this.id = out(`${kind}/${name}`)
           this.name = out(args.name || name)
         }
@@ -150,6 +150,10 @@ for (const checkpointAccess of [false, true]) {
     for (const grant of filestoreGrants) {
       assert.equal(grant.args.member.value, 'serviceAccount:api@example.invalid')
       assert.ok(api.ready.some((resource: any) => resource.id.value === `projects.IAMMember/${grant.name}`))
+      assert.equal(grant.name, `ApiFilestoreViewer-${grant.args.project}`)
+      assert.deepEqual(grant.options.aliases, [
+        { name: `ApiCapability${checkpointAccess ? 2 : 1}FilestoreViewer-${grant.args.project}` },
+      ])
     }
   })
 }

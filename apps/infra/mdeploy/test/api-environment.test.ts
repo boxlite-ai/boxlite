@@ -366,7 +366,7 @@ test('GCP materializes the default Filestore placement and derives its project',
     stage: 'production',
     home: 'gcp',
   })
-  assert.equal(Object.hasOwn(production.environment, 'FILESTORE_INSTANCES'), false)
+  assert.equal(production.environment.FILESTORE_INSTANCES, '[]')
   assert.deepEqual(production.filestoreProjects, [])
 
   const disabled = apiEnvironmentFrom({
