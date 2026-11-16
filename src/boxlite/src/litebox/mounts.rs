@@ -165,7 +165,9 @@ impl MountCoordinator {
     }
 
     /// A coordinator whose guest steps time out quickly, for injection tests.
-    #[cfg(test)]
+    /// Same gate as the tests module: it is the only caller, and the module
+    /// does not compile on every target this crate builds for.
+    #[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn with_guest_timeout(guest_timeout: Duration) -> Self {
         Self {
             guest_timeout,
