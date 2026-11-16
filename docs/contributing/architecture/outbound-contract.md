@@ -170,6 +170,23 @@ The public Rust `GvproxyConfig` shape remains unchanged; restoring Runtime-owned
 A matching status revision is not an acknowledgement while `application_state` is `pending` or `uncertain`.
 This capability describes the gvproxy control boundary; Runtime persistence and Cloud/Runner propagation require their own completed implementation and verification.
 
+### Runtime control client
+
+`NetworkBackend::outbound_snapshot` reads the backend's policy identity and installation phase.
+It requires the `revision-v1` capability and rejects invalid tokens, policies, or phases.
+An observed `pending` or `uncertain` phase remains visible to the caller; an identity match alone does not establish completion.
+
+`replace_outbound_snapshot` sends an `OutboundReplacement` to the dedicated snapshot resource.
+The validated operation keeps expected and candidate revisions separate from user policy JSON.
+It returns `Applied` only for HTTP 200 with exactly one matching strong ETag and the complete matching policy response.
+Missing, weak, duplicate, or different acknowledgements produce an error with an uncertain application outcome.
+HTTP 412 returns `PreconditionFailed`, a must-use outcome that does not represent successful application.
+Unsupported backends return an explicit error; the versioned operation never falls back to the existing unconditional setter.
+
+The existing setters and public configuration structs retain their signatures and wire shapes.
+Backends inherit unsupported defaults for the added methods, so an existing custom implementation still compiles.
+These methods verify the Runtime-to-gvproxy control boundary, independently of durable recovery or Cloud/Runner propagation.
+
 Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
 Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.
 
