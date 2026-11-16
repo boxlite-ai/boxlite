@@ -231,11 +231,17 @@ const bindingsFor = ({
     case 'read-filestore-instances':
       return capability.projects.map(
         (filestoreProject) =>
-          new gcp.projects.IAMMember(`ApiCapability${index}FilestoreViewer-${filestoreProject}`, {
-            project: filestoreProject,
-            role: 'roles/file.viewer',
-            member: principal,
-          }),
+          new gcp.projects.IAMMember(
+            `ApiFilestoreViewer-${filestoreProject}`,
+            {
+              project: filestoreProject,
+              role: 'roles/file.viewer',
+              member: principal,
+            },
+            {
+              aliases: [{ name: `ApiCapability${index}FilestoreViewer-${filestoreProject}` }],
+            },
+          ),
       )
     case 'resize-runner-disks': {
       /*

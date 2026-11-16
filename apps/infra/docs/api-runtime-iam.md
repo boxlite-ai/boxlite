@@ -32,8 +32,9 @@ to cloud authorization.
 mdeploy:
 
 1. Parses `FILESTORE_INSTANCES` in `apiEnvironmentFrom`. Unset uses the built-in placement only on
-   `dev` and `stage`; other stages omit it unless configured explicitly. Explicit whitespace disables
-   Filestore, and each nonempty entry must carry `project_id`.
+   `dev` and `stage`; other stages receive `[]` unless configured explicitly, so the API never falls
+   back to the development instance. Explicit whitespace disables Filestore, and each nonempty entry
+   must carry `project_id`.
 2. Deduplicates and sorts the configured `project_id` values.
 3. Adds `read-filestore-instances` as the final capability only when that project list is nonempty.
 4. Creates one project IAM binding per configured project for the API runtime identity. The role is
@@ -46,10 +47,10 @@ mdeploy:
 It is separate from runner access to the NFS server: granting the API role does not authorize a
 mount, and granting runner network access does not authorize instance lookup. An AWS deployment
 rejects `read-filestore-instances` and omits `FILESTORE_INSTANCES`, even if stage configuration
-supplies instances. Deployment also exports `FILESTORE_SUPPORTED=false` on AWS and `true` on GCP;
-the API hides the Filestore capability and answers a create request with HTTP 501 and the
-structured code `unsupported` only on unsupported deployments. Local APIs default to supported so an explicitly configured
-instance list remains usable.
+supplies instances. Deployment also exports `FILESTORE_SUPPORTED=false` on AWS and `true` on GCP.
+This slice only delivers that configuration; no public Volume or Box path consumes it yet, so it
+does not hide the Filestore capability or return HTTP 501 `unsupported` for create requests. Local
+APIs default to supported so an explicitly configured instance list remains usable.
 
 For a configured instance in a project other than the stage project, the deployer identity needs
 permission to set IAM policy in that project. That is deployment bootstrapping, not a recurring

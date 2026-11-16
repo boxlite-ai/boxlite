@@ -403,7 +403,8 @@ export const apiEnvironmentFrom = ({
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
   validateCiChannels(values, addresses)
   const configuredFilestoreInstances = environment.FILESTORE_INSTANCES?.trim()
-  const filestoreInstances = configuredFilestoreInstances ?? defaultFilestoreInstances(stage)
+  const filestoreInstances =
+    configuredFilestoreInstances ?? defaultFilestoreInstances(stage) ?? (home === 'gcp' ? '[]' : undefined)
   const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
   const apiValues =
     home === 'gcp'
