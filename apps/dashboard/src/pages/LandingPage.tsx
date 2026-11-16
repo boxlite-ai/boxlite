@@ -3,73 +3,89 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
-
-import { LogoText } from '@/assets/Logo'
-import LoadingFallback from '@/components/LoadingFallback'
+import { AccountEntryLayout } from '@/components/SetupLayout'
 import { AsciiButton } from '@/components/ascii'
-import { ArrowRightIcon } from '@/components/ui/icon'
-import { RoutePath } from '@/enums/RoutePath'
-import { consumeJustLoggedOut } from '@/lib/auth-session'
+import { getSignInIntent, prepareSignIn, safeReturnTo } from '@/lib/auth-session'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Navigate, useLocation } from 'react-router-dom'
 
-// No in-app login UI: an unauthenticated visitor is handed straight to the OIDC
-// hosted login (Auth0 in dev/prod, Dex locally). Branding the login page belongs
-// on the IdP side (Universal Login), not here, so the app never collects creds.
-//
-// Exception: a visitor who JUST logged out lands back on '/' (the IdP's
-// post_logout_redirect_uri). Auto-redirecting them would defeat the logout and
-// loop straight back in when the IdP keeps an SSO cookie, so they get a manual
-// sign-in instead.
 const LandingPage: React.FC = () => {
-  const { signinRedirect, isAuthenticated, isLoading } = useAuth()
+  const { signinRedirect, removeUser, user, isAuthenticated, isLoading, error, activeNavigator } = useAuth()
   const location = useLocation()
   const redirecting = useRef(false)
-  const [loggedOut] = useState(() => consumeJustLoggedOut())
+  const [intent] = useState(getSignInIntent)
+  const [opening, setOpening] = useState(false)
+  const [failure, setFailure] = useState(false)
+  const errorCode = (error?.innerError as { error?: string } | undefined)?.error
+  const cancelled = errorCode === 'access_denied'
+  const returnTo = safeReturnTo(location.state?.returnTo ?? intent?.returnTo ?? location.pathname)
 
-  const signIn = useCallback(() => {
-    if (redirecting.current) return
-    redirecting.current = true
-    void signinRedirect({ state: { returnTo: RoutePath.DASHBOARD + location.search } })
-  }, [signinRedirect, location.search])
+  const signIn = useCallback(
+    async (chooseAccount = true) => {
+      if (redirecting.current) return
+      redirecting.current = true
+      setOpening(true)
+      setFailure(false)
+      try {
+        prepareSignIn(returnTo)
+        if (user) await removeUser()
+        // The context wrapper returns null on failure rather than rejecting.
+        const result: unknown = await signinRedirect({
+          ...(chooseAccount ? { prompt: 'login' } : {}),
+          state: { returnTo },
+        })
+        if (result === null) setFailure(true)
+      } catch {
+        setFailure(true)
+      } finally {
+        redirecting.current = false
+        setOpening(false)
+      }
+    },
+    [signinRedirect, removeUser, user, returnTo],
+  )
 
   useEffect(() => {
-    if (isLoading || isAuthenticated || loggedOut) return
-    signIn()
-  }, [isLoading, isAuthenticated, loggedOut, signIn])
+    if (isLoading || isAuthenticated || error || activeNavigator || getSignInIntent() || failure) return
+    void signIn(false)
+  }, [isLoading, isAuthenticated, error, activeNavigator, failure, signIn])
 
-  if (isAuthenticated) {
-    return <Navigate to={`${RoutePath.DASHBOARD}${location.search}`} replace />
-  }
+  if (isAuthenticated && !error && !intent) return <Navigate to={returnTo} replace />
+  const busy = Boolean(opening) || isLoading
 
-  if (loggedOut) {
-    return (
-      <main className="flex min-h-svh items-center justify-center bg-background px-6 py-12">
-        <section aria-labelledby="signed-out-title" className="w-full max-w-[360px] text-center">
-          <div className="mb-10 flex items-center justify-center">
-            <LogoText className="h-11 w-auto" />
-          </div>
-          <div className="text-center">
-            <h1
-              id="signed-out-title"
-              className="font-display text-page font-semibold leading-tight tracking-tight text-foreground"
-            >
-              You’re signed out.
-            </h1>
-            <p className="mt-3 text-body leading-6 text-muted-foreground">Sign in to continue.</p>
-            <AsciiButton variant="primary" onClick={signIn} className="mt-8 h-11 w-full justify-center gap-2 px-4">
-              Sign in
-              <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </AsciiButton>
-          </div>
-        </section>
-      </main>
-    )
-  }
-
-  // Brief loading while the redirect to the hosted login is in flight.
-  return <LoadingFallback />
+  return (
+    <AccountEntryLayout
+      size="compact"
+      centered
+      title="Sign in to BoxLite"
+      description={intent?.signedOut ? 'You’re signed out.' : 'Sign in to manage your Boxes and organizations.'}
+    >
+      <AsciiButton
+        variant="primary"
+        onClick={() => void signIn(false)}
+        disabled={busy}
+        aria-busy={busy}
+        className="h-10 w-full justify-center px-4"
+      >
+        {opening ? 'Opening sign-in…' : isLoading ? 'Checking session…' : 'Sign in'}
+      </AsciiButton>
+      <AsciiButton
+        variant="quiet"
+        disabled={busy}
+        onClick={() => void signIn(true)}
+        className="mt-2 h-10 w-full justify-center px-4"
+      >
+        Use another account
+      </AsciiButton>
+      {!busy && (failure || (error && !cancelled)) && (
+        <p role="alert" className="mt-4 text-body text-destructive">
+          {errorCode === 'mock_auth_unavailable'
+            ? 'Account switching requires the real sign-in service. This preview uses a test identity.'
+            : 'We couldn’t sign you in. Please try again.'}
+        </p>
+      )}
+    </AccountEntryLayout>
+  )
 }
-
 export default LandingPage

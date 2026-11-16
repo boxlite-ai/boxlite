@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { matchPath, useLocation } from 'react-router-dom'
 import { useAuth } from 'react-oidc-context'
-import { LogoText } from '@/assets/Logo'
+import { AccountEntryLayout } from '@/components/SetupLayout'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import { Building2, Check, ChevronDown, Loader2 } from '@/components/ui/icon'
 import { useApi } from '@/hooks/useApi'
 import {
   readOrganizationSession,
+  readPreferredOrganization,
   saveOrganizationSession,
   ORGANIZATION_SESSION_EVENT,
   organizationSwitchPath,
@@ -27,6 +28,7 @@ import {
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog'
 import { RoutePath } from '@/enums/RoutePath'
+import { accountSwitchPath } from '@/lib/auth-session'
 function OrganizationChoices({
   onComplete,
   currentId,
@@ -115,7 +117,7 @@ function OrganizationChoices({
             }}
             aria-current={currentId === org.id ? 'true' : undefined}
             disabled={Boolean(pending)}
-            className={`flex w-full items-center gap-2 px-2 text-left hover:bg-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60 ${choosing ? 'min-h-12 border-b border-border py-3' : 'min-h-11 py-1.5'}`}
+            className="flex min-h-11 w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
           >
             <Building2 className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1">
@@ -184,37 +186,73 @@ export function OrganizationGate({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   const selectedId = useSyncExternalStore(subscribeSelection, () => readOrganizationSession(user?.profile.sub))
   const bypass = pathname === RoutePath.USER_INVITATIONS || matchPath(RoutePath.EMAIL_VERIFY, pathname)
+  const { organizationsApi } = useApi()
+  const userId = user?.profile.sub
+  const preferredId = readPreferredOrganization(userId)
+  const restoreId =
+    !bypass && !selectedId && organizations.length > 1 && organizations.some((org) => org.id === preferredId)
+      ? preferredId
+      : null
+  const restoreKey = JSON.stringify([userId, restoreId])
+  const [attempted, setAttempted] = useState<string | null>(null)
+  useEffect(() => {
+    if (!userId || !restoreId || attempted === restoreKey) return
+    let active = true
+    void organizationsApi
+      .listOrganizationMembers(restoreId)
+      .then(({ data }) => {
+        if (!active || !data.some((member) => member.userId === userId)) return
+        saveOrganizationSession(userId, restoreId)
+        window.dispatchEvent(new Event(ORGANIZATION_SESSION_EVENT))
+      })
+      .catch(() => {
+        // The chooser remains available when remembered access cannot be confirmed.
+      })
+      .finally(() => {
+        if (active) setAttempted(restoreKey)
+      })
+    return () => {
+      active = false
+    }
+  }, [userId, restoreId, restoreKey, attempted, organizationsApi])
+  if (restoreId && attempted !== restoreKey)
+    return (
+      <AccountEntryLayout size="compact" title="Opening Console">
+        <p role="status" className="text-body text-muted-foreground">
+          Checking organization access…
+        </p>
+      </AccountEntryLayout>
+    )
   if (bypass || organizations.length === 1 || organizations.some((org) => org.id === selectedId)) return children
   return (
-    <div className="min-h-svh bg-background font-sans text-foreground">
-      <header className="flex h-16 items-center justify-between gap-4 border-b border-border px-6 md:px-10">
-        <LogoText className="h-9 w-auto shrink-0" />
-        <span className="truncate text-body text-muted-foreground">{user?.profile.email}</span>
-      </header>
-      <main className="mx-auto max-w-[560px] px-6 pb-16 pt-16 md:pt-24">
-        <h1 className="mb-3 mt-3 text-page font-semibold tracking-tight">
-          {organizations.length ? 'Choose an organization' : 'No organizations yet'}
-        </h1>
-        <p className="mb-8 text-body leading-6 text-muted-foreground">
-          {organizations.length
-            ? 'Select an organization to continue.'
-            : 'You have not joined an organization. Open your invitation link, or refresh after joining.'}
-        </p>
-        {organizations.length ? (
-          <OrganizationChoices onComplete={() => window.dispatchEvent(new Event(ORGANIZATION_SESSION_EVENT))} />
-        ) : (
-          <Button variant="outline" onClick={() => window.location.reload()}>
-            Refresh
-          </Button>
-        )}
-        <div className="mt-6 flex justify-between text-meta text-muted-foreground">
-          <span>{organizations.length} organizations</span>
-          <Button variant="ghost" size="sm" onClick={() => window.location.assign(RoutePath.LOGOUT)}>
-            Use another account
-          </Button>
-        </div>
-      </main>
-    </div>
+    <AccountEntryLayout
+      size="compact"
+      identity={<span className="truncate text-body text-muted-foreground">{user?.profile.email}</span>}
+      title={organizations.length ? 'Choose an organization' : 'No organizations yet'}
+      description={
+        organizations.length
+          ? undefined
+          : 'You have not joined an organization. Open your invitation link, or refresh after joining.'
+      }
+    >
+      {organizations.length ? (
+        <OrganizationChoices onComplete={() => window.dispatchEvent(new Event(ORGANIZATION_SESSION_EVENT))} />
+      ) : (
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Refresh
+        </Button>
+      )}
+      <div className="mt-6 flex justify-between text-meta text-muted-foreground">
+        <span>{organizations.length} organizations</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => window.location.assign(accountSwitchPath(window.location.pathname + window.location.search))}
+        >
+          Use another account
+        </Button>
+      </div>
+    </AccountEntryLayout>
   )
 }
 

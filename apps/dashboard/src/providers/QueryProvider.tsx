@@ -28,7 +28,9 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
+      {import.meta.env.DEV && import.meta.env.VITE_ENABLE_MOCKING !== 'true' && (
+        <ReactQueryDevtools initialIsOpen={false} />
+      )}
     </QueryClientProvider>
   )
 }

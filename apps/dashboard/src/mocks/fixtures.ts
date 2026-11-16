@@ -31,12 +31,28 @@ import {
   VolumeState,
 } from '@boxlite-ai/api-client'
 
-export const MOCK_USER = {
-  sub: 'mock-user-00000000',
-  name: 'Mock User',
-  email: 'mock@boxlite.dev',
-  picture: undefined as string | undefined,
+export const MOCK_ACCOUNTS = [
+  {
+    sub: 'mock-user-00000000',
+    name: 'Jordan Lee',
+    email: 'jordan@example.test',
+    picture: undefined as string | undefined,
+  },
+  {
+    sub: 'mock-user-00000001',
+    name: 'Alex Chen',
+    email: 'alex@example.test',
+    picture: undefined as string | undefined,
+  },
+]
+function mockAccountIndex() {
+  try {
+    return sessionStorage.getItem('mock-account') === '1' ? 1 : 0
+  } catch {
+    return 0
+  }
 }
+export const MOCK_USER = MOCK_ACCOUNTS[mockAccountIndex()]
 
 export const MOCK_ORGANIZATION_ID = 'mock-org-00000000'
 
