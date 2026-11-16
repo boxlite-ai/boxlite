@@ -405,7 +405,9 @@ pub fn bind_at(path: &Path) -> io::Result<UnixListener> {
     let mut mode = std::fs::metadata(path)?.permissions();
     mode.set_mode(0o600);
     // SAFETY: the descriptor and mode value remain valid for the call.
-    let mode_value = mode.mode();
+    // mode_t is u32 on Linux but u16 on macOS; the PermissionsExt mode is
+    // always a lossless subset of either.
+    let mode_value = mode.mode() as libc::mode_t;
     if unsafe { libc::fchmod(listener.as_raw_fd(), mode_value) } != 0 {
         return Err(io::Error::last_os_error());
     }
