@@ -93,18 +93,29 @@ class AgentSpecTest(unittest.TestCase):
         self.assertTrue(validator.is_valid("x" * 256))
 
     def test_record_fields_and_fractional_retention(self):
-        expected = {
-            "AgentState": "id status cursor active_turn_id queued_turn_ids requests steering",
-            "AgentTurnState": "id agent_id status cursor result requests steering",
-            "AgentResult": "turn_id status outcome text data artifacts usage error",
-            "AgentConfig": "tools mcp model reasoning instructions permissions limits output_schema",
-            "AgentCapabilities": "operations input_kinds max_queued_turns max_pending_steering idempotency_retention_seconds",
-            "AgentRequest": "id turn_id kind",
-            "AgentSteeringReceipt": "id turn_id status",
-            "AgentEvent": "cursor agent_id turn_id kind data",
-        }
-        for name, fields in expected.items():
-            self.assertEqual(set(SCHEMAS[name]["properties"]), set(fields.split()), name)
+        records = (ROOT / "src/cli/src/commands/agent/records.rs").read_text()
+        functions = dict(re.findall(
+            r"pub\(super\) fn (\w+)\([^\n]*\).*?\n(.*?)(?=\npub\(super\) fn |\n///|\nfn |\Z)",
+            records, re.S,
+        ))
+        for schema, function in {
+            "AgentState": "agent_state", "AgentTurnState": "turn_state",
+            "AgentResult": "result", "AgentSteeringReceipt": "receipt",
+            "AgentCapabilities": "capabilities", "AgentEvent": "event",
+        }.items():
+            fields = set(re.findall(r'"(\w+)"\s*:', functions[function]))
+            self.assertEqual(set(SCHEMAS[schema]["properties"]), fields, schema)
+        config_fields = set(re.findall(r'"(\w+)"\s*:', functions["config"]))
+        config_fields.update(re.findall(r'\(\s*"(\w+)"\s*,', functions["config"]))
+        self.assertEqual(set(SCHEMAS["AgentConfig"]["properties"]), config_fields)
+        request = functions["requests"]
+        outer = re.search(r'json!\(\{ "id":.*?\}\)', request).group()
+        self.assertEqual(set(SCHEMAS["AgentRequest"]["properties"]),
+                         set(re.findall(r'"(\w+)"\s*:', outer)))
+        for variant in SCHEMAS["AgentRequest"]["properties"]["kind"]["oneOf"]:
+            kind = variant["properties"]["type"]["const"]
+            record = re.search(r'json!\(\{ "type": "' + kind + r'".*?\}\)', request).group()
+            self.assertEqual(set(variant["properties"]), set(re.findall(r'"(\w+)"\s*:', record)))
         validate("AgentCapabilities", {"operations": [], "input_kinds": [], "max_queued_turns": 0,
                  "max_pending_steering": None, "idempotency_retention_seconds": 0.5})
         self.assertFalse(jsonschema.Draft202012Validator(SCHEMAS["AgentTurnStatus"]).is_valid("bogus"))
