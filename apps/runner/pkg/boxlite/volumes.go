@@ -471,8 +471,8 @@ func (c *Client) getNfsMountCmd(ctx context.Context, ref *dto.FilestoreRef, path
 // from treating that process as finished before Wait returns.
 func (c *Client) runMount(ctx context.Context, mountKey string, cmd *exec.Cmd) (bool, error) {
 	return c.runBoundedVolumeOperation(ctx, mountKey, func() error {
-		if c.mountRunner != nil {
-			return c.mountRunner(cmd)
+	if c.testMountRunner != nil {
+		return c.testMountRunner(cmd)
 		}
 		return cmd.Run()
 	})
@@ -595,8 +595,8 @@ func (c *Client) umountPath(ctx context.Context, path string) error {
 // binary (`mountpoint`), which a dev machine may not have. Production keeps
 // the real probe — NewClient sets neither seam.
 func (c *Client) probeMounted(ctx context.Context, path string) (bool, error) {
-	if c.probeRunner != nil {
-		return c.probeRunner(ctx, path)
+	if c.testProbeRunner != nil {
+		return c.testProbeRunner(ctx, path)
 	}
 	return c.isDirectoryMounted(ctx, path)
 }
