@@ -137,9 +137,11 @@ class CloudProfilesTest(unittest.TestCase):
         for missing in ("read:images", "delete:images"):
             with self.subTest(missing=missing):
                 permissions = {"write:boxes", "delete:boxes", "read:images", "delete:images"} - {missing}
-                with patch.dict(self.metadata, {'key-two"quoted': ("org-two", sorted(permissions))}):
-                    with self.assertRaisesRegex(RuntimeError, missing):
-                        self.configure()
+                with (
+                    patch.dict(self.metadata, {'key-two"quoted': ("org-two", sorted(permissions))}),
+                    self.assertRaisesRegex(RuntimeError, missing),
+                ):
+                    self.configure()
                 self.assertEqual(self.destination.read_text(), "existing profiles")
 
     def test_invalid_targets_are_rejected_before_credentials_are_sent(self):
