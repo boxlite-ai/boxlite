@@ -61,7 +61,7 @@ export const gcpRegistryProxyProvider =
         name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'registry-proxy' }),
         project,
         location: region,
-        ...($app.stage === 'stage' ? { labels: { stage: 'stage' } } : {}),
+        labels: { stage: $app.stage },
         /*
          * The whole of the restriction, because the invoker below admits
          * everyone. Read the note on that invoker before widening this: the two

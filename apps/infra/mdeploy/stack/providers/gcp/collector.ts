@@ -75,7 +75,7 @@ export const gcpCollectorProvider =
         name,
         project,
         location: region,
-        ...($app.stage === 'stage' ? { labels: { stage: 'stage' } } : {}),
+        labels: { stage: $app.stage },
         ingress: 'INGRESS_TRAFFIC_INTERNAL_ONLY',
         template: {
           serviceAccount: placement.serviceAccount,

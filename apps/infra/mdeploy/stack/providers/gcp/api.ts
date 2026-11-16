@@ -454,7 +454,7 @@ export const gcpApiProvider =
         name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
         project,
         location: region,
-        ...($app.stage === 'stage' ? { labels: { stage: 'stage' } } : {}),
+        labels: { stage: $app.stage },
         /*
          * The ingress *is* the restriction. Read the note on `publicInvoker`
          * below before widening this: the two are one decision, and a value

@@ -68,6 +68,10 @@ mdeploy uses Pulumi with GCS state. API/dashboard, collector and registry proxy 
 the proxy runs on GKE Autopilot, and runners use Compute Engine; see [architecture](architecture.md).
 Cloudflare credentials come from the encrypted `deploy` group.
 
+The API, collector and registry proxy set Service metadata `labels.stage`; the GKE Proxy cluster sets `resourceLabels.stage`.
+Both use the deployed stage, for example `dev`, so Backoffice can select matching resources.
+Apply these labels before enabling strict inventory filtering; unlabeled resources remain excluded until deployment and Cloud Asset indexing complete.
+
 ## Verify and recover
 
 Run the shared [service checks](../deployment.md#verify-the-result), then inspect
