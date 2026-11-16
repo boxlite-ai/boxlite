@@ -164,9 +164,10 @@ retryable instead of making the handle appear to belong to an earlier VM.
 Natural exit commits the stopped state and releases lifecycle admission before
 waiting for disk admission to complete remove-on-stop cleanup. Under both admissions,
 it rechecks persisted stopped status, absent PID, remove-on-stop policy, incomplete
-removal, and lock identity before deletion. Cleanup errors reach the watcher warning
-without retries. Cleanup runs in the exit callback's future; aborting the watcher
-can cancel it, with startup `recover_boxes` remaining the fallback.
+removal, and lock identity before deletion. The watcher ignores `NotFound` and
+`Stopped` cleanup errors and warns on other errors, without retries. Cleanup runs
+in the exit callback's future; aborting the watcher can cancel it, with startup
+`recover_boxes` remaining the fallback.
 
 Explicit start keeps `Container.Start` background and cancellable. Outbound updates
 use the host network backend without awaiting that RPC: a pending container start
