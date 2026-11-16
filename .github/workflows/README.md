@@ -269,7 +269,7 @@ every consumer.
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 3 | lint, test ×2 |
+| `setup-python` | 5 | lint ×2, test ×3 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
