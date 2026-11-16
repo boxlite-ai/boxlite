@@ -12,7 +12,10 @@ impl MountSources {
         for root in roots {
             anyhow::ensure!(root.is_absolute(), "mount source root must be absolute");
             let canonical = root.canonicalize()?;
-            anyhow::ensure!(canonical == *root, "mount source root must be canonical and contain no symlinks");
+            anyhow::ensure!(
+                canonical == *root,
+                "mount source root must be canonical and contain no symlinks"
+            );
             let directory = open_beneath(&File::open("/")?, root.strip_prefix("/")?)?;
             grants.push((canonical, directory));
         }
@@ -21,7 +24,12 @@ impl MountSources {
 
     pub(super) fn pin(&self, source: &Path) -> anyhow::Result<File> {
         anyhow::ensure!(source.is_absolute(), "mount source must be absolute");
-        anyhow::ensure!(source.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_))), "mount source must be canonical");
+        anyhow::ensure!(
+            source
+                .components()
+                .all(|c| matches!(c, Component::RootDir | Component::Normal(_))),
+            "mount source must be canonical"
+        );
         for (root, directory) in &self.0 {
             if let Ok(relative) = source.strip_prefix(root) {
                 return open_beneath(directory, relative);
@@ -33,13 +41,21 @@ impl MountSources {
 
 #[cfg(target_os = "linux")]
 fn open_beneath(root: &File, path: &Path) -> anyhow::Result<File> {
+    use nix::libc;
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
-    use nix::libc;
     #[repr(C)]
-    struct OpenHow { flags: u64, mode: u64, resolve: u64 }
-    let path = CString::new(if path.as_os_str().is_empty() { b".".as_slice() } else { path.as_os_str().as_bytes() })?;
+    struct OpenHow {
+        flags: u64,
+        mode: u64,
+        resolve: u64,
+    }
+    let path = CString::new(if path.as_os_str().is_empty() {
+        b".".as_slice()
+    } else {
+        path.as_os_str().as_bytes()
+    })?;
     let how = OpenHow {
         flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
         mode: 0,
@@ -48,8 +64,18 @@ fn open_beneath(root: &File, path: &Path) -> anyhow::Result<File> {
     };
     // SAFETY: both pointers reference live, initialized syscall arguments;
     // successful openat2 returns a fresh descriptor owned by this File.
-    let fd = unsafe { libc::syscall(libc::SYS_openat2, root.as_raw_fd(), path.as_ptr(), &how, std::mem::size_of::<OpenHow>()) };
-    if fd < 0 { return Err(std::io::Error::last_os_error().into()); }
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            root.as_raw_fd(),
+            path.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     Ok(unsafe { File::from_raw_fd(fd as i32) })
 }
 
@@ -87,7 +113,15 @@ mod tests {
         let inode = source.metadata().unwrap().ino();
         std::fs::rename(&root, root.with_file_name("moved")).unwrap();
         std::fs::create_dir_all(root.join("source")).unwrap();
-        assert_eq!(grants.pin(&root.join("source")).unwrap().metadata().unwrap().ino(), inode);
+        assert_eq!(
+            grants
+                .pin(&root.join("source"))
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .ino(),
+            inode
+        );
         assert_eq!(source.metadata().unwrap().ino(), inode);
         assert_ne!(std::fs::metadata(root.join("source")).unwrap().ino(), inode);
     }

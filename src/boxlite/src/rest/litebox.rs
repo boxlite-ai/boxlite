@@ -681,24 +681,45 @@ impl BoxBackend for RestBox {
     }
 
     async fn mounts_remove(&self, target: &Path) -> BoxliteResult<()> {
-        self.client.delete_with_query(
-            &format!("/boxes/{}/mounts/by-target", self.box_id_str()),
-            &[("target", target.to_str().ok_or_else(|| BoxliteError::InvalidArgument("mount target must be UTF-8".into()))?)],
-        ).await
+        self.client
+            .delete_with_query(
+                &format!("/boxes/{}/mounts/by-target", self.box_id_str()),
+                &[(
+                    "target",
+                    target.to_str().ok_or_else(|| {
+                        BoxliteError::InvalidArgument("mount target must be UTF-8".into())
+                    })?,
+                )],
+            )
+            .await
     }
 
     async fn mounts_list(&self) -> BoxliteResult<Vec<crate::MountInfo>> {
         #[derive(serde::Deserialize)]
-        struct MountsResponse { mounts: Vec<crate::MountInfo> }
-        let response: MountsResponse = self.client.get(&format!("/boxes/{}/mounts", self.box_id_str())).await?;
+        struct MountsResponse {
+            mounts: Vec<crate::MountInfo>,
+        }
+        let response: MountsResponse = self
+            .client
+            .get(&format!("/boxes/{}/mounts", self.box_id_str()))
+            .await?;
         Ok(response.mounts)
     }
 
     async fn mounts_get(&self, target: &Path) -> BoxliteResult<Option<crate::MountInfo>> {
-        match self.client.get_with_query(
-            &format!("/boxes/{}/mounts/by-target", self.box_id_str()),
-            &[("target", target.to_str().ok_or_else(|| BoxliteError::InvalidArgument("mount target must be UTF-8".into()))?)],
-        ).await {
+        match self
+            .client
+            .get_with_query(
+                &format!("/boxes/{}/mounts/by-target", self.box_id_str()),
+                &[(
+                    "target",
+                    target.to_str().ok_or_else(|| {
+                        BoxliteError::InvalidArgument("mount target must be UTF-8".into())
+                    })?,
+                )],
+            )
+            .await
+        {
             Ok(info) => Ok(Some(info)),
             Err(BoxliteError::NotFound(_)) => Ok(None),
             Err(error) => Err(error),
@@ -1616,12 +1637,29 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
             let info = r#"{"source":"/host","target":"/a &b","read_only":true,"state":"mounted"}"#;
-            for (status, response) in [(201, info.to_string()), (200, format!("{{\"mounts\":[{info}]}}")), (404, r#"{"error":{"message":"absent","code":"not_found"}}"#.into()), (204, String::new())] {
+            for (status, response) in [
+                (201, info.to_string()),
+                (200, format!("{{\"mounts\":[{info}]}}")),
+                (
+                    404,
+                    r#"{"error":{"message":"absent","code":"not_found"}}"#.into(),
+                ),
+                (204, String::new()),
+            ] {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut header = Vec::new();
-                while !header.ends_with(b"\r\n\r\n") { header.push(stream.read_u8().await.unwrap()); }
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(stream.read_u8().await.unwrap());
+                }
                 let header = String::from_utf8(header).unwrap();
-                let length: usize = header.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").map(|value| value.trim().parse().unwrap())).unwrap_or(0);
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
                 let mut body = vec![0; length];
                 stream.read_exact(&mut body).await.unwrap();
                 requests.push((header.lines().next().unwrap().to_string(), body));
@@ -1630,17 +1668,39 @@ mod tests {
             requests
         });
         let backend = rest_box_for(port, "mount-box");
-        let info = backend.mounts_add(crate::MountRequest { source: "/host".into(), target: "/a &b".into(), read_only: true }).await.unwrap();
+        let info = backend
+            .mounts_add(crate::MountRequest {
+                source: "/host".into(),
+                target: "/a &b".into(),
+                read_only: true,
+            })
+            .await
+            .unwrap();
         assert!(info.read_only);
         assert_eq!(backend.mounts_list().await.unwrap(), vec![info]);
-        assert!(backend.mounts_get(Path::new("/a &b")).await.unwrap().is_none());
+        assert!(
+            backend
+                .mounts_get(Path::new("/a &b"))
+                .await
+                .unwrap()
+                .is_none()
+        );
         backend.mounts_remove(Path::new("/a &b")).await.unwrap();
         let requests = server.await.unwrap();
         assert_eq!(requests[0].0, "POST /v1/boxes/mount-box/mounts HTTP/1.1");
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&requests[0].1).unwrap()["read_only"], true);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[0].1).unwrap()["read_only"],
+            true
+        );
         assert_eq!(requests[1].0, "GET /v1/boxes/mount-box/mounts HTTP/1.1");
-        assert_eq!(requests[2].0, "GET /v1/boxes/mount-box/mounts/by-target?target=%2Fa+%26b HTTP/1.1");
-        assert_eq!(requests[3].0, "DELETE /v1/boxes/mount-box/mounts/by-target?target=%2Fa+%26b HTTP/1.1");
+        assert_eq!(
+            requests[2].0,
+            "GET /v1/boxes/mount-box/mounts/by-target?target=%2Fa+%26b HTTP/1.1"
+        );
+        assert_eq!(
+            requests[3].0,
+            "DELETE /v1/boxes/mount-box/mounts/by-target?target=%2Fa+%26b HTTP/1.1"
+        );
     }
 
     #[tokio::test]

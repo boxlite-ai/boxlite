@@ -4,8 +4,8 @@
 //! over HTTP so that `Boxlite.rest()` clients can connect.
 
 mod handlers;
-mod types;
 mod mount_sources;
+mod types;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -2077,7 +2077,9 @@ fn build_router(state: Arc<AppState>) -> Router {
 pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     check_bind_auth(&args.host, args.api_key.as_deref())?;
     if !args.mount_source_root.is_empty() {
-        global.experimental_features.require(boxlite::experimental::ExperimentalFeature::NativeVmm)?;
+        global
+            .experimental_features
+            .require(boxlite::experimental::ExperimentalFeature::NativeVmm)?;
     }
     let mount_sources = mount_sources::MountSources::new(&args.mount_source_root)?;
 

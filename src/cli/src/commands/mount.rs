@@ -210,6 +210,17 @@ mod tests {
         assert!(Cli::try_parse_from(["mount", "rm", "box"]).is_err());
         assert!(Cli::try_parse_from(["mount", "inspect", "box"]).is_err());
         assert!(Cli::try_parse_from(["mount", "ls", "box", "--format", "invalid"]).is_err());
-        assert!(Cli::try_parse_from(["mount", "add", "box", "--source", "/host", "--box-path", "/guest"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "mount",
+                "add",
+                "box",
+                "--source",
+                "/host",
+                "--box-path",
+                "/guest"
+            ])
+            .is_ok()
+        );
     }
 }

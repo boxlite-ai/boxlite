@@ -53,7 +53,14 @@ pub(in crate::commands::serve) async fn add_mount(
 ) -> Response {
     let source = match state.mount_sources.pin(std::path::Path::new(&req.source)) {
         Ok(source) => source,
-        Err(error) => return error_response(StatusCode::FORBIDDEN, error.to_string(), "PermissionDeniedError", "permission_denied"),
+        Err(error) => {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                error.to_string(),
+                "PermissionDeniedError",
+                "permission_denied",
+            );
+        }
     };
     let litebox = match get_or_fetch_box(&state, &box_id).await {
         Ok(b) => b,

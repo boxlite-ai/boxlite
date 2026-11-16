@@ -113,11 +113,24 @@ async fn approved_source_reaches_box_lookup() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().canonicalize().unwrap();
     let mut state = lifecycle_state();
-    state.mount_sources = super::super::mount_sources::MountSources::new(&[source.clone()]).unwrap();
-    let (status, body) = status_of(add_mount(
-        State(Arc::new(state)), Path("box-1".into()),
-        Json(CreateMountRequest { source: source.display().to_string(), target: "/workspace".into(), read_only: false }),
-    ).await).await;
-    assert!(status.is_server_error(), "approved source must reach unavailable upstream: {status}");
+    state.mount_sources =
+        super::super::mount_sources::MountSources::new(&[source.clone()]).unwrap();
+    let (status, body) = status_of(
+        add_mount(
+            State(Arc::new(state)),
+            Path("box-1".into()),
+            Json(CreateMountRequest {
+                source: source.display().to_string(),
+                target: "/workspace".into(),
+                read_only: false,
+            }),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        status.is_server_error(),
+        "approved source must reach unavailable upstream: {status}"
+    );
     assert_ne!(body["error"]["code"], "permission_denied");
 }
