@@ -46,7 +46,16 @@ boxlite-vmm
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
 The adapter maps the runtime specification into `VmConfig`; optional devices
-are omitted when not requested. Disk order remains `vda` (container) then
+are omitted when not requested.
+
+The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
+publishes a live device by tag when it enters the transport, and
+`lookup_aggregate` hands it to the Box's mount-control socket, through which
+the runtime registers (`AggregateFs::register`/`register_fd`) and retires
+(`remove`) per-directory exports while the VM runs. A retired export's name
+stops resolving while its in-use nodes, handles and in-flight requests keep
+their backend until their references drain; a re-registered name is a new
+identity with its own read-only policy. Disk order remains `vda` (container) then
 `vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
 vsock and receives aggregate mount instructions before container startup.
 Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64

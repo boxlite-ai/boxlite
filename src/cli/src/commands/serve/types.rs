@@ -384,6 +384,28 @@ pub(super) struct SnapshotResponse {
     pub size_bytes: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreateMountRequest {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+#[derive(Serialize)]
+pub(super) struct MountResponse {
+    pub source: String,
+    pub target: String,
+    pub read_only: bool,
+    pub state: boxlite::MountState,
+}
+
+#[derive(Serialize)]
+pub(super) struct ListMountsResponse {
+    pub mounts: Vec<MountResponse>,
+}
+
 #[derive(Serialize)]
 pub(super) struct ListSnapshotsResponse {
     pub snapshots: Vec<SnapshotResponse>,

@@ -1184,3 +1184,36 @@ Default values used by BoxLite.
 - [Getting Started Guide](../../getting-started/quickstart-nodejs.md) - Installation
 - [Configuration Reference](../configuration.md) - BoxOptions details
 - [Error Codes](../errors.md) - Error handling
+
+## Runtime mounts (M6, experimental)
+
+`box.mounts` delivers host directories into the **running** container and
+retires them again, without restarting. Delivery requires the native VM engine
+and the `BOXLITE_EXPERIMENTAL=native-vmm` opt-in; other backends reject the
+calls.
+
+```ts
+const mounts = box.mounts;
+
+const info = await mounts.add({
+  source: "/host/project",
+  target: "/workspace",
+  readOnly: false,
+});
+// ... the container reads and writes /workspace ...
+await mounts.remove("/workspace");
+
+const all = await mounts.list();          // JsMountInfo[]
+const one = await mounts.get("/workspace"); // JsMountInfo | null
+```
+
+`JsMountInfo` reports `source`, `target`, `readOnly` and `state`
+(`"mounted"` / `"detaching"`). A failed add unwinds its completed steps; a
+failed removal leaves the record in `detaching` and a repeated removal
+converges. Mounts do not survive a VM stop.
+
+`JsMountRequest`, `JsMountInfo` and `JsMountsHandle` are exported types from
+`@boxlite-ai/boxlite`. On REST runtimes, `source` names a directory on the
+server host. The server denies additions unless its operator supplies
+`serve --mount-source-root PATH` with the native VM experimental opt-in.
+Only real directories beneath approved roots are allowed; symlinks are rejected.

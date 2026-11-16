@@ -565,6 +565,27 @@ export interface JsSnapshotInfo {
 
 export type JsSnapshotOptions = Record<string, never>;
 
+export interface JsMountRequest {
+  source: string;
+  target: string;
+  readOnly: boolean;
+}
+
+export interface JsMountInfo {
+  source: string;
+  target: string;
+  readOnly: boolean;
+  /** `mounted` or `detaching` (a removal that has not fully converged). */
+  state: string;
+}
+
+export interface JsMountsHandle {
+  add(request: JsMountRequest): Promise<JsMountInfo>;
+  remove(target: string): Promise<void>;
+  list(): Promise<JsMountInfo[]>;
+  get(target: string): Promise<JsMountInfo | null>;
+}
+
 export interface JsSnapshotHandle {
   create(
     name: string,
@@ -746,6 +767,7 @@ export interface JsBox {
     timeoutSecs?: number | null,
     workingDir?: string | null,
   ): Promise<JsExecution>;
+  readonly mounts: JsMountsHandle;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
   readonly ssh: JsSshHandle;

@@ -130,6 +130,14 @@ impl BoxSockets {
         self.binding_dir().join(NET_SOCK)
     }
 
+    /// M6 runtime mount-control socket (shim binds, runtime dials). Same
+    /// short-binding authority as every other box socket: a deep
+    /// `BOXLITE_HOME` must not silently disable directory delivery.
+    pub fn mount_control_sock(&self) -> PathBuf {
+        self.binding_dir()
+            .join(boxlite_shared::constants::mount_tags::MOUNT_CONTROL_SOCKET)
+    }
+
     /// libkrun's side of the macOS Unix datagram network pair.
     ///
     /// This path is derived by vendored libkrun from [`Self::net_backend_sock`]

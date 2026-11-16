@@ -5,6 +5,7 @@
 // ============================================================================
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -19,6 +20,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::attach::AttachOptions;
 use super::config::BoxConfig;
 use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
+use super::mounts::MountCoordinator;
 use super::state::BoxState;
 use crate::disk::Disk;
 use crate::event_listener::EventListener;
@@ -96,6 +98,11 @@ pub(crate) struct LiveState {
     )]
     agent_installs: tokio::sync::Mutex<()>,
     agents_mounted: OnceCell<()>,
+    /// Runtime directory delivery (M6): coordinator plus the records of this
+    /// VM run. An Arc so mount transactions run in owned tasks that hold the
+    /// coordinator past caller cancellation. A stop drops them together with
+    /// the control socket.
+    mounts: std::sync::Arc<MountCoordinator>,
 }
 
 impl LiveState {
@@ -122,6 +129,7 @@ impl LiveState {
             bind_mount,
             agent_installs: tokio::sync::Mutex::new(()),
             agents_mounted: OnceCell::new(),
+            mounts: std::sync::Arc::new(MountCoordinator::new()),
         }
     }
 }
@@ -751,6 +759,38 @@ impl BoxImpl {
                 .await
         })
         .await
+    }
+
+    /// One control connection through the same short-binding path the shim
+    /// bound (see `BoxSockets::mount_control_sock`).
+    fn mount_control_client(
+        &self,
+    ) -> BoxliteResult<crate::vmm::controller::mount_control::MountControlClient> {
+        self.layout.sockets().ensure()?;
+        crate::vmm::controller::mount_control::MountControlClient::connect_at(
+            &self.layout.sockets().mount_control_sock(),
+        )
+        .map_err(|error| {
+            BoxliteError::Unsupported(format!(
+                "runtime directory delivery socket unavailable: {error}"
+            ))
+        })
+    }
+
+    /// Shared mount precondition: native engine opt-in, a live VM (never an
+    /// implicit start), and recovery of the shim's mount records so a fresh
+    /// handle sees mounts another client added.
+    async fn mount_live_state(&self) -> BoxliteResult<&LiveState> {
+        if self.config.engine_kind != crate::vmm::VmmKind::Native {
+            return Err(BoxliteError::Unsupported(format!(
+                "runtime directory delivery requires the native VMM; box {} runs {:?}",
+                self.config.id, self.config.engine_kind
+            )));
+        }
+        let live = self.existing_live_state().await?;
+        let mut control = self.mount_control_client()?;
+        live.mounts.recover(&mut control).await?;
+        Ok(live)
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -1753,6 +1793,59 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self
     }
 
+    async fn mounts_add(
+        &self,
+        request: crate::litebox::mounts::MountRequest,
+    ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
+        let live = self.mount_live_state().await?;
+        let container_id = self.container_id().to_string();
+        let control = self.mount_control_client()?;
+        let guest = live.guest_session.container().await?;
+        live.mounts
+            .clone()
+            .add(&container_id, control, guest, request)
+            .await
+    }
+
+    async fn mounts_add_pinned(
+        &self,
+        request: crate::litebox::mounts::MountRequest,
+        source: std::fs::File,
+    ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
+        let live = self.mount_live_state().await?;
+        let container_id = self.container_id().to_string();
+        let control = self.mount_control_client()?;
+        let guest = live.guest_session.container().await?;
+        live.mounts
+            .clone()
+            .add_pinned(&container_id, control, guest, request, source)
+            .await
+    }
+
+    async fn mounts_remove(&self, target: &Path) -> BoxliteResult<()> {
+        let live = self.mount_live_state().await?;
+        let container_id = self.container_id().to_string();
+        let control = self.mount_control_client()?;
+        let guest = live.guest_session.container().await?;
+        live.mounts
+            .clone()
+            .remove(&container_id, control, guest, target.to_path_buf())
+            .await
+    }
+
+    async fn mounts_list(&self) -> BoxliteResult<Vec<crate::litebox::mounts::MountInfo>> {
+        let live = self.mount_live_state().await?;
+        Ok(live.mounts.list())
+    }
+
+    async fn mounts_get(
+        &self,
+        target: &Path,
+    ) -> BoxliteResult<Option<crate::litebox::mounts::MountInfo>> {
+        let live = self.mount_live_state().await?;
+        Ok(live.mounts.get(target))
+    }
+
     async fn info(&self) -> BoxliteResult<BoxInfo> {
         self.refresh_network_policy()?;
         Ok(BoxImpl::info(self))
@@ -2041,6 +2134,12 @@ mod tests {
             &self,
             _: Request<boxlite_shared::ContainerMountRequest>,
         ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
+            Err(Status::unimplemented("not used by these tests"))
+        }
+        async fn detach(
+            &self,
+            _: Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerDetachResponse>, Status> {
             Err(Status::unimplemented("not used by these tests"))
         }
     }

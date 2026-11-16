@@ -9,6 +9,7 @@ mod executions;
 mod images;
 mod info;
 mod metrics;
+mod mounts;
 mod network;
 mod options;
 mod registries;
@@ -35,6 +36,7 @@ use crate::info::{
     PyOutboundNetworkInfo, PyPublishedPort,
 };
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
+use crate::mounts::{PyMountInfo, PyMountRequest, PyMountsHandle};
 use crate::network::{
     PyBoxConnection, PyBoxTunnel, PyNetworkHandle, PySocketAddress, PyTunnelForwarder,
     PyTunnelOptions,
@@ -102,6 +104,9 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTunnelForwarder>()?;
     m.add_class::<PyTunnelOptions>()?;
     m.add_class::<PyCopyOptions>()?;
+    m.add_class::<PyMountInfo>()?;
+    m.add_class::<PyMountRequest>()?;
+    m.add_class::<PyMountsHandle>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PySnapshotHandle>()?;
     m.add_class::<PySnapshotOptions>()?;

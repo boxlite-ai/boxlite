@@ -14,6 +14,7 @@ pub mod inspect;
 pub mod kill;
 pub mod list;
 pub mod logs;
+pub mod mount;
 pub mod network;
 pub mod pull;
 pub mod restart;

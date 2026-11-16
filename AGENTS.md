@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=dfe598f1ba30 sha256=8b2d7995a3f8 -->
+<!-- agent-tooling:guidance:begin rev=5fd92da228a2 sha256=73aba8416848 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -53,6 +53,26 @@ Every change goes: understand → research → design → implement → test →
 Apply the `boxlite-clean-code` skill for design, implementation, refactoring, and maintainability review.
 
 MANDATORY: File all agent-tooling issues from any consumer in [upstream GitHub Issues](https://github.com/boxlite-ai/agent-tooling/issues).
+
+### Progression
+
+A passed stage starts the next one; never ask whether to continue.
+
+| When | Next, without asking |
+| --- | --- |
+| The edit gate requires a design | Research, write, register and audit it |
+| The design audit records PASS and advice is recorded | Start implementing |
+| Implementation is finished and its checks pass | Commit and push |
+| The commit and push audits record PASS and the push succeeds | Open a draft PR |
+
+Pause only when:
+
+- A gate asks for a human choice: PR size above 400, a stopped audit loop, an API compatibility decision, or a disclosure approval.
+- A recorded advice item would change the design's approach or scope.
+- The next action is destructive or cannot be undone.
+- The request cannot answer a requirement that changes the result.
+
+Report design advisories and advice in the final reply and the PR; adopt an item only after the human accepts it.
 
 ### Understand
 
@@ -154,6 +174,7 @@ Scope:
 - This covers private messages, memory citations, local paths, internal context, and paraphrases.
 - Omit uncertain material.
 - Edits invalidate approval; task authorization and hook passes grant none.
+- Exception: ledger issues the post-push hook files in the audited repository need no per-post approval; the hook posts only privacy-scanned text linking pushed code.
 
 ### Communication
 

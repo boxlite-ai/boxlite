@@ -306,6 +306,54 @@ impl ContainerInterface {
                 source: source.to_string(),
                 destination: destination.to_string(),
                 read_only: true,
+                // Legacy share delivery only; aggregate delivery carries
+                // export_key and device_tag (M6 runtime coordination).
+                export_key: String::new(),
+                device_tag: String::new(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// M6 aggregate delivery: bind the export `export_key` beneath the
+    /// aggregate root of `device_tag` at `destination` in the running
+    /// container. `read_only` gates the guest bind mode; content policy
+    /// stays with the host backend.
+    pub async fn mount_aggregate(
+        &mut self,
+        container_id: &str,
+        export_key: &str,
+        device_tag: &str,
+        destination: &str,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        self.client
+            .mount(boxlite_shared::ContainerMountRequest {
+                container_id: container_id.to_string(),
+                source: String::new(),
+                destination: destination.to_string(),
+                read_only,
+                export_key: export_key.to_string(),
+                device_tag: device_tag.to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Lazily detach the runtime mount at `destination`: the destination
+    /// leaves the container mount table while descriptors opened before the
+    /// detach keep working.
+    pub async fn detach(
+        &mut self,
+        container_id: &str,
+        destination: &str,
+        export_key: &str,
+    ) -> BoxliteResult<()> {
+        self.client
+            .detach(boxlite_shared::ContainerDetachRequest {
+                container_id: container_id.to_string(),
+                destination: destination.to_string(),
+                export_key: export_key.to_string(),
             })
             .await?;
         Ok(())
@@ -395,6 +443,12 @@ mod tests {
             &self,
             _: Request<boxlite_shared::ContainerMountRequest>,
         ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
+            Err(Status::unimplemented("not used by these tests"))
+        }
+        async fn detach(
+            &self,
+            _: Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerDetachResponse>, Status> {
             Err(Status::unimplemented("not used by these tests"))
         }
     }

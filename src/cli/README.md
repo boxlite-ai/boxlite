@@ -777,6 +777,36 @@ if a file would land on a mount — so `boxlite cp ./x box:/etc` works.
 Copy a path outside the mount, or pipe a tar through
 `boxlite exec`. Files copied in are owned by the box's exec user.
 
+### `boxlite mount`
+
+Deliver a host directory into a **running** box and retire it again — no
+restart, no interruption of the container's processes. Experimental: requires
+`BOXLITE_EXPERIMENTAL=native-vmm`; the commands stay hidden from `--help`
+until the switch is set, and a non-native backend refuses with guidance.
+
+**Usage:**
+
+- `boxlite mount add BOX SOURCE TARGET [--read-only]`
+- `boxlite mount rm BOX TARGET`
+- `boxlite mount ls BOX`
+- `boxlite mount inspect BOX TARGET`
+
+`add` fails on non-directory or unreadable sources and on occupied targets
+(non-empty paths and symlinks are refused, existing content stays intact).
+`rm` is lazy and idempotent: the target stops resolving immediately while
+descriptors opened before keep working, and a `detaching` record converges on
+a repeated removal. `ls`/`inspect` report source, target, mode (`ro`/`rw`) and
+state (`mounted`/`detaching`), as a table or `--format json|yaml`. Mounts do
+not survive stopping the box.
+
+**Examples:**
+
+```bash
+BOXLITE_EXPERIMENTAL=native-vmm boxlite mount add mybox /host/project /workspace --read-only
+BOXLITE_EXPERIMENTAL=native-vmm boxlite mount ls mybox
+BOXLITE_EXPERIMENTAL=native-vmm boxlite mount rm mybox /workspace
+```
+
 ### `boxlite info`
 
 Display system-wide runtime information (version, paths, host/virtualization, box and image counts). Default output is YAML.
@@ -814,6 +844,25 @@ boxlite completion fish > ~/.config/fish/completions/boxlite.fish
 ```
 
 Then reload your shell or source the file.
+
+## Experimental runtime mounts
+
+With `BOXLITE_EXPERIMENTAL=native-vmm`, use `boxlite mount add BOX --source /host/project --box-path /workspace [--read-only]`,
+`boxlite mount ls BOX`, `boxlite mount inspect BOX --box-path /workspace`, and
+`boxlite mount rm BOX --box-path /workspace`. These hidden commands require an already running native VM.
+
+REST host sources are denied by default. The server operator explicitly grants
+trees with `BOXLITE_EXPERIMENTAL=native-vmm boxlite serve --mount-source-root /srv/projects`;
+repeat the flag for additional roots. Roots must be absolute canonical directories.
+On Linux, root and source descriptors are opened with `openat2` beneath pinned
+directories with symlinks forbidden; the validated descriptor reaches the mount
+transaction without reopening the source path. Systems without `openat2` fail closed.
+
+A grant authorizes every authenticated API client to expose that tree to boxes.
+The operator owns authentication and bind policy. Roots and their directory
+topology must remain operator-controlled: descriptor pinning preserves identity
+across renames, while host writers may still change exported contents. Grants
+do not sandbox the host processes that can mutate the approved tree.
 
 ## Environment variables
 

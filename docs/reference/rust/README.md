@@ -393,6 +393,7 @@ starting the box.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `list` | `async fn list(&self) -> BoxliteResult<Vec<ExecutionInfo>>` | Snapshot live guest sessions, including init; never boots a box |
+
 | `get` | `async fn get(&self, execution_id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a known session without taking its output reader |
 
 `executions().list()` is a live-process inventory, not history: sessions disappear
@@ -404,6 +405,40 @@ invalid-state error instead of claiming its sessions disappeared.
 `ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
 spawn time, PTY flag, and `is_main_session`.
 
+
+#### Runtime mounts
+
+`LiteBox::mounts()` returns a `MountsHandle` that delivers host directories
+into the **running** container and retires them again, without restarting the
+Box. Delivery requires the native VM engine and the
+`BOXLITE_EXPERIMENTAL=native-vmm` opt-in; other backends reject the calls.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add` | `async fn add(&self, request: MountRequest) -> BoxliteResult<MountInfo>` | Bind a host directory at the container target; fails on non-directory or unreadable sources and on occupied destinations |
+| `remove` | `async fn remove(&self, target: impl AsRef<Path>) -> BoxliteResult<()>` | Lazy detach (`MNT_DETACH`): the target stops resolving while descriptors opened before keep working |
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<MountInfo>>` | Every runtime mount of the current VM run |
+| `get` | `async fn get(&self, target: impl AsRef<Path>) -> BoxliteResult<Option<MountInfo>>` | One mount by container path |
+
+```rust
+let mounts = box.mounts();
+let info = mounts
+    .add(MountRequest {
+        source: "/host/project".into(),
+        target: "/workspace".into(),
+        read_only: false,
+    })
+    .await?;
+// ... the container reads and writes /workspace ...
+mounts.remove("/workspace").await?;
+```
+
+`MountInfo` reports `source`, `target`, `read_only` and `state`
+(`Mounted` / `Detaching`). Read-only enforcement happens in the host backend:
+a read-only export refuses writes even when the guest bind is writable. A
+failed add unwinds its completed steps; a failed removal leaves the record in
+`Detaching` and a repeated removal converges. Mounts do not survive a VM
+stop; no internal mount identity is exposed.
 `executions().get(id)` returns a control-only handle (no stdin/stdout/stderr).
 The local runtime verifies the ID against the live guest inventory; a
 REST-backed runtime asks the server's by-id endpoint, so a retained terminal

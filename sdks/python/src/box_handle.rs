@@ -4,6 +4,7 @@ use crate::exec::PyExecution;
 use crate::executions::PyExecutions;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
+use crate::mounts::PyMountsHandle;
 use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
@@ -48,6 +49,15 @@ impl PyBox {
     /// Usage: `await box.executions().list()`, `await box.executions().get(id)`.
     fn executions(&self) -> PyExecutions {
         PyExecutions::new(Arc::clone(&self.handle))
+    }
+
+    /// Runtime directory delivery namespace (native VM only).
+    ///
+    /// Usage: `await box.mounts().add(request)`, `await box.mounts().list()`.
+    fn mounts(&self) -> PyMountsHandle {
+        PyMountsHandle {
+            handle: Arc::clone(&self.handle),
+        }
     }
 
     /// Get the snapshot handle for snapshot operations.

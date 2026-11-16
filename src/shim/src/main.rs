@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use boxlite::vmm::exit_info::ExitErrorKind;
 use boxlite::{
     util,
-    vmm::{self, ExitInfo, InstanceSpec, VmmConfig, controller::watchdog},
+    vmm::{self, ExitInfo, InstanceSpec, VmmConfig, VmmKind, controller::watchdog},
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crash_capture::CrashCapture;
@@ -192,6 +192,50 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // Save detach/transport before config is moved into engine.create()
     let detach = config.detach;
     let transport = config.transport.clone();
+    let engine_kind = config.engine;
+
+    // Runtime directory delivery (native VMM only): serve the mount-control
+    // socket for the lifetime of the VM. The aggregate handle appears when
+    // the engine built the virtio-fs device; the server resolves it lazily
+    // per request, so early requests answer ENODEV instead of racing boot.
+    // The aggregate filesystem and its server only exist on Linux x86_64;
+    // other targets run native VMs without runtime directory delivery.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if engine_kind == VmmKind::Native {
+        let box_dir = config
+            .exit_file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let box_id = config.box_id.clone();
+        let sockets_dir = box_dir.join("sockets");
+        std::fs::create_dir_all(&sockets_dir).ok();
+        // Bind through the short socket-path authority (see `BoxSockets`):
+        // a deep BOXLITE_HOME would otherwise silently disable delivery.
+        let binding = boxlite::net::socket_path::BoxSockets::new(box_id, &sockets_dir);
+        match binding.ensure().and_then(|()| {
+            boxlite::vmm::controller::mount_control::bind_at(&binding.mount_control_sock())
+                .map_err(|error| BoxliteError::Storage(error.to_string()))
+        }) {
+            Ok(listener) => {
+                let tag = boxlite_shared::constants::mount_tags::AGGREGATE.to_string();
+                std::thread::Builder::new()
+                    .name("mount-control".into())
+                    .spawn(move || {
+                        boxlite::vmm::controller::mount_control::serve(listener, tag);
+                    })
+                    .map_err(|e| BoxliteError::Engine(format!("spawn mount-control: {e}")))?;
+                timing("mount control socket listening");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "mount control socket unavailable; runtime directory delivery disabled");
+            }
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    if engine_kind == VmmKind::Native {
+        tracing::warn!("runtime directory delivery is Linux x86_64 only; disabled on this target");
+    }
 
     // Initialize engine options with defaults
     let options = VmmConfig::default();

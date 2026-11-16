@@ -16,6 +16,7 @@ mod executions;
 mod images;
 mod info;
 mod metrics;
+mod mounts;
 mod network;
 mod options;
 mod registries;

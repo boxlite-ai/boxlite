@@ -4,6 +4,7 @@
 //! over HTTP so that `Boxlite.rest()` clients can connect.
 
 mod handlers;
+mod mount_sources;
 mod types;
 
 use std::collections::HashMap;
@@ -71,6 +72,10 @@ pub struct ServeArgs {
         value_parser = parse_api_key
     )]
     pub api_key: Option<String>,
+
+    /// Grant REST clients access to this host directory tree (repeatable; default deny).
+    #[arg(long, hide = true, value_name = "PATH")]
+    pub mount_source_root: Vec<std::path::PathBuf>,
 }
 
 // ============================================================================
@@ -88,6 +93,7 @@ struct AppState {
     /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
     /// `None` ⇒ permissive (no auth enforced).
     api_key: Option<String>,
+    mount_sources: mount_sources::MountSources,
     /// Lifecycle deadlines per box, in seconds.
     ///
     /// Held here rather than in `BoxOptions` because the engine accepts neither
@@ -1965,6 +1971,16 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/metrics",
             get(metrics::box_metrics),
         )
+        // Runtime directory delivery (M6). The target addressing uses a
+        // query parameter so container paths never become path segments.
+        .route(
+            "/v1/boxes/{box_id}/mounts",
+            post(handlers::mounts::add_mount).get(handlers::mounts::list_mounts),
+        )
+        .route(
+            "/v1/boxes/{box_id}/mounts/by-target",
+            get(handlers::mounts::get_mount).delete(handlers::mounts::remove_mount),
+        )
         // Main command session (container init) — docker's
         // `POST /containers/{id}/attach`, distinct from exec-attach below.
         .route(
@@ -2060,6 +2076,12 @@ fn build_router(state: Arc<AppState>) -> Router {
 
 pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     check_bind_auth(&args.host, args.api_key.as_deref())?;
+    if !args.mount_source_root.is_empty() {
+        global
+            .experimental_features
+            .require(boxlite::experimental::ExperimentalFeature::NativeVmm)?;
+    }
+    let mount_sources = mount_sources::MountSources::new(&args.mount_source_root)?;
 
     // A server owns an embedded runtime. Client connection settings must not
     // turn it into a proxy merely because a credential profile or REST URL is
@@ -2072,6 +2094,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
         api_key: args.api_key.clone(),
+        mount_sources,
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
@@ -2110,6 +2133,7 @@ mod tests {
     use std::time::Duration;
 
     mod executions;
+    mod mounts;
     mod ssh;
 
     #[test]
@@ -2453,6 +2477,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3284,6 +3309,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3686,6 +3712,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3754,6 +3781,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3820,6 +3848,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3878,6 +3907,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3923,6 +3953,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -3977,6 +4008,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4040,6 +4072,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4151,6 +4184,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4197,6 +4231,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4240,6 +4275,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4283,6 +4319,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4334,6 +4371,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4393,6 +4431,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: Some("expected-key".to_string()),
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4441,6 +4480,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
@@ -4726,6 +4766,7 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
+            mount_sources: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),

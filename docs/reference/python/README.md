@@ -1292,3 +1292,41 @@ Default values used by BoxLite.
 - [Getting Started Guide](../../getting-started/quickstart-python.md) - Installation
 - [Configuration Reference](../configuration.md) - BoxOptions details
 - [Error Codes](../errors.md) - Error handling
+
+## Runtime mounts (M6, experimental)
+
+`box.mounts()` delivers host directories into the **running** container and
+retires them again, without restarting the Box. Requires the native VM engine
+with `BOXLITE_EXPERIMENTAL=native-vmm`; other engines reject the calls.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add` | `await box.mounts().add(MountRequest(source, target, read_only=False)) -> MountInfo` | Bind a host directory at the container target |
+| `remove` | `await box.mounts().remove(target) -> None` | Lazy detach (`MNT_DETACH`); descriptors opened before keep working |
+| `list` | `await box.mounts().list() -> list[MountInfo]` | Every runtime mount of the current VM run |
+| `get` | `await box.mounts().get(target) -> MountInfo \| None` | One mount by container path |
+
+```python
+from boxlite import MountRequest
+
+await box.mounts().add(MountRequest(
+    source="/host/project",
+    target="/workspace",
+    read_only=False,
+))
+info = await box.mounts().get("/workspace")
+assert info is not None and info.read_only is False
+await box.mounts().remove("/workspace")
+```
+
+`MountInfo` reports `source`, `target`, `read_only` and `state`
+(`"mounted"` / `"detaching"`). Read-only enforcement happens in the host
+backend: a read-only export refuses writes even when the guest bind is
+writable. A failed add unwinds its completed steps; a failed removal leaves
+the record in `detaching` and a repeated removal converges. Mounts do not
+survive a VM stop.
+
+On REST runtimes, `source` names a directory on the server host. Additions
+are denied unless the operator starts the server with
+`serve --mount-source-root PATH` and the native VM experimental opt-in.
+Only real directories beneath approved roots are allowed; symlinks are rejected.

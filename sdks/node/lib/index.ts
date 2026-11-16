@@ -31,6 +31,9 @@ import type {
   JsOptions,
 } from "./native-contracts.js";
 export type {
+  JsMountRequest,
+  JsMountInfo,
+  JsMountsHandle,
   CheckpointHandle,
   CheckpointInfo,
   Domain,

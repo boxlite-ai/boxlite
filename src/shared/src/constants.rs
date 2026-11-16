@@ -50,6 +50,11 @@ pub mod mount_tags {
     /// Tag for prepared rootfs virtiofs share (merged mode)
     pub const ROOTFS: &str = "BoxLiteContainer0Rootfs";
 
+    /// The mount-control socket file name, placed in the Box `sockets/`
+    /// directory: that directory stays bind-mounted into the shim sandbox, so a
+    /// socket the shim binds is visible to the runtime on the host.
+    pub const MOUNT_CONTROL_SOCKET: &str = "mount.sock";
+
     /// Tag for image layers directory (mounted at container's diff dir)
     pub const LAYERS: &str = "BoxLiteContainer0Layers";
 

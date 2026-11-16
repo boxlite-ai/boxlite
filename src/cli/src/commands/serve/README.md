@@ -137,6 +137,22 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 | POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
 | POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
 
+### Runtime mounts (M6, experimental)
+
+| Method | Path                                            | Handler                | Description                                        |
+|--------|-------------------------------------------------|------------------------|----------------------------------------------------|
+| POST   | `/v1/boxes/{box_id}/mounts`                     | `mounts::add_mount`    | Deliver a host directory into the running box (201) |
+| GET    | `/v1/boxes/{box_id}/mounts`                     | `mounts::list_mounts`  | List every runtime mount                          |
+| GET    | `/v1/boxes/{box_id}/mounts/by-target?target=…`  | `mounts::get_mount`    | One mount by container target (404 when absent)   |
+| DELETE | `/v1/boxes/{box_id}/mounts/by-target?target=…`  | `mounts::remove_mount` | Lazy detach; idempotent (204)                     |
+
+The container target travels as the `target` query parameter — `/` in it never
+becomes a routing segment. Without `target` both `by-target` routes answer
+`400 invalid_argument`. The source arrives in the POST body
+(`{"source", "target", "read_only"}`); responses carry the same fields plus
+`state` (`mounted` / `detaching`). Delivery requires the native VM engine; a
+non-native runtime fails the request without touching the box.
+
 ### Guest SSH
 
 | Method | Path                       | Handler              | Description                                  |

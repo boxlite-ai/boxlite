@@ -1686,3 +1686,35 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 CPU arguments and `CBoxInfo.cpus` use `double`; rebuild callers with the matching header and library.
 Integer allocations preserve existing behavior; fractional allocations require a Linux execution host and round guest vCPUs upward.
 See [fractional CPUs](../../guides/resource-limits.md#fractional-cpus-linux) for enforcement and error semantics.
+
+## Runtime mounts (M6, experimental)
+
+Four entry points deliver a host directory into a **running** container and
+retire it again, over the same post-and-drain contract as the lifecycle ops:
+each call spawns the work and the callback fires from
+`boxlite_runtime_drain`. Delivery requires the native VM engine and the
+`BOXLITE_EXPERIMENTAL=native-vmm` opt-in; other backends reject the calls.
+
+```c
+// Completion-only operations: cb(error, user_data)
+boxlite_box_mount_add(handle, "/host/project", "/workspace", 0, cb, user_data, &err);
+boxlite_box_mount_remove(handle, "/workspace", cb, user_data, &err);
+
+// Readouts: cb(json, error, user_data) — json is a UTF-8 document the
+// callback must release with boxlite_free_string.
+boxlite_box_mount_list(handle, cb, user_data, &err);   // JSON array of mounts
+boxlite_box_mount_get(handle, "/workspace", cb, user_data, &err); // object or JSON null
+```
+
+Keep `handle` live and prevent concurrent free until each function returns;
+the entrypoint clones the owned box synchronously. Input strings are copied
+before return. After a successful submission, keep the runtime, callback and
+`user_data` alive until `boxlite_runtime_drain` dispatches completion. Callback
+error pointers are borrowed only during dispatch. Successful JSON strings
+belong to the callback recipient and require `boxlite_free_string`.
+
+A mount document reports `source`, `target`, `readOnly` and `state`
+(`"mounted"` / `"detaching"`). `remove` is idempotent: an unknown target
+completes successfully; a mount already converging reports success once the
+record reaches `detaching`. Mounts do not survive a VM stop.
+

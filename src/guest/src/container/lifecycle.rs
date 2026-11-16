@@ -370,6 +370,17 @@ impl Container {
         self.mount_destinations.push(destination);
     }
 
+    /// Remove only the runtime layer, retaining any underlying OCI mount.
+    pub fn remove_mount_destination(&mut self, destination: &Path) {
+        if let Some(index) = self
+            .mount_destinations
+            .iter()
+            .rposition(|recorded| recorded == destination)
+        {
+            self.mount_destinations.remove(index);
+        }
+    }
+
     /// The attacher, behind the lock that orders mounts and copies (see the
     /// field). Taken without holding this container's lock.
     pub(crate) fn attacher(&self) -> Arc<tokio::sync::RwLock<Attacher>> {

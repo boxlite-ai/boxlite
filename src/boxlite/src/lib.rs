@@ -55,6 +55,7 @@ pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventLi
 pub use images::ResolvedImage;
 pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
+pub use litebox::mounts::{MountInfo, MountRequest, MountState, MountsHandle};
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, CopySourceKind, ExecResult, ExecStderr, ExecStdin,

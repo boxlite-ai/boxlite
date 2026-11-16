@@ -453,6 +453,62 @@ fn create_box_rejects_null_callback() {
 
 /// The C boundary preserves fractions and invalid inputs for runtime validation.
 #[test]
+fn test_box_mount_null_pointer_validation() {
+    unsafe {
+        let mut error = FFIError::default();
+        let cb: crate::event_queue::CBoxMountCb = None;
+        let json_cb: crate::event_queue::CBoxMountJsonCb = None;
+        let target = CString::new("/box/data").expect("target cstring");
+        let source = CString::new("/host/data").expect("source cstring");
+
+        let code = boxlite_box_mount_add(
+            ptr::null_mut(),
+            source.as_ptr(),
+            target.as_ptr(),
+            0,
+            cb,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let code = boxlite_box_mount_remove(
+            ptr::null_mut(),
+            target.as_ptr(),
+            cb,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let code = boxlite_box_mount_list(
+            ptr::null_mut(),
+            json_cb,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+
+        let code = boxlite_box_mount_get(
+            ptr::null_mut(),
+            target.as_ptr(),
+            json_cb,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+#[test]
 fn fractional_cpus_setter_preserves_input() {
     let opts = unsafe { new_test_options() };
     unsafe {

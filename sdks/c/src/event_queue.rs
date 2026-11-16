@@ -188,6 +188,19 @@ pub type CBoxVolumeListCb =
 pub(crate) type CBoxVolumeListFn =
     extern "C" fn(*mut CVolumeInfoList, *mut crate::CBoxliteError, *mut c_void);
 
+/// Runtime directory delivery (M6) completion. The error pointer is borrowed
+/// for callback dispatch only and no result allocation is produced.
+pub type CBoxMountCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxMountFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Runtime directory delivery (M6) JSON readout. On success the callback
+/// owns the returned string and must release it with `boxlite_free_string`;
+/// the error pointer is borrowed for callback dispatch only.
+pub type CBoxMountJsonCb =
+    Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxMountJsonFn =
+    extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
+
 /// Volume remove completion. The error pointer is borrowed for callback dispatch
 /// only and no result allocation is produced.
 pub type CBoxVolumeRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -506,6 +519,26 @@ pub enum RuntimeEvent {
         cb: CBoxVolumeListFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CVolumeInfoList>, BoxliteError>,
+    },
+    MountAdd {
+        cb: CBoxMountFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    MountRemove {
+        cb: CBoxMountFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    MountListJson {
+        cb: CBoxMountJsonFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
+    },
+    MountGetJson {
+        cb: CBoxMountJsonFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
     },
     VolumeRemove {
         cb: CBoxVolumeRemoveFn,

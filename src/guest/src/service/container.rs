@@ -6,13 +6,15 @@
 use std::path::{Component, Path, PathBuf};
 
 use crate::service::server::GuestServer;
+use crate::storage::aggregate_root;
 use crate::storage::attach::{validate_destination, Target};
 use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     container_init_response, container_start_response, rootfs_init, Container as ContainerService,
-    ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
-    ContainerInitSuccess, ContainerMountRequest, ContainerMountResponse, ContainerStartRequest,
-    ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
+    ContainerDetachRequest, ContainerDetachResponse, ContainerInitError, ContainerInitErrorKind,
+    ContainerInitRequest, ContainerInitResponse, ContainerInitSuccess, ContainerMountRequest,
+    ContainerMountResponse, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
+    Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
@@ -45,29 +47,70 @@ fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
     }
 }
 
-/// Check a `Container.Mount` request: read-only, a source that is one share
-/// folder name so it stays inside `containers/<id>/volumes/`, and a valid
-/// container path. Returns the destination.
+/// What a `Container.Mount` request delivers, after validation.
+#[derive(Debug)]
+enum MountSource {
+    /// Legacy share folder in the container's volumes directory.
+    Volume,
+    /// M6 aggregate export beneath the registered root of `device_tag`.
+    Aggregate {
+        device_tag: String,
+        export_key: String,
+    },
+}
+
+fn one_component(value: &str) -> bool {
+    let mut components = Path::new(value).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+/// Check a `Container.Mount` request: legacy delivery stays read-only with a
+/// source that is one share folder name so it stays inside
+/// `containers/<id>/volumes/`; aggregate delivery requires an export key and
+/// device tag instead. Returns the checked destination.
 #[allow(clippy::result_large_err)]
-fn checked_mount(request: &ContainerMountRequest) -> Result<PathBuf, Status> {
-    if !request.read_only {
-        return Err(Status::invalid_argument(
-            "Container.Mount mounts share folders read-only",
-        ));
-    }
-    let one_component = matches!(
-        Path::new(&request.source).components().collect::<Vec<_>>()[..],
-        [Component::Normal(_)]
-    );
-    if !one_component {
-        return Err(Status::invalid_argument(format!(
-            "source must be one share folder name, not a path: {:?}",
-            request.source
-        )));
-    }
+fn checked_mount(request: &ContainerMountRequest) -> Result<(MountSource, PathBuf), Status> {
+    let source = if request.export_key.is_empty() {
+        if !request.read_only {
+            return Err(Status::invalid_argument(
+                "legacy share mounts are read-only; aggregate delivery carries the mode",
+            ));
+        }
+        if !one_component(&request.source) {
+            return Err(Status::invalid_argument(format!(
+                "source must be one share folder name, not a path: {:?}",
+                request.source
+            )));
+        }
+        MountSource::Volume
+    } else {
+        if !request.source.is_empty() {
+            return Err(Status::invalid_argument(
+                "aggregate delivery takes export_key, not a share folder name",
+            ));
+        }
+        if !one_component(&request.export_key) {
+            return Err(Status::invalid_argument(format!(
+                "export_key must be one component, not a path: {:?}",
+                request.export_key
+            )));
+        }
+        if request.device_tag.is_empty()
+            || request.device_tag.len() > 36
+            || request.device_tag.contains('\0')
+        {
+            return Err(Status::invalid_argument(
+                "aggregate delivery requires a device tag of 1..=36 bytes",
+            ));
+        }
+        MountSource::Aggregate {
+            device_tag: request.device_tag.clone(),
+            export_key: request.export_key.clone(),
+        }
+    };
     let destination = PathBuf::from(&request.destination);
     validate_destination(&destination).map_err(BoxliteError::into_validation_status)?;
-    Ok(destination)
+    Ok((source, destination))
 }
 
 /// Report a failed attach: caller mistakes stay `INVALID_ARGUMENT`; a
@@ -691,7 +734,7 @@ impl ContainerService for GuestServer {
         request: Request<ContainerMountRequest>,
     ) -> Result<Response<ContainerMountResponse>, Status> {
         let request = request.into_inner();
-        let destination = checked_mount(&request)?;
+        let (source_kind, destination) = checked_mount(&request)?;
 
         let container_id = request.container_id;
         let Some(container_arc) = self.containers.lock().await.get(&container_id).cloned() else {
@@ -712,36 +755,137 @@ impl ContainerService for GuestServer {
             let target = Target::open(init).map_err(mount_status)?;
             (target, container.attacher())
         };
-        let source = self
-            .layout
-            .shared()
-            .container(&container_id)
-            .volume_dir(&request.source);
+        let source = match &source_kind {
+            MountSource::Volume => self
+                .layout
+                .shared()
+                .container(&container_id)
+                .volume_dir(&request.source),
+            MountSource::Aggregate {
+                device_tag,
+                export_key,
+            } => {
+                let root = aggregate_root(device_tag).ok_or_else(|| {
+                    Status::failed_precondition(format!(
+                        "no aggregate root registered for device tag {device_tag}"
+                    ))
+                })?;
+                root.join(export_key)
+            }
+        };
+        let read_only = request.read_only;
         let mount_point = destination.clone();
+        let export_key = request.export_key;
         // Attach and record in a task of their own, so a caller that gives up
         // cannot leave a mount the container does not know about. The write
         // lock is held until the mount is recorded: a copy waits for both.
         let attach = tokio::spawn(async move {
             let mut attacher = attacher.write_owned().await;
             let attacher = tokio::task::spawn_blocking(move || {
-                attacher.attach_read_only(&source, &target, &mount_point)?;
-                Ok::<_, BoxliteError>(attacher)
+                let added = if export_key.is_empty() {
+                    attacher.attach(&source, &target, &mount_point, read_only)?;
+                    true
+                } else {
+                    attacher.attach_runtime(
+                        &export_key,
+                        &source,
+                        &target,
+                        &mount_point,
+                        read_only,
+                    )?
+                };
+                Ok::<_, BoxliteError>((attacher, added))
             })
             .await
             .map_err(|error| Status::internal(format!("attach task failed: {error}")))?
             .map_err(mount_status)?;
-            container_arc
-                .lock()
-                .await
-                .record_mount_destination(destination);
+            let (attacher, added) = attacher;
+            if added {
+                container_arc
+                    .lock()
+                    .await
+                    .record_mount_destination(destination);
+            }
             drop(attacher);
             Ok::<_, Status>(())
         });
         attach
             .await
             .map_err(|error| Status::internal(format!("attach task failed: {error}")))??;
-        info!(container_id = %container_id, destination = %request.destination, "Mounted a share folder read-only");
+        info!(container_id = %container_id, destination = %request.destination, "Mounted a directory into the container");
         Ok(Response::new(ContainerMountResponse {}))
+    }
+
+    async fn detach(
+        &self,
+        request: Request<ContainerDetachRequest>,
+    ) -> Result<Response<ContainerDetachResponse>, Status> {
+        let request = request.into_inner();
+        let destination = PathBuf::from(&request.destination);
+        validate_destination(&destination).map_err(BoxliteError::into_validation_status)?;
+        if request.export_key.is_empty() || !one_component(&request.export_key) {
+            return Err(Status::invalid_argument(
+                "detach requires a runtime export_key",
+            ));
+        }
+
+        let container_id = request.container_id;
+        let Some(container_arc) = self.containers.lock().await.get(&container_id).cloned() else {
+            return Err(Status::not_found(format!(
+                "No such container: {container_id}"
+            )));
+        };
+        let (target, attacher) = {
+            let container = container_arc.lock().await;
+            let init = container
+                .init_pid()
+                .filter(|_| container.is_running())
+                .ok_or_else(|| {
+                    Status::failed_precondition(format!("container {container_id} is not running"))
+                })?;
+            let target = Target::open(init).map_err(mount_status)?;
+            (target, container.attacher())
+        };
+        // Detach in a task of its own, mirroring the mount: a caller that
+        // gives up cannot leave the container believing in a stale mount.
+        let recorded = destination.clone();
+        let detach = tokio::spawn(async move {
+            let mut attacher = attacher.write_owned().await;
+            if attacher.runtime_attached(&request.export_key)
+                && container_arc
+                    .lock()
+                    .await
+                    .mount_destinations()
+                    .iter()
+                    .any(|mount| mount != &destination && mount.starts_with(&destination))
+            {
+                return Err(Status::failed_precondition(
+                    "detach descendant mounts first",
+                ));
+            }
+            let attacher = tokio::task::spawn_blocking(move || {
+                let removed =
+                    attacher.detach_runtime(&request.export_key, &target, &destination)?;
+                Ok::<_, BoxliteError>((attacher, removed))
+            })
+            .await
+            .map_err(|error| Status::internal(format!("detach task failed: {error}")))?
+            .map_err(mount_status)?;
+            let (attacher, removed) = attacher;
+            if removed {
+                container_arc
+                    .lock()
+                    .await
+                    .remove_mount_destination(&recorded);
+            }
+            drop(attacher);
+            Ok::<_, Status>(())
+        });
+        detach
+            .await
+            .map_err(|error| Status::internal(format!("detach task failed: {error}")))??;
+        info!(container_id = %container_id, destination = %request.destination, "Detached a container mount");
+        Ok(Response::new(ContainerDetachResponse {}))
     }
 }
 
@@ -787,12 +931,31 @@ mod tests {
             source: source.to_string(),
             destination: destination.to_string(),
             read_only: true,
+            export_key: String::new(),
+            device_tag: String::new(),
+        }
+    }
+
+    fn aggregate_export(
+        export_key: &str,
+        destination: &str,
+        read_only: bool,
+    ) -> ContainerMountRequest {
+        ContainerMountRequest {
+            container_id: "box".to_string(),
+            source: String::new(),
+            destination: destination.to_string(),
+            read_only,
+            export_key: export_key.to_string(),
+            device_tag: boxlite_shared::constants::mount_tags::AGGREGATE.to_string(),
         }
     }
 
     #[test]
     fn mount_accepts_a_read_only_share_folder() {
-        let destination = checked_mount(&share_folder("agents", "/opt/boxlite/agents")).unwrap();
+        let (source, destination) =
+            checked_mount(&share_folder("agents", "/opt/boxlite/agents")).unwrap();
+        assert!(matches!(source, MountSource::Volume));
         assert_eq!(destination, PathBuf::from("/opt/boxlite/agents"));
     }
 
@@ -806,13 +969,52 @@ mod tests {
     }
 
     #[test]
-    fn mount_refuses_writable_or_misplaced_mounts() {
+    fn mount_refuses_writable_or_misplaced_legacy_mounts() {
         let writable = ContainerMountRequest {
             read_only: false,
             ..share_folder("agents", "/opt/boxlite/agents")
         };
         let relative = share_folder("agents", "opt/boxlite/agents");
         for request in [writable, relative] {
+            let status = checked_mount(&request).unwrap_err();
+            assert_eq!(status.code(), Code::InvalidArgument, "{}", status.message());
+        }
+    }
+
+    #[test]
+    fn mount_accepts_aggregate_exports_in_either_mode() {
+        for read_only in [true, false] {
+            let (source, destination) =
+                checked_mount(&aggregate_export("late", "/opt/boxlite/late", read_only)).unwrap();
+            let MountSource::Aggregate {
+                device_tag,
+                export_key,
+            } = source
+            else {
+                panic!("expected an aggregate source");
+            };
+            assert_eq!(device_tag, boxlite_shared::constants::mount_tags::AGGREGATE);
+            assert_eq!(export_key, "late");
+            assert_eq!(destination, PathBuf::from("/opt/boxlite/late"));
+        }
+    }
+
+    #[test]
+    fn aggregate_delivery_rejects_paths_and_missing_device_tag() {
+        for request in [
+            aggregate_export("a/b", "/opt/boxlite/late", true),
+            aggregate_export("..", "/opt/boxlite/late", true),
+            aggregate_export("", "/opt/boxlite/late", true),
+            ContainerMountRequest {
+                export_key: "late".into(),
+                device_tag: String::new(),
+                ..aggregate_export("late", "/opt/boxlite/late", true)
+            },
+            ContainerMountRequest {
+                source: "agents".into(),
+                ..aggregate_export("late", "/opt/boxlite/late", true)
+            },
+        ] {
             let status = checked_mount(&request).unwrap_err();
             assert_eq!(status.code(), Code::InvalidArgument, "{}", status.message());
         }

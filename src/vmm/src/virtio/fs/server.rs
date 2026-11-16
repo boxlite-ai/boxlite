@@ -11,6 +11,7 @@ use std::ffi::CStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::mem::size_of;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use vm_memory::ByteValued;
@@ -83,7 +84,7 @@ impl io::Write for ZCWriter<'_> {
 }
 
 pub struct Server<F: FileSystem + Sync> {
-    fs: F,
+    fs: Arc<F>,
     options: AtomicU64,
     initialized: AtomicBool,
 }
@@ -91,10 +92,16 @@ pub struct Server<F: FileSystem + Sync> {
 impl<F: FileSystem + Sync> Server<F> {
     pub fn new(fs: F) -> Server<F> {
         Server {
-            fs,
+            fs: Arc::new(fs),
             options: AtomicU64::new(FsOptions::empty().bits()),
             initialized: AtomicBool::new(false),
         }
+    }
+
+    /// A shared handle to the served filesystem. Host-side control paths use
+    /// it to reach the device without crossing the worker runtime.
+    pub fn filesystem(&self) -> Arc<F> {
+        self.fs.clone()
     }
 
     /// Clear negotiated protocol state and invalidate backend session resources.
