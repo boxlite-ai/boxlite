@@ -10,6 +10,7 @@ export class BoxLiteRequestError extends Error {
   constructor(
     readonly status: number | undefined,
     readonly uncertain: boolean,
+    readonly boxId?: string,
   ) {
     super('BoxLite request failed')
   }
@@ -64,6 +65,27 @@ export class BoxLiteHttp {
     const actual = this.decodePrincipal(await this.request('GET', '/me', undefined, undefined, false))
     if (JSON.stringify(actual) !== JSON.stringify(this.principal)) throw new Error('Original BoxLite principal changed')
   }
+  private async readJson(response: Response): Promise<unknown> {
+    if (!response.body) throw new Error('Missing BoxLite response')
+    const reader = response.body.getReader(),
+      chunks: Uint8Array[] = []
+    let bytes = 0
+    try {
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        bytes += chunk.value.byteLength
+        if (bytes > 4194304) {
+          await reader.cancel()
+          throw new Error('BoxLite response limit')
+        }
+        chunks.push(chunk.value)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  }
   async request(
     method: 'GET' | 'POST' | 'DELETE' | 'PUT',
     route: string,
@@ -80,6 +102,7 @@ export class BoxLiteHttp {
           ? undefined
           : JSON.stringify(payload)
     let status: number | undefined
+    let boxId: string | undefined
     try {
       const response = await fetch(
         this.root + (scoped ? '/' + encodeURIComponent(this.principal.path_prefix) : '') + route,
@@ -96,7 +119,11 @@ export class BoxLiteHttp {
       )
       status = response.status
       if (!response.ok) {
-        await response.body?.cancel()
+        if (scoped && method === 'POST' && route === '/boxes' && status === 408) {
+          const value = await this.readJson(response)
+          if (object(value) && typeof value.boxId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.boxId))
+            boxId = value.boxId
+        } else await response.body?.cancel()
         throw new Error('BoxLite HTTP denial')
       }
       if (method === 'PUT' && response.status !== 204) {
@@ -107,30 +134,13 @@ export class BoxLiteHttp {
         await response.body?.cancel()
         return undefined
       }
-      if (!response.body) throw new Error('Missing BoxLite response')
-      const reader = response.body.getReader(),
-        chunks: Uint8Array[] = []
-      let bytes = 0
-      try {
-        for (;;) {
-          const chunk = await reader.read()
-          if (chunk.done) break
-          bytes += chunk.value.byteLength
-          if (bytes > 4194304) {
-            await reader.cancel()
-            throw new Error('BoxLite response limit')
-          }
-          chunks.push(chunk.value)
-        }
-      } finally {
-        reader.releaseLock()
-      }
-      return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      return await this.readJson(response)
     } catch {
       throw new BoxLiteRequestError(
         status,
         method !== 'GET' &&
           (status === undefined || status === 408 || status >= 500 || (status >= 200 && status < 300)),
+        boxId,
       )
     }
   }

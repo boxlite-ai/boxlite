@@ -295,6 +295,20 @@ a conflicting record cannot redirect stop/delete/JIT operations to another Box.
 An HTTP 408 from a Box mutation can follow server-side creation and is therefore
 an uncertain outcome, not permission to retry the create or return its quota.
 
+For `POST /boxes`, a complete, bounded HTTP 408 JSON response may identify the
+original resource in `boxId`. The REST adapter validates and persists that ID
+with its original dispatch before any further network read. Recovery queries
+that exact ID and verifies its allocation name; it never adopts a same-name Box.
+An unfinished original create can resume boot after a failed read, lost start
+response or Listener restart, with admission, principal and lease checks before
+starting. Known allocations and closing allocations are observed without starting.
+Unknown or stopping states keep creation recovery pending and retain capacity.
+
+Missing or malformed timeout IDs, a completely lost response, failed ID persistence
+and historical records without an original ID remain uncertain. A server response
+whose state is `unknown` also remains pending; this includes failures projected as
+unknown by the server. These cases do not authorize another create or quota release.
+
 Admission or repository-read failure before dispatch records a definitive rejection
 for the original create operation, allowing the controller to release its slot.
 Rejection and dispatch compete atomically for the same REST ledger entry under the
