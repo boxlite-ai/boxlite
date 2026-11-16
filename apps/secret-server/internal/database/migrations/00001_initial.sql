@@ -16,7 +16,12 @@ CREATE TABLE secret (
     box_id varchar(64),
     name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 64),
     name_normalized text NOT NULL CHECK (name_normalized ~ '^[A-Z0-9_]{1,64}$'),
-    current_version integer NOT NULL CHECK (current_version >= 1),
+    ciphertext bytea NOT NULL,
+    encrypted_dek bytea NOT NULL,
+    key_id text NOT NULL CHECK (key_id <> '' AND length(key_id) <= 128),
+    hosts text[] NOT NULL CHECK (cardinality(hosts) > 0),
+    headers jsonb NOT NULL CHECK (jsonb_typeof(headers) = 'object' AND headers <> '{}'::jsonb),
+    placeholder text NOT NULL CHECK (placeholder <> ''),
     disabled_at timestamptz,
     created_by text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -31,41 +36,25 @@ CREATE UNIQUE INDEX secret_org_name_uq ON secret (organization_id, name_normaliz
 CREATE UNIQUE INDEX secret_box_name_uq ON secret (box_id, name_normalized) WHERE scope = 'box';
 CREATE INDEX secret_org_idx ON secret (organization_id);
 
-CREATE TABLE secret_version (
-    secret_id uuid NOT NULL REFERENCES secret (id) ON DELETE CASCADE,
-    version integer NOT NULL CHECK (version >= 1),
-    ciphertext bytea NOT NULL,
-    encrypted_dek bytea NOT NULL,
-    key_id text NOT NULL CHECK (key_id <> '' AND length(key_id) <= 128),
-    hosts text[] NOT NULL CHECK (cardinality(hosts) > 0),
-    headers jsonb NOT NULL CHECK (jsonb_typeof(headers) = 'object' AND headers <> '{}'::jsonb),
-    placeholder text NOT NULL CHECK (placeholder <> ''),
-    created_by text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (secret_id, version)
-);
-ALTER TABLE secret ADD CONSTRAINT secret_current_version_fk
-    FOREIGN KEY (id, current_version) REFERENCES secret_version (secret_id, version)
-    DEFERRABLE INITIALLY DEFERRED;
-CREATE INDEX secret_version_key_idx ON secret_version (key_id);
+CREATE INDEX secret_key_idx ON secret (key_id);
 
 -- +goose StatementBegin
-CREATE FUNCTION protect_secret_version() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION protect_secret_value() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     -- encrypted_dek and key_id remain mutable for future KMS rewrapping.
-    IF (NEW.secret_id, NEW.version, NEW.ciphertext, NEW.hosts, NEW.headers,
+    IF (NEW.id, NEW.organization_id, NEW.scope, NEW.box_id, NEW.name, NEW.name_normalized, NEW.ciphertext, NEW.hosts, NEW.headers,
         NEW.placeholder, NEW.created_by, NEW.created_at)
        IS DISTINCT FROM
-       (OLD.secret_id, OLD.version, OLD.ciphertext, OLD.hosts, OLD.headers,
+       (OLD.id, OLD.organization_id, OLD.scope, OLD.box_id, OLD.name, OLD.name_normalized, OLD.ciphertext, OLD.hosts, OLD.headers,
         OLD.placeholder, OLD.created_by, OLD.created_at) THEN
-        RAISE EXCEPTION 'secret version is immutable';
+        RAISE EXCEPTION 'secret value is immutable';
     END IF;
     RETURN NEW;
 END;
 $$;
 -- +goose StatementEnd
-CREATE TRIGGER secret_version_immutable BEFORE UPDATE ON secret_version
-    FOR EACH ROW EXECUTE FUNCTION protect_secret_version();
+CREATE TRIGGER secret_value_immutable BEFORE UPDATE ON secret
+    FOR EACH ROW EXECUTE FUNCTION protect_secret_value();
 
 CREATE TABLE key_verification_canary (
     id smallint PRIMARY KEY CHECK (id = 1),
@@ -81,7 +70,6 @@ CREATE TABLE secret_access_log (
     runner_id text,
     box_id varchar(64),
     secret_id uuid,
-    version integer,
     result text NOT NULL CHECK (result IN
         ('ok', 'attestation_failed', 'credential_invalid', 'runner_mismatch',
          'not_found', 'disabled', 'decrypt_failed'))

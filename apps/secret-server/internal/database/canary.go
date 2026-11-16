@@ -38,7 +38,7 @@ func VerifyKey(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Ciphe
 	var envelope encryption.Envelope
 	err = tx.QueryRow(ctx, "SELECT ciphertext, encrypted_dek, key_id FROM key_verification_canary WHERE id = 1").Scan(&envelope.Ciphertext, &envelope.WrappedDEK.Ciphertext, &envelope.WrappedDEK.KeyID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err := verifyExistingVersion(ctx, tx, cipher); err != nil {
+		if err := verifyExistingSecret(ctx, tx, cipher); err != nil {
 			return err
 		}
 		envelope, err = cipher.Encrypt(ctx, canaryContext, []byte(canaryValue))
@@ -67,26 +67,26 @@ func VerifyKey(ctx context.Context, pool *pgxpool.Pool, cipher *encryption.Ciphe
 	return nil
 }
 
-func verifyExistingVersion(ctx context.Context, tx pgx.Tx, cipher *encryption.Cipher) error {
-	var identity encryption.SecretContext
+func verifyExistingSecret(ctx context.Context, tx pgx.Tx, cipher *encryption.Cipher) error {
+	identity := encryption.SecretContext{Version: 1}
 	var headers []byte
 	var envelope encryption.Envelope
-	err := tx.QueryRow(ctx, `SELECT s.organization_id::text, v.secret_id::text, v.version, v.hosts, v.headers,
-        v.ciphertext, v.encrypted_dek, v.key_id FROM secret_version v JOIN secret s ON s.id = v.secret_id LIMIT 1`).
-		Scan(&identity.OrganizationID, &identity.SecretID, &identity.Version, &identity.Hosts, &headers, &envelope.Ciphertext, &envelope.WrappedDEK.Ciphertext, &envelope.WrappedDEK.KeyID)
+	err := tx.QueryRow(ctx, `SELECT organization_id::text, id::text, hosts, headers,
+        ciphertext, encrypted_dek, key_id FROM secret LIMIT 1`).
+		Scan(&identity.OrganizationID, &identity.SecretID, &identity.Hosts, &headers, &envelope.Ciphertext, &envelope.WrappedDEK.Ciphertext, &envelope.WrappedDEK.KeyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read existing version for key verification: %w", err)
+		return fmt.Errorf("read existing secret for key verification: %w", err)
 	}
 	if err := json.Unmarshal(headers, &identity.Headers); err != nil {
-		return fmt.Errorf("decode existing version headers: %w", err)
+		return fmt.Errorf("decode existing secret headers: %w", err)
 	}
 	plaintext, err := cipher.Decrypt(ctx, identity, envelope)
 	clear(plaintext)
 	if err != nil {
-		return fmt.Errorf("verify existing version key: %w", err)
+		return fmt.Errorf("verify existing secret key: %w", err)
 	}
 	return nil
 }

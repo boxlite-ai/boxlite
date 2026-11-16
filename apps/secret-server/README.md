@@ -130,8 +130,13 @@ server encoding. SIGINT and SIGTERM cancel a running migration.
 
 Before serving requests, the future service must call `database.Initialize`.
 It applies migrations and verifies a durable encrypted canary under a separate
-transaction advisory lock. If the canary is absent but versions exist, it first
-decrypts an existing version. A wrong key or corrupt ciphertext fails readiness.
+transaction advisory lock. If the canary is absent but secrets exist, it first
+decrypts an existing secret using AAD version 1.
+
+A wrong key or corrupt ciphertext fails readiness.
+Each secret stores one immutable encrypted value; replace a value by deleting and
+creating a secret with a new ID. Online rotation and version history are not supported.
+
 Canary enrollment uses a read-committed transaction even when the database has a
 different default isolation level.
 

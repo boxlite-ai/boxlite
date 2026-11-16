@@ -391,7 +391,7 @@ func TestIntegration(t *testing.T) {
 		return
 	}
 
-	t.Run("schema constraints and existing version recovery", func(t *testing.T) {
+	t.Run("single-value schema and key recovery", func(t *testing.T) {
 		org := "10000000-0000-0000-0000-000000000001"
 		id := "20000000-0000-0000-0000-000000000001"
 		identity := encryption.SecretContext{OrganizationID: org, SecretID: id, Version: 1, Hosts: []string{"host"}, Headers: map[string]string{"Authorization": "Bearer {value}"}}
@@ -399,56 +399,55 @@ func TestIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		otherVersion := identity
+		otherVersion.Version = 2
+		if _, err := cipher.Decrypt(ctx, otherVersion, envelope); err == nil {
+			t.Fatal("ciphertext accepted a different AAD version")
+		}
 		normalized, err := NormalizeName("open-ai")
 		if err != nil {
 			t.Fatal(err)
 		}
-		tx, err := pool.Begin(ctx)
-		if err != nil {
+		insert := `INSERT INTO secret(id,organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,$2,'org','open-ai',$3,$4,$5,$6,ARRAY['host'],'{"Authorization":"Bearer {value}"}','p','test')`
+		if _, err := pool.Exec(ctx, insert, id, org, normalized, envelope.Ciphertext, envelope.WrappedDEK.Ciphertext, envelope.WrappedDEK.KeyID); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO secret(id, organization_id, scope, name, name_normalized, current_version, created_by) VALUES ($1,$2,'org','open-ai',$3,1,'test')`, id, org, normalized)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO secret_version(secret_id,version,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,1,$2,$3,$4,ARRAY['host'],'{"Authorization":"Bearer {value}"}','p','test')`, id, envelope.Ciphertext, envelope.WrappedDEK.Ciphertext, envelope.WrappedDEK.KeyID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-		for _, statement := range []string{
-			`INSERT INTO secret_version(secret_id,version,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,2,'x','y','env:key',ARRAY[]::text[],'{"A":"b"}','p','test')`,
-			`INSERT INTO secret_version(secret_id,version,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,2,'x','y','env:key',ARRAY['host'],'{}','p','test')`,
-			`INSERT INTO secret_version(secret_id,version,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,2,'x','y','env:key',ARRAY['host'],'[]','p','test')`,
-			`INSERT INTO secret_version(secret_id,version,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,2,'x','y','env:key',ARRAY['host'],'{"A":"b"}','','test')`,
+		for _, tc := range []struct{ hosts, headers, placeholder, constraint string }{
+			{"{}", `{"A":"b"}`, "p", "secret_hosts_check"},
+			{"{host}", `{}`, "p", "secret_headers_check"},
+			{"{host}", `[]`, "p", "secret_headers_check"},
+			{"{host}", `{"A":"b"}`, "", "secret_placeholder_check"},
 		} {
-			if _, err := pool.Exec(ctx, statement, id); err == nil {
-				t.Errorf("invalid version accepted: %s", statement)
+			_, err := pool.Exec(ctx, `INSERT INTO secret(organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,'org','invalid','INVALID','x','y','env:key',$2::text[],$3::jsonb,$4,'test')`, org, tc.hosts, tc.headers, tc.placeholder)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != tc.constraint {
+				t.Errorf("invalid secret: got %v; want check %s", err, tc.constraint)
 			}
+		}
+		if _, err := pool.Exec(ctx, `UPDATE secret SET ciphertext='other' WHERE id=$1`, id); err == nil {
+			t.Error("mutable ciphertext accepted")
 		}
 		if _, err := pool.Exec(ctx, "DELETE FROM key_verification_canary"); err != nil {
 			t.Fatal(err)
 		}
 		if err := VerifyKey(ctx, pool, testCipher(t, 2)); err == nil {
-			t.Error("wrong key recreated canary despite existing version")
+			t.Error("wrong key recreated canary despite existing secret")
 		}
 		if err := VerifyKey(ctx, pool, cipher); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE secret_version SET hosts=ARRAY['other'] WHERE secret_id=$1`, id); err == nil {
+		if _, err := pool.Exec(ctx, `UPDATE secret SET hosts=ARRAY['other'] WHERE id=$1`, id); err == nil {
 			t.Error("mutable hosts accepted")
 		}
-		if _, err := pool.Exec(ctx, `UPDATE secret_version SET encrypted_dek='new', key_id='env:new' WHERE secret_id=$1`, id); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE secret SET encrypted_dek='new', key_id='env:new' WHERE id=$1`, id); err != nil {
 			t.Error(err)
 		}
 		for _, tc := range []struct {
 			name, statement, code, constraint string
 			args                              []any
 		}{
-			{"duplicate normalized name", `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','open_ai',$2,1,'test')`, "23505", "secret_org_name_uq", []any{org, normalized}},
-			{"incorrect normalization", `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','abc','OTHER',1,'test')`, "23514", "secret_check1", []any{org}},
+			{"duplicate normalized name", `INSERT INTO secret(organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,'org','open_ai',$2,'x','y','env:key',ARRAY['host'],'{"A":"b"}','p','test')`, "23505", "secret_org_name_uq", []any{org, normalized}},
+			{"incorrect normalization", `INSERT INTO secret(organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,'org','abc','OTHER','x','y','env:key',ARRAY['host'],'{"A":"b"}','p','test')`, "23514", "secret_check1", []any{org}},
 		} {
 			_, err := pool.Exec(ctx, tc.statement, tc.args...)
 			var pgErr *pgconn.PgError
@@ -456,35 +455,30 @@ func TestIntegration(t *testing.T) {
 				t.Errorf("%s: got %v, want SQLSTATE %s constraint %s", tc.name, err, tc.code, tc.constraint)
 			}
 		}
-		if _, err := pool.Exec(ctx, `INSERT INTO secret(organization_id,scope,name,name_normalized,current_version,created_by) VALUES ($1,'org','missing','MISSING',1,'test')`, org); err == nil {
-			t.Error("missing current version accepted")
-		}
 		if _, err := pool.Exec(ctx, `DELETE FROM secret WHERE id=$1`, id); err != nil {
 			t.Fatal(err)
 		}
-		var count int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM secret_version WHERE secret_id=$1`, id).Scan(&count); err != nil || count != 0 {
-			t.Errorf("cascade count %d: %v", count, err)
+		replacementID := "20000000-0000-0000-0000-000000000004"
+		replacementIdentity := identity
+		replacementIdentity.SecretID = replacementID
+		replacement, err := cipher.Encrypt(ctx, replacementIdentity, []byte("replacement secret"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, insert, replacementID, org, normalized, replacement.Ciphertext, replacement.WrappedDEK.Ciphertext, replacement.WrappedDEK.KeyID); err != nil {
+			t.Fatalf("recreate secret with a new ID: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM secret WHERE id=$1`, replacementID); err != nil {
+			t.Fatal(err)
 		}
 		for i, box := range []string{"box-a", "box-b"} {
-			tx, err := pool.Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
 			boxID := fmt.Sprintf("20000000-0000-0000-0000-%012d", i+2)
 			boxName, err := NormalizeName("café")
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = tx.Exec(ctx, `INSERT INTO secret(id,organization_id,scope,box_id,name,name_normalized,current_version,created_by) VALUES ($1,$2,'box',$3,'café',$4,1,'test')`, boxID, org, box, boxName)
+			_, err = pool.Exec(ctx, `INSERT INTO secret(id,organization_id,scope,box_id,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,$2,'box',$3,'café',$4,'x','y','env:key',ARRAY['host'],'{"A":"b"}','p','test')`, boxID, org, box, boxName)
 			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = tx.Exec(ctx, `INSERT INTO secret_version(secret_id,version,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,1,'x','y','env:key',ARRAY['host'],'{"A":"b"}','p','test')`, boxID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
 		}
