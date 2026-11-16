@@ -1,4 +1,4 @@
-**Status:** Implemented
+**Status:** Partially implemented
 
 ## TL;DR
 
@@ -7,8 +7,9 @@ Reconcile Filestore discovery prerequisites during deployment, grant the API
 the stage project, and retain sanitized GCP failure details in API logs without
 changing the client error contract.
 
-The resolver diagnostics, effective-configuration, IAM, and service-enablement
-slices are implemented. The default `FILESTORE_INSTANCES` entry is
+The resolver diagnostics, effective-configuration, and service-enablement slices
+are implemented. The `roles/file.viewer` deployment wiring is tracked separately
+in #2731. The default `FILESTORE_INSTANCES` entry is
 `boxlite-dev-shared` in `boxlite-dev-project`, zone `us-east5-a`; stage deployments
 use `boxlite-filestore-stage`, zone `us-east4-a`.
 

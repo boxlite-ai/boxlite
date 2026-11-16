@@ -39,16 +39,6 @@ const volumeMountTimeout = 90 * time.Second
 // stat and umount indefinitely, which is exactly the state these run in.
 const volumeProbeTimeout = 10 * time.Second
 
-// Bound on how long Run may wait for a mount process past its context
-// deadline. A hard mount to an unreachable server parks mount(8) in
-// uninterruptible kernel sleep: SIGKILL does not land until the kernel
-// returns the syscall, so without this bound Run would block until the
-// kernel gives up -- minutes, on a blackholed server -- after the 90s
-// deadline has already fired. Past the delay the wait returns, the
-// lingering process is abandoned to the kernel, and the eventual mount
-// still lands or fails on its own.
-const volumeMountWaitDelay = 5 * time.Second
-
 // Bound for the readiness loop as a whole. It has to be a deadline rather than
 // a retry count: each probe can now burn volumeProbeTimeout against a wedged
 // mount, so counting attempts would multiply into minutes of holding the
@@ -240,7 +230,7 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	// before any path is derived. An empty id is refused outright because
 	// filestoreDataDir(root, "") would name the mount root itself, putting
 	// every volume of the instance behind one box's bind mount.
-	if vol.VolumeId == "" || strings.ContainsAny(vol.VolumeId, "/\\") || strings.Contains(vol.VolumeId, "..") {
+	if vol.VolumeId == "" || vol.VolumeId == "." || strings.ContainsAny(vol.VolumeId, "/\\") || strings.Contains(vol.VolumeId, "..") {
 		return volumeMount{}, fmt.Errorf(
 			"invalid filestore volume id %q: must be a bare identifier without path separators or '..'",
 			vol.VolumeId,
@@ -256,12 +246,16 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 
 	rootPath := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+ref.Instance)
 
-	mutex := c.volumeMutexFor(filestoreMountPrefix + ref.Instance)
+	mountKey := filestoreMountPrefix + ref.Instance
+	mutex := c.volumeMutexFor(mountKey)
 	mutex.Lock()
 	defer mutex.Unlock()
+	if err := c.checkVolumeOperation(mountKey); err != nil {
+		return volumeMount{}, err
+	}
 
 	if !ensured[ref.Instance] {
-		if err := c.ensureFilestoreMounted(ctx, ref, rootPath); err != nil {
+		if err := c.ensureFilestoreMounted(ctx, ref, rootPath, mountKey); err != nil {
 			return volumeMount{}, err
 		}
 		ensured[ref.Instance] = true
@@ -273,11 +267,22 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	// fakes), so the directory needs an explicit chmod after mkdir — plain
 	// MkdirAll is masked by umask, and 0777 matches the posture the FUSE
 	// backends reach for with --dir-mode 0777.
-	if err := os.MkdirAll(dataDir, 0777); err != nil {
-		return volumeMount{}, fmt.Errorf("failed to create filestore data directory %s: %s", dataDir, err)
+	prepare := c.prepareRunner
+	if prepare == nil {
+		prepare = func(dataDir string) error {
+			if err := os.MkdirAll(dataDir, 0777); err != nil {
+				return fmt.Errorf("failed to create filestore data directory %s: %s", dataDir, err)
+			}
+			if err := os.Chmod(dataDir, 0777); err != nil {
+				return fmt.Errorf("failed to chmod filestore data directory %s: %s", dataDir, err)
+			}
+			return nil
+		}
 	}
-	if err := os.Chmod(dataDir, 0777); err != nil {
-		return volumeMount{}, fmt.Errorf("failed to chmod filestore data directory %s: %s", dataDir, err)
+	prepareCtx, cancelPrepare := context.WithTimeout(ctx, volumeProbeTimeout)
+	defer cancelPrepare()
+	if _, err := c.runBoundedVolumeOperation(prepareCtx, mountKey, func() error { return prepare(dataDir) }); err != nil {
+		return volumeMount{}, err
 	}
 
 	mount := volumeMount{
@@ -393,7 +398,11 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 // caller holds the instance mutex so that probing, mounting, preparing the
 // data directory and writing the referencing record form ONE critical section
 // against reclaim (design §4.5).
-func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreRef, mountRoot string) error {
+func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreRef, mountRoot string, mountKey string) error {
+	if ref.Server == "" || ref.Export == "" {
+		return fmt.Errorf("filestore %s requires both server and export", ref.Instance)
+	}
+
 	mounted, err := c.probeMounted(ctx, mountRoot)
 	if err != nil {
 		// Same reasoning as the FUSE twin: guessing here is what makes a stale
@@ -418,9 +427,12 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 	defer cancelMount()
 
 	cmd := c.getNfsMountCmd(mountCtx, ref, mountRoot)
-	if err = c.runMount(cmd); err != nil {
-		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
-		return fmt.Errorf("failed to mount filestore %s to %s: %s", ref.Instance, mountRoot, err)
+	pending, mountErr := c.runMount(mountCtx, mountKey, cmd)
+	if mountErr != nil {
+		if !pending {
+			c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
+		}
+		return fmt.Errorf("failed to mount filestore %s to %s: %s", ref.Instance, mountRoot, mountErr)
 	}
 
 	if err = c.waitForMountReady(ctx, mountRoot); err != nil {
@@ -449,22 +461,21 @@ func nfsMountArgs(ref *dto.FilestoreRef, path string) []string {
 func (c *Client) getNfsMountCmd(ctx context.Context, ref *dto.FilestoreRef, path string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "mount", nfsMountArgs(ref, path)...)
 	cmd.Env = os.Environ()
-	// The deadline kills a wedged mount; this bounds the wait when the kill
-	// itself is delayed by the kernel (see volumeMountWaitDelay).
-	cmd.WaitDelay = volumeMountWaitDelay
 	cmd.Stderr = io.Writer(&log.ErrorLogWriter{})
 	cmd.Stdout = io.Writer(&log.InfoLogWriter{})
 	return cmd
 }
 
-// runMount executes a mount command, through the injectable runner when a
-// test installed one. This is the concurrency test's seam: counting real
-// mounts would need a real NFS server; counting invocations here needs none.
-func (c *Client) runMount(cmd *exec.Cmd) error {
-	if c.mountRunner != nil {
-		return c.mountRunner(cmd)
-	}
-	return cmd.Run()
+// runMount supervises the command so an unkillable process cannot park the
+// caller after the deadline. The pending marker prevents a retry or reclaim
+// from treating that process as finished before Wait returns.
+func (c *Client) runMount(ctx context.Context, mountKey string, cmd *exec.Cmd) (bool, error) {
+	return c.runBoundedVolumeOperation(ctx, mountKey, func() error {
+		if c.mountRunner != nil {
+			return c.mountRunner(cmd)
+		}
+		return cmd.Run()
+	})
 }
 
 // mountProbeCmd and umountCmd exist as separate builders so a test can assert
@@ -588,6 +599,56 @@ func (c *Client) probeMounted(ctx context.Context, path string) (bool, error) {
 		return c.probeRunner(ctx, path)
 	}
 	return c.isDirectoryMounted(ctx, path)
+}
+
+func (c *Client) checkVolumeOperation(key string) error {
+	c.volumeMutexesMutex.Lock()
+	defer c.volumeMutexesMutex.Unlock()
+	if c.volumePending[key] > 0 {
+		return fmt.Errorf("previous volume operation for %s is still in flight", key)
+	}
+	return nil
+}
+
+// trackLateVolumeOperation keeps an instance marked busy until the underlying
+// syscall or process has actually finished, even after its caller timed out.
+func (c *Client) trackLateVolumeOperation(key string, done <-chan error) {
+	c.volumeMutexesMutex.Lock()
+	if c.volumePending == nil {
+		c.volumePending = make(map[string]int)
+	}
+	c.volumePending[key]++
+	c.volumeMutexesMutex.Unlock()
+
+	go func() {
+		err := <-done
+		c.volumeMutexesMutex.Lock()
+		c.volumePending[key]--
+		if c.volumePending[key] == 0 {
+			delete(c.volumePending, key)
+		}
+		c.volumeMutexesMutex.Unlock()
+		if err != nil {
+			c.logger.WarnContext(context.Background(), "late volume operation failed", "key", key, "error", err)
+		}
+	}()
+}
+
+// runBoundedVolumeOperation returns on context completion while retaining an
+// instance-level pending marker until the operation itself finishes.
+func (c *Client) runBoundedVolumeOperation(ctx context.Context, key string, operation func() error) (bool, error) {
+	done := make(chan error, 1)
+	go func() {
+		done <- operation()
+	}()
+
+	select {
+	case err := <-done:
+		return false, err
+	case <-ctx.Done():
+		c.trackLateVolumeOperation(key, done)
+		return true, ctx.Err()
+	}
 }
 
 // volumeMutexFor returns the per-key mutex for a mount key, creating it on
@@ -1036,6 +1097,12 @@ func (c *Client) removeBoxVolumeMountRecord(ctx context.Context, boxID string) e
 // remaining instances. Without filestore instances the plain unlocked delete
 // keeps the object-storage behavior exactly as it was.
 func (c *Client) removeBoxVolumeMountRecordLocked(ctx context.Context, boxID string, instances []string) error {
+	return c.mutateBoxVolumeMountRecordLocked(ctx, boxID, instances, func() error {
+		return c.removeBoxVolumeMountRecord(ctx, boxID)
+	})
+}
+
+func (c *Client) mutateBoxVolumeMountRecordLocked(ctx context.Context, boxID string, instances []string, mutate func() error) error {
 	locked := make(map[string]bool, len(instances))
 	var firstErr error
 	for _, instance := range instances {
@@ -1046,14 +1113,14 @@ func (c *Client) removeBoxVolumeMountRecordLocked(ctx context.Context, boxID str
 
 		mutex := c.volumeMutexFor(filestoreMountPrefix + instance)
 		mutex.Lock()
-		err := c.removeBoxVolumeMountRecord(ctx, boxID)
+		err := mutate()
 		mutex.Unlock()
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	if len(locked) == 0 {
-		return c.removeBoxVolumeMountRecord(ctx, boxID)
+		return mutate()
 	}
 	return firstErr
 }
@@ -1072,23 +1139,33 @@ func hasFilestoreRef(volumes []dto.VolumeDTO) bool {
 	return false
 }
 
-// rollbackVolumeMountRecord removes a box's record after a failed create.
-// Filestore volumes write their record entries inside the instance critical
-// section, so a failure later in the same volume list -- or after the list --
-// leaves an earlier entry already on disk. Without deletion no box ever
-// exists to destroy, the dangling entry counts a reference forever, and the
-// reclaimer never reclaims the NFS mount. Deleting a record that was never
-// written is a no-op; the call sites guard on a volume list that could have
-// written one.
-func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, volumes []dto.VolumeDTO) {
+// rollbackVolumeMountRecord removes entries owned by a failed attempt without
+// discarding references that an existing box recorded before a replay began.
+func (c *Client) rollbackVolumeMountRecord(ctx context.Context, boxID string, volumes []dto.VolumeDTO, prior *boxVolumeMountRecord) {
 	var filestoreInstances []string
 	for _, vol := range volumes {
 		if vol.Filestore != nil {
 			filestoreInstances = append(filestoreInstances, vol.Filestore.Instance)
 		}
 	}
-	if err := c.removeBoxVolumeMountRecordLocked(ctx, boxID, filestoreInstances); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxID, "error", err)
+	if prior != nil {
+		for _, entry := range prior.Entries {
+			if entry.FilestoreInstance != "" {
+				filestoreInstances = append(filestoreInstances, entry.FilestoreInstance)
+			}
+		}
+	}
+
+	err := c.mutateBoxVolumeMountRecordLocked(ctx, boxID, filestoreInstances, func() error {
+		if prior == nil || len(prior.Entries) == 0 {
+			return c.removeBoxVolumeMountRecord(ctx, boxID)
+		}
+		restored := *prior
+		restored.Paths = dedupedRootPaths(restored.Entries)
+		return c.writeBoxVolumeMountRecord(ctx, boxID, restored)
+	})
+	if err != nil {
+		c.logger.WarnContext(ctx, "failed to restore box volume mount record after create failure", "box", boxID, "error", err)
 	}
 }
 
@@ -1204,9 +1281,14 @@ func (c *Client) globOrphanCandidates() ([]string, error) {
 // after it is released. A mount that reads unreferenced here is genuinely
 // unreferenced.
 func (c *Client) reclaimFilestoreMount(ctx context.Context, dir string) {
-	mutex := c.volumeMutexFor(filepath.Base(dir))
+	mountKey := filepath.Base(dir)
+	mutex := c.volumeMutexFor(mountKey)
 	mutex.Lock()
 	defer mutex.Unlock()
+	if err := c.checkVolumeOperation(mountKey); err != nil {
+		c.logger.DebugContext(ctx, "skipping filestore reclaim while an operation is in flight", "mountRoot", dir)
+		return
+	}
 
 	inUse, err := c.getRecordedVolumeMounts()
 	if err != nil {

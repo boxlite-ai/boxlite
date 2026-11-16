@@ -276,8 +276,16 @@ definitions:
     properties:
       instance:
         type: string
+      server:
+        description: NFS server address resolved by the API
+        type: string
+      export:
+        description: NFS export path on the server
+        type: string
     required:
       - instance
+      - server
+      - export
     type: object
   dto.SecretDTO:
     properties:

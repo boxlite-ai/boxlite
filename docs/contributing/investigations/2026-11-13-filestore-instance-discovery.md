@@ -182,9 +182,10 @@ or export is persisted in the public Volume row or database record.
 
 `BoxService.create` resolves every referenced volume's instance through the resolver
 before dispatching. `BoxStartAction` does the same when it rebuilds create or start
-metadata, so recreating an instance under the same name cannot leave a restart pinned to
-its previous address. A failed lookup fails the dispatch loudly rather than allowing the
-runner to discover an invalid mount.
+metadata. Successful lookups are cached for 60 seconds, so an instance recreated within
+that interval can briefly reuse its previous address; a later dispatch refreshes it. A
+failed lookup fails the dispatch loudly rather than allowing the runner to discover an
+invalid mount.
 
 Public Box responses expose only the logical instance name. The resolved server and
 export stay inside dispatch payloads and persisted volume metadata; generated public

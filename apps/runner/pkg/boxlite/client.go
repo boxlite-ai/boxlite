@@ -66,7 +66,9 @@ type Client struct {
 	// nil means the real write runs — every production path lands there
 	// because NewClient sets none of the seams.
 	writeRecordSeam    func(ctx context.Context, boxID string, record boxVolumeMountRecord) error
+	prepareRunner      func(dataDir string) error
 	volumeMutexes      map[string]*sync.Mutex
+	volumePending      map[string]int
 	volumeMutexesMutex sync.Mutex
 	volumeCleanupMutex sync.Mutex
 	lastVolumeCleanup  time.Time
@@ -572,6 +574,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 
+	var priorVolumeRecord *boxVolumeMountRecord
+	if len(boxDto.Volumes) > 0 {
+		priorVolumeRecord, err = c.readBoxVolumeMountRecord(boxDto.Id)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read existing volume mount record: %w", err)
+		}
+	}
+
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Id, boxDto.Volumes)
 	if err != nil {
 		// A filestore volume earlier in the list may already have written its
@@ -580,7 +590,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		// dangling entry would count a reference forever and keep the NFS
 		// mount from reclaiming.
 		if hasFilestoreRef(boxDto.Volumes) {
-			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
 		}
 		return "", "", err
 	}
@@ -597,7 +607,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 			// no box will exist to destroy, so the dangling entries must not
 			// survive.
 			if hasFilestoreRef(boxDto.Volumes) {
-				c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+				c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
 			}
 			return "", "", err
 		}
@@ -608,7 +618,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if len(volumeMounts) > 0 {
 			cleanupCtx, cancel := cleanupContext(ctx)
 			defer cancel()
-			c.rollbackVolumeMountRecord(cleanupCtx, boxDto.Id, boxDto.Volumes)
+			c.rollbackVolumeMountRecord(cleanupCtx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
 		}
 		return "", "", err
 	}
@@ -640,7 +650,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
-			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
