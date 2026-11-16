@@ -8,6 +8,7 @@ import { Module } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
 import { BoxService } from './services/box.service'
+import { SecretServerClient } from './services/secret-server-client'
 import { BoxExitCodeService } from './services/box-exit-code.service'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from './entities/box.entity'
@@ -118,6 +119,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     CustomDomainMaintenanceController,
   ],
   providers: [
+    SecretServerClient,
     CheckpointService,
     CheckpointArchiveStore,
     CheckpointRecoverService,

@@ -545,6 +545,43 @@ GitHub installation settings URL. See
 
 ## Hosted BoxLite-compatible API
 
+### Secret Server forwarding (staging)
+
+`SECRET_SERVER_ENABLED=true` forwards each new box's nonempty inline secret batch
+before inserting the box. The API generates the box ID in memory and sends
+`POST {SECRET_SERVER_URL}/internal/v1/boxes/{box_id}/secrets` with `org_id`,
+the authenticated caller's `created_by`, and the secret values and access policy.
+Omitted placeholders become `<BOXLITE_SECRET:{name}>` before transfer.
+
+Only a complete 200/201 name-to-ID mapping permits insertion. The box's `secrets`
+then contain `{name, hosts, headers, placeholder, secretId}` without `value`;
+persistence callbacks and creation events receive that same representation.
+For example, `openai` with an inline value becomes an `openai` reference with the
+returned UUID and its original host/header policy. New creations with the flag
+off retain the inline representation; empty batches make no transfer call.
+
+Configuration requires `SECRET_SERVER_URL` when enabled. HTTPS is mandatory
+outside `ENVIRONMENT=local|dev`; credentials, query strings, and fragments are
+refused in the URL. Google identity uses the API service account and the base URL
+as audience. `SECRET_SERVER_DEV_TOKEN` selects a static bearer for local/dev only.
+
+A six-second deadline covers identity acquisition, POST, and response parsing.
+There are no automatic transfer retries or redirects. Transfer, authentication,
+timeout, and invalid-response failures return HTTP 503 with
+`code: secret_store_unavailable` before any box insertion; plaintext fallback is
+never attempted. Logs contain box ID, count, result, and latency, without bodies
+or upstream errors. A later insert failure can leave encrypted orphan secrets.
+
+Enable only on staging after the BUI-1385 credential handoff is deployed in an
+all-v2 environment. Flipping this flag does not migrate existing inline boxes or
+convert reference-only boxes back to plaintext. Runner adapters own rejection
+of unsupported stored representations and v0 dispatch.
+
+Design: [API forwarding](https://github.com/boxlite-ai/boxlite/issues/2736) and
+[Secret Server write contract](https://github.com/boxlite-ai/boxlite/issues/2626).
+
+### Hosted routes
+
 **Service:** `apps/api` · **Base URL:** `https://api.<domain>/v1` · **Port:** `3000` in
 deployments (shared with the control-plane API)
 

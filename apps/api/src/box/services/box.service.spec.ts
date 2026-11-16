@@ -22,6 +22,11 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { SecretServerClient } from './secret-server-client'
+import { createServer } from 'node:http'
+import { AddressInfo } from 'node:net'
+
+const disabledSecretServer = () => new SecretServerClient({ get: () => false } as any)
 
 /** Records every reason as it came, which is what a failure it cannot explain gets. */
 const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
@@ -67,6 +72,7 @@ function makeService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    disabledSecretServer(),
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -207,6 +213,7 @@ function makeNetworkTunnelService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    disabledSecretServer(),
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -395,6 +402,7 @@ describe('BoxService inbound defaults', () => {
       imageResolverService: {
         resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
       },
+      secretServerClient: disabledSecretServer(),
       ...overrides,
     })
     return { service, boxRepository, runnerService, warmPoolService }
@@ -421,6 +429,146 @@ describe('BoxService inbound defaults', () => {
       expect.objectContaining({ id: result.id, organizationId: activeOrg.id }),
     )
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ id: result.id }), 7, onPersist)
+  })
+
+  describe('Secret Server forwarding', () => {
+    const secrets = [
+      { name: 'first', value: 'private-first', hosts: ['first.example'], headers: { Authorization: 'Bearer {value}' } },
+      { name: 'second', value: 'private-second', hosts: ['second.example'], headers: { 'x-key': '{value}' } },
+    ]
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']
+
+    async function fixture(status = 201) {
+      let transfer: { boxId: string; payload: any; insertCalls: number }
+      const server = createServer(async (request, response) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(chunk)
+        transfer = {
+          boxId: request.url.split('/')[4],
+          payload: JSON.parse(Buffer.concat(chunks).toString()),
+          insertCalls: boxRepository.insert.mock.calls.length,
+        }
+        if (status === -1) {
+          response.writeHead(201)
+          response.write('{')
+          return
+        }
+        response.writeHead(status)
+        response.end(
+          JSON.stringify({
+            secrets: transfer.payload.secrets.map(({ name }, i) => ({ name, secret_id: ids[i] })).reverse(),
+          }),
+        )
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const values = {
+        'secretServer.enabled': true,
+        'secretServer.url': `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        'secretServer.devToken': 'test-token',
+      }
+      const { service, boxRepository, warmPoolService } = makeCreateService({
+        secretServerClient: new SecretServerClient({ get: (key: string) => values[key] } as any),
+      })
+      const events = (service as any).eventEmitter
+      return {
+        service,
+        boxRepository,
+        warmPoolService,
+        events,
+        transfer: () => transfer,
+        close: async () => {
+          server.closeAllConnections()
+          await new Promise<void>((resolve) => server.close(() => resolve()))
+        },
+      }
+    }
+
+    it('forwards with the generated ID before insertion, callback, and creation event', async () => {
+      const f = await fixture()
+      const onPersist = jest.fn()
+      const snapshots: unknown[] = []
+      f.boxRepository.insert.mockImplementation(async (box, _limit, callback) => {
+        snapshots.push(structuredClone(box.secrets))
+        await callback({}, box)
+        return box
+      })
+      try {
+        const box = await f.service.create({ name: 'forwarded', secrets }, activeOrg, Context.user(), {
+          createdBy: 'authenticated-user',
+          onPersist,
+        })
+        const sent = f.transfer()
+        expect(sent.insertCalls).toBe(0)
+        expect(sent.boxId).toBe(box.id)
+        expect(sent.boxId).toMatch(/^[a-zA-Z0-9]{12}$/)
+        expect(sent.payload).toMatchObject({ org_id: activeOrg.id, created_by: 'authenticated-user', secrets })
+        const refs = secrets.map(({ name, hosts, headers }, i) => ({
+          name,
+          hosts,
+          headers,
+          placeholder: `<BOXLITE_SECRET:${name}>`,
+          secretId: ids[i],
+        }))
+        expect(snapshots).toEqual([refs])
+        expect(onPersist.mock.calls[0][1].secrets).toEqual(refs)
+        expect(f.events.emitAsync).toHaveBeenCalledWith(
+          BoxEvents.CREATED,
+          expect.objectContaining({ box: expect.objectContaining({ secrets: refs }) }),
+        )
+        expect(JSON.stringify(f.events.emitAsync.mock.calls)).not.toMatch(/private-first|private-second|"value"/)
+        expect(f.warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+      } finally {
+        await f.close()
+      }
+    })
+
+    it.each([503, 401, -1])(
+      'fails before insertion and events on transfer status %s (-1 stalls)',
+      async (status) => {
+        const f = await fixture(status)
+        try {
+          await expect(
+            f.service.create({ name: 'refused', secrets }, activeOrg, Context.user(), { createdBy: 'user' }),
+          ).rejects.toMatchObject({ status: 503, response: { code: 'secret_store_unavailable' } })
+          expect(f.boxRepository.insert).not.toHaveBeenCalled()
+          expect(f.events.emitAsync).not.toHaveBeenCalled()
+        } finally {
+          await f.close()
+        }
+      },
+      10000,
+    )
+
+    it('does not transfer a request that fails local lifecycle validation', async () => {
+      const f = await fixture()
+      try {
+        await expect(
+          f.service.create({ name: 'invalid', secrets, autoStop: -1 }, activeOrg, Context.user(), {
+            createdBy: 'user',
+          }),
+        ).rejects.toThrow(BadRequestError)
+        expect(f.transfer()).toBeUndefined()
+        expect(f.boxRepository.insert).not.toHaveBeenCalled()
+      } finally {
+        await f.close()
+      }
+    })
+
+    it('keeps plaintext out of failed inserts and emits no creation event', async () => {
+      const f = await fixture()
+      f.boxRepository.insert.mockRejectedValue(new Error('insert failed'))
+      try {
+        await expect(
+          f.service.create({ name: 'failed-insert', secrets }, activeOrg, Context.user(), { createdBy: 'user' }),
+        ).rejects.toThrow('insert failed')
+        expect(f.boxRepository.insert.mock.calls[0][0].secrets.every((secret) => !Object.hasOwn(secret, 'value'))).toBe(
+          true,
+        )
+        expect(f.events.emitAsync).not.toHaveBeenCalled()
+      } finally {
+        await f.close()
+      }
+    })
   })
 
   /**
