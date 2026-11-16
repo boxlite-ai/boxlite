@@ -16,6 +16,12 @@
     {"id": "direct-nat", "hostname": "", "policy_ip": "192.168.127.254", "connection_ip": "127.0.0.1", "port": 8080, "protocol": "tcp", "transport": "direct"},
     {"id": "approved-hostname-candidate", "hostname": "api.example.com", "policy_ip": "192.0.2.99", "connection_ip": "198.51.100.8", "port": 443, "protocol": "tcp", "transport": "direct"}
   ],
+  "mode_transition_cases": [
+    {"id": "disable-before-nic-suspension", "snapshot_mode": "disabled", "nic_state": "enabled", "transition": "pending", "new_tcp": "blocked", "new_udp": "blocked", "new_dns_tcp": "blocked", "new_dns_udp": "blocked", "ack": false},
+    {"id": "enable-before-snapshot-publication", "snapshot_mode": "disabled", "nic_state": "enabled", "transition": "pending", "new_tcp": "blocked", "new_udp": "blocked", "new_dns_tcp": "blocked", "new_dns_udp": "blocked", "ack": false},
+    {"id": "disable-nic-failure", "snapshot_mode": "disabled", "nic_state": "unknown", "transition": "uncertain", "new_tcp": "blocked", "new_udp": "blocked", "new_dns_tcp": "blocked", "new_dns_udp": "blocked", "ack": false},
+    {"id": "enable-nic-failure", "snapshot_mode": "disabled", "nic_state": "unknown", "transition": "uncertain", "new_tcp": "blocked", "new_udp": "blocked", "new_dns_tcp": "blocked", "new_dns_udp": "blocked", "ack": false}
+  ],
   "replacement_cases": [
     {"id": "matching-ack", "expected_revision": "rev-a", "current_revision": "rev-a", "candidate_revision": "rev-b", "ack_revision": "rev-b", "persistence": "succeeds", "outcome": "confirmed"},
     {"id": "stale-public-precondition", "expected_revision": "rev-a", "current_revision": "rev-b", "candidate_revision": "rev-c", "outcome": "precondition-failed", "apply": false},

@@ -2,7 +2,7 @@
 
 This is the shared implementation contract for destination policy, upstream transport, and complete outbound replacement.
 It does not advertise proxy, deny-rule, IPv6, or revision support before the corresponding backend implements and reports that capability.
-The [accepted design](../investigations/2026-11-16-egress-foundation.md) records the rationale; [shared examples](../../../tests/fixtures/outbound/contract-v1.json) supply inputs for each implementation layer.
+The [design](../investigations/2026-11-16-egress-foundation.md) records the rationale; [shared examples](../../../tests/fixtures/outbound/contract-v1.json) supply inputs for each implementation layer.
 
 ## Connection ownership
 
@@ -101,6 +101,20 @@ Reuse the current Box update lock, Runtime persistence operation, and Cloud row-
 All complete replacements, including future proxy rotation, share this ownership boundary.
 Validate and compile the entire candidate before publishing it for new flows.
 
+Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
+Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.
+
+Disabled mode rejects new flows independently of the empty allowlist.
+A mode gate before IP endpoint demultiplexing also covers registered services such as DNS, which bypass default transport handlers.
+This gate uses the same snapshot and leaves enabled-mode DNS behavior unchanged.
+Packets arriving under disabled mode cannot start new DNS forwarding; work accepted before publication retains established-work semantics.
+
+To disable, publish the disabled snapshot before suspending the NIC, then acknowledge only after suspension succeeds.
+To enable, retain the disabled snapshot until NIC enabling succeeds, then publish the enabled candidate.
+Mark application pending before publication or a mode transition.
+On a failed mode transition, retain the disabled gate and report uncertainty; do not confirm the candidate or a stale previous revision.
+Compilation failure before publication preserves the previous confirmed snapshot.
+
 An acknowledgement timeout leaves the outcome uncertain because the candidate may already be live.
 Perform bounded readback and distinguish the expected, candidate, and another revision; unresolved state remains explicit.
 Observing the expected revision does not prove rejection while the original request can still apply later.
@@ -130,6 +144,7 @@ Runtime, Runner, Cloud, and forwarding tests should consume the applicable cases
 | Destination and transport | Allowed ordinary, hostname, and MITM flows reach the selected connector; rejected targets never reach it. |
 | NAT and controlled DNS | Pre-NAT checks, approved literal dialing, candidate changes, cancellation, and setup budgets retain their contract. |
 | Replacement | Stale writes and stale compensation lose under controlled interleavings. |
+| Mode transitions | TCP/UDP and registered DNS stay gated during paused NIC transitions and after injected NIC failures; enabled controls still succeed. |
 | Acknowledgement | Missing or mismatched acknowledgement cannot appear as confirmed success. |
 | Recovery | Persistence errors, delayed application after old-revision readback, and the specified crash windows retain explicit uncertainty. |
 | Compatibility | Existing mode/allowlist clients retain their documented behavior; unsupported extensions and old backends fail explicitly. |

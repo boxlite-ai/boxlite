@@ -4,6 +4,7 @@
 
 - `policy_cases` describes the current strict mode/allowlist boundary; unsupported extensions remain rejected until their owning feature enables them.
 - `connection_cases` separates the pre-NAT policy address, approved literal connection address, hostname, port, and protocol.
+- `mode_transition_cases` requires ordinary forwarding and registered DNS endpoints to remain blocked during mode transitions and NIC failures; pending or uncertain transitions cannot acknowledge success.
 - `replacement_cases` describes the revision protocol's required outcomes, including conflicts, acknowledgement uncertainty, conditional restoration, and crashes.
 
 These are fixture inputs and expected outcomes, not an implementation or capability advertisement.
