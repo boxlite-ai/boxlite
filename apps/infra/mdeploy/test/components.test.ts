@@ -106,6 +106,20 @@ test('component selection defaults to the full graph and rejects invalid or unsu
   }
 })
 
+test('an unhandled scoped component cannot select Runner targets', () => {
+  assert.throws(
+    () =>
+      componentTargets({
+        components: 'collector' as never,
+        app,
+        stage,
+        resources: runnerState(1),
+        environment: {},
+      }),
+    /Unsupported deployment component: collector/,
+  )
+})
+
 for (const count of [1, 2])
   test(`Runner targets come from actual provider identities (${count} hosts)`, () => {
     const resources = runnerState(count)

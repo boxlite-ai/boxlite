@@ -70,49 +70,56 @@ export const componentTargets = ({
     new Error(
       `${components} resources or fleet do not match the existing stage; run a full --components api+runner deployment first`,
     )
-  if (components === 'api') {
-    const api = existing(API, 'Api')
-    if (!api) throw fullDeployment()
-    return [api.urn, `${prefix}gcp:secretmanager/secretIamMember:SecretIamMember::ApiSecretAccess-*`]
-  }
-
-  const fleet = runnerFleetFrom({ environment, app, stage })
-  const instances = resources.filter(
-    (resource) =>
-      !resource.delete &&
-      resource.type === INSTANCE &&
-      resource.urn.startsWith(`${prefix}${INSTANCE}::`) &&
-      /^Runner(?:-runner-[0-9]+)?$/.test(resource.urn.split('::').at(-1)!),
-  )
-  if (instances.length !== fleet.length) throw fullDeployment()
-  for (const slot of fleet) {
-    const instance = existing(INSTANCE, slot.resourceName)
-    if (
-      !instance ||
-      labelsKey(instance.inputs?.labels) !==
-        labelsKey({ 'boxlite-runner': runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': stage })
-    )
-      throw fullDeployment()
-  }
-  const targets = runnerPolicyBatches({ app, stage }, fleet).map((batch) => {
-    const policy = existing(POLICY, batch.resourceName)
-    const filter = policy?.inputs?.instanceFilter
-    const expected = batch.hosts
-      .map((slot) =>
-        labelsKey({ 'boxlite-runner': runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': stage }),
+  switch (components) {
+    case 'api': {
+      const api = existing(API, 'Api')
+      if (!api) throw fullDeployment()
+      return [api.urn, `${prefix}gcp:secretmanager/secretIamMember:SecretIamMember::ApiSecretAccess-*`]
+    }
+    case 'runner': {
+      const fleet = runnerFleetFrom({ environment, app, stage })
+      const instances = resources.filter(
+        (resource) =>
+          !resource.delete &&
+          resource.type === INSTANCE &&
+          resource.urn.startsWith(`${prefix}${INSTANCE}::`) &&
+          /^Runner(?:-runner-[0-9]+)?$/.test(resource.urn.split('::').at(-1)!),
       )
-      .sort()
-    const recorded = filter?.inclusionLabels?.map(({ labels }) => labelsKey(labels)).sort()
-    if (
-      !policy ||
-      filter?.all ||
-      filter?.exclusionLabels?.length ||
-      filter?.inventories?.length ||
-      JSON.stringify(recorded) !== JSON.stringify(expected)
-    )
-      throw fullDeployment()
-    return policy.urn
-  })
-  // A release-to-build transition needs this grant even when it was absent from the old state.
-  return [...targets, `${prefix}gcp:storage/bucketIAMMember:BucketIAMMember::RunnerArtifactsRead*`]
+      if (instances.length !== fleet.length) throw fullDeployment()
+      for (const slot of fleet) {
+        const instance = existing(INSTANCE, slot.resourceName)
+        if (
+          !instance ||
+          labelsKey(instance.inputs?.labels) !==
+            labelsKey({ 'boxlite-runner': runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': stage })
+        )
+          throw fullDeployment()
+      }
+      const targets = runnerPolicyBatches({ app, stage }, fleet).map((batch) => {
+        const policy = existing(POLICY, batch.resourceName)
+        const filter = policy?.inputs?.instanceFilter
+        const expected = batch.hosts
+          .map((slot) =>
+            labelsKey({ 'boxlite-runner': runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': stage }),
+          )
+          .sort()
+        const recorded = filter?.inclusionLabels?.map(({ labels }) => labelsKey(labels)).sort()
+        if (
+          !policy ||
+          filter?.all ||
+          filter?.exclusionLabels?.length ||
+          filter?.inventories?.length ||
+          JSON.stringify(recorded) !== JSON.stringify(expected)
+        )
+          throw fullDeployment()
+        return policy.urn
+      })
+      // A release-to-build transition needs this grant even when it was absent from the old state.
+      return [...targets, `${prefix}gcp:storage/bucketIAMMember:BucketIAMMember::RunnerArtifactsRead*`]
+    }
+    default: {
+      const unsupported: never = components
+      throw new Error(`Unsupported deployment component: ${unsupported}`)
+    }
+  }
 }
