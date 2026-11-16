@@ -7,6 +7,7 @@ import { useAuth } from 'react-oidc-context'
 import { saveOrganizationSession } from '@/lib/organization-session'
 import { AsciiButton } from '@/components/ascii'
 import { CiOrganizationRecovery } from '@/components/CiAccountPicker'
+import { CiFirstJobGuide } from '@/components/ci/CiFirstJobGuide'
 import { toast } from 'sonner'
 
 export default function CiConnectCallback() {
@@ -96,6 +97,7 @@ export default function CiConnectCallback() {
         ) : result?.status === 'connected' ? (
           <>
             <p role="status">GitHub connected. Listener setup: {result.listener_status}.</p>
+            <CiFirstJobGuide label="Set up a job" primary />
             <AsciiButton
               variant="primary"
               onClick={() => {

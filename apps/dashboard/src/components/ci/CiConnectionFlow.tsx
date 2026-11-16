@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
+import { CiJobSetup } from './CiJobSetup'
 import { toast } from 'sonner'
 import type { CiConnectConfiguration, CiConnectResult } from '@/api/ci-types'
 import { AsciiButton } from '@/components/ascii'
@@ -249,6 +250,12 @@ export function CiConnectionFlow({
           </p>
         )}
       </div>
+      {!id && result?.status === 'connected' && (
+        <div role="status" className="flex flex-wrap items-center gap-3 text-body">
+          <span>GitHub connected. Add a workflow to start running GitHub Actions jobs.</span>
+          <CiJobSetup label="Set up a job" primary />
+        </div>
+      )}
       {!id && discard}
       <Dialog
         open={!!id}

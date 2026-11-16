@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { CiJobSetup } from '@/components/ci/CiJobSetup'
 import { TabIcon } from '@/components/ui/TabIcon'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConnectsPanel } from '@/components/ci/ConnectsPanel'
@@ -25,11 +26,17 @@ export default function CiPage({ tab }: { tab: 'runners' | 'connects' }) {
             <h1 className="font-display text-page font-semibold text-foreground">
               {tab === 'runners' ? 'Runners' : 'Connects'}
             </h1>
-            <p className="mt-2 text-body leading-relaxed text-muted-foreground">
-              {tab === 'runners'
-                ? 'Ephemeral Boxes running your GitHub Actions jobs.'
-                : 'GitHub accounts connected to this organization.'}
-            </p>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-body leading-relaxed text-muted-foreground">
+              <p>
+                {tab === 'runners'
+                  ? 'Ephemeral Boxes running your GitHub Actions jobs.'
+                  : 'GitHub accounts connected to this organization.'}
+              </p>
+              <CiJobSetup
+                key={selectedOrganization.id}
+                label={tab === 'connects' ? 'Run workflows on BoxLite' : 'How to run a job'}
+              />
+            </div>
           </div>
           <TabsList variant="underline" aria-label="CI views" className="md:hidden">
             <TabsTrigger value="runners">

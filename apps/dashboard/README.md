@@ -903,6 +903,42 @@ JIT Boxes and deletable connections for local presentation checks.
 Neither tab has a manual Refresh control. Connects fetches on entry and after
 successful additions/updates/deletions; it does not poll the connection list.
 
+**Run workflows on BoxLite** on Connects and **How to run a job** on Runners follow the page description as an underlined button that opens
+the guide sheet; it wraps below the description on narrow screens. Each Runners empty state
+uses a single title, concise explanation and at most one primary action. Workflow
+steps live in the guide rather than being repeated below a second empty-state heading. Successful browser
+connection offers the same guide for the current BoxLite organization.
+
+The guide shows a compact organization context and an example workflow diff:
+replace `runs-on: ubuntu-latest` with `runs-on: boxlite` on the intended job.
+The filename and job name are labeled as examples. The copy action copies only
+`runs-on: boxlite`, never the diff or placeholder steps. No BoxLite API key is
+needed; existing workflow triggers remain unchanged.
+
+**Try a test workflow** optionally expands a complete manual test with default-branch
+instructions. **Troubleshooting** explains queueing, trigger and execution problems,
+and links to Connects for repository authorization or Runners for capacity.
+The guide has no repository selector or duplicate authorization inventory.
+Connection errors stay local and do not block reading or copying the configuration.
+Copying does not dispatch a job; results and logs remain in GitHub Actions.
+
+In `start:mock`, open the workflow guide next to the CI page description. Use Connects
+to inspect the installed repositories and private repository policy.
+The empty Runners page checks owner-visible connection settings before choosing
+its next step. No connections leads to **Set up GitHub**, which opens Connects in a new tab and preserves the current guide; existing
+connections lead to **Set up a job**, with repository checks still required.
+Loading, permission uncertainty, members without owner access, failed reads
+(including failed refreshes of cached empty data), and disabled CI have distinct
+messages. They never imply that GitHub is connected or disconnected.
+The header guide remains available for reading in every state.
+
+Use `/dashboard/ci?preview=ci-disconnected` for an unconnected account,
+`?preview=ci-connected` for a connected account without active runners,
+`?preview=ci-unknown` for a failed connection lookup, and `?preview=ci-loading`
+for an eight-second lookup. `?preview=ci-empty` also represents no connections.
+The selected fixture persists per tab across navigation. Use `?preview=ci-default`
+to restore the populated demo. These fixtures do not execute GitHub Actions.
+
 Connect GitHub starts dedicated identity OAuth immediately. While requesting the
 authorization URL, the existing button shows its loading state without adding a
 temporary Cancel beside it. Failures release the button for retry, and browser
