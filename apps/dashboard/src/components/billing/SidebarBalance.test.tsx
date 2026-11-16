@@ -5,6 +5,7 @@ import { SidebarBalance } from './SidebarBalance'
 
 const state = vi.hoisted(() => ({
   hasPlan: true,
+  planStatus: 'active',
   role: 'owner',
   configured: true,
   failed: false,
@@ -37,7 +38,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
     isSuccess: state.ready,
     isError: false,
     data: state.hasPlan
-      ? { planName: 'Pro', status: 'active', quotaRemainingCents: state.quota, includedQuotaCents: 25000 }
+      ? { planName: 'Pro', status: state.planStatus, quotaRemainingCents: state.quota, includedQuotaCents: 25000 }
       : null,
   }),
 }))
@@ -54,6 +55,7 @@ beforeEach(() =>
     topUp: false,
     credit: 0,
     hasPlan: true,
+    planStatus: 'active',
     role: 'owner',
     configured: true,
     failed: false,
@@ -64,6 +66,25 @@ beforeEach(() =>
 )
 
 describe('SidebarBalance', () => {
+  it.each([
+    { planStatus: 'active', quota: 0 },
+    { planStatus: 'canceled', quota: 18750 },
+  ])('shows an empty wallet when the $planStatus plan has no usable allowance', (plan) => {
+    Object.assign(state, plan, { balance: 0 })
+    const html = render()
+    expect(html).toContain('Wallet')
+    expect(html).toContain('$0.00')
+    expect(html).toContain('No balance remaining')
+    expect(html).not.toContain('Pro')
+    expect(html).not.toContain('role="meter"')
+  })
+  it('does not describe a canceled plan as spent when the wallet is funded', () => {
+    state.planStatus = 'canceled'
+    const html = render()
+    expect(html).toContain('Wallet')
+    expect(html).toContain('$10.00')
+    expect(html).not.toContain('Plan used up')
+  })
   it('uses the configured automatic reload threshold for wallet warnings', () => {
     Object.assign(state, { hasPlan: false, topUp: true })
     expect(render()).toContain('Below auto-reload threshold')

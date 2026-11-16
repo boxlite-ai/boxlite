@@ -27,13 +27,14 @@ export function SidebarBalance({ expanded }: { expanded: boolean }) {
 
   const failed = wallet.isError || plan.isError
   const ready = wallet.isSuccess && plan.isSuccess && !wallet.isPlaceholderData && !plan.isPlaceholderData
-  const warning = ready ? balanceWarning(wallet.data, plan.data) : null
+  const currentPlan = plan.data?.status === 'canceled' ? null : plan.data
+  const warning = ready ? balanceWarning(wallet.data, currentPlan) : null
   const remaining = plan.data?.quotaRemainingCents
   const total = plan.data?.includedQuotaCents
   const balance = wallet.data?.ongoingBalanceCents ?? 0
-  const hasAllowance = plan.data?.status !== 'canceled' && (remaining === null || (remaining ?? 0) > 0)
+  const hasAllowance = currentPlan && (remaining === null || (remaining ?? 0) > 0)
   // Show the current funding source; a zero wallet beside a funded plan is noise.
-  const showPlan = Boolean(plan.data && balance >= 0 && (hasAllowance || balance === 0))
+  const showPlan = Boolean(balance >= 0 && hasAllowance)
   const heading = ready ? (showPlan ? plan.data!.planName : 'Wallet') : 'Billing'
   const amount = showPlan ? (remaining === null ? 'Unlimited' : formatAmount(remaining ?? 0)) : formatAmount(balance)
   const used = typeof total === 'number' && typeof remaining === 'number' ? Math.max(0, total - remaining) : null
@@ -50,7 +51,7 @@ export function SidebarBalance({ expanded }: { expanded: boolean }) {
           : warning && !showPlan
             ? 'Below auto-reload threshold'
             : null
-  const note = status ?? (ready && !showPlan && plan.data && !hasAllowance ? 'Plan used up · using wallet' : null)
+  const note = status ?? (ready && !showPlan && currentPlan && !hasAllowance ? 'Plan used up · using wallet' : null)
   const attention = ready && warning && (!showPlan || warning.level === 'empty')
 
   if (!expanded)

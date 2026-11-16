@@ -657,7 +657,8 @@ Run `make test:apps:dashboard` for page/client tests and
 The desktop sidebar shows one funding summary above Quickstart: remaining plan
 allowance while funded, otherwise the wallet balance. Subscription-only accounts
 do not see an empty wallet row. When allowance is exhausted and the wallet has
-funds, a short note explains the switch. Overdrawn wallets take priority.
+funds, a short note explains the switch. Exhausted or canceled plans fall back
+to Wallet even when its balance is zero. Overdrawn wallets take priority.
 Unsubscribed accounts show the actual wallet balance, including a new account
 with no funds. The summary does not infer separate promotional credit totals,
 remaining grant amounts, or a registration reward. Finite allowance usage uses the shared
