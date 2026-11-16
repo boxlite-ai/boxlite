@@ -32,7 +32,12 @@ const Keys: React.FC = () => {
   const [loadingKeys, setLoadingKeys] = useState<Record<string, boolean>>({})
   const [filter, setFilter] = useState('')
 
-  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const {
+    selectedOrganization,
+    authenticatedUserOrganizationMember,
+    organizationMembersStatus,
+    refreshOrganizationMembers,
+  } = useSelectedOrganization()
   const revokeApiKeyMutation = useRevokeApiKeyMutation()
   const apiKeysQuery = useApiKeysQuery(selectedOrganization?.id)
   const needle = filter.trim().toLowerCase()
@@ -106,6 +111,12 @@ const Keys: React.FC = () => {
         />
         <div className="flex-1" />
         <CreateApiKeyDialog
+          key={`${selectedOrganization?.id}:${authenticatedUserOrganizationMember?.userId}`}
+          organizationName={selectedOrganization?.name}
+          permissionsStatus={organizationMembersStatus ?? (authenticatedUserOrganizationMember ? 'ready' : 'loading')}
+          onRetryPermissions={async () => {
+            await refreshOrganizationMembers()
+          }}
           availablePermissions={availablePermissions}
           apiUrl={apiUrl}
           organizationId={selectedOrganization?.id}

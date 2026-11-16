@@ -10,7 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import Keys from './Keys'
 
 const mocks = vi.hoisted(() => ({
-  create: vi.fn(async () => ({ value: 'test-key' })),
+  create: vi.fn(async () => ({ value: 'test-key', permissions: ['write:boxes'] })),
   member: { role: 'owner', assignedRoles: [] as { permissions: string[] }[] },
 }))
 
@@ -70,21 +70,20 @@ describe('console member key defaults', () => {
     return (mocks.create.mock.calls[0] as unknown as [{ permissions: string[] }])[0].permissions
   }
 
-  it('includes independent member read and write scopes for an owner', async () => {
+  it('defaults to Box operations for an owner', async () => {
     const permissions = await createKey()
 
-    expect(permissions).toContain('read:members')
-    expect(permissions).toContain('write:members')
+    expect(permissions).toEqual(['write:boxes'])
   })
 
-  it('includes assigned member read for a member but never member write', async () => {
+  it('defaults to Box operations even when member read is available', async () => {
     mocks.member = {
       role: 'member',
       assignedRoles: [{ permissions: ['write:boxes', 'read:members', 'write:members'] }],
     }
     const permissions = await createKey()
 
-    expect(permissions).toContain('read:members')
+    expect(permissions).toEqual(['write:boxes'])
     expect(permissions).not.toContain('write:members')
   })
 

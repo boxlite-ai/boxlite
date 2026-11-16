@@ -49,7 +49,9 @@ async function enterName() {
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
-  mocks.create.mockReset().mockResolvedValue({ value: 'boxlite_test_key' })
+  mocks.create
+    .mockReset()
+    .mockResolvedValue({ value: 'boxlite_test_key', permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES] })
   mocks.writeText.mockReset().mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: mocks.writeText } })
   const host = document.createElement('div')
@@ -80,7 +82,7 @@ describe('CreateApiKeyDialog shared button interactions', () => {
       organizationId: 'org-1',
       name: 'agent-key',
       permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES],
-      expiresAt: null,
+      expiresAt: expect.any(Date),
     })
     expect(button('Creating…').disabled).toBe(true)
     await act(async () => button('Creating…').click())

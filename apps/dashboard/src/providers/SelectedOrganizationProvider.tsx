@@ -23,7 +23,7 @@ import {
   OrganizationUserRoleEnum,
 } from '@boxlite-ai/api-client'
 import { usePostHog } from 'posthog-js/react'
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
@@ -94,17 +94,30 @@ export function SelectedOrganizationProvider(props: Props) {
   // empty list) until members arrive.
   const [organizationMembers, setOrganizationMembers] = useState<OrganizationUser[]>([])
 
+  const [membersLoad, setMembersLoad] = useState<{
+    organizationId: string | null
+    status: 'loading' | 'ready' | 'error'
+  }>({ organizationId: null, status: 'loading' })
+  const currentOrganizationId = useRef(selectedOrganizationId)
+  currentOrganizationId.current = selectedOrganizationId
+  const organizationMembersStatus =
+    membersLoad.organizationId === selectedOrganizationId ? membersLoad.status : 'loading'
+
   useEffect(() => {
     let cancelled = false
+    setMembersLoad({ organizationId: selectedOrganizationId, status: 'loading' })
     getOrganizationMembers(selectedOrganizationId)
       .then((members) => {
         if (!cancelled) {
           setOrganizationMembers(members)
+          setMembersLoad({ organizationId: selectedOrganizationId, status: 'ready' })
         }
       })
       // getOrganizationMembers already surfaces a toast via handleApiError; a
       // members failure must not crash the dashboard (was: error boundary).
-      .catch(() => undefined)
+      .catch(() => {
+        if (!cancelled) setMembersLoad({ organizationId: selectedOrganizationId, status: 'error' })
+      })
     return () => {
       cancelled = true
     }
@@ -112,9 +125,19 @@ export function SelectedOrganizationProvider(props: Props) {
 
   const refreshOrganizationMembers = useCallback(
     async (organizationId?: string) => {
-      const organizationMembers = await getOrganizationMembers(organizationId || selectedOrganizationId)
-      setOrganizationMembers(organizationMembers)
-      return organizationMembers
+      const target = organizationId || selectedOrganizationId
+      setMembersLoad({ organizationId: target, status: 'loading' })
+      try {
+        const members = await getOrganizationMembers(target)
+        if (currentOrganizationId.current === target) {
+          setOrganizationMembers(members)
+          setMembersLoad({ organizationId: target, status: 'ready' })
+        }
+        return members
+      } catch (error) {
+        if (currentOrganizationId.current === target) setMembersLoad({ organizationId: target, status: 'error' })
+        throw error
+      }
     },
     [getOrganizationMembers, selectedOrganizationId],
   )
@@ -173,6 +196,7 @@ export function SelectedOrganizationProvider(props: Props) {
     return {
       selectedOrganization,
       organizationMembers,
+      organizationMembersStatus,
       refreshOrganizationMembers,
       authenticatedUserOrganizationMember,
       authenticatedUserHasPermission,
@@ -181,6 +205,7 @@ export function SelectedOrganizationProvider(props: Props) {
   }, [
     selectedOrganization,
     organizationMembers,
+    organizationMembersStatus,
     authenticatedUserOrganizationMember,
     authenticatedUserHasPermission,
     handleSelectOrganization,
