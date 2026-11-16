@@ -175,7 +175,9 @@ TypeScript types are exported from the package; Go types use the `Agent` prefix.
 
 These records define SDK data types. The [Box OpenAPI contract](../../openapi/box.openapi.yaml) declares agent creation and snapshot reads. With `B = /v1/{prefix}/boxes/{box_id}`, `POST B/agents` creates an agent, `GET B/agents/{agent_id}` reads it, and `GET B/agents/{agent_id}/turns/{turn_id}` reads a turn. An empty prefix removes the segment, as in `/v1/boxes/box_1/agents`.
 
-The agent `Idempotency-Key` is forwarded to the adapter; it must be 1–256 visible ASCII bytes. BoxLite stores no retry results. Adapters advertise retention in `capabilities.idempotency_retention_seconds` and reject unsupported keys. Agent HTTP handlers and REST client support are unavailable.
+The agent `Idempotency-Key` is forwarded to the adapter; it must be 1–256 visible ASCII bytes. BoxLite stores no retry results. Adapters advertise retention in `capabilities.idempotency_retention_seconds` and reject unsupported keys.
+
+Agent HTTP handlers and REST client support are unavailable. The specified agent operations are API-key-only for MCP; OAuth tokens cannot invoke them.
 
 ### Example: handle operation errors
 
