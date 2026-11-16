@@ -366,15 +366,15 @@ export class BoxService {
         // downstream (the runner, the `boxlite-volume-<id>` bucket) reads this
         // field as a global id - see VolumeService.validateVolumes.
         createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
-          const canonicalId = canonical.get(volume.volumeId)
-          if (!canonicalId) {
+          const selected = canonical.get(volume.volumeId)
+          if (!selected) {
             // validateVolumes keys every selector or throws, so this is
             // unreachable today. Fail closed anyway: the alternative fallback
             // is silently persisting the caller's own string, which is exactly
             // the tenant-controlled passthrough the resolution exists to stop.
             throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
           }
-          return { ...volume, volumeId: canonicalId }
+          return { ...volume, volumeId: selected.id }
         })
       } else if (image && !needsFreshBox) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec

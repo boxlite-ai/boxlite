@@ -97,11 +97,13 @@ export class VolumeManager
         return
       }
 
-      const pendingVolumes = await this.volumeRepository.find({
-        where: {
-          state: In([VolumeState.PENDING_CREATE, VolumeState.PENDING_DELETE]),
-        },
-      })
+      const pendingVolumes = (
+        await this.volumeRepository.find({
+          where: {
+            state: In([VolumeState.PENDING_CREATE, VolumeState.PENDING_DELETE]),
+          },
+        })
+      ).filter((volume) => this.bucketStore !== null || isFilestoreVolume(volume))
 
       await Promise.all(
         pendingVolumes.map(async (volume) => {

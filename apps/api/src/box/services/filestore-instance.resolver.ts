@@ -24,6 +24,7 @@ interface FilestoreApiInstance {
 }
 
 export interface FilestoreInstanceLookup {
+  initialize?(): Promise<unknown>
   getInstance(request: { name: string }): Promise<[FilestoreApiInstance, unknown?, unknown?]>
 }
 
@@ -87,7 +88,14 @@ export class FilestoreInstanceResolver {
   ): Promise<ResolvedFilestoreInstance> {
     let instance: FilestoreApiInstance
     try {
-      ;[instance] = await this.lookupClient().getInstance({ name: resourceName })
+      const client = this.lookupClient()
+      try {
+        await client.initialize?.()
+      } catch (error) {
+        if (this.client === client) this.client = undefined
+        throw error
+      }
+      ;[instance] = await client.getInstance({ name: resourceName })
     } catch (error) {
       if (this.isNotFound(error)) {
         throw source === 'request'

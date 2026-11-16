@@ -321,21 +321,24 @@ const runnerDiskExpansionFrom = (environment: Environment): Record<string, strin
   }
 }
 
-const defaultFilestoreInstances = (stage: string) =>
-  JSON.stringify([
-    stage === 'stage'
-      ? { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' }
-      : { instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' },
-  ])
+const defaultFilestoreInstances = (stage: string): string | undefined => {
+  if (stage === 'dev') {
+    return JSON.stringify([{ instance: 'boxlite-dev-shared', project_id: 'boxlite-dev-project', zone: 'us-east5-a' }])
+  }
+  if (stage === 'stage') {
+    return JSON.stringify([
+      { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
+    ])
+  }
+  return undefined
+}
 
-function filestoreProjectsFrom(raw: string | undefined, home: Cloud, stage: string): string[] {
-  if (home !== 'gcp') return []
+function filestoreProjectsFrom(raw: string | undefined, home: Cloud): string[] {
+  if (home !== 'gcp' || !raw) return []
 
-  const effective = raw ?? defaultFilestoreInstances(stage)
-  if (!effective) return []
   let parsed: unknown
   try {
-    parsed = JSON.parse(effective)
+    parsed = JSON.parse(raw)
   } catch {
     throw new ApiEnvironmentError('FILESTORE_INSTANCES must be a JSON array of { instance, project_id, zone } objects')
   }
@@ -399,8 +402,9 @@ export const apiEnvironmentFrom = ({
   }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
   validateCiChannels(values, addresses)
-  const filestoreInstances = environment.FILESTORE_INSTANCES?.trim()
-  const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home, stage)
+  const configuredFilestoreInstances = environment.FILESTORE_INSTANCES?.trim()
+  const filestoreInstances = configuredFilestoreInstances ?? defaultFilestoreInstances(stage)
+  const filestoreProjects = filestoreProjectsFrom(filestoreInstances, home)
   const apiValues =
     home === 'gcp'
       ? values
@@ -450,11 +454,7 @@ export const apiEnvironmentFrom = ({
        */
       ...(home === 'gcp' ? { VOLUME_STORAGE_BACKEND: 'gcs', GCS_LOCATION: region } : {}),
       FILESTORE_SUPPORTED: 'false',
-      ...(home === 'gcp'
-        ? filestoreInstances === undefined
-          ? { FILESTORE_INSTANCES: defaultFilestoreInstances(stage) }
-          : { FILESTORE_INSTANCES: filestoreInstances }
-        : {}),
+      ...(home === 'gcp' && filestoreInstances !== undefined ? { FILESTORE_INSTANCES: filestoreInstances } : {}),
       // On unless the stage says otherwise, and it says so through the api
       // group's own `OTEL_ENABLED`, which `...values` below lets win. There is
       // no second switch: an inverted one read here would come from whatever

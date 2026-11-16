@@ -22,6 +22,8 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { Volume } from '../entities/volume.entity'
+import { VolumeState } from '../enums/volume-state.enum'
 
 /** Records every reason as it came, which is what a failure it cannot explain gets. */
 const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
@@ -527,6 +529,32 @@ describe('BoxService inbound defaults', () => {
     )
     expect(boxRepository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ image: 'quay.io/acme/app@sha256:resolved' }),
+      undefined,
+    )
+  })
+
+  it('persists the resolved volume id when a ready volume is selected by name', async () => {
+    const volume = Object.assign(new Volume(), {
+      id: '09f81aef-69a3-488b-b872-e193831549f3',
+      name: 'shared-data',
+      state: VolumeState.READY,
+    })
+    const validateVolumes = jest.fn().mockResolvedValue(new Map([['shared-data', volume]]))
+    const { service, boxRepository } = makeCreateService({ volumeService: { validateVolumes } })
+
+    await service.create(
+      {
+        name: 'volume-box',
+        image: 'quay.io/acme/app:v1',
+        volumes: [{ volumeId: 'shared-data', mountPath: '/data' }],
+      } as any,
+      { id: 'org-1' } as any,
+      Context.user(),
+    )
+
+    expect(validateVolumes).toHaveBeenCalledWith('org-1', ['shared-data'])
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ volumes: [{ volumeId: volume.id, mountPath: '/data' }] }),
       undefined,
     )
   })

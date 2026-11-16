@@ -31,8 +31,9 @@ to cloud authorization.
 `FILESTORE_INSTANCES` names the logical instances the API may select or resolve. On GCP,
 mdeploy:
 
-1. Parses `FILESTORE_INSTANCES` in `apiEnvironmentFrom`. Unset uses the environment's default,
-   explicit whitespace disables Filestore, and each nonempty entry must carry `project_id`.
+1. Parses `FILESTORE_INSTANCES` in `apiEnvironmentFrom`. Unset uses the built-in placement only on
+   `dev` and `stage`; other stages omit it unless configured explicitly. Explicit whitespace disables
+   Filestore, and each nonempty entry must carry `project_id`.
 2. Deduplicates and sorts the configured `project_id` values.
 3. Adds `read-filestore-instances` as the final capability only when that project list is nonempty.
 4. Creates one project IAM binding per configured project for the API runtime identity. The role is
@@ -64,9 +65,10 @@ Check the pipeline in this order:
    each project.
 4. `file.googleapis.com` is enabled and IAM policy has propagated.
 
-An API container's ephemeral address is not part of this check. A generic "Could not look up
-Filestore instance" response wraps a non-not-found control-plane failure; inspect the API log's
-`filestore_lookup_failed` event for the GCP code and message.
+An API container's ephemeral address is not part of this check. A "Could not look up Filestore
+instance" response for a non-not-found control-plane failure includes the GCP status name and
+error message. The API log's `filestore_lookup_failed` event also records the numeric GCP code and
+raw error message.
 
 Manual grants are emergency recovery actions. If a binding was already created manually before the
 stack managed it, import it into stack state or remove it before applying; otherwise the provider

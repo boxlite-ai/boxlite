@@ -229,7 +229,9 @@ capability wiring. Restoring the implementation produced 105/105 focused tests,
 No live GCP request was run for this slice either.
 
 Roll out infrastructure before or with the API image, then verify against the
-real stage:
+real stage. Steps 2 and 3 require the box-runtime slice to enable
+`FILESTORE_SUPPORTED` on the stage API; while it is `false`, a create returns
+HTTP 501. Defer those steps until that slice is deployed:
 
 1. Confirm `file.googleapis.com` is enabled in the stage project and the API
    runtime service account has `roles/file.viewer` in each configured project.

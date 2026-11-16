@@ -359,6 +359,16 @@ test('GCP materializes the default Filestore placement and derives its project',
     { instance: 'boxlite-filestore-stage', project_id: 'boxlite-dev-project', zone: 'us-east4-a' },
   ])
 
+  const production = apiEnvironmentFrom({
+    environment: { ...base, FILESTORE_INSTANCES: undefined },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'production',
+    home: 'gcp',
+  })
+  assert.equal(Object.hasOwn(production.environment, 'FILESTORE_INSTANCES'), false)
+  assert.deepEqual(production.filestoreProjects, [])
+
   const disabled = apiEnvironmentFrom({
     environment: { ...base, FILESTORE_INSTANCES: '   ' },
     declaration: groups([]),

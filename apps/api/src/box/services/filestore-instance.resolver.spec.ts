@@ -139,16 +139,45 @@ describe('FilestoreInstanceResolver', () => {
     await expect(resolver.resolve('ml-scratch', 'request')).resolves.toEqual({ server: '10.0.0.7', export: '/vol1' })
   })
 
+  it('maps initialization failure to 503 and retries with a fresh client', async () => {
+    const credentialFailure = new Error('Application Default Credentials unavailable')
+    const failedClient = {
+      initialize: jest.fn().mockRejectedValue(credentialFailure),
+      getInstance: jest.fn(),
+    }
+    const readyClient = {
+      initialize: jest.fn().mockResolvedValue({}),
+      getInstance: jest.fn().mockResolvedValue([readyInstance]),
+    }
+    const clientFactory = jest.fn().mockReturnValueOnce(failedClient).mockReturnValueOnce(readyClient)
+    const configService = { getOrThrow: jest.fn().mockReturnValue(config) }
+    const resolver = new FilestoreInstanceResolver(configService as never, clientFactory)
+
+    await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toMatchObject({
+      response: { statusCode: 503 },
+      cause: credentialFailure,
+    })
+    expect(failedClient.getInstance).not.toHaveBeenCalled()
+
+    await expect(resolver.resolve('ml-scratch', 'configured')).resolves.toEqual({
+      server: '10.0.0.7',
+      export: '/vol1',
+    })
+    expect(clientFactory).toHaveBeenCalledTimes(2)
+  })
+
   it('does not cache failed lookups', async () => {
     const getInstance = jest.fn().mockRejectedValue(new Error('transient GCP outage'))
-    const { resolver } = createResolver(getInstance)
+    const { resolver, clientFactory } = createResolver(getInstance)
 
     await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toThrow('Could not look up')
     await expect(resolver.resolve('ml-scratch', 'configured')).rejects.toThrow('Could not look up')
 
     // A failed lookup must reach the API again: caching the failure would pin
-    // a transient outage into the 60s cache window.
+    // a transient outage into the 60s cache window. Request failures retain
+    // the initialized client and its gRPC channel.
     expect(getInstance).toHaveBeenCalledTimes(2)
+    expect(clientFactory).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an instance exposing multiple file shares', async () => {

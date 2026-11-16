@@ -90,6 +90,32 @@ describe('VolumeManager S3 client setup', () => {
   })
 })
 
+describe('VolumeManager pending volume selection', () => {
+  it('leaves object-storage rows pending when this instance has no bucket store', async () => {
+    const objectStorage = { id: 'object-1', state: VolumeState.PENDING_DELETE }
+    const filestore = { id: 'filestore-1', state: VolumeState.PENDING_DELETE, instance: 'ml-scratch' }
+    const volumeRepository = { find: jest.fn().mockResolvedValue([objectStorage, filestore]) }
+    const configService = { get: jest.fn().mockReturnValue(undefined) }
+    const redisLockProvider = {
+      lock: jest.fn().mockResolvedValue(true),
+      unlock: jest.fn().mockResolvedValue(undefined),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      configService as any,
+      {} as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+    const processVolumeState = jest.spyOn(manager as any, 'processVolumeState').mockResolvedValue(undefined)
+
+    await manager.processPendingVolumes()
+
+    expect(processVolumeState).toHaveBeenCalledTimes(1)
+    expect(processVolumeState).toHaveBeenCalledWith(filestore)
+  })
+})
+
 describe('VolumeManager filestore volume deletion', () => {
   function buildManagerForDeletion() {
     const configService = {
@@ -124,11 +150,14 @@ describe('VolumeManager filestore volume deletion', () => {
 
     await (manager as any).handlePendingDelete(volume, 'lock-key')
 
-    expect(volumeRepository.save).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      id: 'volume-1',
-      state: VolumeState.DELETED,
-      name: 'nfs-data-deleted',
-    }))
+    expect(volumeRepository.save).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        id: 'volume-1',
+        state: VolumeState.DELETED,
+        name: 'nfs-data-deleted',
+      }),
+    )
     expect(volumeRepository.delete).toHaveBeenCalledWith({
       organizationId: 'org-1',
       name: 'nfs-data-deleted',

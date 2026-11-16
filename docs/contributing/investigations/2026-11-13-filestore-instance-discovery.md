@@ -250,9 +250,10 @@ more broadly. Deploying only the API image does not reconcile these prerequisite
 how deployment reconciles that read access and the Filestore API, and how lookup failures
 retain their GCP cause.
 
-No database migration is required because `Volume.instance` already exists. Volumes
-created by the current branch contain instance names that this resolver can continue to
-look up, provided those names are real GCP instance IDs. If a stored name was only a
+The `1792000000000-volume-instance-column-migration.ts` pre-deploy migration adds the nullable
+`volume.instance` column with no backfill and must run before the API rollout. Volumes created by
+the current branch contain instance names that this resolver can continue to look up, provided
+those names are real GCP instance IDs. If a stored name was only a
 local alias and not a GCP instance ID, that row must be corrected before the new dispatch
 path ships.
 

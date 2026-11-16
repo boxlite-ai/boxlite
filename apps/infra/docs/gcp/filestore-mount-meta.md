@@ -1,6 +1,6 @@
 # Runbook: query Filestore mount metadata on a GCP VM
 
-[Infrastructure index](../README.md)
+[Infrastructure index](../../README.md)
 
 Use this when a GCE VM has a Filestore share mounted and you need to answer,
 quickly and in order: **what is mounted, how it got there, what it points at,
