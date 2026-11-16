@@ -77,11 +77,15 @@ async function mount(path = '/logout', child = <Logout />) {
 
 describe('account exit regression', () => {
   it('clears the local identity and cached resources before provider logout, once in StrictMode', async () => {
+    let removalsAtRedirect = 0
+    let cachedBoxesAtRedirect: unknown = 'redirect not started'
     auth.signoutRedirect.mockImplementation(async () => {
-      expect(auth.removeUser).toHaveBeenCalledTimes(1)
-      expect(client.getQueryData(['boxes'])).toBeUndefined()
+      removalsAtRedirect = auth.removeUser.mock.calls.length
+      cachedBoxesAtRedirect = client.getQueryData(['boxes'])
     })
     await mount()
+    expect(removalsAtRedirect).toBe(1)
+    expect(cachedBoxesAtRedirect).toBeUndefined()
     expect(auth.signoutRedirect).toHaveBeenCalledTimes(1)
     expect(auth.signoutRedirect).toHaveBeenCalledWith({ id_token_hint: 'id-token-hint' })
   })

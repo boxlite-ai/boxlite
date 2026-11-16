@@ -1245,6 +1245,11 @@ retry without claiming success. If provider logout fails after local clear, it
 reports that BoxLite is signed out and offers account choice. Browser Back never
 replays an account-switch URL. No global Google/GitHub logout is requested.
 
+Authentication-error recovery preserves the full local destination, including query
+parameters and fragments, even without saved intent. For example, an invitation
+link retains its invitation ID after retrying sign-in. The destination still passes
+through the same local-route validation.
+
 Interactive intent is stored per tab until a successful callback. Read operations
 do not consume it, and unsuccessful redirects retain a usable Sign in
 button. Sign in uses ordinary provider authentication. Use another account requests `prompt=login`; account switching is optional rather than a mandatory step. Cancelling returns quietly to manual entry. Only local Console return destinations are accepted; the GitHub recovery route

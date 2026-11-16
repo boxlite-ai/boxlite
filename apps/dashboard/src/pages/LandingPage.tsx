@@ -19,7 +19,9 @@ const LandingPage: React.FC = () => {
   const [failure, setFailure] = useState(false)
   const errorCode = (error?.innerError as { error?: string } | undefined)?.error
   const cancelled = errorCode === 'access_denied'
-  const returnTo = safeReturnTo(location.state?.returnTo ?? intent?.returnTo ?? location.pathname)
+  const returnTo = safeReturnTo(
+    location.state?.returnTo ?? intent?.returnTo ?? location.pathname + location.search + location.hash,
+  )
 
   const signIn = useCallback(
     async (chooseAccount = true) => {

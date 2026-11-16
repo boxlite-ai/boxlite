@@ -36,9 +36,9 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
 })
-const mount = async (strict = false) => {
+const mount = async (strict = false, path = '/') => {
   const page = (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <LandingPage />
     </MemoryRouter>
   )
@@ -105,6 +105,14 @@ describe('account entry refinement', () => {
 })
 
 describe('account entry recovery coverage', () => {
+  it('preserves the full destination when recovering from an authentication error', async () => {
+    const destination = '/dashboard/user/invitations?id=inv-123#accept'
+    auth.error = { innerError: { error: 'login_required' } }
+    await mount(false, destination)
+    expect(auth.signinRedirect).not.toHaveBeenCalled()
+    await click()
+    expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnTo: destination } })
+  })
   it('recovers when the redirect rejects and permits a retry', async () => {
     markJustLoggedOut()
     auth.signinRedirect.mockRejectedValueOnce(new Error('offline'))
@@ -118,11 +126,13 @@ describe('account entry recovery coverage', () => {
   it('clears a stale identity before opening hosted authentication', async () => {
     markJustLoggedOut()
     auth.user = { profile: { sub: 'old-user' } }
+    let removalsAtRedirect = 0
     auth.signinRedirect.mockImplementation(async () => {
-      expect(auth.removeUser).toHaveBeenCalledTimes(1)
+      removalsAtRedirect = auth.removeUser.mock.calls.length
     })
     await mount()
     await click()
+    expect(removalsAtRedirect).toBe(1)
     expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
   })
   it('keeps actions disabled while checking the session', async () => {
