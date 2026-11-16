@@ -25,6 +25,8 @@ type RunnerHealthcheck struct {
 	NestedVirtualizationEnabled *bool `json:"nestedVirtualizationEnabled,omitempty"`
 	// Runner preserves the guest privileged creation option
 	SupportsPrivileged *bool `json:"supportsPrivileged,omitempty"`
+	// Capabilities the runner binary supports (e.g. \"filestore\"). Absent from runners predating capability reporting, which the API treats as supporting none of them
+	Capabilities []string `json:"capabilities,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
@@ -124,6 +126,38 @@ func (o *RunnerHealthcheck) HasSupportsPrivileged() bool {
 // SetSupportsPrivileged gets a reference to the given bool and assigns it to the SupportsPrivileged field.
 func (o *RunnerHealthcheck) SetSupportsPrivileged(v bool) {
 	o.SupportsPrivileged = &v
+}
+
+// GetCapabilities returns the Capabilities field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetCapabilities() []string {
+	if o == nil || IsNil(o.Capabilities) {
+		var ret []string
+		return ret
+	}
+	return o.Capabilities
+}
+
+// GetCapabilitiesOk returns a tuple with the Capabilities field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetCapabilitiesOk() ([]string, bool) {
+	if o == nil || IsNil(o.Capabilities) {
+		return nil, false
+	}
+	return o.Capabilities, true
+}
+
+// HasCapabilities returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasCapabilities() bool {
+	if o != nil && !IsNil(o.Capabilities) {
+		return true
+	}
+
+	return false
+}
+
+// SetCapabilities gets a reference to the given []string and assigns it to the Capabilities field.
+func (o *RunnerHealthcheck) SetCapabilities(v []string) {
+	o.Capabilities = v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.
@@ -358,6 +392,9 @@ func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.SupportsPrivileged) {
 		toSerialize["supportsPrivileged"] = o.SupportsPrivileged
 	}
+	if !IsNil(o.Capabilities) {
+		toSerialize["capabilities"] = o.Capabilities
+	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
@@ -422,6 +459,7 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "nestedVirtualizationEnabled")
 		delete(additionalProperties, "supportsPrivileged")
+		delete(additionalProperties, "capabilities")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
 		delete(additionalProperties, "dataDiskRef")
