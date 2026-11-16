@@ -19,6 +19,7 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerState } from '../enums/runner-state.enum'
+import { boxVolumeForDispatch } from '../utils/box-volume.util'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -125,6 +126,65 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
+  // A filestore volume needs runner-side NFS mount support. apiVersion 2 alone
+  // does not imply it: v2 predates filestore, so an un-upgraded v2 runner
+  // drops the filestore reference and mounts a bucket that does not exist.
+  // The runner declares the capability in its healthcheck; refusing here —
+  // instead of dispatching — keeps the failure at the API with the real
+  // cause instead of a misleading bucket error on the runner.
+  private async assertFilestoreVolumeSupport(box: Box): Promise<void> {
+    if (!box.volumes?.some((volume) => volume.filestore)) return
+
+    // Runner lookup caching is local to an API replica. Read the declaration
+    // again so a heartbeat received by another replica cannot leave this one
+    // rejecting a capable runner from an hour-old snapshot.
+    const runner = await this.runnerRepository.findOne({ where: { id: this.runner.id }, cache: false })
+    if (runner?.capabilities?.includes('filestore')) return
+
+    const filestoreVolumes = box.volumes?.filter((volume) => volume.filestore) ?? []
+    const lastChecked = runner?.lastChecked
+    const lastHealthcheckAgeSeconds = lastChecked
+      ? Math.max(0, Math.floor((Date.now() - lastChecked.getTime()) / 1000))
+      : undefined
+    const diagnostics = [
+      `runnerRecordFound=${runner !== null}`,
+      `runnerState=${runner?.state ?? 'unknown'}`,
+      `apiVersion=${runner?.apiVersion ?? 'unknown'}`,
+      `appVersion=${runner?.appVersion ?? 'unknown'}`,
+      `capabilities=${JSON.stringify(runner?.capabilities ?? [])}`,
+      `volumeIds=${JSON.stringify(filestoreVolumes.map((volume) => volume.volumeId))}`,
+      `filestoreInstances=${JSON.stringify(filestoreVolumes.map((volume) => volume.filestore?.instance ?? 'unknown'))}`,
+      `lastChecked=${lastChecked?.toISOString() ?? 'never'}`,
+      ...(lastHealthcheckAgeSeconds === undefined ? [] : [`lastHealthcheckAgeSeconds=${lastHealthcheckAgeSeconds}`]),
+    ].join('; ')
+    const error = Object.assign(
+      new Error(
+        `FILESTORE_CAPABILITY_MISSING: Box ${box.id} requires a runner with the filestore capability, but runner ${this.runner.id} has not declared it (${diagnostics}). No CREATE_BOX job was dispatched. If the healthcheck is recent, inspect why the running binary omitted filestore; otherwise inspect healthcheck delivery to the API.`,
+      ),
+      { code: 'FILESTORE_CAPABILITY_MISSING' },
+    )
+    this.logger.error(
+      {
+        event: 'box.create.dispatch_rejected',
+        boxId: box.id,
+        runnerId: this.runner.id,
+        runnerRecordFound: runner !== null,
+        runnerState: runner?.state,
+        runnerApiVersion: runner?.apiVersion,
+        runnerAppVersion: runner?.appVersion,
+        runnerCapabilities: runner?.capabilities ?? [],
+        volumeIds: filestoreVolumes.map((volume) => volume.volumeId),
+        filestoreInstances: filestoreVolumes.map((volume) => volume.filestore?.instance ?? 'unknown'),
+        runnerLastChecked: lastChecked,
+        lastHealthcheckAgeSeconds,
+        code: error.code,
+        err: error,
+      },
+      'Filestore Box dispatch rejected',
+    )
+    throw error
+  }
+
   async createBox(
     box: Box,
     image: string,
@@ -138,6 +198,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
+
+    await this.assertFilestoreVolumeSupport(box)
     const payload = {
       id: box.id,
       ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
@@ -153,11 +215,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,
-      volumes: box.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: box.volumes?.map(boxVolumeForDispatch),
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,
         value: secret.value,

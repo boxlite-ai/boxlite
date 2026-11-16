@@ -4,7 +4,10 @@
  */
 
 import { JobType } from '../enums/job-type.enum'
+import { BoxState } from '../enums/box-state.enum'
 import { ResourceType } from '../enums/resource-type.enum'
+import { BoxStateWaiterService } from '../services/box-state-waiter.service'
+import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
 
 describe('RunnerAdapterV2 createBox', () => {
@@ -50,6 +53,168 @@ describe('RunnerAdapterV2 createBox', () => {
       'does not support privileged',
     )
     expect(jobService.createJob).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, [], ['gpu-passthrough']])(
+    'rejects a filestore volume create when the runner declared capabilities %p',
+    async (capabilities) => {
+      const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+      const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+      Object.assign(adapter as any, {
+        runnerRepository: { findOne: jest.fn().mockResolvedValue({ id: 'runner-1', capabilities }) },
+      })
+      await adapter.init({ id: 'runner-1', capabilities } as any)
+
+      await expect(
+        adapter.createBox(
+          {
+            id: 'box-1',
+            volumes: [
+              {
+                volumeId: 'vol-1',
+                mountPath: '/data',
+                filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+              },
+            ],
+          } as any,
+          'base',
+        ),
+      ).rejects.toThrow('requires a runner with the filestore capability')
+      expect(jobService.createJob).not.toHaveBeenCalled()
+    },
+  )
+
+  it('uses the latest persisted capability instead of a stale scheduling snapshot', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const runnerRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 'runner-1', capabilities: ['filestore'] }),
+    }
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter as any, { runnerRepository })
+    await adapter.init({ id: 'runner-1', capabilities: null } as any)
+
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        volumes: [
+          {
+            volumeId: 'vol-1',
+            mountPath: '/data',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          },
+        ],
+      } as any,
+      'base',
+    )
+
+    expect(runnerRepository.findOne).toHaveBeenCalledWith({ where: { id: 'runner-1' }, cache: false })
+    expect(jobService.createJob).toHaveBeenCalled()
+  })
+
+  it('returns capability diagnostics through the new-Box error response', async () => {
+    const lastChecked = new Date('2026-11-14T02:00:00Z')
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter as any, {
+      runnerRepository: {
+        findOne: jest.fn().mockResolvedValue({
+          id: 'runner-1',
+          state: 'ready',
+          apiVersion: '2',
+          appVersion: '0.13.1+abc123',
+          capabilities: ['gpu-passthrough'],
+          lastChecked,
+        }),
+      },
+    })
+    await adapter.init({ id: 'runner-1', capabilities: null } as any)
+
+    const failure = await adapter
+      .createBox(
+        {
+          id: 'box-1',
+          volumes: [
+            {
+              volumeId: 'vol-1',
+              mountPath: '/data',
+              filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+            },
+          ],
+        } as any,
+        'base',
+      )
+      .catch((error) => error)
+    const { errorReason } = sanitizeBoxError(failure)
+    const subscriber = { on: jest.fn(), subscribe: jest.fn().mockResolvedValue(undefined) }
+    const waiter = new BoxStateWaiterService(
+      {
+        findOneByIdOrName: jest.fn().mockResolvedValue({
+          id: 'box-1',
+          state: BoxState.ERROR,
+          errorReason,
+        }),
+      } as any,
+      { duplicate: jest.fn(() => subscriber) } as any,
+    )
+
+    const response = await waiter.waitForStarted('box-1', 'org-1', 1).catch((error) => error)
+    const body = response.getResponse()
+    expect(body).toMatchObject({ boxId: 'box-1', code: 'BOX_STATE_TRANSITION_FAILED' })
+    for (const detail of [
+      'runnerRecordFound=true',
+      'runnerState=ready',
+      'apiVersion=2',
+      'appVersion=0.13.1+abc123',
+      'capabilities=["gpu-passthrough"]',
+      'volumeIds=["vol-1"]',
+      'filestoreInstances=["ml-scratch"]',
+      `lastChecked=${lastChecked.toISOString()}`,
+      'lastHealthcheckAgeSeconds=',
+      'No CREATE_BOX job was dispatched',
+      'FILESTORE_CAPABILITY_MISSING',
+    ]) {
+      expect(body.message).toContain(detail)
+    }
+    expect(jobService.createJob).not.toHaveBeenCalled()
+  })
+
+  it('dispatches a filestore volume when the runner declared the capability', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter as any, {
+      runnerRepository: { findOne: jest.fn().mockResolvedValue({ id: 'runner-1', capabilities: ['filestore'] }) },
+    })
+    await adapter.init({ id: 'runner-1', capabilities: ['filestore'] } as any)
+
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        volumes: [
+          {
+            volumeId: 'vol-1',
+            mountPath: '/data',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          },
+        ],
+      } as any,
+      'base',
+    )
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({
+        volumes: [
+          expect.objectContaining({
+            volumeId: 'vol-1',
+            filestore: { instance: 'ml-scratch', server: '10.0.0.7', export: '/vol1' },
+          }),
+        ],
+      }),
+    )
   })
 
   it('passes secrets through to the CREATE_BOX job payload', async () => {

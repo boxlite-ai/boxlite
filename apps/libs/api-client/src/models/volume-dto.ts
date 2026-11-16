@@ -35,6 +35,14 @@ export interface VolumeDto {
      */
     'state': VolumeState;
     /**
+     * The storage backend that owns the volume
+     */
+    'storageBackend': VolumeDtoStorageBackendEnum;
+    /**
+     * Filestore instance name; filestore volumes only
+     */
+    'instance'?: string;
+    /**
      * Creation timestamp
      */
     'createdAt': string;
@@ -52,5 +60,12 @@ export interface VolumeDto {
     'errorReason': string | null;
 }
 
+export const VolumeDtoStorageBackendEnum = {
+    OBJECT_STORAGE: 'object_storage',
+    FILESTORE: 'filestore',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type VolumeDtoStorageBackendEnum = typeof VolumeDtoStorageBackendEnum[keyof typeof VolumeDtoStorageBackendEnum];
 
 
