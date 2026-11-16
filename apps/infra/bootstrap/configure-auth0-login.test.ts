@@ -91,3 +91,21 @@ test('login-policy preview is not gated on the scopes only apply writes with', (
   assert.doesNotMatch(previewed.stderr, /scope\(s\) apply writes with/)
   assert.equal(previewed.reachedAuth0, true)
 })
+
+test('login-policy validates allowed domains loaded from .env before contacting Auth0', () => {
+  const { home, invocations, binDirectory } = harness([])
+  try {
+    writeFileSync(join(home, '.env'), 'OIDC_INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS=*.example.com\n')
+    const environment: NodeJS.ProcessEnv = { ...process.env, OIDC_AUDIENCE: 'https://api.example.test/api', HOME: home, PATH: `${binDirectory}:${process.env.PATH ?? ''}` }
+    delete environment.OIDC_INTERNAL_ACCESS_ALLOWED_EMAIL_DOMAINS
+    const result = spawnSync(join(infraRoot, 'node_modules/.bin/tsx'), [
+      join(infraRoot, ENTRYPOINT), '--tenant', TENANT, '--client-id', 'spa_123', '--connection', 'boxlite-users',
+      '--api-audience', 'https://api.example.test/api',
+    ], { cwd: home, encoding: 'utf8', env: environment })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /exact DNS domains/)
+    assert.equal(existsSync(invocations), false)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

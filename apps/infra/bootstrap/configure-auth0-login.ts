@@ -42,9 +42,9 @@ try {
       ),
     )
   } else {
-    const options = parseAuth0LoginPolicyOptions(process.argv.slice(2))
-    // The stage's .env names the audience its API validates; an exported value wins.
+    // Load the stage's audience and domain defaults before parsing; exported values win.
     loadDeploymentEnvironment()
+    const options = parseAuth0LoginPolicyOptions(process.argv.slice(2))
     assertStageApiAudience(options.apiAudience ?? '')
     // Checked here rather than in the configurator: the session belongs to the
     // CLI client this entrypoint chose. Apply only — preview writes nothing, so

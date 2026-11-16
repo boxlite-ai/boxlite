@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { runInNewContext } from 'node:vm'
+import { runAction } from './tests/action-harness.js'
 
 import {
   Auth0CliManagementClient,
@@ -1097,7 +1097,7 @@ function loadAction(
     apiAudience,
   })
   const exports: Record<string, ActionHandler> = {}
-  runInNewContext(source, { exports, ...context })
+  runAction(source, new URL('./auth0/login-policy.js', import.meta.url), { exports, ...context })
   return exports as { onExecutePostLogin: ActionHandler; onContinuePostLogin: ActionHandler }
 }
 

@@ -11,7 +11,7 @@ const SHA = 'a'.repeat(40)
 const DIGEST = 'b'.repeat(64)
 
 const declaration: GroupDeclaration = {
-  groups: { deploy: [], api: ['OIDC_CLIENT_ID'], proxy: ['PROXY_API_KEY'], 'otel-collector': [], runner: [] },
+  groups: { deploy: [], api: ['OIDC_CLIENT_ID', 'OIDC_MANAGEMENT_API_CLIENT_ID', 'OIDC_MANAGEMENT_API_CLIENT_SECRET'], proxy: ['PROXY_API_KEY'], 'otel-collector': [], runner: [] },
   where: '/repo/mstage.config.json',
 }
 
@@ -22,6 +22,10 @@ const complete = {
   CLOUDFLARE_ZONE_ID: 'zone-1',
   OIDC_ISSUER_BASE_URL: 'https://auth.dev.boxlite.ai',
   OIDC_CLIENT_ID: 'client-1',
+  OIDC_MANAGEMENT_API_ENABLED: 'true',
+  OIDC_MANAGEMENT_API_AUDIENCE: 'https://auth.dev.boxlite.ai/api/v2/',
+  OIDC_MANAGEMENT_API_CLIENT_ID: 'fixture-client',
+  OIDC_MANAGEMENT_API_CLIENT_SECRET: 'fixture-secret',
   PROXY_API_KEY: 'proxy-key',
 }
 
