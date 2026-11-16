@@ -6,13 +6,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
-import { Link } from 'react-router-dom'
 import { RegistrationEmailError, RegistrationError } from '@/api/errors'
-import { LogoText } from '@/assets/Logo'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
-import { RoutePath } from '@/enums/RoutePath'
-import LoadingFallback from './LoadingFallback'
+import { SetupLayout, SetupPending } from './SetupLayout'
 import { Turnstile } from './Turnstile'
 import { Button } from './ui/button'
 
@@ -75,18 +72,19 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   if (account.error instanceof RegistrationEmailError) throw account.error
   // Background revalidation must not tear down live terminals for an admitted identity.
   if (admitted && !needsRegistration) return children
-  if (!account.isFetchedAfterMount || account.isPending || account.isFetching) return <LoadingFallback />
+  if (!account.isFetchedAfterMount || account.isPending || account.isFetching)
+    return <SetupPending title={submitting ? 'Confirming your account' : 'Checking account'} />
   if (account.isSuccess) return children
 
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-6 px-6 text-center">
-      <LogoText className="h-9 w-auto" />
-      <h1 className="text-section font-semibold">Complete your account</h1>
-      <p className="max-w-md text-body text-muted-foreground">
-        {needsRegistration
-          ? 'Verify you are human to start using BoxLite.'
-          : 'Registration is temporarily unavailable. Please try again.'}
-      </p>
+    <SetupLayout
+      title={needsRegistration ? 'Verify your account' : 'Let’s try that again'}
+      description={
+        needsRegistration
+          ? 'Complete the security check to create your BoxLite account. Next, we’ll help you set up your organization.'
+          : 'We couldn’t confirm your account. Try again to continue.'
+      }
+    >
       {message && (
         <p role="alert" className="max-w-md text-body text-destructive">
           {message}
@@ -95,8 +93,8 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
       {needsRegistration ? (
         <>
           <Turnstile key={challenge} {...turnstile} onToken={setToken} />
-          <Button onClick={() => void register()} disabled={!token || submitting}>
-            {submitting ? 'Creating account…' : 'Continue'}
+          <Button className="mt-6 h-10 w-full" onClick={() => void register()} disabled={!token || submitting}>
+            {submitting ? 'Creating account…' : 'Create account'}
           </Button>
         </>
       ) : (
@@ -104,9 +102,6 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
           Try again
         </Button>
       )}
-      <Link to={RoutePath.LOGOUT} className="text-body underline underline-offset-4">
-        Sign out
-      </Link>
-    </main>
+    </SetupLayout>
   )
 }

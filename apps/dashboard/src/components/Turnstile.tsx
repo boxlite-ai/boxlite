@@ -4,9 +4,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { useTheme } from '@/contexts/ThemeContext'
 import { Button } from '@/components/ui/button'
 
 type WidgetOptions = {
+  theme: 'light' | 'dark'
+  size: 'flexible'
   sitekey: string
   action: string
   callback: (token: string) => void
@@ -70,6 +73,7 @@ export function Turnstile({
   action: string
   onToken: (token: string | null) => void
 }) {
+  const { resolvedTheme } = useTheme()
   const container = useRef<HTMLDivElement>(null)
   const [attempt, setAttempt] = useState(0)
   const [error, setError] = useState('')
@@ -91,6 +95,8 @@ export function Turnstile({
           if (widgetId !== undefined) api?.reset(widgetId)
         }
         widgetId = api.render(container.current, {
+          theme: resolvedTheme,
+          size: 'flexible',
           sitekey,
           action,
           callback: (token) => {
@@ -122,10 +128,10 @@ export function Turnstile({
       onToken(null)
       if (widgetId !== undefined) api?.remove(widgetId)
     }
-  }, [sitekey, action, onToken, attempt])
+  }, [sitekey, action, onToken, attempt, resolvedTheme])
 
   return (
-    <div className="space-y-3">
+    <div className="min-h-[90px] space-y-3">
       {loading && (
         <p role="status" className="text-body text-muted-foreground">
           Loading verification…

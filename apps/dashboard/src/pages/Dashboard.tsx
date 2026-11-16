@@ -6,7 +6,8 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
-import { LogoText } from '@/assets/Logo'
+import { SetupHeader } from '@/components/SetupLayout'
+import { OnboardingEntryGate } from '@/components/OnboardingEntryGate'
 import { RoutePath } from '@/enums/RoutePath'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -96,7 +97,7 @@ const Dashboard: React.FC = () => {
     <div
       className={cn(
         'relative w-full [--app-banner-height:0px] [--app-header-height:60px] [--app-content-height:calc(100svh_-_var(--app-header-height)_-_var(--app-banner-height))]',
-        '[--app-header-height:64px] md:[--app-header-height:64px]',
+        !isWelcome && '[--app-header-height:64px] md:[--app-header-height:64px]',
         isBannerVisible && 'pt-16 [--app-banner-height:4rem] md:pt-12 md:[--app-banner-height:3rem]',
       )}
     >
@@ -107,10 +108,7 @@ const Dashboard: React.FC = () => {
         <>
           {isWelcome ? (
             <>
-              <header className="flex h-[60px] items-center justify-between border-b border-border px-6 sm:px-10">
-                <LogoText className="h-[40px] w-auto" />
-                <span className="font-sans text-label text-muted-foreground">GET STARTED WITH BOXLITE</span>
-              </header>
+              <SetupHeader />
               {content}
             </>
           ) : (
@@ -127,4 +125,10 @@ const Dashboard: React.FC = () => {
   )
 }
 
-export default Dashboard
+export default function DashboardEntry() {
+  return (
+    <OnboardingEntryGate>
+      <Dashboard />
+    </OnboardingEntryGate>
+  )
+}
