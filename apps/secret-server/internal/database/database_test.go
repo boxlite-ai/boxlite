@@ -202,6 +202,61 @@ func TestIntegration(t *testing.T) {
 	}
 
 	cipher := testCipher(t, 1)
+	t.Run("canary lock timeout rolls back", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, "DELETE FROM key_verification_canary"); err != nil {
+			t.Fatal(err)
+		}
+		guard, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer guard.Rollback(context.Background())
+		if _, err := guard.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", canaryLock); err != nil {
+			t.Fatal(err)
+		}
+		blocked, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		defer cancel()
+		err = VerifyKey(blocked, pool, cipher)
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "lock key verification") {
+			t.Fatalf("canary lock wait = %v; want lock deadline exceeded", err)
+		}
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("canary count after lock timeout = %d, %v", count, err)
+		}
+	})
+	t.Run("canary read failure is not enrollment", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, "ALTER TABLE key_verification_canary RENAME TO unavailable_canary"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "ALTER TABLE unavailable_canary RENAME TO key_verification_canary"); err != nil {
+				t.Error(err)
+			}
+		})
+		err := VerifyKey(ctx, pool, cipher)
+		if err == nil || !strings.Contains(err.Error(), "read key canary") {
+			t.Fatalf("canary read failure = %v", err)
+		}
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM unavailable_canary").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("canary count after read failure = %d, %v", count, err)
+		}
+	})
+	t.Run("canary encryption failure rolls back", func(t *testing.T) {
+		unavailable, err := encryption.NewCipher(unavailableProvider{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = VerifyKey(ctx, pool, unavailable)
+		if !errors.Is(err, encryption.ErrProviderUnavailable) || !strings.Contains(err.Error(), "encrypt key canary") {
+			t.Fatalf("canary encryption failure = %v", err)
+		}
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("canary count after encryption failure = %d, %v", count, err)
+		}
+	})
 	t.Run("key verification rejects invalid inputs", func(t *testing.T) {
 		if err := VerifyKey(ctx, pool, nil); err == nil || !strings.Contains(err.Error(), "cipher is nil") {
 			t.Fatalf("nil cipher = %v", err)
@@ -434,6 +489,16 @@ func TestIntegration(t *testing.T) {
 			}
 		}
 	})
+}
+
+type unavailableProvider struct{}
+
+func (unavailableProvider) Wrap(context.Context, []byte, []byte) (encryption.WrappedDEK, error) {
+	return encryption.WrappedDEK{}, encryption.ErrProviderUnavailable
+}
+
+func (unavailableProvider) Unwrap(context.Context, encryption.WrappedDEK, []byte) ([]byte, error) {
+	return nil, encryption.ErrProviderUnavailable
 }
 
 func testCipher(t *testing.T, key byte) *encryption.Cipher {
