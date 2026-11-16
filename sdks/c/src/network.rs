@@ -26,6 +26,8 @@ use crate::{
     CBoxHandle, CBoxNetworkHandle, CBoxTunnelHandle, CBoxliteError, CTunnelForwarderHandle,
 };
 
+mod outbound;
+
 async fn connection_fd(
     mut connection: BoxConnection,
 ) -> Result<std::os::fd::OwnedFd, BoxliteError> {
@@ -893,7 +895,7 @@ mod tests {
 
     /// A network handle for box1 on a REST runtime, built as
     /// `boxlite_box_network` builds it from a box handle.
-    fn network_at(url: &str) -> (boxlite::BoxliteRuntime, BoxNetworkHandle) {
+    pub(super) fn network_at(url: &str) -> (boxlite::BoxliteRuntime, BoxNetworkHandle) {
         let tokio_rt = Arc::new(TokioRuntime::new().unwrap());
         let runtime =
             boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(url.to_string()))

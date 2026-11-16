@@ -1724,6 +1724,29 @@ enum BoxliteErrorCode boxlite_tunnel_forward(CBoxTunnelHandle *tunnel,
                                              CTunnelForwarderHandle **out_forwarder,
                                              CBoxliteError *out_error);
 
+// Read persisted policy and revision as JSON, without claiming live confirmation.
+// On success, release *out_json with boxlite_free_string. On error it is NULL.
+enum BoxliteErrorCode boxlite_network_outbound_snapshot(CBoxNetworkHandle *network,
+                                                        char **out_json,
+                                                        CBoxliteError *out_error);
+
+// Read durable/live status and pending evidence without changing policy or booting a VM.
+// On success, release *out_json with boxlite_free_string. On error it is NULL.
+enum BoxliteErrorCode boxlite_network_outbound_status(CBoxNetworkHandle *network,
+                                                      char **out_json,
+                                                      CBoxliteError *out_error);
+
+// Apply a trusted coordinator's complete policy and fresh candidate revision.
+// Inputs are borrowed UTF-8 strings for the call; revisions are outside policy JSON.
+// Ok with *out_applied=1 means applied; Ok with 0 means the precondition failed.
+// *out_applied is initialized to 0 before input validation. No legacy fallback occurs.
+enum BoxliteErrorCode boxlite_network_replace_outbound_snapshot(CBoxNetworkHandle *network,
+                                                                const char *expected_revision,
+                                                                const char *candidate_revision,
+                                                                const char *policy_json,
+                                                                uint8_t *out_applied,
+                                                                CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_options_new(const char *image,
                                           CBoxliteOptions **out_opts,
                                           CBoxliteError *out_error);

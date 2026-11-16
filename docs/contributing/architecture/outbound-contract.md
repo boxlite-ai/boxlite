@@ -227,6 +227,21 @@ Revision control exchanges have a ten-second total bound, including response rea
 Socket-backed REST tests run requests through NetworkHandle and the real HTTP encoder/decoder.
 They cover exact request metadata, matching and rejected acknowledgements, old peers, invalid stored policy, and contradictory confirmed status.
 
+### Native C revision boundary
+
+The additive C ABI exposes `boxlite_network_outbound_snapshot`, `boxlite_network_outbound_status`, and `boxlite_network_replace_outbound_snapshot`.
+Read calls allocate JSON strings owned by the caller; release them with `boxlite_free_string`.
+Their output pointer is initialized to NULL before validating other inputs.
+
+Replacement takes separate expected revision, fresh candidate revision, and complete policy JSON strings, borrowed for the blocking call.
+For example, expected `rev-a`, candidate `rev-b`, and `{"mode":"disabled"}` preserve the same identity through NetworkHandle and its selected local or REST backend.
+`Ok` with `out_applied=1` confirms application; `Ok` with `out_applied=0` reports a failed precondition.
+Errors also initialize `out_applied` to zero and keep the existing error-code ABI.
+Malformed UTF-8, invalid tokens, repeated/reserved candidates, invalid policy, and null required pointers are rejected before dispatch.
+These are trusted-coordinator operations; the existing unconditional setters retain their signatures.
+
+The C boundary tests call the actual exported functions through a REST runtime, inspect the resulting HTTP requests, free returned strings, and check output initialization and rejection without dispatch.
+
 Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
