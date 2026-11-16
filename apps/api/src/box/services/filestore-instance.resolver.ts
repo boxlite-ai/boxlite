@@ -67,7 +67,7 @@ export class FilestoreInstanceResolver {
     if (!configured) {
       const reason = `unknown Filestore instance '${instanceName}'`
       this.logResolutionFailure('FILESTORE_INSTANCE_UNKNOWN', instanceName, source, undefined, reason)
-      throw new BadRequestError(reason)
+      throw source === 'request' ? new BadRequestError(reason) : new ServiceUnavailableException(reason)
     }
 
     const resourceName = `projects/${configured.projectId}/locations/${configured.zone}/instances/${instanceName}`

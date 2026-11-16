@@ -40,10 +40,20 @@ describe('FilestoreInstanceResolver', () => {
     expect(() => resolver.select('volume-id')).toThrow('Filestore is not configured')
   })
 
-  it('rejects a name outside the deployment list', async () => {
+  it('maps an unknown requested instance to 400', async () => {
     const { resolver } = createResolver(jest.fn())
+    const resolution = resolver.resolve('other', 'request')
 
-    await expect(resolver.resolve('other', 'request')).rejects.toThrow("unknown Filestore instance 'other'")
+    await expect(resolution).rejects.toBeInstanceOf(BadRequestError)
+    await expect(resolution).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('maps an unknown configured instance to 503', async () => {
+    const { resolver } = createResolver(jest.fn())
+    const resolution = resolver.resolve('other', 'configured')
+
+    await expect(resolution).rejects.toBeInstanceOf(ServiceUnavailableException)
+    await expect(resolution).rejects.toMatchObject({ response: { statusCode: 503 } })
   })
 
   it('logs unknown and unusable instances with stable error codes', async () => {

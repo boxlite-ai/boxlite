@@ -31,6 +31,20 @@ describe('filestore instances configuration', () => {
     expect(parseFilestoreInstances({ FILESTORE_INSTANCES: '[]' })).toEqual({ instances: [] })
   })
 
+  it.each(['a', 'a0', 'a-b', `${'a'.repeat(62)}0`])('accepts RFC 1035 instance name %s', (instance) => {
+    const raw = JSON.stringify([{ instance, project_id: 'boxlite-dev', zone: 'us-east5-a' }])
+
+    expect(parseFilestoreInstances({ FILESTORE_INSTANCES: raw })).toEqual({
+      instances: [{ instance, projectId: 'boxlite-dev', zone: 'us-east5-a' }],
+    })
+  })
+
+  it.each(['1scratch', 'scratch-', 'a'.repeat(64)])('rejects invalid RFC 1035 instance name %s', (instance) => {
+    const raw = JSON.stringify([{ instance, project_id: 'boxlite-dev', zone: 'us-east5-a' }])
+
+    expect(() => parseFilestoreInstances({ FILESTORE_INSTANCES: raw })).toThrow('invalid instance')
+  })
+
   it.each([
     'not-json',
     '{"instance":"ml-scratch"}',
