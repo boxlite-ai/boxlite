@@ -268,6 +268,41 @@ describe('CI label demand counters and fallback', () => {
     await expect(rebuildDemand(state, lease, target, previous, [job()], captured)).rejects.toBeInstanceOf(StateConflict)
     expect(decodeDemand((await counters())[0]).dirty).toBe(true)
   })
+  it('rolls back missing fact batches when a counter snapshot has changed', async () => {
+    await send('queued')
+    const previous = await counters(),
+      captured = await wake()
+    await state.commit(lease, [
+      {
+        key: previous[0].key,
+        expected: previous[0].version,
+        payload: { ...(previous[0].payload as object), dirty: true } as Json,
+      },
+    ])
+    await expect(
+      rebuildDemand(
+        state,
+        lease,
+        target,
+        previous,
+        Array.from({ length: 101 }, (_, index) => job(index + 100)),
+        captured,
+      ),
+    ).rejects.toBeInstanceOf(StateConflict)
+    expect(await state.recover(lease, 1000, ['job-fact/'])).toEqual([expect.objectContaining({ key: 'job-fact/1/55' })])
+    expect(decodeDemand((await counters())[0]).dirty).toBe(true)
+  })
+  it.each([0, 100])('preserves duplicate job counting across %s other facts', async (others) => {
+    await rebuildDemand(
+      state,
+      lease,
+      target,
+      [],
+      [job(), ...Array.from({ length: others }, (_, index) => job(index + 100)), job()],
+    )
+    expect((await counters()).map(decodeDemand)).toEqual([expect.objectContaining({ queued: others + 2 })])
+    expect(await state.recover(lease, 1000, ['job-fact/'])).toHaveLength(others + 1)
+  })
   it('does not resurrect a terminal job from a stale GitHub scan', async () => {
     await send('queued')
     await send('completed')

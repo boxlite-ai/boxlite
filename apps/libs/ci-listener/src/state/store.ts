@@ -263,14 +263,7 @@ export class ListenerState {
         this.anchor(await tx.get('@anchor'))
         this.owner(await tx.get('@owner'))
         this.until(await tx.get('@lease'))
-        const rows: StateRecord[] = []
-        for (const key of keys) {
-          const row = await tx.get(key)
-          if (row) {
-            this.valid(row)
-            rows.push(row)
-          }
-        }
+        const rows = await this.lookup(tx, keys)
         if (lease) await this.assertLease(tx, lease)
         return rows
       },
@@ -290,17 +283,10 @@ export class ListenerState {
       this.until(await tx.get('@lease'))
       const result = await work({
         read: async (keys) => {
-          const rows: StateRecord[] = []
-          for (const key of keys) {
+          for (const key of keys)
             if (!/^(receipt|notice|wake|demand|job-fact|runner-claim)\/[A-Za-z0-9:._/-]+$/.test(key))
               throw new Error('Invalid ingress record kind')
-            const row = await tx.get(key)
-            if (row) {
-              this.valid(row)
-              rows.push(row)
-            }
-          }
-          return rows
+          return this.lookup(tx, keys)
         },
         write: async (changes) => {
           const prepared = this.prepare(changes)
@@ -327,9 +313,46 @@ export class ListenerState {
     })
   }
 
+  private async lookup(tx: StateTransaction, keys: readonly string[]): Promise<StateRecord[]> {
+    const result: StateRecord[] = []
+    for (let offset = 0; offset < keys.length; offset += 100) {
+      const batch = keys.slice(offset, offset + 100)
+      const found = tx.getMany ? await tx.getMany([...new Set(batch)]) : []
+      if (!tx.getMany)
+        for (const key of batch) {
+          const row = await tx.get(key)
+          if (row) found.push(row)
+        }
+      const indexed = new Map(
+        found.map((row) => {
+          this.valid(row)
+          if (!batch.includes(row.key)) throw new StateCorrupt()
+          return [row.key, row] as const
+        }),
+      )
+      for (const key of batch) {
+        const row = indexed.get(key)
+        if (row) result.push(row)
+      }
+    }
+    return result
+  }
   private async apply(tx: StateTransaction, changes: StateChange[]): Promise<StateRecord[]> {
     const result: StateRecord[] = []
-    for (const change of changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+    const ordered = changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    for (let index = 0; index < ordered.length; index++) {
+      const change = ordered[index]
+      if (tx.insertMany && change.expected === null) {
+        let end = index + 1
+        while (end < ordered.length && ordered[end].expected === null) end++
+        if (end - index > 1) {
+          const inserted = ordered.slice(index, end).map((row) => record(row.key, row.payload as Json))
+          if (!(await tx.insertMany(inserted))) throw new StateConflict()
+          result.push(...inserted)
+          index = end - 1
+          continue
+        }
+      }
       if (change.payload === undefined) {
         if (!change.expected || !(await tx.remove(change.key, change.expected))) throw new StateConflict()
       } else {

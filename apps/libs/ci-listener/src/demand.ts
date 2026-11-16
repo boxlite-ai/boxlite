@@ -200,16 +200,22 @@ export async function rebuildDemand(
       const [wake] = await tx.read([wakeKey])
       if (wake?.version !== wakeVersion) throw new StateConflict()
       const counts = new Map<string, { labels: string[]; jobs: WorkflowJob[] }>()
-      for (const job of jobs) {
-        if (job.repository !== target.repositoryId || job.status !== 'queued' || job.runner !== null) continue
-        const factKey = `job-fact/${target.installationId}/${job.job}`
-        const [fact] = await tx.read([factKey])
-        if (fact && object(fact.payload) && ['in_progress', 'completed'].includes(fact.payload.status as string))
-          continue
-        if (!fact)
-          await tx.write([
-            {
-              key: factKey,
+      const queued = jobs.filter(
+        (job) => job.repository === target.repositoryId && job.status === 'queued' && job.runner === null,
+      )
+      const factKey = (job: WorkflowJob) => `job-fact/${target.installationId}/${job.job}`
+      for (let offset = 0; offset < queued.length; offset += 100) {
+        const batch = queued.slice(offset, offset + 100)
+        const facts = new Map((await tx.read(batch.map(factKey))).map((row) => [row.key, row]))
+        const missing = new Map<string, StateChange>()
+        for (const job of batch) {
+          const key = factKey(job)
+          const fact = facts.get(key)
+          if (fact && object(fact.payload) && ['in_progress', 'completed'].includes(fact.payload.status as string))
+            continue
+          if (!fact && !missing.has(key))
+            missing.set(key, {
+              key,
               expected: null,
               payload: {
                 status: 'queued',
@@ -217,40 +223,48 @@ export async function rebuildDemand(
                 runner: null,
                 hint: { ...target, job: { id: job.job, runId: job.run } },
               },
-            },
-          ])
-        const key = demandKey(target.installationId, target.repositoryId, job.labels)
-        const entry = counts.get(key) ?? { labels: labelsFor(job.labels), jobs: [] }
-        entry.jobs.push(job)
-        counts.set(key, entry)
+            })
+          const groupKey = demandKey(target.installationId, target.repositoryId, job.labels)
+          const entry = counts.get(groupKey) ?? { labels: labelsFor(job.labels), jobs: [] }
+          entry.jobs.push(job)
+          counts.set(groupKey, entry)
+        }
+        if (missing.size) await tx.write([...missing.values()])
       }
       const known = previous.filter((row) => row.key.startsWith(prefix))
-      const keys = new Set([...known.map((row) => row.key), ...counts.keys()])
+      const priorCounts = new Map(known.map((row) => [row.key, row]))
+      const keys = [...new Set([...priorCounts.keys(), ...counts.keys()])]
       const result: StateRecord[] = []
-      for (const key of keys) {
-        const [row] = await tx.read([key])
-        const prior = known.find((candidate) => candidate.key === key)
-        if (row?.version !== prior?.version) throw new StateConflict()
-        const group = counts.get(key)
-        const old = row && object(row.payload) ? row.payload : undefined
-        if (!group && row) {
-          try {
-            decodeDemand(row)
-          } catch {
-            await tx.write([{ key, expected: row.version }])
-            continue
+      for (let offset = 0; offset < keys.length; offset += 100) {
+        const batch = keys.slice(offset, offset + 100)
+        const current = new Map((await tx.read(batch)).map((row) => [row.key, row]))
+        for (const key of batch) {
+          const row = current.get(key)
+          const prior = priorCounts.get(key)
+          if (row?.version !== prior?.version) throw new StateConflict()
+          const group = counts.get(key)
+          const old = row && object(row.payload) ? row.payload : undefined
+          if (!group && row) {
+            try {
+              decodeDemand(row)
+            } catch {
+              await tx.write([{ key, expected: row.version }])
+              continue
+            }
           }
+          const sample = group?.jobs[0]
+          const payload: LabelDemand = {
+            ...target,
+            labels: group?.labels ?? (old!.labels as string[]),
+            queued: group?.jobs.length ?? 0,
+            dirty: false,
+            updatedAt: Date.now(),
+            job: sample ? { id: sample.job, runId: sample.run } : (old!.job as unknown as LabelDemand['job']),
+          }
+          result.push(
+            ...(await tx.write([{ key, expected: row?.version ?? null, payload: payload as unknown as Json }])),
+          )
         }
-        const sample = group?.jobs[0]
-        const payload: LabelDemand = {
-          ...target,
-          labels: group?.labels ?? (old!.labels as string[]),
-          queued: group?.jobs.length ?? 0,
-          dirty: false,
-          updatedAt: Date.now(),
-          job: sample ? { id: sample.job, runId: sample.run } : (old!.job as unknown as LabelDemand['job']),
-        }
-        result.push(...(await tx.write([{ key, expected: row?.version ?? null, payload: payload as unknown as Json }])))
       }
       return result
     },

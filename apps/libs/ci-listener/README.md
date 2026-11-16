@@ -429,6 +429,31 @@ demand is larger. Rotation admits later repositories as that supply becomes busy
 it does not guarantee filling the entire queue across windows. The window does
 not cap runners represented by one counter or replace organization quota.
 
+### Transaction and lock budget
+
+Worker recovery validates the scope once per membership page. Ordinary state
+reads use parameterized batches of at most 100 keys. Each worker batch rechecks
+up to 32 original allocations with their membership and deduplication links in
+one fenced snapshot; missing workers require missing memberships too.
+
+Queue rebuilding reads job facts and counters in bounded batches and inserts
+missing facts in groups of at most 100. All groups share the existing repository
+ingress transaction, wake-version check and execution lease. A later conflict
+rolls back earlier batches; partial snapshots cannot authorize capacity changes.
+
+Consecutive expected-absent ordinary records can share an insert statement.
+The inserted count must match the complete batch or the transaction rolls back.
+Versioned updates, deletes, sorted mutation order and policy locks retain their
+existing contracts.
+
+Optional batch storage methods have a point-operation fallback; reads preserve caller order and duplicate ingress keys.
+
+Hosted transactions still serialize on the namespace's `@owner` row, and SQLite
+still uses `BEGIN IMMEDIATE`. Batching reduces repeated transactions and queries;
+it does not remove these locks or establish a production throughput guarantee.
+GitHub and Box requests execute outside state transactions. PostgreSQL statement
+and lock timeouts do not bound the total duration of a multi-statement transaction.
+
 ### Surplus idle retirement
 
 Retirement uses the complete authoritative label aggregate, including counters

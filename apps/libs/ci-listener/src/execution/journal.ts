@@ -159,17 +159,20 @@ export class ExecutionJournal {
 
   async workers(lease: ExecutionLease, scope: string, after = '', limit = 32): Promise<Page<AllocationRow>> {
     lease = { ...lease }
-    await this.scope(lease, scope)
+    const target = await this.scope(lease, scope)
     const prefix = 'active-worker/' + scopeId(scope) + '/'
     const records = await this.state.scan(lease, { prefix, after, limit })
     const rows: AllocationRow[] = []
-    for (const record of records) {
-      const key = 'worker/' + record.key.slice(prefix.length)
-      const row = await this.allocation(lease, key)
-      if (row) {
-        if (row.value.scope !== scope) throw new StateCorrupt()
-        rows.push(row)
-      } else if ((await this.state.read([record.key], lease)).length) throw new StateCorrupt()
+    for (let offset = 0; offset < records.length; offset += 32) {
+      const batch = records.slice(offset, offset + 32)
+      const keys = batch.map((record) => 'worker/' + record.key.slice(prefix.length))
+      const initial = await this.state.read(keys, lease)
+      const current = await this.readAllocations(lease, target, initial)
+      const found = new Set(current.map((row) => row.record.key))
+      const missing = batch.filter((_, index) => !found.has(keys[index])).map((row) => row.key)
+      // A final release can remove a worker between the page and point reads.
+      if (missing.length && (await this.state.read(missing, lease)).length) throw new StateCorrupt()
+      rows.push(...current)
     }
     return { rows, after: records.length === limit ? records[records.length - 1].key : '' }
   }
@@ -180,25 +183,49 @@ export class ExecutionJournal {
     await this.check(lease)
     const [first] = await this.state.read([key], lease)
     if (!first) return undefined
-    const original = decodeAllocation(first.payload)
-    const scope = await this.scope(lease, original.scope)
-    const membership = 'active-worker/' + scopeId(original.scope) + '/' + workerId(key)
-    const dedupe = allocationLink(scope.scope, original)
-    const rows = new Map((await this.state.read([key, membership, dedupe], lease)).map((row) => [row.key, row]))
-    const record = rows.get(key)
-    if (!record) return undefined
-    const value = decodeAllocation(record.payload)
-    if (
-      value.name !== 'ci-jit-' + workerId(key) ||
-      value.scope !== original.scope ||
-      allocationLink(scope.scope, value) !== dedupe
+    const scope = await this.scope(lease, decodeAllocation(first.payload).scope)
+    return (await this.readAllocations(lease, scope, [first]))[0]
+  }
+
+  private async readAllocations(
+    lease: ExecutionLease,
+    scope: ScopeRow,
+    initial: readonly StateRecord[],
+  ): Promise<AllocationRow[]> {
+    if (!initial.length) return []
+    const originals = initial.map((record) => {
+      const value = decodeAllocation(record.payload)
+      if (value.scope !== scope.record.key) throw new StateCorrupt()
+      const membership = 'active-worker/' + scopeId(value.scope) + '/' + workerId(record.key)
+      return { record, value, membership, dedupe: allocationLink(scope.scope, value) }
+    })
+    // Each allocation contributes at most three keys to one fenced snapshot.
+    const records = new Map(
+      (
+        await this.state.read(
+          [...new Set(originals.flatMap((row) => [row.record.key, row.membership, row.dedupe]))],
+          lease,
+        )
+      ).map((row) => [row.key, row]),
     )
-      throw new StateCorrupt()
-    for (const link of [membership, dedupe]) {
-      const row = rows.get(link)
-      if (!row || !object(row.payload) || row.payload.worker !== key) throw new StateCorrupt()
+    const result: AllocationRow[] = []
+    for (const original of originals) {
+      const record = records.get(original.record.key)
+      if (!record) continue
+      const value = decodeAllocation(record.payload)
+      if (
+        value.name !== 'ci-jit-' + workerId(record.key) ||
+        value.scope !== original.value.scope ||
+        allocationLink(scope.scope, value) !== original.dedupe
+      )
+        throw new StateCorrupt()
+      for (const link of [original.membership, original.dedupe]) {
+        const row = records.get(link)
+        if (!row || !object(row.payload) || row.payload.worker !== record.key) throw new StateCorrupt()
+      }
+      result.push({ record, value })
     }
-    return { record, value }
+    return result
   }
 
   async hasCapacity(lease: ExecutionLease, scope: string, policy: CapacityPolicy): Promise<boolean> {

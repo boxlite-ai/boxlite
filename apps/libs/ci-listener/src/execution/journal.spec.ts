@@ -88,6 +88,52 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         }
       }
     })
+    it.each([0, 1, 16, 32, 33])('reads %s workers with a bounded transaction budget per page', async (size) => {
+      const capacity = testCapacity({ account: Math.max(1, size), tenant: Math.max(1, size) })
+      const expected = new Set<string>()
+      for (let index = 0; index < size; index++) {
+        const row = await journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })
+        expected.add(row!.record.key)
+      }
+      const transactions = jest.spyOn(db, 'transaction')
+      const seen = new Set<string>()
+      let after = ''
+      do {
+        transactions.mockClear()
+        const page = await journal.workers(lease, key, after)
+        expect(transactions.mock.calls.length).toBeLessThanOrEqual(10)
+        for (const row of page.rows) {
+          expect(row.value.scope).toBe(key)
+          expect(row.value.name).toBe('ci-jit-' + row.record.key.slice(7))
+          seen.add(row.record.key)
+        }
+        after = page.after
+      } while (after)
+      expect(seen).toEqual(expected)
+      transactions.mockRestore()
+    })
+    it.each(['complete', 'worker-only'])('handles %s removal between worker page reads', async (removal) => {
+      let row = (await journal.reserve(lease, key, demand, limits))!
+      row = await journal.advance(lease, row.record.key, row.record.version, {
+        box: { phase: 'absent', id: null },
+        runner: { phase: 'absent', id: null },
+      })
+      const read = state.read.bind(state)
+      let removed = false
+      const observed = jest.spyOn(state, 'read').mockImplementation(async (keys, currentLease) => {
+        const records = await read(keys, currentLease)
+        if (!removed && keys.length === 1 && keys[0] === row.record.key) {
+          removed = true
+          if (removal === 'complete') await journal.release(lease, row.record.key, row.record.version)
+          else await state.commit(lease, [{ key: row.record.key, expected: row.record.version }])
+        }
+        return records
+      })
+      if (removal === 'complete') expect((await journal.workers(lease, key)).rows).toEqual([])
+      else await expect(journal.workers(lease, key)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(removed).toBe(true)
+      observed.mockRestore()
+    })
     it('does not bind counted supply reservations to the triggering job', async () => {
       const capacity = testCapacity({ account: 2, tenant: 2 })
       const reserve = () => journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })
