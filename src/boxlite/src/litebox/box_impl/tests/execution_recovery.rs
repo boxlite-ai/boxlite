@@ -81,13 +81,16 @@ impl ExecutionService for ExitRecoveryGuest {
 #[tokio::test]
 async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() {
     let gate = Arc::new(StartGate::default());
-    let mut fixture = running_box_for_start_test(Arc::clone(&gate)).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind execution guest");
     let address = listener.local_addr().expect("execution guest address");
     let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
         .expect("configure execution guest listener");
+    let mut fixture = running_box_for_start_test_with_live(Arc::clone(&gate), |live| {
+        live.guest_session = GuestSession::new(BoxTransport::tcp(address.port()));
+    })
+    .await;
     let main_id = fixture.box_impl.container_id().to_owned();
     fixture.server.abort();
     fixture.server = tokio::spawn(async move {
@@ -97,12 +100,7 @@ async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() 
             .await
             .expect("serve execution guest");
     });
-    let box_impl = Arc::get_mut(&mut fixture.box_impl).expect("fixture owns its box handle");
-    box_impl
-        .live
-        .get_mut()
-        .expect("fixture has live state")
-        .guest_session = GuestSession::new(BoxTransport::tcp(address.port()));
+    let box_impl = &fixture.box_impl;
     let exit_file = box_impl.layout.container_exit_file(box_impl.container_id());
     std::fs::create_dir_all(exit_file.parent().unwrap()).expect("create exit-file directory");
     boxlite_shared::layout::ExitRecord { exit_code: 129 }

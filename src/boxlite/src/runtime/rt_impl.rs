@@ -1,9 +1,10 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
 use crate::images::{ImageDiskManager, ImageManager};
+use crate::litebox::box_impl::{BoxEvent, BoxRun};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
-use crate::lock::{FileLockManager, LockManager};
+use crate::lock::{FileLockManager, LockGuard, LockManager, Locker};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
@@ -16,6 +17,7 @@ use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
@@ -161,6 +163,7 @@ pub struct RuntimeImpl {
     /// Provides locks for individual entities (boxes, volumes, etc.) that work
     /// across multiple processes. Similar to Podman's lock manager.
     pub(crate) lock_manager: Arc<dyn LockManager>,
+    sync_cleanup_pending: AtomicBool,
 
     /// Abstract factory for boxes' network control backends (the one place a
     /// concrete backend is chosen). Boxes create their backend through this, so
@@ -366,6 +369,7 @@ impl RuntimeImpl {
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
+            sync_cleanup_pending: AtomicBool::new(false),
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
@@ -859,6 +863,8 @@ impl RuntimeImpl {
             }
         });
 
+        // Drop must retry if this await is cancelled or any stop is incomplete.
+        self.sync_cleanup_pending.store(true, Ordering::Release);
         let results = futures::future::join_all(stop_futures).await;
 
         // Check for errors
@@ -880,6 +886,7 @@ impl RuntimeImpl {
         }
 
         if errors.is_empty() {
+            self.sync_cleanup_pending.store(false, Ordering::Release);
             tracing::info!("Runtime shutdown complete");
             Ok(())
         } else {
@@ -899,21 +906,67 @@ impl RuntimeImpl {
     ///
     /// Detached boxes are skipped (same contract as async `shutdown()`).
     pub(crate) fn shutdown_sync(&self) {
-        if self.shutdown_token.is_cancelled() {
+        if self.shutdown_token.is_cancelled() && !self.sync_cleanup_pending.load(Ordering::Acquire)
+        {
             return;
         }
         self.shutdown_token.cancel();
+        self.sync_cleanup_pending.store(false, Ordering::Release);
 
         let boxes = match self.box_manager.all_boxes(true) {
             Ok(b) => b,
             Err(e) => {
+                self.sync_cleanup_pending.store(true, Ordering::Release);
                 eprintln!("[boxlite] Failed to query boxes during sync shutdown: {e}");
                 return;
             }
         };
 
-        for (config, mut state) in boxes {
-            if state.status != BoxStatus::Running || config.options.detach {
+        for (config, _) in boxes {
+            if config.options.detach {
+                continue;
+            }
+            let locker = match self.box_locker(&config.id) {
+                Ok(locker) => locker,
+                Err(error) => {
+                    self.sync_cleanup_pending.store(true, Ordering::Release);
+                    tracing::warn!(
+                        box_id = %config.id,
+                        error = %error,
+                        "Sync shutdown deferred: failed to retrieve box lock"
+                    );
+                    continue;
+                }
+            };
+            let _guard = if let Some(locker) = locker.as_deref() {
+                match LockGuard::try_new(locker) {
+                    Some(guard) => Some(guard),
+                    None => {
+                        self.sync_cleanup_pending.store(true, Ordering::Release);
+                        tracing::warn!(
+                            box_id = %config.id,
+                            "Sync shutdown deferred: box is busy"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let mut state = match self.box_manager.update_box(&config.id) {
+                Ok(state) => state,
+                Err(BoxliteError::NotFound(_)) => continue,
+                Err(error) => {
+                    self.sync_cleanup_pending.store(true, Ordering::Release);
+                    tracing::warn!(
+                        box_id = %config.id,
+                        error = %error,
+                        "Sync shutdown deferred: failed to refresh box state"
+                    );
+                    continue;
+                }
+            };
+            if state.status != BoxStatus::Running {
                 continue;
             }
             let Some(pid) = state.pid else { continue };
@@ -1022,6 +1075,53 @@ impl RuntimeImpl {
     /// - Box not found
     /// - Box is active and force=false
     pub(crate) fn remove_box(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        crate::litebox::box_impl::BoxImpl::try_with_operation(self, id, || {
+            self.remove_box_locked(id, force)
+        })
+    }
+
+    fn cached_box_impl(&self, id: &BoxID) -> Option<SharedBoxImpl> {
+        let sync = self.sync_state.read().unwrap();
+        sync.active_boxes_by_id
+            .get(id)
+            .and_then(|weak| weak.upgrade())
+    }
+
+    pub(crate) async fn apply_box_observation(
+        self: &Arc<Self>,
+        id: &BoxID,
+        run: BoxRun,
+        event: BoxEvent,
+    ) -> BoxliteResult<Option<crate::litebox::HealthStatus>> {
+        if let Some(box_impl) = self.cached_box_impl(id) {
+            // The facade owns its config and state; update_box still refreshes state
+            // under lifecycle admission, so resolving it needs no persistence reads.
+            return match box_impl.apply_observation(run, event).await {
+                // A missing lock is retryable; only a missing row drops the event.
+                Err(BoxliteError::NotFound(_)) if self.box_manager.box_by_id(id)?.is_none() => {
+                    Ok(None)
+                }
+                result => result,
+            };
+        }
+        let Some((config, state)) = self.box_manager.box_by_id(id)? else {
+            return Ok(None);
+        };
+        // Resolve the facade without arming a watcher or retaining it between events.
+        let (box_impl, _) = self.get_or_create_box_impl(config, state);
+        box_impl.apply_observation(run, event).await
+    }
+
+    pub(crate) fn box_locker(&self, id: &BoxID) -> BoxliteResult<Option<Arc<dyn Locker>>> {
+        self.box_manager
+            .box_by_id(id)?
+            .and_then(|(_, state)| state.lock_id)
+            .map(|id| self.lock_manager.retrieve(id))
+            .transpose()
+    }
+
+    /// Caller holds the box's entity lock, if the box has one.
+    pub(crate) fn remove_box_locked(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
@@ -1991,10 +2091,7 @@ fn volumes_unsupported() -> BoxliteError {
 
 impl Drop for RuntimeImpl {
     fn drop(&mut self) {
-        if self.shutdown_token.is_cancelled() {
-            return; // shutdown() was already called
-        }
-        // Safety net: stop non-detached boxes if shutdown() wasn't called.
+        // The synchronous path also retries cleanup deferred by a busy box.
         // shutdown_sync() logs per-box when it actually stops something.
         self.shutdown_sync();
     }
