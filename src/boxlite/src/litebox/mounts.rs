@@ -87,6 +87,7 @@ pub struct MountInfo {
 /// Lifecycle of one runtime mount. `Detaching` is a convergence state: the
 /// detach or the retirement did not complete and a retry finishes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MountState {
     /// Visible in the container at `target`.
     Mounted,

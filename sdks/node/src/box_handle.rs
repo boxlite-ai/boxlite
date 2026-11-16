@@ -8,6 +8,7 @@ use crate::copy::{JsCopyOptions, into_copy_options};
 use crate::exec::JsExecution;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
+use crate::mounts::JsMountsHandle;
 use crate::network::JsNetworkHandle;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
@@ -119,6 +120,14 @@ impl JsBox {
         Ok(JsExecution {
             execution: Arc::new(tokio::sync::Mutex::new(execution)),
         })
+    }
+
+    /// Get the runtime directory delivery handle for this box (M6).
+    #[napi(getter)]
+    pub fn mounts(&self) -> JsMountsHandle {
+        JsMountsHandle {
+            handle: Arc::clone(&self.handle),
+        }
     }
 
     /// Get the snapshot handle for this box.

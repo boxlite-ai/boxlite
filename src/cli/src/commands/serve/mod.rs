@@ -1965,6 +1965,16 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/metrics",
             get(metrics::box_metrics),
         )
+        // Runtime directory delivery (M6). The target addressing uses a
+        // query parameter so container paths never become path segments.
+        .route(
+            "/v1/boxes/{box_id}/mounts",
+            post(handlers::mounts::add_mount).get(handlers::mounts::list_mounts),
+        )
+        .route(
+            "/v1/boxes/{box_id}/mounts/by-target",
+            get(handlers::mounts::get_mount).delete(handlers::mounts::remove_mount),
+        )
         // Main command session (container init) — docker's
         // `POST /containers/{id}/attach`, distinct from exec-attach below.
         .route(
@@ -2110,6 +2120,7 @@ mod tests {
     use std::time::Duration;
 
     mod executions;
+    mod mounts;
     mod ssh;
 
     #[test]

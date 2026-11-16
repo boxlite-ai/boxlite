@@ -709,6 +709,15 @@ typedef struct CRuntimeMetrics {
 // Runtime metrics completion.
 typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
 
+// Runtime directory delivery (M6) completion. The error pointer is borrowed
+// for callback dispatch only and no result allocation is produced.
+typedef void (*CBoxMountCb)(CBoxliteError*, void*);
+
+// Runtime directory delivery (M6) JSON readout. On success the callback
+// owns the returned string and must release it with `boxlite_free_string`;
+// the error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxMountJsonCb)(char*, CBoxliteError*, void*);
+
 typedef struct BoxNetworkHandle CBoxNetworkHandle;
 
 typedef struct TunnelForwarderHandle CTunnelForwarderHandle;
@@ -1626,6 +1635,48 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               CRuntimeMetricsCb cb,
                                               void *user_data,
                                               CBoxliteError *out_error);
+
+// Submit a runtime directory delivery into the running container.
+//
+// `source` is a host directory, `box_path` the container target, and
+// `read_only` non-zero for a read-only delivery.
+enum BoxliteErrorCode boxlite_box_mount_add(struct BoxHandle *handle,
+                                            const char *source,
+                                            const char *box_path,
+                                            int read_only,
+                                            CBoxMountCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Lazily detach the mount at a container target.
+//
+// Idempotent: removing an unknown target completes successfully; a mount
+// already converging reports success once the record reaches `detaching`.
+enum BoxliteErrorCode boxlite_box_mount_remove(struct BoxHandle *handle,
+                                               const char *box_path,
+                                               CBoxMountCb cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+// List every runtime mount of the current VM run as a JSON array.
+//
+// On success, the callback owns the returned string and must release it
+// with `boxlite_free_string`.
+enum BoxliteErrorCode boxlite_box_mount_list(struct BoxHandle *handle,
+                                             CBoxMountJsonCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
+// The mount at a container target as a JSON object, or JSON `null` when
+// nothing is delivered there.
+//
+// On success, the callback owns the returned string and must release it
+// with `boxlite_free_string`.
+enum BoxliteErrorCode boxlite_box_mount_get(struct BoxHandle *handle,
+                                            const char *box_path,
+                                            CBoxMountJsonCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
 
 // Replace inbound policy from {"mode":"enabled","allow_net":[]}.
 // Blocks until applied or rejected. Strings are borrowed for the call.

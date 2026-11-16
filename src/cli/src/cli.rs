@@ -443,6 +443,32 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: VOLUME_SCOPES,
     },
     CommandScope {
+        name: "mount",
+        globals: BOX_GLOBALS,
+        children: &[
+            CommandScope {
+                name: "add",
+                globals: BOX_GLOBALS,
+                children: &[],
+            },
+            CommandScope {
+                name: "rm",
+                globals: BOX_GLOBALS,
+                children: &[],
+            },
+            CommandScope {
+                name: "ls",
+                globals: BOX_GLOBALS,
+                children: &[],
+            },
+            CommandScope {
+                name: "inspect",
+                globals: BOX_GLOBALS,
+                children: &[],
+            },
+        ],
+    },
+    CommandScope {
         name: "domain",
         globals: VOLUME_GLOBALS,
         children: DOMAIN_SCOPES,
@@ -847,6 +873,10 @@ pub enum Commands {
 
     /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
+
+    /// Runtime directory delivery on a running Box (hidden; requires native-vmm)
+    #[command(hide = true)]
+    Mount(crate::commands::mount::MountArgs),
 
     /// Bind, list or unbind the organization's domains on a REST server
     Domain(crate::commands::domain::DomainArgs),

@@ -685,6 +685,26 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::MountAdd {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::MountRemove {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::MountListJson {
+                cb,
+                user_data,
+                result,
+            } => dispatch_string_event(result, user_data, cb),
+            RuntimeEvent::MountGetJson {
+                cb,
+                user_data,
+                result,
+            } => dispatch_string_event(result, user_data, cb),
             RuntimeEvent::RegistryList {
                 cb,
                 user_data,

@@ -777,6 +777,36 @@ if a file would land on a mount — so `boxlite cp ./x box:/etc` works.
 Copy a path outside the mount, or pipe a tar through
 `boxlite exec`. Files copied in are owned by the box's exec user.
 
+### `boxlite mount`
+
+Deliver a host directory into a **running** box and retire it again — no
+restart, no interruption of the container's processes. Experimental: requires
+`BOXLITE_EXPERIMENTAL=native-vmm`; the commands stay hidden from `--help`
+until the switch is set, and a non-native backend refuses with guidance.
+
+**Usage:**
+
+- `boxlite mount add BOX SOURCE TARGET [--read-only]`
+- `boxlite mount rm BOX TARGET`
+- `boxlite mount ls BOX`
+- `boxlite mount inspect BOX TARGET`
+
+`add` fails on non-directory or unreadable sources and on occupied targets
+(non-empty paths and symlinks are refused, existing content stays intact).
+`rm` is lazy and idempotent: the target stops resolving immediately while
+descriptors opened before keep working, and a `detaching` record converges on
+a repeated removal. `ls`/`inspect` report source, target, mode (`ro`/`rw`) and
+state (`mounted`/`detaching`), as a table or `--format json|yaml`. Mounts do
+not survive stopping the box.
+
+**Examples:**
+
+```bash
+BOXLITE_EXPERIMENTAL=native-vmm boxlite mount add mybox /host/project /workspace --read-only
+BOXLITE_EXPERIMENTAL=native-vmm boxlite mount ls mybox
+BOXLITE_EXPERIMENTAL=native-vmm boxlite mount rm mybox /workspace
+```
+
 ### `boxlite info`
 
 Display system-wide runtime information (version, paths, host/virtualization, box and image counts). Default output is YAML.

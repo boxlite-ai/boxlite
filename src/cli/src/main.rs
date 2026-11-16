@@ -115,6 +115,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
     // at the call site without adding an exit-code concept to their APIs.
     let result: anyhow::Result<i32> = match cli.command {
         cli::Commands::Ci(args) => commands::ci::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Mount(args) => commands::mount::execute(args, &global).await.map(|_| 0),
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
         cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
         cli::Commands::Top(args) => commands::top::execute(args, &global).await.map(|_| 0),
