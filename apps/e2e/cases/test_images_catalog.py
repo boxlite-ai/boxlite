@@ -115,6 +115,7 @@ async def _remove_catalog_entry(images, name: str) -> None:
         try:
             await images.remove(name)
         except boxlite.NotFoundError:
+            # An absent entry already satisfies catalog cleanup.
             pass
         except boxlite.InvalidStateError as failure:
             held = failure
@@ -334,6 +335,7 @@ async def test_a_pull_that_fails_records_nothing(rt, images):
             try:
                 await rt.remove(created.id, force=True)
             except boxlite.NotFoundError:
+                # The Box is already gone; still verify it is absent from listings.
                 pass
             leaked = await wait_until_unlisted(rt, [created.id])
             assert not leaked, f"failed-pull Box cleanup timed out: {leaked}"

@@ -87,7 +87,7 @@ class Runtime:
 class CatalogCaseTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         sdk = SimpleNamespace(
-            BoxOptions=lambda **kwargs: SimpleNamespace(**kwargs),
+            BoxOptions=SimpleNamespace,
             BoxliteError=BoxliteError,
             NotFoundError=NotFoundError,
             InvalidStateError=InvalidStateError,
@@ -95,7 +95,7 @@ class CatalogCaseTest(unittest.IsolatedAsyncioTestCase):
         pytest = SimpleNamespace(
             mark=SimpleNamespace(asyncio=lambda function: function),
             fail=fail,
-            skip=lambda message: self.skipTest(message),
+            skip=self.skipTest,
         )
         self.wait = AsyncMock(return_value=[])
         dependencies = {
