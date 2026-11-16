@@ -140,3 +140,30 @@ describe('account switch contract', () => {
     expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnTo: '/dashboard/keys' } })
   })
 })
+
+describe('account recovery failure boundaries', () => {
+  it.each(['reject', 'null', 'throw'])('recovers from protected-route authentication %s', async (failure) => {
+    auth.user = undefined
+    auth.isAuthenticated = false
+    auth.signinRedirect.mockImplementation(() => {
+      if (failure === 'throw') throw new Error('storage blocked')
+      return failure === 'null' ? Promise.resolve(null) : Promise.reject(new Error('offline'))
+    })
+    await mount(
+      '/dashboard/keys',
+      <ApiProvider>
+        <div>Protected data</div>
+      </ApiProvider>,
+    )
+    expect(container.textContent).toContain('Sign in to BoxLite')
+    expect(container.textContent).not.toContain('Protected data')
+    expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
+  })
+  it('offers manual recovery when account switching fails after clearing identity', async () => {
+    auth.signinRedirect.mockRejectedValue(new Error('offline'))
+    await mount('/logout?switch=1')
+    expect(container.textContent).toContain('Sign in to BoxLite')
+    expect(auth.removeUser).toHaveBeenCalledTimes(1)
+    expect(client.getQueryData(['boxes'])).toBeUndefined()
+  })
+})

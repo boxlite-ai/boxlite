@@ -13,7 +13,7 @@ const auth = vi.hoisted(() => ({
   isAuthenticated: false,
   isLoading: false,
   error: undefined as undefined | { innerError: { error: string } },
-  user: undefined,
+  user: undefined as undefined | { profile: { sub: string } },
   activeNavigator: undefined,
 }))
 vi.mock('react-oidc-context', () => ({ useAuth: () => auth }))
@@ -22,6 +22,9 @@ let root: Root
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   sessionStorage.clear()
+  auth.user = undefined
+  auth.isLoading = false
+  auth.isAuthenticated = false
   auth.error = undefined
   auth.signinRedirect.mockReset().mockResolvedValue(undefined)
   auth.removeUser.mockReset().mockResolvedValue(undefined)
@@ -97,6 +100,44 @@ describe('account entry refinement', () => {
     await mount()
     expect(container.textContent).not.toContain('cancelled')
     expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(auth.signinRedirect).not.toHaveBeenCalled()
+  })
+})
+
+describe('account entry recovery coverage', () => {
+  it('recovers when the redirect rejects and permits a retry', async () => {
+    markJustLoggedOut()
+    auth.signinRedirect.mockRejectedValueOnce(new Error('offline'))
+    await mount()
+    await click()
+    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(container.querySelector('button')!.disabled).toBe(false)
+    await click()
+    expect(auth.signinRedirect).toHaveBeenCalledTimes(2)
+  })
+  it('clears a stale identity before opening hosted authentication', async () => {
+    markJustLoggedOut()
+    auth.user = { profile: { sub: 'old-user' } }
+    auth.signinRedirect.mockImplementation(async () => {
+      expect(auth.removeUser).toHaveBeenCalledTimes(1)
+    })
+    await mount()
+    await click()
+    expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
+  })
+  it('keeps actions disabled while checking the session', async () => {
+    markJustLoggedOut()
+    auth.isLoading = true
+    await mount()
+    expect(container.textContent).toContain('Checking session')
+    expect([...container.querySelectorAll('button')].every((button) => button.disabled)).toBe(true)
+    expect(auth.signinRedirect).not.toHaveBeenCalled()
+  })
+  it('explains unsupported mock authentication without redirecting', async () => {
+    markJustLoggedOut()
+    auth.error = { innerError: { error: 'mock_auth_unavailable' } }
+    await mount()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('requires the real sign-in service')
     expect(auth.signinRedirect).not.toHaveBeenCalled()
   })
 })
