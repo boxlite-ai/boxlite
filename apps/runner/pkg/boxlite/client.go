@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"slices"
@@ -52,11 +53,24 @@ type Client struct {
 	awsAccessKeyId      string
 	awsSecretAccessKey  string
 	volumeBackend       string
-	volumeMutexes       map[string]*sync.Mutex
-	volumeMutexesMutex  sync.Mutex
-	volumeCleanupMutex  sync.Mutex
-	lastVolumeCleanup   time.Time
-	volumeCleanup       volumeCleanupConfig
+	// mountRunner and probeRunner are the test seams for the NFS mount path:
+	// the concurrency test counts mount commands without a real server, and
+	// the readiness probe reads a host binary (mountpoint) a dev machine may
+	// not have. nil means the real exec runs — every production path lands
+	// there because NewClient sets neither.
+	mountRunner func(*exec.Cmd) error
+	probeRunner func(context.Context, string) (bool, error)
+	// writeRecordSeam replaces the box volume mount record write when set —
+	// the same posture as mountRunner replacing the mount exec: a test uses
+	// it to fail one specific record write without touching the filesystem.
+	// nil means the real write runs — every production path lands there
+	// because NewClient sets none of the seams.
+	writeRecordSeam    func(ctx context.Context, boxID string, record boxVolumeMountRecord) error
+	volumeMutexes      map[string]*sync.Mutex
+	volumeMutexesMutex sync.Mutex
+	volumeCleanupMutex sync.Mutex
+	lastVolumeCleanup  time.Time
+	volumeCleanup      volumeCleanupConfig
 
 	nestedVirtualizationAllowed bool
 
@@ -455,6 +469,18 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err := validateRecreatableSecrets(boxDto.Secrets); err != nil {
 		return "", "", err
 	}
+
+	// Also before any side effect: the box id becomes part of filesystem
+	// paths — volume mount records ({id}.json) and the runtime's own box
+	// name. The control plane mints ids from
+	// [0-9A-Za-z]{12}, which cannot carry separators or '..', but this
+	// boundary must not lean on that: a traversal-shaped id is rejected
+	// before any mount or record work runs. The literal Contains checks stay
+	// inline so static analysis sees the validation on every path.
+	if strings.ContainsAny(boxDto.Id, "/\\") || strings.Contains(boxDto.Id, "..") {
+		return "", "", fmt.Errorf("invalid box id %q: must not contain path separators or '..'", boxDto.Id)
+	}
+
 	operation, err := c.checkpointOperations().Lock(ctx, boxDto.Id)
 	if err != nil {
 		return "", "", err
@@ -546,8 +572,16 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
+	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Id, boxDto.Volumes)
 	if err != nil {
+		// A filestore volume earlier in the list may already have written its
+		// record entry inside the instance critical section. The failed create
+		// must not leave it behind: no box ever exists to destroy, so the
+		// dangling entry would count a reference forever and keep the NFS
+		// mount from reclaiming.
+		if hasFilestoreRef(boxDto.Volumes) {
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+		}
 		return "", "", err
 	}
 	for _, vol := range volumeMounts {
@@ -558,6 +592,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 	if len(volumeMounts) > 0 {
 		if err := c.recordBoxVolumeMounts(ctx, boxDto.Id, volumeMounts); err != nil {
+			// The final write failed after earlier volumes already published
+			// their entries in-lock. Same rule as the getVolumeMounts path:
+			// no box will exist to destroy, so the dangling entries must not
+			// survive.
+			if hasFilestoreRef(boxDto.Volumes) {
+				c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
+			}
 			return "", "", err
 		}
 	}
@@ -567,9 +608,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if len(volumeMounts) > 0 {
 			cleanupCtx, cancel := cleanupContext(ctx)
 			defer cancel()
-			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(cleanupCtx, "failed to remove cancelled box volume mount record", "box", boxDto.Id, "error", cleanupErr)
-			}
+			c.rollbackVolumeMountRecord(cleanupCtx, boxDto.Id, boxDto.Volumes)
 		}
 		return "", "", err
 	}
@@ -601,9 +640,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
-			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
-			}
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes)
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
@@ -682,6 +719,13 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	// Same boundary check as Create: Start replays the volume mount record
+	// write from metadata and looks the box up by name, so a
+	// traversal-shaped id is rejected before any of that runs.
+	if strings.ContainsAny(boxId, "/\\") || strings.Contains(boxId, "..") {
+		return "", fmt.Errorf("invalid box id %q: must not contain path separators or '..'", boxId)
+	}
+
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
 		return "", err
@@ -689,7 +733,7 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
-		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
+		c.logger.ErrorContext(ctx, "failed to ensure volume mounts", "box", boxId, "error", err)
 	}
 
 	bx, err := c.getOrFetchBox(ctx, boxId)
@@ -727,6 +771,13 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	// Same boundary check as Create/Start: the runtime removal and the
+	// volume mount record paths below all key off boxId, so a
+	// traversal-shaped id is rejected before any of them runs.
+	if strings.ContainsAny(boxId, "/\\") || strings.Contains(boxId, "..") {
+		return fmt.Errorf("invalid box id %q: must not contain path separators or '..'", boxId)
+	}
+
 	operation, err := c.checkpointOperations().Lock(ctx, boxId)
 	if err != nil {
 		return err
@@ -748,8 +799,15 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		}
 	}
 
-	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
-		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)
+	// The record deletion takes each referenced instance's mutex so it cannot
+	// interleave with an in-flight reclaim decision for those instances
+	// (design §4.5.3); the orphan cleanup that follows reclaims their mounts.
+	instances, readErr := c.readFilestoreInstancesFromRecord(boxId)
+	if readErr != nil {
+		c.logger.WarnContext(ctx, "failed to read box volume mount record", "box", boxId, "error", readErr)
+	}
+	if cleanupErr := c.removeBoxVolumeMountRecordLocked(ctx, boxId, instances); cleanupErr != nil {
+		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", cleanupErr)
 	}
 	c.CleanupOrphanedVolumeMounts(ctx)
 

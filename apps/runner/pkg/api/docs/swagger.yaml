@@ -272,6 +272,13 @@ definitions:
       outboundEnabled:
         type: boolean
     type: object
+  dto.FilestoreRef:
+    properties:
+      instance:
+        type: string
+    required:
+      - instance
+    type: object
   dto.SecretDTO:
     properties:
       headers:
@@ -295,6 +302,8 @@ definitions:
     type: object
   dto.VolumeDTO:
     properties:
+      filestore:
+        $ref: '#/definitions/dto.FilestoreRef'
       mountPath:
         type: string
       subpath:
