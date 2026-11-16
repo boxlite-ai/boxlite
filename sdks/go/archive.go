@@ -71,6 +71,11 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 	cDest := toCString(dest)
 	defer C.free(unsafe.Pointer(cDest))
 
+	boxHandle, unlock, err := b.acquire()
+	if err != nil {
+		return "", err
+	}
+
 	result := make(chan handleResult[*C.char], 1)
 	handle := registerHandleForDispatch(cgo.NewHandle(result))
 
@@ -81,12 +86,13 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 
 	var cError C.CBoxliteError
 	code := C.boxlite_box_export(
-		b.handle,
+		boxHandle,
 		cDest,
 		C.cbBoxExport(),
 		handleToPtr(handle),
 		&cError,
 	)
+	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return "", freeError(&cError)

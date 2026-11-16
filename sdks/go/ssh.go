@@ -170,8 +170,8 @@ func (s *SSH) call(
 	ctx context.Context,
 	submit func(*C.CBoxHandle, unsafe.Pointer, *C.CBoxliteError) C.enum_BoxliteErrorCode,
 ) (*SSHStatus, error) {
-	if s == nil || s.box == nil || s.box.handle == nil {
-		return nil, &Error{Code: ErrInvalidState, Message: "box is closed"}
+	if s == nil || s.box == nil {
+		return nil, errBoxClosed
 	}
 	rt := s.box.runtime
 	select {
@@ -184,13 +184,20 @@ func (s *SSH) call(
 	}
 	rt.ensureDrainRunning()
 
+	handle, unlock, err := s.box.acquire()
+	if err != nil {
+		return nil, err
+	}
+
 	ch := make(chan sshStatusResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	var cerr C.CBoxliteError
-	if code := submit(s.box.handle, handleToPtr(h), &cerr); code != C.Ok {
+	if code := submit(handle, handleToPtr(h), &cerr); code != C.Ok {
+		unlock()
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
+	unlock()
 
 	select {
 	case res := <-ch:

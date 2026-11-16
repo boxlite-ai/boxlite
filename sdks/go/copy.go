@@ -24,18 +24,23 @@ import (
 // that would land on one, is refused: such a write would not be visible to
 // anything running in the box. Copy elsewhere, or pipe a tar through Exec.
 func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
-	b.runtime.ensureDrainRunning()
-
 	cSrc := toCString(hostSrc)
 	defer C.free(unsafe.Pointer(cSrc))
 	cDst := toCString(guestDst)
 	defer C.free(unsafe.Pointer(cDst))
 
+	handle, unlock, err := b.acquire()
+	if err != nil {
+		return err
+	}
+	b.runtime.ensureDrainRunning()
+
 	ch := make(chan error, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_copy_into(b.handle, cSrc, cDst, C.cbCopy(), handleToPtr(h), &cerr)
+	code := C.boxlite_copy_into(handle, cSrc, cDst, C.cbCopy(), handleToPtr(h), &cerr)
+	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
@@ -62,18 +67,23 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 // is refused: the archive would carry the underlying files rather than the ones
 // processes in the box see.
 func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
-	b.runtime.ensureDrainRunning()
-
 	cSrc := toCString(guestSrc)
 	defer C.free(unsafe.Pointer(cSrc))
 	cDst := toCString(hostDst)
 	defer C.free(unsafe.Pointer(cDst))
 
+	handle, unlock, err := b.acquire()
+	if err != nil {
+		return err
+	}
+	b.runtime.ensureDrainRunning()
+
 	ch := make(chan error, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_copy_out(b.handle, cSrc, cDst, C.cbCopy(), handleToPtr(h), &cerr)
+	code := C.boxlite_copy_out(handle, cSrc, cDst, C.cbCopy(), handleToPtr(h), &cerr)
+	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
@@ -156,7 +166,14 @@ func (b *Box) CopyOutStream(ctx context.Context, guestSrc string, w io.Writer, o
 
 	var sourceKind C.int32_t
 	var cerr C.CBoxliteError
-	stream := C.boxlite_copy_out_start(b.handle, cSrc, &sourceKind, &cerr)
+	handle, unlock, err := b.acquire()
+	if err != nil {
+		return err
+	}
+	// copy_out_start dereferences the box handle across its whole
+	// synchronous setup; the returned stream is independent of it.
+	stream := C.boxlite_copy_out_start(handle, cSrc, &sourceKind, &cerr)
+	unlock()
 	if stream == nil {
 		return freeError(&cerr)
 	}
@@ -241,6 +258,11 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	cDst := toCString(guestDst)
 	defer C.free(unsafe.Pointer(cDst))
 
+	handle, unlock, err := b.acquire()
+	if err != nil {
+		return err
+	}
+
 	ch := make(chan error, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
@@ -249,7 +271,8 @@ func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind Copy
 	// C caller might pass must map to Unknown, not an invalid Rust enum);
 	// cgo needs the explicit conversion.
 	kind := C.int32_t(normalizeCopySourceKind(sourceKind))
-	stream := C.boxlite_copy_in_start(b.handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
+	stream := C.boxlite_copy_in_start(handle, cDst, kind, C.cbCopy(), handleToPtr(h), &cerr)
+	unlock()
 	if stream == nil {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
