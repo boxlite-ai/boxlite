@@ -65,14 +65,15 @@ type Client struct {
 	// it to fail one specific record write without touching the filesystem.
 	// nil means the real write runs — every production path lands there
 	// because NewClient sets none of the seams.
-	writeRecordSeam    func(ctx context.Context, boxID string, record boxVolumeMountRecord) error
-	prepareRunner      func(dataDir string) error
-	volumeMutexes      map[string]*sync.Mutex
-	volumePending      map[string]int
-	volumeMutexesMutex sync.Mutex
-	volumeCleanupMutex sync.Mutex
-	lastVolumeCleanup  time.Time
-	volumeCleanup      volumeCleanupConfig
+	writeRecordSeam      func(ctx context.Context, boxID string, record boxVolumeMountRecord) error
+	prepareRunner        func(dataDir string) error
+	clearPublishedRunner func() error
+	volumeMutexes        map[string]*sync.Mutex
+	volumePending        map[string]int
+	volumeMutexesMutex   sync.Mutex
+	volumeCleanupMutex   sync.Mutex
+	lastVolumeCleanup    time.Time
+	volumeCleanup        volumeCleanupConfig
 
 	nestedVirtualizationAllowed bool
 
@@ -636,6 +637,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// now exists locally and the job can proceed, so it is discarded.
 	id, err := c.nativeBoxID(boxDto.Id)
 	if err != nil {
+		if len(volumeMounts) > 0 {
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
+		}
 		return "", "", err
 	}
 	var bx *boxlite.Box
@@ -643,7 +647,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		bx, err = c.runtime.Get(ctx, id)
 	}
 	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
-		if err := operation.ClearPublished(); err != nil {
+		clearPublished := operation.ClearPublished
+		if c.clearPublishedRunner != nil {
+			clearPublished = c.clearPublishedRunner
+		}
+		if err := clearPublished(); err != nil {
+			if len(volumeMounts) > 0 {
+				c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, priorVolumeRecord)
+			}
 			return "", "", err
 		}
 		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
