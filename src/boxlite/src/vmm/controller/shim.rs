@@ -218,25 +218,6 @@ impl VmmHandlerTrait for ShimHandler {
     }
 }
 
-/// The requested native `RLIMIT_FSIZE` ceiling: twice the larger of the
-/// online grow limit and the disk. The jailer caps it at the inherited hard
-/// limit; the shim can raise its soft limit only within that effective ceiling.
-/// Other engines keep their hard limit at the soft one.
-fn file_size_ceiling(
-    engine: VmmKind,
-    options: &crate::runtime::options::BoxOptions,
-) -> Option<u64> {
-    use crate::disk::constants::qcow2::{
-        DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER, ONLINE_GROW_MAX_GB,
-    };
-    (engine == VmmKind::Native).then(|| {
-        let disk_gb = options.disk_size_gb.unwrap_or(DEFAULT_DISK_SIZE_GB);
-        crate::runtime::types::Bytes::from_gib(disk_gb.max(ONLINE_GROW_MAX_GB))
-            .as_bytes()
-            .saturating_mul(FSIZE_DISK_MULTIPLIER)
-    })
-}
-
 /// Emit the post-spawn TRACE event with the serialized `InstanceSpec`'s
 /// secrets stripped out.
 ///
@@ -393,8 +374,7 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         )
-        .with_nested_virtualization(config.nested_virtualization)
-        .with_file_size_ceiling(file_size_ceiling(self.engine_type, &self.options));
+        .with_nested_virtualization(config.nested_virtualization);
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
@@ -427,24 +407,6 @@ impl VmmController for ShimController {
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn only_a_native_shim_gets_a_file_size_ceiling() {
-        use crate::runtime::types::Bytes;
-        let mut options = crate::runtime::options::BoxOptions::default();
-        assert_eq!(file_size_ceiling(VmmKind::Libkrun, &options), None);
-        // The default 10 GiB disk may grow online to 1 TiB, so 2 TiB.
-        assert_eq!(
-            file_size_ceiling(VmmKind::Native, &options),
-            Some(Bytes::from_gib(2048).as_bytes())
-        );
-        // A disk above the online limit keeps twice its own size.
-        options.disk_size_gb = Some(1500);
-        assert_eq!(
-            file_size_ceiling(VmmKind::Native, &options),
-            Some(Bytes::from_gib(3000).as_bytes())
-        );
-    }
     use super::*;
     use std::sync::{Arc, Mutex};
 

@@ -142,10 +142,20 @@ requiring maximum security should use Linux.
 | Resource | Limit Type | Purpose |
 |----------|------------|---------|
 | Open files | RLIMIT_NOFILE | Prevent FD exhaustion |
-| File size | RLIMIT_FSIZE | Prevent disk filling |
+| File size | RLIMIT_FSIZE | Cap individual file growth |
 | Processes | RLIMIT_NPROC | Prevent fork bombs |
 | Memory | RLIMIT_AS | Prevent OOM |
 | CPU time | RLIMIT_CPU | Prevent CPU monopolization |
+
+The file-size soft limit comes from `ResourceLimits.max_file_size`, normally
+twice the disk capacity. For both engines, the jailer reserves hard as
+`min(max(2 TiB, max_file_size), inherited hard)` and caps soft there too.
+
+A 10 GiB disk starts with soft 20 GiB; the native shim raises it to 100 GiB
+before growing to 50 GiB. libkrun shares the reserve but has no online disk grow.
+
+A shim can raise its own soft limit within hard; this is a per-file backstop,
+while the virtual disk capacity determines the guest's available space.
 
 ### Layer 4: Environment Sanitization
 

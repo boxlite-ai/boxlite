@@ -571,12 +571,14 @@ logged.
   - Smaller, unaligned and read-only targets fail; the current size succeeds,
     making retries safe. Requests sent before driver activation wait for it.
 - **File size limits.** Before growing, the shim raises its soft `RLIMIT_FSIZE`.
-  - The native hard limit covers twice the larger of `ONLINE_GROW_MAX_GB`
-    (1024 GiB) and the disk, capped at the inherited hard limit.
+  - The jailer computes hard as `min(max(2 TiB, max_file_size), inherited hard)`
+    for both engines. The existing `max_file_size` supplies the initial soft
+    limit, so the controller and builders carry no separate ceiling parameter.
   - The initial soft limit is capped there too: an unprivileged child cannot
     raise its inherited hard limit. A grow beyond that limit fails before
     changing the disk.
-  - Other engines keep hard equal to soft.
+  - A 10 GiB disk starts with soft 20 GiB; native growth to 50 GiB raises soft
+    to 100 GiB. libkrun shares the hard-limit reserve but cannot grow online.
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).

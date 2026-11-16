@@ -183,7 +183,9 @@ pub struct ResourceLimits {
     #[serde(default)]
     pub max_open_files: Option<u64>,
 
-    /// Maximum file size in bytes (RLIMIT_FSIZE).
+    /// Initial soft file-size limit in bytes (RLIMIT_FSIZE).
+    /// The jailer reserves a hard limit for disk growth, capped at the inherited
+    /// hard limit; the initial soft limit is capped there too.
     #[serde(default)]
     pub max_file_size: Option<u64>,
 

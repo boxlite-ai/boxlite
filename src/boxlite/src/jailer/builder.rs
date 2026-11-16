@@ -34,7 +34,6 @@ pub struct JailerBuilder {
     detach: bool,
     additional_path_access: Vec<PathAccess>,
     network_backend_enabled: bool,
-    file_size_ceiling: Option<u64>,
 }
 
 impl Default for JailerBuilder {
@@ -56,7 +55,6 @@ impl JailerBuilder {
             detach: false,
             additional_path_access: Vec::new(),
             network_backend_enabled: false,
-            file_size_ceiling: None,
         }
     }
 
@@ -312,13 +310,6 @@ impl JailerBuilder {
         self
     }
 
-    /// Keep the hard `RLIMIT_FSIZE` at `ceiling` (when above the soft limit
-    /// `max_file_size`), so the shim can raise its own soft limit later.
-    pub(crate) fn with_file_size_ceiling(mut self, ceiling: Option<u64>) -> Self {
-        self.file_size_ceiling = ceiling;
-        self
-    }
-
     /// Build with the platform-default sandbox.
     ///
     /// On Linux: [`BwrapSandbox`](super::sandbox::BwrapSandbox)
@@ -368,7 +359,6 @@ impl JailerBuilder {
             detach: self.detach,
             additional_path_access: self.additional_path_access,
             network_backend_enabled: self.network_backend_enabled,
-            file_size_ceiling: self.file_size_ceiling,
         })
     }
 }

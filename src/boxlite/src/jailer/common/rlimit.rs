@@ -41,7 +41,7 @@ pub fn get_rlimit(resource: RlimitResource) -> Result<(u64, u64), io::Error> {
 ///
 /// # Safety
 ///
-/// This function only uses async-signal-safe syscalls (setrlimit).
+/// This function only uses async-signal-safe syscalls (getrlimit and setrlimit).
 /// Do NOT add:
 /// - Logging (tracing, println)
 /// - Memory allocation (Box, Vec, String)
@@ -59,7 +59,7 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
     }
 
     if let Some(max_fsize) = limits.max_file_size {
-        set_rlimit_raw(libc::RLIMIT_FSIZE, max_fsize)?;
+        set_file_size_raw(max_fsize)?;
     }
 
     // NOTE: `max_processes` is deliberately NOT applied as RLIMIT_NPROC.
@@ -92,11 +92,16 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
     Ok(())
 }
 
-/// Set `RLIMIT_FSIZE` to `soft` under a higher `hard` limit, so the process
-/// can raise its own soft limit up to `hard` later - async-signal-safe. An
-/// unprivileged process cannot raise its hard limit, so `hard` stops at the
-/// inherited one, and `soft` at that.
-pub fn set_file_size_raw(soft: u64, hard: u64) -> Result<(), i32> {
+/// Apply the disk-derived soft limit and reserve a hard limit for online growth.
+/// Both engines share this policy; neither limit exceeds the inherited hard limit.
+/// Async-signal-safe: only arithmetic, getrlimit and setrlimit run after fork.
+fn set_file_size_raw(soft: u64) -> Result<(), i32> {
+    use crate::disk::constants::qcow2::{FSIZE_DISK_MULTIPLIER, ONLINE_GROW_MAX_GB};
+    use crate::runtime::types::Bytes;
+
+    let reserve = Bytes::from_gib(ONLINE_GROW_MAX_GB)
+        .as_bytes()
+        .saturating_mul(FSIZE_DISK_MULTIPLIER);
     let mut inherited = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -104,7 +109,7 @@ pub fn set_file_size_raw(soft: u64, hard: u64) -> Result<(), i32> {
     if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut inherited) } != 0 {
         return Err(super::get_errno());
     }
-    let hard = (hard as libc::rlim_t).min(inherited.rlim_max);
+    let hard = (soft.max(reserve) as libc::rlim_t).min(inherited.rlim_max);
     let rlim = libc::rlimit {
         rlim_cur: (soft as libc::rlim_t).min(hard),
         rlim_max: hard,
@@ -168,3 +173,7 @@ mod tests {
         assert!(soft > 0, "Should have some file descriptors available");
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/rlimit.rs"]
+mod file_size_tests;
