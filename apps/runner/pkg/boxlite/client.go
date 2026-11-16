@@ -590,8 +590,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		return "", "", err
 	}
 	var bx *boxlite.Box
-	if id != boxDto.Id {
+	if id != boxDto.Id || boxDto.RequireExisting {
 		bx, err = c.runtime.Get(ctx, id)
+	}
+	// The target lease excludes HTTP destruction until adoption/start finishes.
+	// Never recreate a replay target whose single-use credential was skipped.
+	if boxDto.RequireExisting && bx == nil {
+		return "", "", fmt.Errorf("existing box unavailable")
 	}
 	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
 		if err := operation.ClearPublished(); err != nil {
@@ -786,6 +791,16 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 	default:
 		return enums.BoxStateUnknown
 	}
+}
+
+// BoxExists distinguishes absence from runtime lookup failures without fetching
+// a bootable handle. GetBoxInfo intentionally maps absence to an unknown state.
+func (c *Client) BoxExists(ctx context.Context, boxId string) (bool, error) {
+	_, err := c.nativeBoxInfo(ctx, boxId)
+	if boxlite.IsNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // GetBoxInfo returns a box's current state together with the main command's

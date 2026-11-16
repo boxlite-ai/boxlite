@@ -56,6 +56,10 @@ func (a *BoxliteAdapter) GetBoxInfo(ctx context.Context, boxId string) (models.B
 	return a.client.GetBoxInfo(ctx, boxId)
 }
 
+func (a *BoxliteAdapter) BoxExists(ctx context.Context, boxId string) (bool, error) {
+	return a.client.BoxExists(ctx, boxId)
+}
+
 func (a *BoxliteAdapter) Ping(ctx context.Context) error {
 	return a.client.Ping(ctx)
 }
