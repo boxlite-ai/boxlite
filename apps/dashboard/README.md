@@ -564,7 +564,7 @@ can be removed but not given another role. The member whose personal
 organization this is has no remove action, because the API refuses that
 removal.
 
-The profile menu's Organization entry opens two tabs. General shows the editable
+The Management navigation's Organization entry opens two tabs. General shows the editable
 name and copyable ID. Member combines members and outgoing invitations in one
 table, with Member, Invited, and Expired statuses. Owners can invite, remove members,
 and cancel invitations. Expired invitations offer Remove (with confirmation) and
@@ -572,7 +572,7 @@ Resend. Resending creates a new invitation with the same permissions and the cur
 default lifetime, then removes the expired record. Creation failure preserves the
 old row; cleanup failure reports that the new invitation exists and refreshes both
 rows, so the owner can remove the expired one. The old link remains unusable.
-The page shows the current organization's name; switching stays in the profile menu.
+The page shows the current organization's name; use the header switcher to change organizations.
 The Member tab can be bookmarked at
 `/dashboard/settings?tab=member`; older `/dashboard/members` links redirect there.
 
@@ -591,15 +591,15 @@ an invitation ID redirects to the current organization's Member tab without acce
 
 The new selection is saved only after membership validation succeeds. If switching
 fails, acceptance still succeeds. The page explains that joining succeeded and
-asks the user to switch through the profile menu. The console keeps the previous
+asks the user to switch through the header organization switcher. The console keeps the previous
 organization both on screen and for the next reload.
 
-## The organization you pick is the one you come back to
+## Organization selection persists for the session
 
-A user in more than one organization switches between them from the profile
-menu, which marks the personal one. The pick is kept in `localStorage`, so the
-next login opens the same organization; if the user was removed from it in the
-meantime, the console falls back to their personal organization.
+Users switch organizations from the header switcher. The selection is kept in
+`sessionStorage` for the authenticated user. Reload and token renewal restore it,
+and explicit logout clears it. A new login does not treat the legacy `localStorage`
+ID as a confirmed selection. See [Organization context](#organization-context).
 
 ## New-user onboarding
 
@@ -742,14 +742,14 @@ route remains highlighted when the whole sidebar collapses.
 
 The desktop sidebar spans the viewport height (minus any announcement). Its logo
 shows the full wordmark when expanded and the icon when compact. The right column
-contains a 48px header and route content; API Keys is separated from the account
-by 32px on desktop. Below 768px the 60px header retains the brand and mobile menu.
+contains a 64px header and route content; API Keys is separated from the account
+by 32px on desktop. Below 768px the header prioritizes organization context and the mobile menu.
 Welcome keeps its simplified header.
 
 Management is a primary disclosure after Applications, with Billing and Organization
 children. Clicking it in compact mode expands the sidebar and reveals the group;
 entering a management route opens the group, while manual collapse remains possible.
-Organization switching, theme and logout remain in the account menu.
+Organization switching is in the header; theme and logout are in the account menu.
 
 Links retain accessible names in compact mode and show right-side tooltips on
 hover/focus. The middle navigation scrolls on short screens; the footer pins the
@@ -1222,3 +1222,50 @@ validation and actionable errors, lifecycle labels, and keyboard access to check
 and runner failure reasons. CI tests also cover repository disclosure without changing
 the selected account, missing runner metadata, and explicit retries that retain cached
 connections and runners. These tests use the existing frontend API contracts.
+
+## Organization context
+
+After authentication, users with multiple organizations select an organization before
+organization business providers mount. One organization enters directly; zero
+organizations offers refresh and another-account recovery. Invitation and email
+verification URLs complete their existing scoped flow before this gate applies.
+
+The 64px Console header displays the active organization. Multiple memberships
+open a compact switcher showing names and complete IDs; search appears above five
+memberships. The profile menu contains account actions, not another organization list. On mobile,
+API Keys remains available in the navigation menu while its header shortcut is hidden.
+
+Selection is stored in tab-local sessionStorage with the authenticated user ID.
+Reload and token renewal restore a valid confirmation; explicit logout clears it.
+The legacy localStorage ID is a compatibility hint, not a login confirmation.
+A missing or removed selection returns multiple-membership users to the chooser.
+The server remains responsible for authorizing every organization API request.
+
+Switching validates membership without changing the current permission context,
+saves the session, then performs a full document navigation. This discards in-memory
+query state and connections. Resource lists retain their section without query/hash;
+Box and Image details return to their lists. Settings and billing switches land on
+Boxes, avoiding a destination that may require permissions the new member lacks.
+Non-list pages ask before discarding edits or terminal connections. Running Boxes
+continue running. This conservative route warning is not general form-dirty tracking;
+list-page modal editors already block access to the header.
+
+A failed membership request or session write leaves the current context intact and
+shows a retryable error. Failed invitation entry can be retried through the header.
+Email verification waits for organization selection and does not replay the token
+when React effects rerun. GitHub CI authorization callbacks save the authenticated
+user’s organization session before returning to Connects, including attempts started
+before the session selection rollout. Storage failure keeps a retry action on the callback.
+
+### Local organization review
+
+From `apps/`, run:
+
+```sh
+VITE_MOCK_MULTIPLE_ORGANIZATIONS=true node scripts/start-dashboard.mjs --target=mock --host 127.0.0.1 --port 3187
+```
+
+The existing MSW worker supplies three synthetic memberships. Without the flag,
+mock mode has one organization. Mock resource fixtures are shared: these previews
+verify navigation and UI, not backend resource isolation. Review with real accounts
+having distinct memberships and resources before production rollout.

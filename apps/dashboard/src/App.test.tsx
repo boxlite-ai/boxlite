@@ -10,6 +10,10 @@ import { MemoryRouter, Outlet, useLocation, useParams } from 'react-router-dom'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
+vi.mock('@/components/OrganizationExperience', () => ({
+  OrganizationGate: ({ children }: { children: React.ReactNode }) => children,
+}))
+
 // The route table is what is under test, so everything it mounts around a page
 // is a pass-through and every page is a marker naming itself.
 vi.mock('react-oidc-context', () => ({

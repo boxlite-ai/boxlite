@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { OrganizationGate } from './components/OrganizationExperience'
 import { NotificationSocketProvider } from '@/providers/NotificationSocketProvider'
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
@@ -179,15 +180,17 @@ function App() {
             <ApiProvider>
               <RegistrationGate key={user?.profile.sub}>
                 <OrganizationsProvider>
-                  <SelectedOrganizationProvider>
-                    <RegionsProvider>
-                      <NotificationSocketProvider>
-                        <BannerProvider>
-                          <Dashboard />
-                        </BannerProvider>
-                      </NotificationSocketProvider>
-                    </RegionsProvider>
-                  </SelectedOrganizationProvider>
+                  <OrganizationGate>
+                    <SelectedOrganizationProvider>
+                      <RegionsProvider>
+                        <NotificationSocketProvider>
+                          <BannerProvider>
+                            <Dashboard />
+                          </BannerProvider>
+                        </NotificationSocketProvider>
+                      </RegionsProvider>
+                    </SelectedOrganizationProvider>
+                  </OrganizationGate>
                 </OrganizationsProvider>
               </RegistrationGate>
             </ApiProvider>

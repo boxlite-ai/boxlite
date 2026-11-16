@@ -96,7 +96,7 @@ const Dashboard: React.FC = () => {
     <div
       className={cn(
         'relative w-full [--app-banner-height:0px] [--app-header-height:60px] [--app-content-height:calc(100svh_-_var(--app-header-height)_-_var(--app-banner-height))]',
-        !isWelcome && 'md:[--app-header-height:48px]',
+        '[--app-header-height:64px] md:[--app-header-height:64px]',
         isBannerVisible && 'pt-16 [--app-banner-height:4rem] md:pt-12 md:[--app-banner-height:3rem]',
       )}
     >

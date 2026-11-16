@@ -56,6 +56,7 @@ const mockSignIn = async () => {
 const mockSignOut = async () => {
   try {
     localStorage.setItem(SIGNED_OUT_KEY, '1')
+    sessionStorage.removeItem('boxlite-organization-session')
   } catch {
     /* localStorage may be unavailable */
   }

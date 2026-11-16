@@ -19,7 +19,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
-import { useOrganizations } from '@/hooks/useOrganizations'
+import { OrganizationSwitcher } from './OrganizationExperience'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
@@ -28,7 +28,6 @@ import {
   BookOpen,
   Building2,
   CreditCardIcon,
-  Check,
   ChevronDown,
   KeyRound,
   LogOut,
@@ -265,8 +264,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     if ([RoutePath.BILLING, RoutePath.SETTINGS].some((path) => pathname === path || pathname.startsWith(`${path}/`)))
       setManagementOpen(true)
   }, [pathname])
-  const { selectedOrganization, onSelectOrganization } = useSelectedOrganization()
-  const { organizations } = useOrganizations()
+  const { selectedOrganization } = useSelectedOrganization()
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -633,15 +631,8 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             isBannerVisible ? 'top-16 md:top-12' : 'top-0',
           )}
         >
-          <Link
-            to={RoutePath.BOXES}
-            className="flex h-full shrink-0 items-center md:hidden px-2 xs:px-[14px] text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-            aria-label="BoxLite home"
-          >
-            <LogoText className="h-9 w-auto" />
-          </Link>
-
-          <div className="min-w-0 flex-1" />
+          <OrganizationSwitcher />
+          <div className="hidden min-w-0 flex-1 md:block" />
 
           <Link
             to={RoutePath.KEYS}
@@ -650,6 +641,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             title="API Keys"
             className={cn(
               'mr-2 md:mr-8 inline-flex h-9 shrink-0 items-center gap-2 px-3 text-muted-foreground hover:bg-control-hover hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring',
+              'hidden md:inline-flex',
               isActive(RoutePath.KEYS) && 'bg-selection text-selection-foreground hover:bg-selection',
             )}
           >
@@ -657,7 +649,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             <span className="hidden sm:inline">API Keys</span>
           </Link>
 
-          {/* profile menu (organization switcher tucked inside) */}
+          {/* Account actions and theme */}
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label="Open profile menu"
@@ -692,33 +684,6 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               <DropdownMenuSeparator />
               <ThemeMenuItems theme={theme} setTheme={setTheme} />
               <DropdownMenuSeparator />
-              {/* The selection persists in localStorage, so the chosen organization opens on the next login. */}
-              {organizations.length > 1 && (
-                <>
-                  <DropdownMenuLabel className="font-sans text-meta font-normal uppercase tracking-[0.18em] text-muted-foreground">
-                    Organizations
-                  </DropdownMenuLabel>
-                  {organizations.map((organization) => {
-                    const isSelected = organization.id === selectedOrganization?.id
-                    return (
-                      <DropdownMenuItem
-                        key={organization.id}
-                        className="cursor-pointer"
-                        onClick={() => {
-                          if (!isSelected) void onSelectOrganization(organization.id)
-                        }}
-                      >
-                        <Check className={cn('size-4', isSelected ? 'opacity-100' : 'opacity-0')} />
-                        <span className="truncate">{organization.name}</span>
-                        {organization.isDefaultForAuthenticatedUser && (
-                          <span className="ml-auto text-meta text-muted-foreground">Personal</span>
-                        )}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                  <DropdownMenuSeparator />
-                </>
-              )}
               <DropdownMenuItem asChild className="cursor-pointer">
                 <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
                   <BookOpen className="size-4" />
@@ -769,6 +734,12 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Management</DropdownMenuLabel>
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <Link to={RoutePath.KEYS}>
+                  <KeyRound className="size-4" />
+                  API Keys
+                </Link>
+              </DropdownMenuItem>
               {managementEntries}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>

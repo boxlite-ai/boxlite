@@ -11,10 +11,13 @@
 // logout here so the landing page shows a manual sign-in instead of auto-
 // redirecting. sessionStorage survives the cross-origin round-trip to the IdP
 // and back within the same tab, and clears on tab close.
+import { ORGANIZATION_SESSION_KEY } from './organization-session'
+
 const JUST_LOGGED_OUT_KEY = 'boxlite-just-logged-out'
 
 export function markJustLoggedOut() {
   try {
+    sessionStorage.removeItem(ORGANIZATION_SESSION_KEY)
     sessionStorage.setItem(JUST_LOGGED_OUT_KEY, '1')
   } catch {
     /* sessionStorage may be unavailable (private mode, etc.) */

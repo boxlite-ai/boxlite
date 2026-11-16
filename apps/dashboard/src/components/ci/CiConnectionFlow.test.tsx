@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   selectCiAccount: vi.fn(),
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => api }))
+vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub: 'callback-user' } } }) }))
 vi.mock('@/lib/ci-connect', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ci-connect')>()
   return {
