@@ -816,6 +816,73 @@ async fn disk_lock_b1_running_auto_delete_stop_retries_busy_removal() {
 }
 
 #[tokio::test]
+async fn disk_lock_natural_exit_auto_delete_waits_for_disk_and_completes() {
+    let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let bx = Arc::get_mut(&mut fixture.box_impl).unwrap();
+    bx.config.options.auto_delete = Some(1);
+    bx.config.options.detach = false;
+    bx.state.write().set_pid(Some(u32::MAX));
+    bx.runtime.box_manager.remove_box(bx.id()).unwrap();
+    bx.runtime
+        .box_manager
+        .add_box(&bx.config, &bx.state.read())
+        .unwrap();
+    let run = BoxRun {
+        pid: bx.state.read().pid.unwrap(),
+        started_at: bx.state.read().started_at,
+    };
+    std::fs::create_dir_all(bx.config.box_home.join("disks")).unwrap();
+    let disk = bx.disk_locker().unwrap();
+    let paths = [
+        bx.runtime.layout.locks_dir().join(disk.id().to_string()),
+        bx.runtime
+            .layout
+            .disk_locks_dir()
+            .join(disk.id().to_string()),
+    ];
+    let guard = LockGuard::new_async(disk.as_ref()).await;
+    let mut observation = Box::pin(bx.apply_observation(
+        run,
+        BoxEvent::Exited {
+            health_checked: false,
+        },
+    ));
+    let initial = futures::poll!(&mut observation);
+    assert_eq!(bx.state.read().status, BoxStatus::Stopped);
+    assert_eq!(
+        bx.runtime.box_manager.update_box(bx.id()).unwrap().status,
+        BoxStatus::Stopped
+    );
+    assert!(bx.config.box_home.is_dir());
+    assert!(paths.iter().all(|path| path.is_file()));
+    assert!(!bx.auto_removed.load(Ordering::Acquire));
+    // Waiting for disk admission must not retain lifecycle admission.
+    let lifecycle = bx.runtime.lock_manager.retrieve(disk.id()).unwrap();
+    assert!(LockGuard::try_new(lifecycle.as_ref()).is_some());
+    drop(guard);
+
+    let cleaned = tokio::time::timeout(Duration::from_secs(5), async {
+        let observed = match initial {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => observation.await,
+        };
+        while bx.runtime.box_manager.box_by_id(bx.id()).unwrap().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        observed
+    })
+    .await;
+    assert!(
+        cleaned.is_ok(),
+        "natural exit abandoned auto-delete after disk admission became available"
+    );
+    cleaned.unwrap().unwrap();
+    assert!(!bx.config.box_home.exists());
+    assert!(paths.iter().all(|path| !path.exists()));
+    assert!(bx.auto_removed.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn disk_lock_c1_auto_delete_missing_lock_is_not_completed_removal() {
     let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
     let bx = Arc::get_mut(&mut fixture.box_impl).unwrap();

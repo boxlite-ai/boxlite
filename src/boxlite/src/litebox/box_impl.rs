@@ -37,8 +37,8 @@ use crate::vmm::controller::VmmHandler;
 use crate::{BoxID, BoxInfo};
 
 mod operations;
-use operations::StopReason;
 pub(crate) use operations::{BoxEvent, BoxRun};
+use operations::{StopCommit, StopReason};
 
 // ============================================================================
 // TYPE ALIASES
@@ -291,6 +291,33 @@ impl BoxImpl {
             )));
         }
         Ok(())
+    }
+
+    async fn complete_exit_cleanup(&self) -> BoxliteResult<()> {
+        let locker = self.disk_locker()?;
+        let _guard = LockGuard::new_async(locker.as_ref()).await;
+        self.validate_disk_owner(locker.id())?;
+        self.with_operation(async {
+            let state = self.state.read().clone();
+            if state.status != BoxStatus::Stopped
+                || state.pid.is_some()
+                || !self.config.options.removes_on_stop()
+                || self.auto_removed.load(Ordering::Acquire)
+                || state.lock_id != Some(locker.id())
+            {
+                return Ok(());
+            }
+            self.runtime.remove_box_holding_admissions(
+                self.id(),
+                false,
+                self.config.clone(),
+                state,
+                locker.id(),
+            )?;
+            self.auto_removed.store(true, Ordering::Release);
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) fn container_id(&self) -> &str {
@@ -898,12 +925,15 @@ impl BoxImpl {
             ),
         }
 
-        self.finish_stop(StopReason::Requested)?;
+        if matches!(self.finish_stop(StopReason::Requested)?, StopCommit::Remove) {
+            self.runtime.remove_box_locked(self.id(), false)?;
+            self.auto_removed.store(true, Ordering::Release);
+        }
         tracing::info!(box_id = %self.id(), elapsed_ms = t0.elapsed().as_millis() as u64, "Box stopped");
         Ok(())
     }
 
-    fn finish_stop(&self, reason: StopReason) -> BoxliteResult<()> {
+    fn finish_stop(&self, reason: StopReason) -> BoxliteResult<StopCommit> {
         // Check if box was persisted
         let was_persisted = self.state.read().lock_id.is_some();
 
@@ -931,7 +961,7 @@ impl BoxImpl {
                     {
                         state.exit_code = Some(record.exit_code);
                     } else {
-                        return Ok(());
+                        return Ok(StopCommit::Settled);
                     }
                     if health_checked {
                         state.health_status.state = crate::HealthState::Unhealthy;
@@ -951,7 +981,7 @@ impl BoxImpl {
                             "Box already removed from DB during stop (likely cleanup after init failure)"
                         );
                         *current = state;
-                        return Ok(());
+                        return Ok(StopCommit::Settled);
                     }
                     Err(e) => return Err(e),
                 }
@@ -976,13 +1006,11 @@ impl BoxImpl {
                 .fetch_add(1, Ordering::Relaxed);
         }
 
-        // Apply the configured remove-on-stop policy.
-        if self.config.options.removes_on_stop() {
-            self.runtime.remove_box_locked(self.id(), false)?;
-            self.auto_removed.store(true, Ordering::Release);
-        }
-
-        Ok(())
+        Ok(if self.config.options.removes_on_stop() {
+            StopCommit::Remove
+        } else {
+            StopCommit::Settled
+        })
     }
 
     // ========================================================================

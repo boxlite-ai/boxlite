@@ -1137,89 +1137,7 @@ impl RuntimeImpl {
                     "box {id} has a disk operation in progress; retry removal"
                 ))
             })?;
-            let mut state = state;
-            if state.status.is_active() || state.pid.is_some() {
-                if force {
-                    // Stop the box's whole process tree through the same handler
-                    // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
-                    // pid (the outer launcher), then reaps any survivors of a
-                    // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
-                    // which a single-pid kill misses, since #851 stopped tying
-                    // detached boxes to the launcher's lifetime.
-                    if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let _ = handler.stop();
-                    }
-                    // Update status to stopped and save
-                    state.set_status(BoxStatus::Stopped);
-                    state.set_pid(None);
-                    self.box_manager.save_box(id, &state)?;
-                } else {
-                    // Non-force mode: error on active box
-                    return Err(BoxliteError::InvalidState(format!(
-                        "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
-                        id, state.pid, state.status
-                    )));
-                }
-            }
-
-            // Check if other boxes depend on this box's disks (COW backing references).
-            if !force {
-                let dependents = find_boxes_depending_on(self, id.as_ref())?;
-                if !dependents.is_empty() {
-                    return Err(BoxliteError::InvalidState(format!(
-                        "Cannot remove box: boxes [{}] have clone dependencies on it. \
-                         Remove those first or use force=true.",
-                        dependents.join(", ")
-                    )));
-                }
-            }
-
-            // Remove from BoxManager (database-first)
-            self.box_manager.remove_box(id)?;
-
-            // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
-            let affected_base_ids = self
-                .base_disk_mgr
-                .store()
-                .remove_all_refs_for_box(id.as_ref())
-                .unwrap_or_default();
-
-            // 2. Delete container disk file
-            let disks_dir = config.box_home.join("disks");
-            let container = disks_dir.join(crate::disk::constants::filenames::CONTAINER_DISK);
-            let _ = std::fs::remove_file(&container);
-
-            // 3. Remove all snapshots for this box (files + DB records).
-            self.snapshot_mgr
-                .remove_all_for_box(id.as_ref(), &config.box_home);
-
-            // 4. GC each affected base (may cascade to parents)
-            for base_id in affected_base_ids {
-                self.base_disk_mgr.try_gc_base(&base_id);
-            }
-
-            // Delete box directory + its socket binding symlink
-            config.sockets().remove();
-            let box_home = config.box_home;
-            if box_home.exists()
-                && let Err(e) = std::fs::remove_dir_all(&box_home)
-            {
-                tracing::warn!(
-                    box_id = %id,
-                    path = %box_home.display(),
-                    error = %e,
-                    "Failed to cleanup box directory"
-                );
-            }
-
-            // Invalidate cache
-            self.invalidate_box_impl(id, config.name.as_deref());
-            self.free_box_locks(lock_id);
-
-            tracing::info!(box_id = %id, "Removed box");
-            return Ok(());
+            return self.remove_box_holding_admissions(id, force, config, state, lock_id);
         }
 
         // Box not in database - check in-memory cache
@@ -1285,6 +1203,101 @@ impl RuntimeImpl {
 
         // Box not found anywhere
         Err(BoxliteError::NotFound(id.to_string()))
+    }
+
+    /// Caller must hold this box's lifecycle and disk write admissions and pass
+    /// its refreshed config/state and the admitted lock ID.
+    pub(crate) fn remove_box_holding_admissions(
+        &self,
+        id: &BoxID,
+        force: bool,
+        config: BoxConfig,
+        state: BoxState,
+        lock_id: crate::lock::LockId,
+    ) -> BoxliteResult<()> {
+        let mut state = state;
+        if state.status.is_active() || state.pid.is_some() {
+            if force {
+                // Stop the box's whole process tree through the same handler
+                // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
+                // pid (the outer launcher), then reaps any survivors of a
+                // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
+                // which a single-pid kill misses, since #851 stopped tying
+                // detached boxes to the launcher's lifetime.
+                if let Some(pid) = state.pid {
+                    tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
+                    let mut handler = ShimHandler::from_pid(pid, config.id.clone());
+                    let _ = handler.stop();
+                }
+                // Update status to stopped and save
+                state.set_status(BoxStatus::Stopped);
+                state.set_pid(None);
+                self.box_manager.save_box(id, &state)?;
+            } else {
+                // Non-force mode: error on active box
+                return Err(BoxliteError::InvalidState(format!(
+                    "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
+                    id, state.pid, state.status
+                )));
+            }
+        }
+
+        // Check if other boxes depend on this box's disks (COW backing references).
+        if !force {
+            let dependents = find_boxes_depending_on(self, id.as_ref())?;
+            if !dependents.is_empty() {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Cannot remove box: boxes [{}] have clone dependencies on it. \
+                     Remove those first or use force=true.",
+                    dependents.join(", ")
+                )));
+            }
+        }
+
+        // Remove from BoxManager (database-first)
+        self.box_manager.remove_box(id)?;
+
+        // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
+        let affected_base_ids = self
+            .base_disk_mgr
+            .store()
+            .remove_all_refs_for_box(id.as_ref())
+            .unwrap_or_default();
+
+        // 2. Delete container disk file
+        let disks_dir = config.box_home.join("disks");
+        let container = disks_dir.join(crate::disk::constants::filenames::CONTAINER_DISK);
+        let _ = std::fs::remove_file(&container);
+
+        // 3. Remove all snapshots for this box (files + DB records).
+        self.snapshot_mgr
+            .remove_all_for_box(id.as_ref(), &config.box_home);
+
+        // 4. GC each affected base (may cascade to parents)
+        for base_id in affected_base_ids {
+            self.base_disk_mgr.try_gc_base(&base_id);
+        }
+
+        // Delete box directory + its socket binding symlink
+        config.sockets().remove();
+        let box_home = config.box_home;
+        if box_home.exists()
+            && let Err(e) = std::fs::remove_dir_all(&box_home)
+        {
+            tracing::warn!(
+                box_id = %id,
+                path = %box_home.display(),
+                error = %e,
+                "Failed to cleanup box directory"
+            );
+        }
+
+        // Invalidate cache
+        self.invalidate_box_impl(id, config.name.as_deref());
+        self.free_box_locks(lock_id);
+
+        tracing::info!(box_id = %id, "Removed box");
+        Ok(())
     }
 
     // ========================================================================

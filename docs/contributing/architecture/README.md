@@ -151,7 +151,7 @@ The state refresh under lifecycle admission remains the sole authority.
 `BoxImpl::apply_observation` acquires lifecycle write admission, checks
 PID/`started_at`, and applies the report:
 health persistence or shared stop finalization (exit records, cache invalidation,
-and configured removal). The name distinguishes this state-changing commit phase
+and the configured cleanup decision). The name distinguishes this state-changing commit phase
 from the watcher's process observation and health probing outside admission.
 Successful automatic removal is recorded on that handle, so a later `stop()` remains
 idempotent even after its row and lock are gone. Unrelated missing state is not
@@ -160,6 +160,13 @@ treated as completed automatic removal.
 Stop finalization publishes its in-memory terminal state only after persistence
 succeeds (or the row is already gone). A failed write leaves the run identity
 retryable instead of making the handle appear to belong to an earlier VM.
+
+Natural exit commits the stopped state and releases lifecycle admission before
+waiting for disk admission to complete remove-on-stop cleanup. Under both admissions,
+it rechecks persisted stopped status, absent PID, remove-on-stop policy, incomplete
+removal, and lock identity before deletion. Cleanup errors reach the watcher warning
+without retries. Cleanup runs in the exit callback's future; aborting the watcher
+can cancel it, with startup `recover_boxes` remaining the fallback.
 
 Explicit start keeps `Container.Start` background and cancellable. Outbound updates
 use the host network backend without awaiting that RPC: a pending container start
@@ -189,8 +196,10 @@ Clone, export, and snapshot mutations share `with_disk_admission` for acquisitio
 and ownership rechecks, keeping new entry points on the same admission path.
 The quiesce bracket holds lifecycle write admission through freeze, pause, disk
 work, resume, and thaw.
-Removal already holding lifecycle admission only tries disk admission and returns
-`InvalidState` when busy, allowing retry without a deadlock.
+Explicit stop/removal already holding lifecycle admission only tries disk admission
+and returns `InvalidState` when busy, allowing retry without a deadlock. Natural-exit
+cleanup instead waits in disk → lifecycle order, then uses the shared removal core
+with both admissions held.
 Final archive writing releases lifecycle admission but retains disk exclusion
 while its caller awaits it.
 Disk operations execute in the caller's future, so cancellation does not guarantee
