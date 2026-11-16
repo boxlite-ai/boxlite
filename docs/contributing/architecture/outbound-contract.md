@@ -214,7 +214,30 @@ A versioned call, or a Box already using versioned state, cannot silently fall b
 Durable-control tests use the real Runtime operation lock and SQLite database with controlled backend replies.
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
-Private startup revision propagation and the full live/persisted status resource require their own completed verification before claiming Runtime recovery is complete.
+The full live/persisted status resource and coordinator recovery acceptance remain separate verification steps.
+
+### Runtime bootstrap identity
+
+New and restarted VMs receive the persisted revision alongside their persisted policy.
+Records without control metadata use `initial`.
+An unresolved pending candidate is not replayed at startup: the committed policy and revision seed the backend, and the pending record remains available for reconciliation.
+Reattaching to a surviving backend does not replace its live identity.
+
+The revision travels in a private field of the existing stdin launch message, then in the private JSON object passed to gvproxy.
+`InstanceSpec`, `NetworkBackendSpec`, `GvproxyConfig`, and `BoxState` keep their public fields.
+The existing `GvproxyInstance::from_config` constructor remains available; the explicit revision constructor restores a coordinator-owned identity.
+The shim validates the optional token before starting the backend; absent metadata preserves the legacy launch contract.
+
+The shared `bootstrap-v1.json` example passes through the production launch encoder, shim parser, and gvproxy JSON encoder.
+Real-library tests create gvproxy with a restored revision, verify live readback and conditional replacement, reject a stale replacement, and repeat after backend restart.
+These checks exercise the Rust/Go control boundary without requiring a guest VM.
+
+Run the bootstrap checks with real dependencies, because stub mode cannot link the shim or gvproxy FFI:
+
+```sh
+make test:unit:rust FILTER=outbound_bootstrap RUST_UNIT_CORE_ARGS='-p boxlite-shim --bin boxlite-shim'
+make test:unit:rust FILTER=outbound_bootstrap RUST_UNIT_CORE_ARGS='-p boxlite --all-features --lib'
+```
 
 Install stable TCP and UDP entry points before guest traffic starts, with one shared snapshot reference.
 Enabled-to-enabled replacement publishes that reference once; delayed setup, retries, and MITM upstream sockets retain their flow's captured snapshot.

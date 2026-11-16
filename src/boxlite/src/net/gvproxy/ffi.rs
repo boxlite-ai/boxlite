@@ -19,10 +19,11 @@ use libgvproxy_sys::{
 ///
 /// # Returns
 /// Instance ID (handle) or error
-pub fn create_instance(config: &GvproxyConfig) -> BoxliteResult<i64> {
-    // Serialize full config to JSON
-    let json = serde_json::to_string(config)
-        .map_err(|e| BoxliteError::Network(format!("Failed to serialize config: {}", e)))?;
+pub fn create_instance(
+    config: &GvproxyConfig,
+    revision: Option<&crate::net::OutboundRevision>,
+) -> BoxliteResult<i64> {
+    let json = serialize_config(config, revision)?;
 
     let c_json = CString::new(json)
         .map_err(|e| BoxliteError::Network(format!("Invalid JSON string: {}", e)))?;
@@ -55,6 +56,24 @@ pub fn create_instance(config: &GvproxyConfig) -> BoxliteResult<i64> {
     tracing::info!(id, "Created gvproxy instance via FFI");
 
     Ok(id)
+}
+
+fn serialize_config(
+    config: &GvproxyConfig,
+    revision: Option<&crate::net::OutboundRevision>,
+) -> BoxliteResult<String> {
+    #[derive(serde::Serialize)]
+    struct Startup<'a> {
+        #[serde(flatten)]
+        config: &'a GvproxyConfig,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outbound_revision: Option<&'a crate::net::OutboundRevision>,
+    }
+    serde_json::to_string(&Startup {
+        config,
+        outbound_revision: revision,
+    })
+    .map_err(|e| BoxliteError::Network(format!("Failed to serialize config: {e}")))
 }
 
 /// Destroy a gvproxy instance and free resources
@@ -132,6 +151,10 @@ pub fn get_stats_json(id: i64) -> BoxliteResult<String> {
 }
 
 #[cfg(test)]
+#[path = "tests/bootstrap.rs"]
+mod bootstrap_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -149,7 +172,7 @@ mod tests {
         use std::path::PathBuf;
         let socket_path = PathBuf::from("/tmp/test-gvproxy-ffi.sock");
         let config = GvproxyConfig::new(socket_path);
-        let id = create_instance(&config).unwrap();
+        let id = create_instance(&config, None).unwrap();
 
         // Destroy instance
         destroy_instance(id).unwrap();

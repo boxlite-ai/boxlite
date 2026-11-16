@@ -1,0 +1,24 @@
+{
+  "box_id": "outbound-bootstrap",
+  "fs_shares": { "shares": [] },
+  "block_devices": { "devices": [] },
+  "guest_entrypoint": { "executable": "/init", "args": [], "env": [] },
+  "transport": { "Unix": { "socket_path": "/tmp/boxlite-bootstrap/guest.sock" } },
+  "ready_transport": { "Unix": { "socket_path": "/tmp/boxlite-bootstrap/ready.sock" } },
+  "guest_rootfs": {
+    "path": "/tmp/boxlite-bootstrap/rootfs",
+    "strategy": "Direct",
+    "kernel": null,
+    "initrd": null
+  },
+  "network_backend_spec": {
+    "socket_path": "/tmp/boxlite-bootstrap/net.sock",
+    "outbound_disabled": true,
+    "allow_net": []
+  },
+  "home_dir": "/tmp/boxlite-bootstrap",
+  "console_output": null,
+  "exit_file": "/tmp/boxlite-bootstrap/exit.json",
+  "detach": true,
+  "outbound_revision": "restored-revision"
+}

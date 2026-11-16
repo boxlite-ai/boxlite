@@ -10,3 +10,7 @@
 These are fixture inputs and expected outcomes, not an implementation or capability advertisement.
 
 Consume them through each production parser, forwarding path, or replacement operation rather than testing values constructed solely inside a test.
+
+`bootstrap-v1.json` is a minimal shim launch message with a disabled network and a private restored revision.
+The Runtime launch encoder, shim parser, and gvproxy startup encoder consume it to verify metadata propagation while keeping the existing public configuration shapes.
+Its paths are example values; live integration tests use temporary directories they own.

@@ -253,6 +253,16 @@ impl BoxBuilder {
             ctx.guard.disarm();
         }
         ctx.outbound_policy = state.outbound_policy.clone();
+        if status != BoxStatus::Running {
+            ctx.outbound_revision = Some(
+                runtime
+                    .box_manager
+                    .outbound_control(&ctx.config.id)?
+                    .map_or_else(crate::net::OutboundRevision::initial, |control| {
+                        control.revision
+                    }),
+            );
+        }
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);
 
