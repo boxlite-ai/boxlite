@@ -14,8 +14,9 @@ import type { AppDeliveryRecovery } from './replay/recovery'
 import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity } from './capacity'
 import { RepositoryCompensation, RepositoryScanSession } from './compensation/scanner'
 import { ScanClaim } from './compensation/queue'
-import { decodeDemand, DemandUncertain, LabelDemand, rebuildDemand } from './demand'
+import { decodeDemand, DemandUncertain, LabelDemand, rebuildQueueSnapshot } from './demand'
 import { CredentialCollector } from './credential-retirement'
+import { WorkQueue } from './execution/work-queue'
 
 export interface ListenerBackend extends PoolBackend {
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -38,6 +39,9 @@ interface Runtime {
   pool: WorkerPool
 }
 interface Session {
+  planning: WorkQueue
+  planningAfter: number
+  execution: WorkQueue
   demandRefresh: Map<string, number>
   lease: ExecutionLease
   recoveryAfter: string
@@ -160,7 +164,17 @@ export class Listener {
   private async session(lease: ExecutionLease, external: AbortSignal): Promise<void> {
     const stop = new AbortController(),
       signal = AbortSignal.any([external, stop.signal]),
+      report = (operation: string) => (error: unknown) => {
+        if (error instanceof LeaseLost && !signal.aborted) {
+          renewalError = error
+          stop.abort()
+        }
+        if (!signal.aborted || error instanceof LeaseLost) this.options.host.report(error, operation)
+      },
       session: Session = {
+        planning: new WorkQueue(8, report('label-capacity-balance')),
+        planningAfter: 0,
+        execution: new WorkQueue(32, report('allocation-work')),
         demandRefresh: new Map(),
         lease,
         recoveryAfter: '',
@@ -170,7 +184,8 @@ export class Listener {
         discoveryPending: false,
         jobs: new FairSelection(),
       }
-    let renewalError: unknown
+    let renewalError: unknown, failure: unknown
+    let failed = false
     const renewal = (async () => {
       try {
         while (!signal.aborted) {
@@ -201,12 +216,27 @@ export class Listener {
         if (!signal.aborted) await this.wait(signal)
       }
       if (renewalError) throw renewalError
+    } catch (error) {
+      failure = error
+      failed = true
     } finally {
       stop.abort()
       await renewal
       for (const runtime of session.runtimes.values()) this.retiring.add(runtime)
-      await this.retireKnown()
+      const results = await Promise.allSettled([
+        session.planning.close(),
+        session.execution.close(),
+        this.retireKnown(),
+      ])
+      const failures = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+      if (failures.length) {
+        if (failed) failures.unshift(failure)
+        failure =
+          failures.length === 1 ? failures[0] : new AggregateError(failures, 'Listener work retirement is incomplete')
+        failed = true
+      }
     }
+    if (failed) throw failure
   }
   private async retireKnown(): Promise<void> {
     const failures: unknown[] = []
@@ -241,6 +271,7 @@ export class Listener {
           async () => backend,
           this.worker,
           (event) => this.options.host.observe?.(event),
+          { queue: session.execution, wake: () => this.wake?.() },
         ),
       }
       session.runtimes.set(key, runtime)
@@ -263,8 +294,12 @@ export class Listener {
           counted.set(key, { scope: row.scope, runtime })
           continue
         }
+        // Validate durable membership before admitting new bindings; execution remains asynchronous.
+        await this.journal.workers(lease, key)
         // Recovery consumes an existing reservation, even when policy lookup is unavailable.
-        await (await this.runtime(session, key, row.scope)).pool.tick(lease, closedCapacity, undefined, signal)
+        session.planning.enqueue(key, row.record.version, () =>
+          runtime.pool.tick(lease, closedCapacity, undefined, signal),
+        )
       } catch (error) {
         if (error instanceof LeaseLost || error instanceof StateCorrupt) throw error
         blocked.add(key)
@@ -386,9 +421,10 @@ export class Listener {
       )
     for (const { key, scope, job } of session.jobs.take(candidates, 32)) {
       signal.throwIfAborted()
-      try {
+      session.planning.enqueue(key, job.record.version, async () => {
+        signal.throwIfAborted()
         const policy = await resolveCapacity(scope, job.notice.repository, job.notice)
-        if (!(await this.journal.hasCapacity(lease, key, policy))) continue
+        if (!(await this.journal.hasCapacity(lease, key, policy))) return
         const runtime = await this.runtime(session, key, scope),
           current = await runtime.backend.job(job.notice, signal)
         if (
@@ -399,10 +435,7 @@ export class Listener {
           throw new Error('Original CI notice identity changed')
         if (jobMatches(current, this.worker.labels)) await runtime.pool.tick(lease, policy, job.notice, signal)
         else await this.settle(lease, job.record)
-      } catch (error) {
-        if (error instanceof LeaseLost) throw error
-        if (!signal.aborted) this.options.host.report(error, 'job-admission')
-      }
+      })
     }
     signal.throwIfAborted()
     for (const wake of wakes)
@@ -433,127 +466,143 @@ export class Listener {
     signal: AbortSignal,
   ): Promise<void> {
     const counters = new Map(records.filter((row) => row.key.startsWith('demand/')).map((row) => [row.key, row]))
-    const tasks = [...runtimes].map(async ([key, { scope, runtime }]) => {
-      const current = session.current.has(key)
-      const related = (row: StateRecord) =>
-        row.key.startsWith(`demand/${scope.installation.id}/`) &&
-        repositories(scope).some((id) => row.key.startsWith(`demand/${scope.installation.id}/${id}/`))
-      const notices = records.filter(
-        (row) =>
-          row.key.startsWith(`notice/${scope.installation.id}/`) &&
-          object(row.payload) &&
-          repositories(scope).includes(row.payload.repositoryId as number),
-      )
-      const repairs = new Set<number>()
-      const now = Date.now()
-      for (const row of [...counters.values()].filter(related)) {
-        try {
-          const value = decodeDemand(row)
-          const refreshKey = `${scope.installation.id}/${value.repositoryId}`
-          if (
-            value.dirty ||
-            (value.queued > 0 &&
-              now - value.updatedAt >= 30000 &&
-              now - (session.demandRefresh.get(refreshKey) ?? 0) >= 30000)
-          )
-            repairs.add(value.repositoryId)
-        } catch {
-          repairs.add(Number(row.key.split('/')[2]))
-        }
-      }
-      for (const notice of notices)
-        if (object(notice.payload) && notice.payload.counted !== true)
-          repairs.add(notice.payload.repositoryId as number)
-      const deferredRepositories = new Set<number>()
-      const refreshCounts = async (targets: Iterable<number>) => {
-        for (const repository of targets) {
-          if (!repositories(scope).includes(repository)) throw new StateCorrupt()
-          const prefix = `demand/${scope.installation.id}/${repository}/`
-          for (let attempt = 0; attempt < 2; attempt++) {
-            const wakeKey = `wake/${scope.installation.id}/${repository}`
-            const [wake] = await this.options.state.read([wakeKey], session.lease)
-            const jobs = (await runtime.backend.queued(repository, signal)).filter((job) =>
-              jobMatches(job, this.worker.labels),
+    const revision = JSON.stringify(records.map((row) => [row.key, row.version]))
+    const entries = [...runtimes]
+    for (let offset = 0; offset < entries.length; offset++) {
+      const index = (session.planningAfter + offset) % entries.length
+      const [key, { scope, runtime }] = entries[index]
+      const accepted = session.planning.enqueue(key, revision, async () => {
+        signal.throwIfAborted()
+        const current = session.current.has(key)
+        const related = (row: StateRecord) =>
+          row.key.startsWith(`demand/${scope.installation.id}/`) &&
+          repositories(scope).some((id) => row.key.startsWith(`demand/${scope.installation.id}/${id}/`))
+        const notices = records.filter(
+          (row) =>
+            row.key.startsWith(`notice/${scope.installation.id}/`) &&
+            object(row.payload) &&
+            repositories(scope).includes(row.payload.repositoryId as number),
+        )
+        const repairs = new Set<number>()
+        const now = Date.now()
+        for (const row of [...counters.values()].filter(related)) {
+          try {
+            const value = decodeDemand(row)
+            const refreshKey = `${scope.installation.id}/${value.repositoryId}`
+            if (
+              value.dirty ||
+              (value.queued > 0 &&
+                now - value.updatedAt >= 30000 &&
+                now - (session.demandRefresh.get(refreshKey) ?? 0) >= 30000)
             )
-            try {
-              const refreshed = await rebuildDemand(
-                this.options.state,
-                session.lease,
-                {
-                  installationId: scope.installation.id,
-                  accountId: scope.installation.account.id,
-                  repositoryId: repository,
-                },
-                [...counters.values()].filter((row) => row.key.startsWith(prefix)),
-                jobs,
-                wake?.version,
+              repairs.add(value.repositoryId)
+          } catch {
+            repairs.add(Number(row.key.split('/')[2]))
+          }
+        }
+        for (const notice of notices)
+          if (object(notice.payload) && notice.payload.counted !== true)
+            repairs.add(notice.payload.repositoryId as number)
+        const queueChecks = new Map<number, { key: string; version: string }>()
+        const deferredRepositories = new Set<number>()
+        const refreshCounts = async (targets: Iterable<number>) => {
+          for (const repository of targets) {
+            if (!repositories(scope).includes(repository)) throw new StateCorrupt()
+            const prefix = `demand/${scope.installation.id}/${repository}/`
+            for (let attempt = 0; attempt < 2; attempt++) {
+              const wakeKey = `wake/${scope.installation.id}/${repository}`
+              const revisionKey = `queue-revision/${scope.installation.id}/${repository}`
+              const before = new Map(
+                (await this.options.state.read([wakeKey, revisionKey], session.lease)).map((row) => [row.key, row]),
               )
-              for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
-              for (const row of refreshed) counters.set(row.key, row)
-              deferredRepositories.delete(repository)
-              session.demandRefresh.set(`${scope.installation.id}/${repository}`, Date.now())
-              break
-            } catch (error) {
-              if (!(error instanceof StateConflict)) throw error
-              // A racing webhook invalidates this entire repository snapshot.
-              // Never reserve from it; leave unsettled notices for the next cycle.
-              for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
-              if (attempt === 1) {
-                deferredRepositories.add(repository)
+              const wake = before.get(wakeKey)
+              const jobs = (await runtime.backend.queued(repository, signal)).filter((job) =>
+                jobMatches(job, this.worker.labels),
+              )
+              signal.throwIfAborted()
+              try {
+                const snapshot = await rebuildQueueSnapshot(
+                  this.options.state,
+                  session.lease,
+                  {
+                    installationId: scope.installation.id,
+                    accountId: scope.installation.account.id,
+                    repositoryId: repository,
+                  },
+                  [...counters.values()].filter((row) => row.key.startsWith(prefix)),
+                  jobs,
+                  wake?.version,
+                  { version: before.get(revisionKey)?.version },
+                )
+                for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
+                for (const row of snapshot.demands) counters.set(row.key, row)
+                deferredRepositories.delete(repository)
+                queueChecks.set(repository, { key: snapshot.revision.key, version: snapshot.revision.version })
+                session.demandRefresh.set(`${scope.installation.id}/${repository}`, Date.now())
                 break
+              } catch (error) {
+                if (!(error instanceof StateConflict)) throw error
+                // A racing webhook invalidates this entire repository snapshot.
+                // Never reserve from it; leave unsettled notices for the next cycle.
+                for (const key of counters.keys()) if (key.startsWith(prefix)) counters.delete(key)
+                if (attempt === 1) {
+                  deferredRepositories.add(repository)
+                  break
+                }
+                for (const row of await this.options.state.recover(session.lease, 100000, [prefix]))
+                  counters.set(row.key, row)
               }
-              for (const row of await this.options.state.recover(session.lease, 100000, [prefix]))
-                counters.set(row.key, row)
             }
           }
         }
-      }
-      if (current) {
-        try {
-          await refreshCounts(repairs)
-        } catch (error) {
-          if (error instanceof LeaseLost || error instanceof StateCorrupt || signal.aborted) throw error
-          // Failed queue reads retain demand, but must not strand known stopped
-          // resources. Unverified balancing cannot dispatch unsent reservations.
+        if (current) {
           try {
-            await runtime.pool.balance(session.lease, closedCapacity, [], signal)
-          } catch (recovery) {
-            if (!(recovery instanceof DemandUncertain)) throw recovery
+            await refreshCounts(repairs)
+          } catch (error) {
+            if (error instanceof LeaseLost || error instanceof StateCorrupt || signal.aborted) throw error
+            // Failed queue reads retain demand, but must not strand known stopped
+            // resources. Unverified balancing cannot dispatch unsent reservations.
+            try {
+              await runtime.pool.balance(session.lease, closedCapacity, [], signal)
+            } catch (recovery) {
+              if (!(recovery instanceof DemandUncertain)) throw recovery
+            }
+            throw error
           }
-          throw error
         }
+        const readCounts = (): LabelDemand[] => {
+          const values = current ? [...counters.values()].filter(related).map(decodeDemand) : []
+          if (values.some((value) => value.accountId !== scope.installation.account.id)) throw new StateCorrupt()
+          return values
+        }
+        const resolve = async (values: readonly LabelDemand[]) => {
+          const target = values.find((value) => value.queued > 0)
+          return target ? capacity(scope, target.repositoryId) : closedCapacity
+        }
+        let demands = readCounts()
+        try {
+          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal)
+        } catch (error) {
+          if (!(error instanceof DemandUncertain) || !current) throw error
+          // Notifications cannot authorize expansion or idle retirement. A partial
+          // rebuild is not an empty queue and cannot authorize either operation.
+          await refreshCounts(repositories(scope))
+          demands = readCounts()
+          if (!deferredRepositories.size)
+            await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true, [
+              ...queueChecks.values(),
+            ])
+        }
+        for (const notice of current ? notices : [])
+          if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))
+            await this.settle(session.lease, notice)
+      })
+      if (!accepted) {
+        session.planningAfter = (index + 1) % entries.length
+        break
       }
-      const readCounts = (): LabelDemand[] => {
-        const values = current ? [...counters.values()].filter(related).map(decodeDemand) : []
-        if (values.some((value) => value.accountId !== scope.installation.account.id)) throw new StateCorrupt()
-        return values
-      }
-      const resolve = async (values: readonly LabelDemand[]) => {
-        const target = values.find((value) => value.queued > 0)
-        return target ? capacity(scope, target.repositoryId) : closedCapacity
-      }
-      let demands = readCounts()
-      try {
-        await runtime.pool.balance(session.lease, await resolve(demands), demands, signal)
-      } catch (error) {
-        if (!(error instanceof DemandUncertain) || !current) throw error
-        // Notifications cannot authorize expansion or idle retirement. A partial
-        // rebuild is not an empty queue and cannot authorize either operation.
-        await refreshCounts(repositories(scope))
-        demands = readCounts()
-        if (!deferredRepositories.size)
-          await runtime.pool.balance(session.lease, await resolve(demands), demands, signal, true)
-      }
-      for (const notice of current ? notices : [])
-        if (object(notice.payload) && !deferredRepositories.has(notice.payload.repositoryId as number))
-          await this.settle(session.lease, notice)
-    })
-    const results = await Promise.allSettled(tasks)
-    for (const result of results)
-      if (result.status === 'rejected') {
-        if (result.reason instanceof LeaseLost || signal.aborted) throw result.reason
-        this.options.host.report(result.reason, 'label-capacity-balance')
-      }
+      if (offset === entries.length - 1) session.planningAfter = (index + 1) % entries.length
+    }
   }
   private validateWake(row: StateRecord): void {
     const value = row.payload

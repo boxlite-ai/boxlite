@@ -390,11 +390,56 @@ conservatively as starting supply. Counter versions fence reservations against
 newer observations; short quota updates serialize without holding a lock over
 GitHub or Box network calls.
 
-Independent allocations advance concurrently without a fixed management
-concurrency ceiling. Reservations commit before HTTP starts, within existing
-organization/host limits. All started operations settle before the next pool
-round. Credentials are isolated by allocation; each runner preserves its own
-effect ordering and lease checks.
+The Listener schedules scope planning and allocation execution independently.
+Each reservation enters execution as soon as it commits; neither the remaining
+reservations nor a previous allocation's create/JIT response is a batch barrier.
+The in-process budgets are eight scope planners and 32 allocation consumers per
+owner, independently of organization/host quota. Credentials remain isolated by
+allocation, with original effect ordering and lease checks.
+
+### Asynchronous allocation queue
+
+`Listener` assembles two keyed `WorkQueue` indexes. Scope keys coalesce capacity
+planning; allocation keys coalesce resource execution. One key has at most one
+active consumer, and changed work received during execution runs once afterward
+with its latest revision. Hosted uses the PostgreSQL journal; standalone uses the
+same protocol in SQLite. These are logical queues within the existing state
+store, with no additional broker or deployment unit.
+
+The indexes each retain at most 4096 pending/active keys. Rejected submissions
+remain durable; planning and execution rotate past rejected positions on a later wake instead of always favoring the first page. Pending consumers
+count against quota as starting supply. The queue reads each allocation again
+when execution starts, and each effect retains its lease and version checks.
+
+Queue errors back off for one and then two seconds; a third failure yields to
+periodic recovery for 60 seconds. Version conflicts reload without consuming
+that remote-failure budget. A retry reconciles the original intent: it does not
+repeat an uncertain create, runner registration or JIT delivery.
+
+`queue-revision/<installation>/<repository>` is an ingress-owned observation
+fence. Webhook observations and changed authoritative snapshots advance it in
+the same transaction as their facts/counters. Unchanged snapshots retain their
+versions, so polling cannot continually invalidate waiting consumers. A scan
+captures the revision before HTTP and verifies it on commit, including when a
+wake was acknowledged during the request. Queued idle retirement checks the
+captured repository revisions in the original intent transaction; a stale task
+cannot use an older queue snapshot to authorize deletion. Pending retirement
+intents are reconsidered against current demand after restart.
+
+Stop or lease loss rejects new queue work and cancels cooperative requests.
+The owner waits for actual active operations; an uncancellable call can still
+delay shutdown. Backend closure also rejects late authorization results and
+prevents new worker credential providers from appearing after the close snapshot.
+Persisted uncertain operations remain recoverable by the next execution owner.
+
+When invoking `WorkerPool` directly without the Listener's executor, its existing
+awaited `tick`/`balance` interface remains available. Both production hosts use
+the Listener's asynchronous assembly.
+
+Rollout must drain older webhook writers before enabling this queue protocol:
+older binaries do not advance the repository observation fence. This is a writer
+compatibility requirement, not a database migration or permission to clear CI
+state. Admission and cleanup continue to enforce current host authority.
 
 Before a possible expansion, cancellation of an undispatched reservation, or idle
 retirement, the controller rebuilds the current GitHub queue for every repository
@@ -563,11 +608,17 @@ failed retirement retains its handle for retry and reports the cleanup failure.
 
 ## Worker recovery and logs
 
+`ci-worker-reserved` records the completed reservation. Pending resource work
+emits `ci-worker-execution-started` with `queueWaitMs` and
+`ci-worker-execution-settled` with `durationMs`. These are management timings,
+not proof that a GitHub job started or that an external mutation succeeded.
+Healthy running allocations do not emit these timing events on every poll.
+
 The scheduler rotates through eight active scopes per recovery metadata page;
 this is pagination, not a management concurrency limit. The label-capacity path
 reads each pool's allocations once per round in 32-record pages, counts compatible
-supply from a complete GitHub inventory, and advances independent resources
-concurrently. It does not rescan the pool before every reservation. Custom
+supply from a complete GitHub inventory, and enqueues independent resources
+without awaiting their completion. It does not rescan the pool before every reservation. Custom
 backends without inventory retain their clean-round and membership-version
 admission guard. Unknown resources retain their original identity and quota.
 
@@ -646,7 +697,8 @@ allocations for recovery, and drives the shared worker pools. The
 host supplies an authoritative scope directory, bound execution adapters and an
 ingress transaction that checks the current binding. Receiving a notification
 stores its receipt, observed phase and aggregate demand before waking the
-scheduler; it needs no execution lease. Notifications grant no authority: actual
+scheduler; it needs no execution lease. Resource and scope task completion do
+not gate the next demand read. Notifications grant no authority: actual
 effects still check the original scope and host policy. Settlement uses the captured notice version, so a concurrent
 delivery stays pending.
 
@@ -655,7 +707,8 @@ large repository list earns no extra turns. Selection continues rotating across
 tenants and accounts until it selects 32 candidates or exhausts the current input.
 An account can supply multiple distinct candidates in one batch; a short batch
 returns immediately without waiting to fill. Admission still checks each job's
-capacity and recovery readiness separately, and resource operations remain sequential.
+capacity and recovery readiness separately; the Listener queues the resource
+operations independently from subsequent job admission.
 Capacity exhaustion retains the
 notice and skips admission-time GitHub job reads while the durable account or
 tenant quota is full. Independent compensation scans continue recording pending

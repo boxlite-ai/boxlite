@@ -1556,6 +1556,21 @@ identity retain capacity for subsequent checks. No timeout alone authorizes rele
 and standalone REST creation retains its original uncertainty contract. See the shared
 [worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
 
+### Hosted CI asynchronous scheduling
+
+The shared Listener maintains independent scope-planning and allocation-execution
+queues under the current execution lease. Each committed reservation is eligible
+for execution immediately; a slow Box create or JIT delivery does not hold a
+whole scheduling batch open. The PostgreSQL allocation journal is the durable
+source; in-memory queues are bounded execution indexes, not another service.
+
+Scope planners use eight concurrent I/O positions and allocation consumers use
+32. These management budgets are separate from organization/Commerce limits.
+Repository observation versions fence delayed retirement tasks, including demand
+found by an authoritative scan without a webhook. Before enabling this protocol,
+drain older webhook writers that cannot advance these observation versions.
+No CI-state reset is required. See [queue and shutdown contracts](../libs/ci-listener/README.md#asynchronous-allocation-queue).
+
 ### Hosted CI management
 
 `GET /api/v1/{organization-prefix}/ci/runners` uses existing organization Box-read

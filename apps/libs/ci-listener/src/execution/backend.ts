@@ -26,6 +26,7 @@ export class GitHubExecutionBackend implements PoolBackend {
   private readonly workerCredentials = new Map<string, ListenerCredentials>()
   private readonly journal: ExecutionJournal
   private readonly labels: string[]
+  private closed = false
   constructor(
     private readonly state: ListenerState,
     lease: ExecutionLease,
@@ -77,23 +78,28 @@ export class GitHubExecutionBackend implements PoolBackend {
           if (effect) await host.rejectUndispatchedCreate!(originalLaunch.name, effect)
           throw error
         }
+        this.assertOpen()
         return host.workers.create(originalLaunch)
       },
       get: async (name) => {
         await this.check('cleanup')
+        this.assertOpen()
         return host.workers.get(name)
       },
       stop: async (name) => {
         await this.check('cleanup')
+        this.assertOpen()
         return host.workers.stop(name)
       },
       remove: async (name) => {
         await this.check('cleanup')
+        this.assertOpen()
         return host.workers.remove(name)
       },
       deliverJit: async (name, configuration, signal) => {
         await this.check('admission', signal)
         await this.repositoryPolicy(name, signal)
+        this.assertOpen()
         return host.workers.deliverJit(name, configuration, signal)
       },
     }
@@ -115,9 +121,12 @@ export class GitHubExecutionBackend implements PoolBackend {
   }
   private async check(operation: 'admission' | 'cleanup', signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
+    this.assertOpen()
     await this.host.authorize(decodeScope(this.scope), operation, signal)
+    this.assertOpen()
     // Authorization can wait across lease expiry; recheck the original scope afterward.
     await this.journal.scope(this.lease, scopeKey(this.scope))
+    this.assertOpen()
     signal?.throwIfAborted()
   }
   admit(signal?: AbortSignal): Promise<void> {
@@ -158,6 +167,7 @@ export class GitHubExecutionBackend implements PoolBackend {
         : { kind: 'organization-runners' as const }
     const borrow = await (name ? this.credentialsFor(name) : this.credentials).open(purpose, signal)
     try {
+      this.assertOpen()
       const registry = new GitHubRunners(borrow.credential, this.scope.runners, labels, async (effect) => {
         await this.check(effect.kind === 'register' ? 'admission' : 'cleanup', signal)
         await beforeMutation({ ...effect })
@@ -169,7 +179,11 @@ export class GitHubExecutionBackend implements PoolBackend {
       throw error
     }
   }
+  private assertOpen(): void {
+    if (this.closed) throw new Error('CI execution backend is closed')
+  }
   private credentialsFor(name: string): ListenerCredentials {
+    this.assertOpen()
     if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) throw new Error('Original CI worker required for credential isolation')
     let provider = this.workerCredentials.get(name)
     if (!provider) {
@@ -201,6 +215,7 @@ export class GitHubExecutionBackend implements PoolBackend {
     this.workerCredentials.delete(name)
   }
   async close(): Promise<void> {
+    this.closed = true
     const results = await Promise.allSettled([
       this.credentials.close(),
       ...[...this.workerCredentials.keys()].map((name) => this.retire(name)),

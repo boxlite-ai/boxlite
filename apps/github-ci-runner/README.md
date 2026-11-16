@@ -9,8 +9,10 @@ The shared controller lives in [`../libs/ci-listener`](../libs/ci-listener/READM
 Its [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
 also runs in this image. A runner taking another matching job no longer blocks
 replenishment for its trigger job. Independent resources advance concurrently
-within `CI_WORKER_MAX` and the organization's actual quota, without another fixed
-management concurrency ceiling. PAT mode rebuilds counts when busy supply lacks
+within `CI_WORKER_MAX` and the organization's actual quota. The shared Listener
+uses eight scope planners and 32 allocation consumers, with bounded keyed queues;
+these I/O budgets do not increase worker quota. A committed reservation can start
+execution before other reservations or JIT deliveries complete. PAT mode rebuilds counts when busy supply lacks
 webhook observations.
 
 The hosted API imports the same controller and supplies native PostgreSQL/BoxService

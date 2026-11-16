@@ -284,13 +284,17 @@ export class ListenerState {
       const result = await work({
         read: async (keys) => {
           for (const key of keys)
-            if (!/^(receipt|notice|wake|demand|job-fact|runner-claim)\/[A-Za-z0-9:._/-]+$/.test(key))
+            if (!/^(receipt|notice|wake|demand|job-fact|runner-claim|queue-revision)\/[A-Za-z0-9:._/-]+$/.test(key))
               throw new Error('Invalid ingress record kind')
           return this.lookup(tx, keys)
         },
         write: async (changes) => {
           const prepared = this.prepare(changes)
-          if (prepared.some(({ key }) => !/^(receipt|notice|wake|demand|job-fact|runner-claim)\//.test(key)))
+          if (
+            prepared.some(
+              ({ key }) => !/^(receipt|notice|wake|demand|job-fact|runner-claim|queue-revision)\//.test(key),
+            )
+          )
             throw new Error('Invalid ingress record kind')
           return this.apply(tx, prepared)
         },

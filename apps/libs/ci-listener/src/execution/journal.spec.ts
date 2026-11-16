@@ -13,7 +13,7 @@ import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
 import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
-import { observeDemand } from '../demand'
+import { observeDemand, rebuildDemand } from '../demand'
 
 const definition: ExecutionScope = {
   binding: 'binding-a',
@@ -87,6 +87,29 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           pg = undefined
         }
       }
+    })
+    it('rejects a queued allocation mutation after an authoritative queue revision changes', async () => {
+      const target = { installationId: 1, accountId: 7, repositoryId: 21 }
+      const jobs = [{ repository: 21, run: 33, job: 55, status: 'queued' as const, runner: null, labels: ['boxlite'] }]
+      const counters = await rebuildDemand(state, lease, target, [], jobs)
+      const [revision] = await state.read(['queue-revision/1/21'])
+      const row = (await journal.reserve(
+        lease,
+        key,
+        { repository: 21, run: 33, job: 55 },
+        testCapacity({ account: 2, tenant: 2 }),
+        { labels: ['boxlite'] },
+      ))!
+      await rebuildDemand(state, lease, target, counters, [
+        { ...jobs[0], job: 56, labels: ['boxlite-4vcpu-8gbmem-20gbdisk'] },
+      ])
+      await expect(
+        journal.advance(lease, row.record.key, row.record.version, { closing: true }, [
+          { key: revision.key, version: revision.version },
+        ]),
+      ).rejects.toBeInstanceOf(StateConflict)
+      expect((await journal.allocation(lease, row.record.key))!.value.closing).toBe(false)
+      expect((await journal.allocation(lease, row.record.key))!.record.version).toBe(row.record.version)
     })
     it.each([0, 1, 16, 32, 33])('reads %s workers with a bounded transaction budget per page', async (size) => {
       const capacity = testCapacity({ account: Math.max(1, size), tenant: Math.max(1, size) })

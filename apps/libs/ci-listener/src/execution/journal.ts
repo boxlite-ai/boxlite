@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { JobNotice } from '../jobs'
 import { Json, StateConflict, StateCorrupt, StateRecord } from '../state/database'
-import { ExecutionLease, ListenerState, StateChange } from '../state/store'
+import { ExecutionLease, ListenerState, StateChange, StateCheck } from '../state/store'
 import { Allocation, decodeAllocation, decodeScope, ExecutionScope, object, positive, scopeKey } from './model'
 import { CapacityPolicy, captureCapacity } from '../capacity'
 
@@ -382,20 +382,27 @@ export class ExecutionJournal {
     await this.remove(lease, row, true)
   }
 
-  async advance(lease: ExecutionLease, key: string, version: string, change: AllocationChange): Promise<AllocationRow> {
+  async advance(
+    lease: ExecutionLease,
+    key: string,
+    version: string,
+    change: AllocationChange,
+    checks: readonly StateCheck[] = [],
+  ): Promise<AllocationRow> {
     lease = { ...lease }
     change = structuredClone(change)
-    if (change.box?.phase !== 'absent') return this.advanceRecord(lease, key, version, change)
+    if (change.box?.phase !== 'absent') return this.advanceRecord(lease, key, version, change, checks)
     const row = await this.allocation(lease, key)
     if (!row) throw new StateConflict()
     const target = await this.scope(lease, row.value.scope)
-    return this.serializeQuota(target.scope.organization, () => this.advanceRecord(lease, key, version, change))
+    return this.serializeQuota(target.scope.organization, () => this.advanceRecord(lease, key, version, change, checks))
   }
   private async advanceRecord(
     lease: ExecutionLease,
     key: string,
     version: string,
     change: AllocationChange,
+    checks: readonly StateCheck[],
   ): Promise<AllocationRow> {
     lease = { ...lease }
     change = structuredClone(change)
@@ -425,7 +432,7 @@ export class ExecutionJournal {
       const target = await this.scope(lease, value.scope)
       changes.push(...this.charge(await this.usage(Object.values(domains(target.scope)), lease), -1))
     }
-    const records = await this.state.commit(lease, changes)
+    const records = await this.state.commit(lease, changes, checks)
     return { record: records.find((record) => record.key === key)!, value }
   }
 

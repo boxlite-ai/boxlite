@@ -66,6 +66,22 @@ export function decodeDemand(row: StateRecord): LabelDemand {
   } as unknown as LabelDemand
 }
 
+type RepositoryDemand = Pick<LabelDemand, 'installationId' | 'accountId' | 'repositoryId'>
+const revisionKey = (target: RepositoryDemand) => `queue-revision/${target.installationId}/${target.repositoryId}`
+async function readRevision(tx: IngressTransaction, target: RepositoryDemand): Promise<StateRecord | undefined> {
+  const [row] = await tx.read([revisionKey(target)])
+  if (
+    row &&
+    (row.schema !== 1 ||
+      !object(row.payload) ||
+      row.payload.installationId !== target.installationId ||
+      row.payload.accountId !== target.accountId ||
+      row.payload.repositoryId !== target.repositoryId)
+  )
+    throw new StateCorrupt()
+  return row
+}
+
 /** One ingress transaction owns event idempotency and aggregate demand together. */
 export async function observeDemand(
   tx: IngressTransaction,
@@ -123,7 +139,17 @@ export async function observeDemand(
     const key = demandKey(hint.installationId, hint.repositoryId, observation.labels)
     deltas.set(key, { labels: observation.labels, delta: (deltas.get(key)?.delta ?? 0) + 1 })
   }
+  const revision = await readRevision(tx, hint)
   const changes: StateChange[] = [
+    {
+      key: revisionKey(hint),
+      expected: revision?.version ?? null,
+      payload: {
+        installationId: hint.installationId,
+        accountId: hint.accountId,
+        repositoryId: hint.repositoryId,
+      },
+    },
     {
       key: factKey,
       expected: prior?.version ?? null,
@@ -184,14 +210,15 @@ export async function observeDemand(
 }
 
 /** Replace a suspect count only if no webhook arrived during its authoritative scan. */
-export async function rebuildDemand(
+export async function rebuildQueueSnapshot(
   state: ListenerState,
   lease: ExecutionLease,
   target: Pick<LabelDemand, 'installationId' | 'accountId' | 'repositoryId'>,
   previous: readonly StateRecord[],
   jobs: readonly WorkflowJob[],
   wakeVersion?: string,
-): Promise<StateRecord[]> {
+  expectedRevision?: { version: string | undefined },
+): Promise<{ demands: StateRecord[]; revision: StateRecord }> {
   const prefix = `demand/${target.installationId}/${target.repositoryId}/`
   const wakeKey = `wake/${target.installationId}/${target.repositoryId}`
   return state.ingress(
@@ -199,6 +226,9 @@ export async function rebuildDemand(
     async (tx) => {
       const [wake] = await tx.read([wakeKey])
       if (wake?.version !== wakeVersion) throw new StateConflict()
+      const revision = await readRevision(tx, target)
+      if (expectedRevision && revision?.version !== expectedRevision.version) throw new StateConflict()
+      let changed = !revision
       const counts = new Map<string, { labels: string[]; jobs: WorkflowJob[] }>()
       const queued = jobs.filter(
         (job) => job.repository === target.repositoryId && job.status === 'queued' && job.runner === null,
@@ -229,7 +259,10 @@ export async function rebuildDemand(
           entry.jobs.push(job)
           counts.set(groupKey, entry)
         }
-        if (missing.size) await tx.write([...missing.values()])
+        if (missing.size) {
+          await tx.write([...missing.values()])
+          changed = true
+        }
       }
       const known = previous.filter((row) => row.key.startsWith(prefix))
       const priorCounts = new Map(known.map((row) => [row.key, row]))
@@ -249,6 +282,7 @@ export async function rebuildDemand(
               decodeDemand(row)
             } catch {
               await tx.write([{ key, expected: row.version }])
+              changed = true
               continue
             }
           }
@@ -261,13 +295,40 @@ export async function rebuildDemand(
             updatedAt: Date.now(),
             job: sample ? { id: sample.job, runId: sample.run } : (old!.job as unknown as LabelDemand['job']),
           }
-          result.push(
-            ...(await tx.write([{ key, expected: row?.version ?? null, payload: payload as unknown as Json }])),
+          if (
+            row &&
+            old &&
+            old.queued === payload.queued &&
+            old.dirty === false &&
+            old.installationId === target.installationId &&
+            old.accountId === target.accountId &&
+            old.repositoryId === target.repositoryId &&
+            JSON.stringify(old.labels) === JSON.stringify(payload.labels) &&
+            object(old.job) &&
+            old.job.id === payload.job.id &&
+            old.job.runId === payload.job.runId
           )
+            result.push(row)
+          else {
+            changed = true
+            result.push(
+              ...(await tx.write([{ key, expected: row?.version ?? null, payload: payload as unknown as Json }])),
+            )
+          }
         }
       }
-      return result
+      const committed = changed
+        ? (
+            await tx.write([{ key: revisionKey(target), expected: revision?.version ?? null, payload: { ...target } }])
+          )[0]
+        : revision!
+      return { demands: result, revision: committed }
     },
     lease,
   )
+}
+
+/** Counter-only compatibility entry point; snapshots also maintain the repository fence. */
+export async function rebuildDemand(...args: Parameters<typeof rebuildQueueSnapshot>): Promise<StateRecord[]> {
+  return (await rebuildQueueSnapshot(...args)).demands
 }

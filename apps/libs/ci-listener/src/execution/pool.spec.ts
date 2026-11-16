@@ -13,6 +13,7 @@ import { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected, WorkerState } f
 import { ExecutionJournal } from './journal'
 import { ExecutionScope } from './model'
 import { PoolBackend, WorkerPool } from './pool'
+import { WorkQueue } from './work-queue'
 import { decodeDemand, DemandUncertain, observeDemand } from '../demand'
 
 describe('CI shared worker lifecycle', () => {
@@ -179,6 +180,36 @@ describe('CI shared worker lifecycle', () => {
       job: { id: demand.job, runId: demand.run },
     },
   ]
+  it('rotates past an allocation in retry backoff on the next capacity plan', async () => {
+    const policy = testCapacity({ account: 2, tenant: 2 })
+    await pool.tick(lease, policy, demand)
+    await pool.tick(lease, policy, { ...demand, job: 56 })
+    await pool.close()
+    supplyInventory()
+    const [first, second] = (await journal.workers(lease, key)).rows
+    const queue = new WorkQueue(2, () => {})
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now())
+    queue.enqueue(first.record.key, 'failed', async () => {
+      throw new Error('retry later')
+    })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    let continued = false
+    const get = jest.mocked(backend.workers.get).getMockImplementation()!
+    jest.mocked(backend.workers.get).mockImplementation(async (...args) => {
+      if (args[0] === second.value.name) continued = true
+      return get(...args)
+    })
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, policy, [])
+      await pool.balance(lease, policy, [])
+      await queue.close()
+      expect(continued).toBe(true)
+    } finally {
+      clock.mockRestore()
+      await queue.close()
+    }
+  })
   const supplyInventory = (busy = new Set<string>()) => {
     const inventory = jest.fn(
       async (): Promise<RunnerObservation[]> =>
