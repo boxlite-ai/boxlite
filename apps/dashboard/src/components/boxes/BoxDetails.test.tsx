@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   volumes: [] as { id: string; name: string }[],
   images: [] as { id: string | null; name: string; curated: boolean; curatedRef: string | null }[],
   boxRefetch: vi.fn(),
+  queryError: false,
   terminalMounts: vi.fn(),
   navigate: vi.fn(),
   setSearchParams: vi.fn(),
@@ -119,7 +120,7 @@ vi.mock('@/hooks/queries/useBoxQuery', () => ({
   useBoxQuery: () => ({
     data: mocks.box,
     isLoading: false,
-    isError: false,
+    isError: mocks.queryError,
     error: null,
     refetch: mocks.boxRefetch,
   }),
@@ -188,6 +189,7 @@ describe('BoxDetails overview', () => {
   })
 
   beforeEach(() => {
+    mocks.queryError = false
     mocks.box = makeRunningBox()
     mocks.volumes = []
     mocks.images = []
@@ -214,6 +216,44 @@ describe('BoxDetails overview', () => {
 
     await flushReactWork()
   }
+
+  it('shows lifecycle values from the Box response, including mixed units', async () => {
+    mocks.box = { ...makeRunningBox(), autoStop: 900, autoDelete: 4500, autoResume: true }
+    await renderBoxDetails()
+    const lifecycle = document.querySelector('[aria-label="Lifecycle"]')!
+    expect(lifecycle?.textContent).toContain('After 15 min idle')
+    expect(lifecycle?.textContent).toContain('After 1 h 15 min idle')
+    expect(lifecycle?.textContent).toContain('Only applies while the Box is stopped.')
+    expect(lifecycle?.textContent).toContain('Enabled')
+    expect(mocks.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ autoStop: 0, autoDelete: 0, autoResume: false }, ['Disabled', 'Disabled', 'Disabled']],
+    [{}, ['Not available', 'Not available', 'Not available']],
+    [
+      { autoStop: 900, autoDelete: 90, autoResume: false },
+      ['After 15 min idle', 'After 1 min 30 sec idle', 'Disabled'],
+    ],
+    [{ autoStop: -1, autoDelete: null, autoResume: 'false' }, ['Not available', 'Not available', 'Not available']],
+  ])('renders lifecycle boundary values %j', async (policy, expected) => {
+    mocks.box = { ...makeRunningBox(), ...policy }
+    await renderBoxDetails()
+    const values = [...document.querySelectorAll('[aria-label="Lifecycle"] dd')]
+    expect(values).toHaveLength(3)
+    expected.forEach((value, index) => expect(values[index].textContent).toContain(value))
+  })
+
+  it('keeps lifecycle values visible after a refresh error and offers Retry', async () => {
+    mocks.box = { ...makeRunningBox(), autoStop: 900 }
+    mocks.queryError = true
+    await renderBoxDetails()
+    expect(document.body.textContent).toContain('After 15 min idle')
+    expect(document.body.textContent).toContain('Showing last known values.')
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')!
+    await act(async () => retry.click())
+    expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
+  })
 
   it('copies the public Box ID and clears confirmation after the timeout', async () => {
     vi.useFakeTimers()
