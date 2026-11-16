@@ -435,6 +435,8 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) additional_path_access: Vec<PathAccess>,
     /// Whether the shim runs a network backend and needs its AF_UNIX endpoints.
     pub(crate) network_backend_enabled: bool,
+    /// The hard `RLIMIT_FSIZE`, when it must exceed the soft `max_file_size`.
+    pub(crate) file_size_ceiling: Option<u64>,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -537,7 +539,14 @@ impl<S: Sandbox> Jail for Jailer<S> {
         // PID file goes first on purpose — see `pre_exec`'s module docs.
         // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
         // by sandbox.apply() above — Command supports multiple pre_exec closures.
-        let resource_limits = self.security.resource_limits.clone();
+        let mut resource_limits = self.security.resource_limits.clone();
+        let file_size = match (resource_limits.max_file_size, self.file_size_ceiling) {
+            (Some(soft), Some(ceiling)) => {
+                resource_limits.max_file_size = None;
+                Some((soft, ceiling.max(soft)))
+            }
+            _ => None,
+        };
         let pid_writer = self.pid_file_writer();
         pre_exec::add_pre_exec_hook(
             &mut cmd,
@@ -546,6 +555,17 @@ impl<S: Sandbox> Jail for Jailer<S> {
             self.preserved_fds.clone(),
             self.detach,
         );
+        if let Some((soft, hard)) = file_size {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: the hook only calls getrlimit and setrlimit, which are
+            // async-signal-safe.
+            unsafe {
+                cmd.pre_exec(move || {
+                    common::rlimit::set_file_size_raw(soft, hard)
+                        .map_err(std::io::Error::from_raw_os_error)
+                });
+            }
+        }
         cmd
     }
 }
@@ -1340,6 +1360,91 @@ mod tests {
         assert!(
             console.is_none(),
             "console.log should not be a standalone path access (covered by logs/)"
+        );
+    }
+
+    /// The child's soft and hard `RLIMIT_FSIZE`, read from its own limits.
+    #[cfg(target_os = "linux")]
+    fn child_file_size_limits(ceiling: Option<u64>) -> (String, String) {
+        use crate::jailer::builder::JailerBuilder;
+
+        let dir = tempdir().unwrap();
+        let security = SecurityOptions {
+            jailer_enabled: false,
+            resource_limits: ResourceLimits {
+                max_file_size: Some(1 << 30),
+                ..ResourceLimits::default()
+            },
+            ..SecurityOptions::default()
+        };
+        let jail = JailerBuilder::new()
+            .with_box_id("fsize-test")
+            .with_layout(test_layout(dir.path().to_path_buf()))
+            .with_security(security)
+            .with_file_size_ceiling(ceiling)
+            .build_with(NoopSandbox)
+            .unwrap();
+        let output = jail
+            .command(Path::new("/bin/cat"), &["/proc/self/limits".to_string()])
+            .output()
+            .unwrap();
+        let limits = String::from_utf8(output.stdout).unwrap();
+        let line = limits
+            .lines()
+            .find(|line| line.starts_with("Max file size"))
+            .unwrap();
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        (fields[3].to_string(), fields[4].to_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_size_ceiling_raises_only_the_hard_limit() {
+        let soft = (1u64 << 30).to_string();
+        assert_eq!(child_file_size_limits(None), (soft.clone(), soft.clone()));
+        let ceiling = 4u64 << 40;
+        assert_eq!(
+            child_file_size_limits(Some(ceiling)),
+            (soft.clone(), ceiling.to_string())
+        );
+        // A ceiling below the soft limit never lowers the hard limit under it.
+        assert_eq!(child_file_size_limits(Some(1 << 20)), (soft.clone(), soft));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_size_ceiling_stops_at_the_inherited_hard_limit() {
+        use std::os::unix::process::CommandExt;
+
+        // A parent whose hard limit is below the ceiling must still spawn the
+        // child, with the inherited hard limit instead of the ceiling.
+        let inherited: u64 = 4 << 30;
+        let mut parent = Command::new("/bin/sh");
+        parent.args(["-c", "cat /proc/self/limits"]);
+        // SAFETY: the hook only calls the async-signal-safe getrlimit and
+        // setrlimit.
+        unsafe {
+            parent.pre_exec(move || {
+                common::rlimit::set_file_size_raw(1 << 30, inherited)
+                    .map_err(std::io::Error::from_raw_os_error)?;
+                common::rlimit::set_file_size_raw(1 << 30, 4 << 40)
+                    .map_err(std::io::Error::from_raw_os_error)
+            });
+        }
+        let output = parent.output().unwrap();
+        assert!(output.status.success());
+        let limits = String::from_utf8(output.stdout).unwrap();
+        let line = limits
+            .lines()
+            .find(|line| line.starts_with("Max file size"))
+            .unwrap();
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(
+            (fields[3], fields[4]),
+            (
+                (1u64 << 30).to_string().as_str(),
+                inherited.to_string().as_str()
+            )
         );
     }
 

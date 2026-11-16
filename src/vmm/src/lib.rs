@@ -82,6 +82,7 @@ pub use config::{
 };
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
+pub use virtio::blk::control::DiskHandle;
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test

@@ -46,6 +46,7 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    file_size_ceiling: Option<u64>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,6 +62,7 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            file_size_ceiling: None,
         }
     }
 
@@ -93,6 +95,12 @@ impl<'a> ShimSpawner<'a> {
     /// it is about to serialize, which is the authority on what the shim runs.
     pub fn with_nested_virtualization(mut self, enabled: bool) -> Self {
         self.nested_virtualization = enabled;
+        self
+    }
+
+    /// Lets the shim raise its own `RLIMIT_FSIZE` up to `ceiling` bytes.
+    pub fn with_file_size_ceiling(mut self, ceiling: Option<u64>) -> Self {
+        self.file_size_ceiling = ceiling;
         self
     }
 
@@ -150,6 +158,7 @@ impl<'a> ShimSpawner<'a> {
                 &self.options.network,
                 NetworkSpec::Enabled { .. }
             ))
+            .with_file_size_ceiling(self.file_size_ceiling)
             .with_detach(detach);
 
         if let Some(ref setup) = child_setup {

@@ -554,6 +554,29 @@ logged.
   attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
   The single filesystem device exports logical shares below its aggregate root;
   matching mount instructions are sent only for the native engine.
+- **Runtime control (`src/boxlite/src/vmm/control.rs`).** The native shim
+  serves `control.sock` in the box socket directory: host-only (mode 0600,
+  never bridged into guest vsock), at a fixed path so a restarted runtime can
+  reach a running box. Each connection carries one length-prefixed JSON request
+  naming a protocol version and one answer; an unknown version or operation is
+  refused, and a bad request ends only its own connection. The one operation is
+  `resize_disk`. libkrun serves no control socket.
+- **Online disk grow.** `Vm::disk_handle(index)` returns a `DiskHandle` before `run`.
+  - `DiskHandle::grow` queues an absolute target and rings a doorbell socket,
+    registered at each activation. The worker applies it between guest
+    requests; the handle never takes the device lock.
+  - The device grows the image with imago, updates capacity and configuration
+    space, then raises the configuration interrupt. `PreallocateMode::None`
+    supports qcow2 backing files and makes the new range read as zeroes.
+  - Smaller, unaligned and read-only targets fail; the current size succeeds,
+    making retries safe. Requests sent before driver activation wait for it.
+- **File size limits.** Before growing, the shim raises its soft `RLIMIT_FSIZE`.
+  - The native hard limit covers twice the larger of `ONLINE_GROW_MAX_GB`
+    (1024 GiB) and the disk, capped at the inherited hard limit.
+  - The initial soft limit is capped there too: an unprivileged child cannot
+    raise its inherited hard limit. A grow beyond that limit fails before
+    changing the disk.
+  - Other engines keep hard equal to soft.
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).

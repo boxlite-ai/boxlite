@@ -14,6 +14,8 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU8, AtomicUsize, Ordering},
     },
+    thread,
+    time::Duration,
 };
 
 use imago::{
@@ -32,6 +34,7 @@ use super::{
     VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_IN,
     VIRTIO_BLK_T_OUT,
     backend::{CompletedRequest, DiskBackend, DiskInfo, Request, RequestKind, SubmitOutcome},
+    control::{self, DiskHandle},
     device::VirtioBlk,
     imago::ImagoBackend,
 };
@@ -108,6 +111,7 @@ fn file_at(path: &Path, offset: u64, len: usize) -> Vec<u8> {
 #[derive(Default)]
 struct TestInterrupt {
     raised: AtomicUsize,
+    config_raised: AtomicUsize,
     status: AtomicU8,
 }
 
@@ -128,7 +132,9 @@ impl VirtioInterrupt for TestInterrupt {
         0
     }
 
-    fn raise_config(&self) {}
+    fn raise_config(&self) {
+        self.config_raised.fetch_add(1, Ordering::SeqCst);
+    }
 
     fn device_status(&self) -> u8 {
         0
@@ -222,6 +228,11 @@ impl DiskBackend for FakeBackend {
         self.disk_info
     }
 
+    fn resize_grow(&mut self, bytes: u64) -> io::Result<DiskInfo> {
+        self.disk_info.capacity_sectors = bytes / SECTOR_SIZE;
+        Ok(self.disk_info)
+    }
+
     fn submit(&mut self, token: u32, request: Request) -> SubmitOutcome {
         self.state.lock().unwrap().pending.push((token, request));
         SubmitOutcome::Pending
@@ -256,6 +267,7 @@ struct Fixture {
     interrupt: Arc<TestInterrupt>,
     registrar: Arc<TestRegistrar>,
     fake: Option<Arc<Mutex<FakeState>>>,
+    handle: DiskHandle,
 }
 
 impl Fixture {
@@ -298,7 +310,8 @@ impl Fixture {
         backend: Box<dyn DiskBackend>,
         fake: Option<Arc<Mutex<FakeState>>>,
     ) -> Self {
-        let mut blk = VirtioBlk::new(backend);
+        let (handle, controls) = control::channel().unwrap();
+        let mut blk = VirtioBlk::new(backend, controls);
         let features = blk.spec().features;
         blk.set_features(features).unwrap();
         let leaked: &'static GuestMemoryMmap = Box::leak(Box::new(
@@ -314,6 +327,7 @@ impl Fixture {
             interrupt: Arc::new(TestInterrupt::default()),
             registrar: Arc::new(TestRegistrar::default()),
             fake,
+            handle,
         };
         fixture.activate().unwrap();
         fixture
@@ -509,6 +523,31 @@ impl Fixture {
         let mut data = vec![0u8; len];
         self.blk.read_config(offset, &mut data).unwrap();
         data
+    }
+
+    /// The capacity in sectors that the configuration space reports.
+    fn capacity(&mut self) -> u64 {
+        u64::from_le_bytes(self.config_bytes(0, 8).try_into().unwrap())
+    }
+
+    fn config_raised(&self) -> usize {
+        self.interrupt.config_raised.load(Ordering::SeqCst)
+    }
+
+    /// Grows the disk through its handle on another thread while this one
+    /// plays the worker: it delivers the doorbell, which the device
+    /// registered last, until the handle has its answer.
+    fn grow(&mut self, bytes: u64) -> io::Result<u64> {
+        let control = SourceId(self.registrar.registered.load(Ordering::SeqCst) as u32 - 1);
+        let handle = self.handle.clone();
+        let caller = thread::spawn(move || handle.grow(bytes, Duration::from_secs(10)));
+        while !caller.is_finished() {
+            self.blk
+                .on_event(DeviceEvent::BackendReady(control))
+                .unwrap();
+            thread::sleep(Duration::from_millis(1));
+        }
+        caller.join().unwrap()
     }
 }
 
@@ -815,7 +854,7 @@ fn an_empty_kick_does_not_interrupt() {
 #[test]
 fn a_pending_request_completes_when_the_backend_signals() {
     let mut fixture = Fixture::pending();
-    assert_eq!(fixture.registrar.registered.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.registrar.registered.load(Ordering::SeqCst), 2);
     fixture.read(0, 512).unwrap();
     assert_eq!(fixture.used().0, 0, "a pending chain has no used entry");
     assert_eq!(fixture.raised(), 0);
@@ -892,7 +931,7 @@ fn reset_fails_the_device_while_a_request_is_in_flight() {
     assert_eq!(fixture.fake().flushes, 0);
     assert_eq!(
         *fixture.registrar.deregistered.lock().unwrap(),
-        vec![SourceId(0)]
+        vec![SourceId(0), SourceId(1)]
     );
 }
 
@@ -903,14 +942,14 @@ fn reset_with_nothing_in_flight_flushes_and_a_rebind_registers_a_fresh_source() 
     assert_eq!(fixture.fake().flushes, 1);
     assert_eq!(
         *fixture.registrar.deregistered.lock().unwrap(),
-        vec![SourceId(0)]
+        vec![SourceId(0), SourceId(1)]
     );
 
     fixture.fresh_rings();
     let features = fixture.blk.spec().features;
     fixture.blk.set_features(features).unwrap();
     assert!(fixture.activate().is_ok());
-    assert_eq!(fixture.registrar.registered.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.registrar.registered.load(Ordering::SeqCst), 4);
     fixture.read(0, 512).unwrap();
     let token = fixture.fake().pending[0].0;
     fixture.fake().complete(token, VIRTIO_BLK_S_OK, 0xCD);
@@ -921,7 +960,7 @@ fn reset_with_nothing_in_flight_flushes_and_a_rebind_registers_a_fresh_source() 
     assert_eq!(fixture.used().0, 0, "the old generation's id is stale");
     fixture
         .blk
-        .on_event(DeviceEvent::BackendReady(SourceId(1)))
+        .on_event(DeviceEvent::BackendReady(SourceId(2)))
         .unwrap();
     assert_eq!(fixture.used(), (1, vec![(0, 513)]));
     assert_eq!(fixture.data(512), vec![0xCD; 512]);
@@ -970,4 +1009,85 @@ fn check_shutdown_flush(flush_error: Option<io::ErrorKind>) {
         }
     }
     assert_eq!(state.lock().unwrap().flushes, 1);
+}
+
+#[test]
+fn a_grow_reaches_the_configuration_and_the_data_path_and_notifies_once() {
+    let mut fixture = Fixture::qcow2();
+    let old = IMAGE_BYTES / SECTOR_SIZE;
+    // Past the old end, the guest is refused before the grow.
+    fixture.read(old, 512).unwrap();
+    assert_eq!(fixture.status(), VIRTIO_BLK_S_IOERR);
+
+    assert_eq!(fixture.grow(2 * IMAGE_BYTES).unwrap(), 2 * IMAGE_BYTES);
+    assert_eq!(fixture.capacity(), 2 * old);
+    assert_eq!(fixture.config_raised(), 1);
+
+    fixture.write(old, &[0x5A; 512]).unwrap();
+    assert_eq!(fixture.status(), VIRTIO_BLK_S_OK);
+    fixture.read(old, 512).unwrap();
+    assert_eq!(fixture.status(), VIRTIO_BLK_S_OK);
+    assert_eq!(fixture.data(512), vec![0x5A; 512]);
+    // The grown range of a qcow2 overlay reads as zeroes, not as stale data.
+    fixture.read(old + 1, 512).unwrap();
+    assert_eq!(fixture.data(512), vec![0u8; 512]);
+}
+
+#[test]
+fn a_raw_grow_extends_the_file() {
+    let mut fixture = Fixture::raw(false);
+    assert_eq!(fixture.grow(4 * IMAGE_BYTES).unwrap(), 4 * IMAGE_BYTES);
+    assert_eq!(
+        std::fs::metadata(&fixture.path).unwrap().len(),
+        4 * IMAGE_BYTES
+    );
+    assert_eq!(fixture.capacity(), 4 * IMAGE_BYTES / SECTOR_SIZE);
+}
+
+#[test]
+fn invalid_grows_fail_without_a_change_or_an_interrupt() {
+    let mut fixture = Fixture::qcow2();
+    let sectors = fixture.capacity();
+    for (bytes, kind) in [
+        (IMAGE_BYTES - SECTOR_SIZE, io::ErrorKind::InvalidInput),
+        (IMAGE_BYTES + 1, io::ErrorKind::InvalidInput),
+    ] {
+        assert_eq!(fixture.grow(bytes).unwrap_err().kind(), kind, "{bytes}");
+    }
+    // The current size is a successful no-op, so a retry is harmless.
+    assert_eq!(fixture.grow(IMAGE_BYTES).unwrap(), IMAGE_BYTES);
+    assert_eq!(fixture.capacity(), sectors);
+    assert_eq!(fixture.config_raised(), 0);
+
+    let mut read_only = Fixture::raw(true);
+    assert_eq!(
+        read_only.grow(2 * IMAGE_BYTES).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(read_only.capacity(), IMAGE_BYTES / SECTOR_SIZE);
+    assert_eq!(read_only.config_raised(), 0);
+}
+
+#[test]
+fn a_grow_sent_while_inactive_waits_for_the_next_activation() {
+    let mut fixture = Fixture::qcow2();
+    fixture.blk.reset().unwrap();
+    let late = fixture
+        .handle
+        .grow(2 * IMAGE_BYTES, Duration::from_millis(20))
+        .unwrap_err();
+    assert_eq!(late.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(fixture.capacity(), IMAGE_BYTES / SECTOR_SIZE);
+
+    fixture.fresh_rings();
+    let features = fixture.blk.spec().features;
+    fixture.blk.set_features(features).unwrap();
+    fixture.activate().unwrap();
+    let control = SourceId(fixture.registrar.registered.load(Ordering::SeqCst) as u32 - 1);
+    fixture
+        .blk
+        .on_event(DeviceEvent::BackendReady(control))
+        .unwrap();
+    assert_eq!(fixture.capacity(), 2 * IMAGE_BYTES / SECTOR_SIZE);
+    assert_eq!(fixture.config_raised(), 1);
 }

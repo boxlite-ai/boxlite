@@ -475,3 +475,91 @@ async fn reports_a_missing_kernel_through_the_exit_file() {
         other => panic!("expected an Unsupported exit record, got {other:?}"),
     }
 }
+
+#[test]
+fn a_resize_of_a_missing_disk_is_invalid() {
+    use crate::vmm::control::{ControlError, ControlOp};
+    assert_eq!(
+        super::engine::control(
+            &[],
+            ControlOp::ResizeDisk {
+                index: 0,
+                bytes: 1 << 30
+            }
+        ),
+        Err(ControlError::InvalidInput("no disk 0".into()))
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 with /dev/kvm, VMM_KERNEL, VMM_DISK_GROW_INIT and a boxlite-shim built with native"]
+async fn grows_a_disk_through_the_shim_control_socket() {
+    use crate::vmm::control::{ControlOp, ControlReply, ControlRequest, VERSION, request};
+
+    let test_box = TestBox::new();
+    let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
+    let init =
+        fs::read(std::env::var_os("VMM_DISK_GROW_INIT").expect("set VMM_DISK_GROW_INIT")).unwrap();
+    let archive = m1_initramfs::newc_archive("init", &init);
+    let prepared = test_box.stage_kernel(&kernel, Some(&archive));
+    // The container disk path is one the jail grants read-write; the test
+    // serves a raw image there.
+    fs::create_dir_all(test_box.layout.disks_dir()).unwrap();
+    let disk = test_box.layout.disk_path();
+    fs::File::create(&disk).unwrap().set_len(1 << 20).unwrap();
+    let mut spec = test_box.spec(Some(prepared));
+    spec.block_devices.add(BlockDevice {
+        block_id: "vda".to_string(),
+        disk_path: disk.clone(),
+        read_only: false,
+        format: DiskFormat::Raw,
+    });
+
+    let mut controller = ShimController::new(
+        find_binary("boxlite-shim").unwrap(),
+        VmmKind::Native,
+        test_box.box_id.clone(),
+        BoxOptions::default(),
+        test_box.layout.clone(),
+    )
+    .unwrap();
+    let handler = controller.start(&spec).await.unwrap();
+    let started = std::time::Instant::now();
+    while !test_box.console().contains("GROW_BEFORE") {
+        assert!(
+            started.elapsed() < SHIM_TIMEOUT && handler.is_running(),
+            "console:\n{}\nexit: {:?}",
+            test_box.console(),
+            fs::read_to_string(test_box.layout.exit_file_path())
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let path = test_box.layout.sockets().control_sock();
+    let grow = ControlRequest {
+        version: VERSION,
+        op: ControlOp::ResizeDisk {
+            index: 0,
+            bytes: 2 << 20,
+        },
+    };
+    let reply = tokio::task::spawn_blocking(move || request(&path, &grow, Duration::from_secs(15)))
+        .await
+        .unwrap()
+        .unwrap();
+    let exit = tokio::time::timeout(
+        SHIM_TIMEOUT,
+        ProcessMonitor::new(handler.pid()).wait_for_exit(),
+    )
+    .await
+    .expect("the shim exits within the timeout");
+
+    let console = test_box.console();
+    assert_eq!(
+        reply,
+        Ok(ControlReply::DiskSize(2 << 20)),
+        "console:\n{console}"
+    );
+    assert_eq!(exit, ProcessExit::Code(0), "console:\n{console}");
+    assert!(console.contains("GROW_AFTER 4096"), "console:\n{console}");
+    assert_eq!(fs::metadata(&disk).unwrap().len(), 2 << 20);
+}

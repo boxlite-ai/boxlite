@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use self::{device::VirtioBlk, imago::ImagoBackend};
+use self::{control::Controls, device::VirtioBlk, imago::ImagoBackend};
 use super::{
     DeviceContext, VirtioDevice,
     mmio::{self, Slot},
@@ -24,6 +24,7 @@ use crate::{
 
 pub(crate) mod backend;
 pub(crate) mod config;
+pub(crate) mod control;
 pub(crate) mod device;
 pub(crate) mod imago;
 pub(crate) mod inflight;
@@ -46,7 +47,8 @@ const CHIPSET_NAMES: [&str; MAX_DISKS] = [
 ];
 
 /// Adds `disk` as a virtio-blk device behind a virtio-mmio transport in
-/// `slot`, run by the VM's workers. `index` selects the chipset name.
+/// `slot`, run by the VM's workers. `index` selects the chipset name;
+/// `controls` carries the grow requests of the disk's handle.
 #[cfg_attr(
     not(all(target_os = "linux", target_arch = "x86_64")),
     expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds disks yet.")
@@ -57,6 +59,7 @@ pub(crate) fn add_disk(
     disk: &DiskConfig,
     index: usize,
     slot: Slot,
+    controls: Controls,
 ) -> Result<()> {
     let name = CHIPSET_NAMES
         .get(index)
@@ -69,7 +72,7 @@ pub(crate) fn add_disk(
             }
         })?;
     let device: Arc<Mutex<dyn VirtioDevice>> =
-        Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend))));
+        Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend), controls)));
     mmio::add_device(chipset, ctx, name, slot, device)
 }
 

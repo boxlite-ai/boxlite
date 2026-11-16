@@ -3,7 +3,7 @@
 //! `create` translates the `InstanceSpec` into a `VmConfig`; `enter` builds
 //! the VM and runs it until the guest resets or powers off.
 
-use std::{fs::File, io, path::PathBuf};
+use std::{fs::File, io, path::PathBuf, time::Duration};
 
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::rootfs::guest::Strategy;
@@ -13,7 +13,9 @@ use crate::vmm::{
     guest_args, registry::EngineFactoryRegistration,
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use boxlite_vmm::{DiskConfig, FsConfig, FsShareConfig, NetConfig, Vm, VmConfig, VsockConfig};
+use boxlite_vmm::{
+    DiskConfig, DiskHandle, FsConfig, FsShareConfig, NetConfig, Vm, VmConfig, VsockConfig,
+};
 
 /// The command line when the box brings no custom one: the virtio console, a
 /// reset on panic and on `reboot`, as the VMM's own boot tests use.
@@ -34,6 +36,8 @@ impl Native {
 struct NativeVmmInstance {
     config: VmConfig,
     console: Option<PathBuf>,
+    /// Where the host reaches this VM's control channel.
+    control: PathBuf,
 }
 
 impl VmmInstanceImpl for NativeVmmInstance {
@@ -47,11 +51,79 @@ impl VmmInstanceImpl for NativeVmmInstance {
             })?),
             None => Box::new(io::sink()),
         };
+        let disk_count = self.config.disks.len();
         let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
+        let disks: Vec<DiskHandle> = (0..disk_count).filter_map(|i| vm.disk_handle(i)).collect();
+        // Without the channel the box still runs; it only cannot grow online.
+        if let Err(error) = crate::vmm::control::serve(&self.control, move |op| control(&disks, op))
+        {
+            tracing::warn!(%error, path = %self.control.display(), "VMM control channel unavailable");
+        }
         let exit = vm.run().map_err(map_vmm_error)?;
         tracing::info!(?exit, "native VM ended");
         Ok(())
     }
+}
+
+/// How long a grow may wait for the block device's worker.
+const GROW_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serves one control operation against the VM's disks.
+pub(crate) fn control(
+    disks: &[DiskHandle],
+    op: crate::vmm::control::ControlOp,
+) -> crate::vmm::control::ControlResponse {
+    use crate::vmm::control::{ControlError, ControlOp, ControlReply};
+
+    match op {
+        ControlOp::ResizeDisk { index, bytes } => {
+            let disk = disks
+                .get(index)
+                .ok_or_else(|| ControlError::InvalidInput(format!("no disk {index}")))?;
+            raise_file_size_limit(bytes).map_err(|error| {
+                ControlError::Failed(format!("cannot raise the file size limit: {error}"))
+            })?;
+            disk.grow(bytes, GROW_TIMEOUT)
+                .map(ControlReply::DiskSize)
+                .map_err(|error| match error.kind() {
+                    io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
+                        ControlError::InvalidInput(error.to_string())
+                    }
+                    _ => ControlError::Failed(error.to_string()),
+                })
+        }
+    }
+}
+
+/// Raises this process's soft `RLIMIT_FSIZE` to cover a disk of `bytes`,
+/// with the jailer's margin, up to the hard limit; it never lowers it.
+fn raise_file_size_limit(bytes: u64) -> io::Result<()> {
+    use crate::disk::constants::qcow2::FSIZE_DISK_MULTIPLIER;
+
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid out-pointer for the call.
+    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let wanted = bytes.saturating_mul(FSIZE_DISK_MULTIPLIER);
+    if limit.rlim_cur == libc::RLIM_INFINITY || limit.rlim_cur >= wanted {
+        return Ok(());
+    }
+    if limit.rlim_max != libc::RLIM_INFINITY && limit.rlim_max < wanted {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{wanted} bytes exceed the hard limit of {}", limit.rlim_max),
+        ));
+    }
+    limit.rlim_cur = wanted;
+    // SAFETY: `limit` is a valid rlimit for the call.
+    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Requests the engine cannot serve; any one fails `create` before boot.
@@ -267,9 +339,19 @@ impl Vmm for Native {
             kernel = %vm_config.kernel.display(),
             "native VM configured"
         );
+        let box_dir = config
+            .exit_file
+            .parent()
+            .ok_or_else(|| BoxliteError::Engine("the exit file has no box directory".into()))?;
+        let control = crate::net::socket_path::BoxSockets::new(
+            config.box_id.clone(),
+            box_dir.join(crate::runtime::layout::dirs::SOCKETS_DIR),
+        )
+        .control_sock();
         Ok(VmmInstance::new(Box::new(NativeVmmInstance {
             config: vm_config,
             console: config.console_output,
+            control,
         })))
     }
 }

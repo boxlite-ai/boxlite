@@ -64,6 +64,8 @@ const BOX_SOCK: &str = "box.sock";
 const READY_SOCK: &str = "ready.sock";
 /// Network backend (gvproxy) socket filename.
 const NET_SOCK: &str = "net.sock";
+/// The shim's VMM control socket.
+const CONTROL_SOCK: &str = "control.sock";
 
 /// Base directory for binding symlinks. Deliberately literal — see module docs.
 const SYMLINK_BASE: &str = "/tmp";
@@ -122,6 +124,12 @@ impl BoxSockets {
     /// Guest-ready notification socket (host binds the listener).
     pub fn ready_sock(&self) -> PathBuf {
         self.binding_dir().join(READY_SOCK)
+    }
+
+    /// Host-only VMM control socket the native shim serves; never bridged
+    /// into guest vsock.
+    pub fn control_sock(&self) -> PathBuf {
+        self.binding_dir().join(CONTROL_SOCK)
     }
 
     /// Network backend socket (gvproxy binds; libkrun derives a sibling

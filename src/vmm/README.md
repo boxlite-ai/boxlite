@@ -8,8 +8,8 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
-are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `DiskHandle`, `Error`
+and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
 `Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
@@ -27,7 +27,7 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `disk_handle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -753,7 +753,8 @@ took, and then announces that slot on the kernel command line.
   at most 128 MiB, and a read past the end returns zeros, while writes are
   refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
-  engine implements: `disk_info` once after open; `event_source` at every
+  engine implements: `disk_info` once after open; `resize_grow` to a larger
+  aligned size between requests, returning the new information; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
   `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
   inline or `Pending`; `completions` on each `BackendReady` edge, drained
@@ -779,8 +780,19 @@ took, and then announces that slot on the kernel command line.
   and at most 128 MiB, so a conforming guest splits a larger range; imago
   zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
+- **Online grow.** `devices::add_all` returns one `blk::control::DiskHandle`
+  per disk and `Vm::disk_handle(index)` hands it out. `DiskHandle::grow(bytes,
+  timeout)` queues the absolute target and writes one byte to a doorbell socket
+  pair; the device registers the other end at each activation, after the
+  backend source, and on its `BackendReady` drains the doorbell and applies
+  every queued target on the worker thread. A grow refuses a read-only disk
+  (`PermissionDenied`) and a smaller or unaligned size (`InvalidInput`),
+  succeeds unchanged at the current size, and otherwise calls `resize_grow`,
+  re-encodes the configuration space and raises the configuration interrupt.
+  A target sent while the device is inactive waits for the next activation;
+  the caller times out with `TimedOut` and may retry.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
-  backend source, fails the device with `Fatal` if a request is still in
+  backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already
   reuse that memory), flushes, and forgets the activation. The imago
   backend finishes every request inline, so its table is always empty; a

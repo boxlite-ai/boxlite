@@ -17,6 +17,7 @@ use crate::{
     memory::{GuestRam, ram_ranges},
     virtio::{
         DeviceContext,
+        blk::control::DiskHandle,
         worker::{ShutdownError, VirtioWorkers},
     },
 };
@@ -73,6 +74,8 @@ pub struct Vm<H: HostVm> {
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
     console: Mutex<Option<ConsoleWorker>>,
+    /// One grow handle per disk, in `VmConfig::disks` order.
+    disks: Vec<DiskHandle>,
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
@@ -115,15 +118,20 @@ impl Vm<boxlite_hypervisor::KvmVm> {
         )?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
+        let mut disks = Vec::new();
         let mut vm = Self::build(
             config,
             move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
             true,
             VirtioWorkers::new,
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+            |chipset, ctx, config| {
+                disks = crate::devices::add_all(chipset, ctx, config, writer)?;
+                Ok(())
+            },
         )?;
         vm.console = Mutex::new(Some(worker));
+        vm.disks = disks;
         Ok(vm)
     }
 }
@@ -221,6 +229,7 @@ impl<H: HostVm> Vm<H> {
             chipset: Some(chipset),
             workers: Some(workers),
             console: Mutex::new(None),
+            disks: Vec::new(),
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
@@ -238,6 +247,12 @@ impl<H: HostVm> Vm<H> {
     /// [`run`](Self::run) starts.
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
+    }
+
+    /// A handle that grows disk `index` (in `VmConfig::disks` order) from
+    /// another thread while the VM runs; `None` past the last disk.
+    pub fn disk_handle(&self, index: usize) -> Option<DiskHandle> {
+        self.disks.get(index).cloned()
     }
 }
 

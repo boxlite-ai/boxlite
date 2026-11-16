@@ -31,6 +31,11 @@ pub mod qcow2 {
     /// virtual size, where a full disk gives the guest a clean `ENOSPC`).
     pub const FSIZE_DISK_MULTIPLIER: u64 = 2;
 
+    /// The largest size, in GiB, a disk grows to while its box runs. A native
+    /// shim's hard `RLIMIT_FSIZE` covers it, so the shim can raise its own
+    /// soft limit on a grow.
+    pub const ONLINE_GROW_MAX_GB: u64 = 1024;
+
     /// QCOW2 cluster size in bits (64KB = 2^16)
     pub const CLUSTER_BITS: usize = 16;
 

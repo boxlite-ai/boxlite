@@ -7,8 +7,8 @@
 use std::{io, path::Path};
 
 use imago::{
-    DynStorage, FormatAccess, FormatDriverBuilder, PermissiveImplicitOpenGate, qcow2::Qcow2,
-    raw::Raw,
+    DynStorage, FormatAccess, FormatDriverBuilder, PermissiveImplicitOpenGate,
+    format::PreallocateMode, qcow2::Qcow2, raw::Raw,
 };
 
 use super::{
@@ -83,6 +83,14 @@ impl DiskBackend for ImagoBackend {
             status,
             request,
         })
+    }
+
+    fn resize_grow(&mut self, bytes: u64) -> io::Result<DiskInfo> {
+        // `None` only grows metadata and the file length: the new range reads
+        // as zeroes because it maps nothing, even past a shorter backing file.
+        self.image.resize_grow(bytes, PreallocateMode::None)?;
+        self.disk_info.capacity_sectors = self.image.size() >> SECTOR_SHIFT;
+        Ok(self.disk_info)
     }
 
     fn completions(&mut self, _out: &mut Vec<CompletedRequest>) {}

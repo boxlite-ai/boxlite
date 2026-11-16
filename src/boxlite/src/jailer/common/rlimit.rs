@@ -92,6 +92,29 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
     Ok(())
 }
 
+/// Set `RLIMIT_FSIZE` to `soft` under a higher `hard` limit, so the process
+/// can raise its own soft limit up to `hard` later - async-signal-safe. An
+/// unprivileged process cannot raise its hard limit, so `hard` stops at the
+/// inherited one, and `soft` at that.
+pub fn set_file_size_raw(soft: u64, hard: u64) -> Result<(), i32> {
+    let mut inherited = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut inherited) } != 0 {
+        return Err(super::get_errno());
+    }
+    let hard = (hard as libc::rlim_t).min(inherited.rlim_max);
+    let rlim = libc::rlimit {
+        rlim_cur: (soft as libc::rlim_t).min(hard),
+        rlim_max: hard,
+    };
+    if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &rlim) } != 0 {
+        return Err(super::get_errno());
+    }
+    Ok(())
+}
+
 /// Set a specific resource limit - async-signal-safe version.
 #[inline]
 fn set_rlimit_raw(resource: RlimitResource, limit: u64) -> Result<(), i32> {
