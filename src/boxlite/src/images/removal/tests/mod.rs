@@ -434,6 +434,50 @@ fn removal_handles_readonly_extracted_directories_and_nested_symlinks() {
     assert!(external.path().join("keep").exists());
 }
 
+#[test]
+fn removal_handles_unreadable_extracted_directories_on_the_first_attempt() {
+    for mode in [0o000, 0o100] {
+        for depth in [0, 1, 3] {
+            let root = tempfile::tempdir().unwrap();
+            let external = tempfile::tempdir().unwrap();
+            fs::write(external.path().join("keep"), b"external data").unwrap();
+            fs::set_permissions(external.path(), fs::Permissions::from_mode(0o500)).unwrap();
+            let storage = ImageStorage::new(root.path().to_path_buf()).unwrap();
+            let path = storage.layer_extracted_path(FIRST);
+            let mut directories = vec![path.clone()];
+            for _ in 0..depth {
+                directories.push(directories.last().unwrap().join("nested"));
+            }
+            let deepest = directories.last().unwrap();
+            fs::create_dir_all(deepest).unwrap();
+            fs::write(deepest.join("file"), b"cached contents").unwrap();
+            std::os::unix::fs::symlink(external.path(), deepest.join("outside")).unwrap();
+            for directory in directories.iter().rev() {
+                fs::set_permissions(directory, fs::Permissions::from_mode(mode)).unwrap();
+            }
+
+            let result = remove_paths(root.path(), BTreeSet::from([path.clone()]));
+
+            // Restore fixture access even when removal fails, so cleanup can finish.
+            for directory in &directories {
+                if directory.exists() {
+                    fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+                }
+            }
+            let external_mode = fs::metadata(external.path()).unwrap().mode() & 0o777;
+            fs::set_permissions(external.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(result.is_ok(), "mode={mode:o}, depth={depth}: {result:?}");
+            assert!(result.unwrap() > 0);
+            assert!(!path.exists());
+            assert_eq!(external_mode, 0o500);
+            assert_eq!(
+                fs::read(external.path().join("keep")).unwrap(),
+                b"external data"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn removal_reclaims_unique_disks_but_preserves_shared_keys_and_lookalikes() {
     for shared in [false, true] {

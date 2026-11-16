@@ -216,15 +216,9 @@ fn remove_paths(root: &Path, paths: BTreeSet<PathBuf>) -> BoxliteResult<u64> {
                 path.display()
             )));
         }
-        for entry in walkdir::WalkDir::new(&path)
-            .follow_links(false)
-            .follow_root_links(false)
-        {
-            let entry = entry.map_err(|error| {
-                BoxliteError::Storage(format!("inspect image cache {}: {error}", path.display()))
-            })?;
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| io_error(entry.path(), error))?;
+        let mut pending = vec![path.clone()];
+        while let Some(entry) = pending.pop() {
+            let metadata = fs::symlink_metadata(&entry).map_err(|error| io_error(&entry, error))?;
             let inode = inodes.entry((metadata.dev(), metadata.ino())).or_insert((
                 metadata.blocks() * 512,
                 metadata.nlink(),
@@ -232,14 +226,18 @@ fn remove_paths(root: &Path, paths: BTreeSet<PathBuf>) -> BoxliteResult<u64> {
                 metadata.is_dir(),
             ));
             inode.2 += 1;
-            // Layers may intentionally contain 0555 directories. Only eligible,
-            // unshared directories are made traversable, never symlink targets.
-            if metadata.is_dir() && metadata.mode() & 0o700 != 0o700 {
-                fs::set_permissions(
-                    entry.path(),
-                    fs::Permissions::from_mode(metadata.mode() | 0o700),
-                )
-                .map_err(|error| io_error(entry.path(), error))?;
+            if metadata.is_dir() {
+                // Restore owner access before opening directories; symlink targets stay untouched.
+                if metadata.mode() & 0o700 != 0o700 {
+                    fs::set_permissions(
+                        &entry,
+                        fs::Permissions::from_mode(metadata.mode() | 0o700),
+                    )
+                    .map_err(|error| io_error(&entry, error))?;
+                }
+                for child in fs::read_dir(&entry).map_err(|error| io_error(&entry, error))? {
+                    pending.push(child.map_err(|error| io_error(&entry, error))?.path());
+                }
             }
         }
         existing.push(path);

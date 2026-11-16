@@ -103,6 +103,10 @@ Pure image disk caches are also reclaimed when no retained build shares their la
 When boxes exist, pure disk caches remain because their backing chains can outlive image-index records.
 Versioned guest bases, snapshots and local-bundle caches keep their existing lifecycle.
 
+Deletion restores owner access before opening eligible, unshared extracted directories,
+including nested directories with `0000` or `0100` permissions.
+Symbolic links are removed without changing their targets' permissions or contents.
+
 The result reports allocated bytes removed, including zero when files are absent or data remains shared.
 It accounts for sparse files and hardlinks; filesystem snapshots and reflinks may defer physical free-space changes.
 The value therefore does not promise an equal change in the filesystem's global free-space counter.
