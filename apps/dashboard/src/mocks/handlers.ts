@@ -66,16 +66,16 @@ const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-
 function quickstartHandoffDemoBox() {
   const stage = globalThis.localStorage?.getItem('qs-publish-demo')
   if (stage !== 'created' && stage !== 'published') return null
-  return {
-    ...MOCK_BOXES[0],
+  return buildBox({
     id: 'mock-box-agent',
     name: 'agile-otter',
+    state: BoxState.STARTED,
     createdAt: new Date().toISOString(),
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
       inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
     },
-  }
+  })
 }
 
 /** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
@@ -97,7 +97,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 
 export const handlers = [
   ...resourceStateHandlers(API_URL),
-  ...ciHandlers(),
+  ...ciHandlers(newUserPreview),
   ...sshHandlers,
   ...tunnelHandlers,
   ...domainHandlers(),

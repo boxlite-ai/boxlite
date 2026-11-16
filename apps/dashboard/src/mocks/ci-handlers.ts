@@ -4,7 +4,7 @@ import { BoxState } from '@boxlite-ai/api-client'
 import type { CiSettings } from '@/api/ci-types'
 import { buildBox, MOCK_BOXES, MOCK_PAGINATED_BOXES, MOCK_ORGANIZATION } from './fixtures'
 
-export function ciHandlers() {
+export function ciHandlers(emptyAccount = false) {
   const runners = [
     buildBox({
       id: 'mock-ci-jit-running',
@@ -59,7 +59,7 @@ export function ciHandlers() {
   const missing = () => new HttpResponse(null, { status: 404 })
   const preview = () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview')
   const emptyPreview = () =>
-    globalThis.localStorage?.getItem('desktop-review-empty') === '1' || preview() === 'ci-empty'
+    emptyAccount || globalThis.localStorage?.getItem('desktop-review-empty') === '1' || preview() === 'ci-empty'
   return [
     http.get(`${base}/settings`, ({ params }) =>
       own(params.organizationId)

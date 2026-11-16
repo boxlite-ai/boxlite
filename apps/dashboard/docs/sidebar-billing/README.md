@@ -31,6 +31,9 @@ Open `/dashboard/boxes?preview=new-user`. An unfunded account shows $0.00 and
 supply an amount to this summary. Existing promotional funds, if present, are
 represented by the wallet balance returned by the API.
 
+The new-user fixture also clears CI runner inventory and used capacity through
+navigation. The opt-in Quickstart handoff demo still creates a complete Box fixture.
+
 ![New user wallet](new-user.png)
 
 Click any summary to open the existing Billing page. Collapse the sidebar to use

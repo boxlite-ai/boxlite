@@ -101,6 +101,9 @@ describe('SidebarBalance API integration', () => {
     await render()
     await settle()
     expect(document.body.textContent).toContain('$12.34')
+    const summary = document.querySelector('a[href="/dashboard/billing"]')!
+    expect(summary.getAttribute('aria-label')).toBeNull()
+    expect(summary.textContent).toContain('$12.34')
     expect(requests.sort()).toEqual(['/organization/org-a/plan', '/organization/org-a/wallet'])
     scope.id = 'org-b'
     await render()

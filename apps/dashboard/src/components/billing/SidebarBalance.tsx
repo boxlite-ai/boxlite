@@ -76,7 +76,6 @@ export function SidebarBalance({ expanded }: { expanded: boolean }) {
   return (
     <Link
       to={RoutePath.BILLING}
-      aria-label="View billing and balance"
       className="group block w-full border-t border-border px-3 pb-3 pt-4 text-body hover:bg-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
     >
       <div className="flex items-center justify-between gap-2">
