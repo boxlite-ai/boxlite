@@ -13,12 +13,8 @@
 
 use std::fs::File;
 use std::io::{self, ErrorKind, Read};
-#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-use std::io::Write;
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, RawFd};
-#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-use std::os::fd::FromRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 
@@ -162,6 +158,7 @@ fn send_frame(stream: &UnixStream, payload: &[u8], fd: Option<RawFd>) -> io::Res
 /// before the error returns.
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn receive_frame(stream: &mut UnixStream) -> io::Result<Option<(Vec<u8>, Option<File>)>> {
+    use std::os::fd::FromRawFd;
     let mut len = [0u8; 4];
     let mut control = vec![0u8; unsafe { libc::CMSG_SPACE(size_of::<RawFd>() as u32) } as usize];
     let iov = [libc::iovec {
@@ -364,6 +361,7 @@ fn serve_connection(stream: &mut UnixStream, tag: &str, registry: &MountRegistry
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn write_response(stream: &mut UnixStream, response: MountResponse) -> io::Result<()> {
+    use std::io::Write;
     let payload = serde_json::to_vec(&response)?;
     let bytes = frame_bytes(&payload);
     stream.write_all(&bytes)?;
