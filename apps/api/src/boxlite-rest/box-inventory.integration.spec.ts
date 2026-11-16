@@ -29,6 +29,7 @@ import { McpDispatcher } from '../mcp/mcp-dispatcher'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { boxToBoxResponse } from './mappers/box-to-box.mapper'
+import { BoxRequestReplayService, ReplaySession } from '../boxlite-rest/box-request-replay.service'
 
 jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn() }))
 const org = '00000000-0000-4000-8000-000000000001'
@@ -81,6 +82,10 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
         { provide: BoxStateWaiterService, useValue: {} },
         { provide: CommerceBoxLimitService, useValue: {} },
         { provide: CheckpointRecoverService, useValue: {} },
+        {
+          provide: BoxRequestReplayService,
+          useValue: { session: async () => new ReplaySession(undefined, undefined, undefined) },
+        },
       ],
     })
       .overrideGuard(CombinedAuthGuard)

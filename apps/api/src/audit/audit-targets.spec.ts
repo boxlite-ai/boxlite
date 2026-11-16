@@ -14,6 +14,7 @@ import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.serv
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
+import { BoxRequestReplayService, ReplaySession } from '../boxlite-rest/box-request-replay.service'
 
 describe('audit targets at HTTP boundaries', () => {
   let app: INestApplication
@@ -43,6 +44,10 @@ describe('audit targets at HTTP boundaries', () => {
       controllers: [BoxliteBoxController],
       providers: [
         { provide: BoxService, useValue: boxes },
+        {
+          provide: BoxRequestReplayService,
+          useValue: { session: async () => new ReplaySession(undefined, undefined, undefined) },
+        },
         { provide: BoxStateWaiterService, useValue: { waitForStarted } },
         { provide: CommerceBoxLimitService, useValue: { resolveMaxCreatedBoxes: async () => 10 } },
         { provide: CheckpointRecoverService, useValue: { createBox: createFromCheckpoint } },

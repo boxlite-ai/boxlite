@@ -171,6 +171,30 @@ schema and drops it afterward; it skips without `DB_HOST`. Authentication guards
 and enrichment dependencies are replaced in this harness, so it does not establish
 credential-policy enforcement or deployed infrastructure behavior.
 
+## Request idempotency and replay
+
+`createBox` and `POST /boxes/{boxId}/exec` honour an optional `Idempotency-Key` UUID header.
+The first request atomically claims the key in the existing Redis; later same-key requests replay
+the stored success response without calling the business layer again. Same key with a different
+method, path, or body returns `422 idempotency_payload_mismatch`; a concurrent same-key request
+while the owner is still processing returns `409` with `idempotency_in_progress`. A result whose
+outcome cannot be confirmed returns `422 idempotency_outcome_unknown` and never redispatches.
+
+Records live 24 hours from first use; retries never extend the deadline. A proven pre-dispatch
+failure (the organization Box limit rejection) marks the record retryable so the same key can
+succeed once capacity frees; the success response is then cached permanently within that window.
+REST and MCP share the same entry points: MCP passes `Idempotency-Key` through to the REST
+route, and its `wait`/`wait_timeout_seconds` arguments are stripped before the fingerprint, so
+retries always reach the original execution. Requests without the header are unchanged.
+
+Two API replicas sharing one Redis cannot both claim a key: the Lua scripts make
+`EXISTS` → `HSET` → `EXPIRE` atomic, and a stale owner cannot overwrite a reclaimed record.
+Redis data loss, TTL expiry, or manual deletion terminates the replay guarantee for that key.
+
+Run `make test:apps:api TEST_FILES='box-request-replay|box-replay'` with `REDIS_HOST` and
+`REDIS_PORT` for the real-Redis service and cross-replica HTTP suites; without `REDIS_HOST`
+they skip.
+
 ## Registration email policy
 
 With protection enabled, new OIDC identities register through `POST /api/auth/register`,
@@ -1710,15 +1734,15 @@ promised. Deployment and dev data reset remain operator actions.
 
 The removal release deletes these operations (paths relative to the hosted API base):
 
-| Removed operation | Supported path or behavior |
-| --- | --- |
-| `POST /users/{id}/regenerate-key-pair` | SSH gateway keys have no consumer; account creation no longer generates them |
-| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics` | Dashboard queries the independent Analytics API |
-| `GET /object-storage/push-access` | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning |
-| `GET /box` | Use `/box/paginated` or portable `/v1` listing |
-| `PUT /box/{id}/labels` | No replacement mutation; stored labels and label filters remain |
+| Removed operation                                                            | Supported path or behavior                                                                                  |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `POST /users/{id}/regenerate-key-pair`                                       | SSH gateway keys have no consumer; account creation no longer generates them                                |
+| `GET /box/{id}/telemetry/logs`, `traces`, `traces/{traceId}`, `metrics`      | Dashboard queries the independent Analytics API                                                             |
+| `GET /object-storage/push-access`                                            | Runner archives use infrastructure credentials; managed volumes retain their own S3 provisioning            |
+| `GET /box`                                                                   | Use `/box/paginated` or portable `/v1` listing                                                              |
+| `PUT /box/{id}/labels`                                                       | No replacement mutation; stored labels and label filters remain                                             |
 | `POST /box/{id}/autostop/{interval}`, `POST /box/{id}/autodelete/{interval}` | Set `auto_stop` and `auto_delete` in seconds when creating a Box through `/v1`; dynamic updates are retired |
-| `GET /volumes/by-name/{name}` | Look up volumes by ID; managed-volume selectors still accept names |
+| `GET /volumes/by-name/{name}`                                                | Look up volumes by ID; managed-volume selectors still accept names                                          |
 
 Removed operations return 404 and are absent from regenerated TypeScript and Go cloud clients.
 External consumers must stop calling them before this release; absence of repository callers does not establish absence of external use.

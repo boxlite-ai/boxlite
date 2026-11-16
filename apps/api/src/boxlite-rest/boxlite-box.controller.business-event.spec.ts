@@ -4,6 +4,7 @@
  */
 
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { ReplaySession } from './box-request-replay.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { Context } from '../common/context/context'
 import { subscribeBusinessEvents } from '../common/utils/business-event.util'
@@ -36,6 +37,7 @@ function makeController() {
     {} as never,
     commerceBoxLimitService as never,
     {} as never,
+    { session: async () => new ReplaySession(undefined, undefined, undefined) } as never,
   )
   return { controller, boxService }
 }
@@ -55,9 +57,12 @@ describe('BoxliteBoxController business event actor', () => {
       waiter as never,
       { resolveMaxCreatedBoxes: async () => 3 } as never,
       recovery as never,
+      { session: async () => new ReplaySession(undefined, undefined, undefined) } as never,
     )
     try {
-      await controller.createBox(authContext as never, { checkpoint_id: 'base' } as never, ctx).catch(() => undefined)
+      await controller
+        .createBox(authContext as never, undefined, { checkpoint_id: 'base' } as never, ctx)
+        .catch(() => undefined)
       expect(observed).toEqual([
         expect.objectContaining({
           'event.name': 'box.create',
@@ -69,7 +74,7 @@ describe('BoxliteBoxController business event actor', () => {
       observed.length = 0
       recovery.createBox.mockRejectedValue(new Error('admission failed'))
       await expect(
-        controller.createBox(authContext as never, { checkpoint_id: 'base' } as never, ctx),
+        controller.createBox(authContext as never, undefined, { checkpoint_id: 'base' } as never, ctx),
       ).rejects.toThrow()
       expect(observed).toEqual([])
     } finally {
@@ -80,7 +85,7 @@ describe('BoxliteBoxController business event actor', () => {
   it('creates, starts, stops and deletes a box as the calling user', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(authContext as never, { image: 'boxlite/base' } as never, ctx)
+    await controller.createBox(authContext as never, undefined, { image: 'boxlite/base' } as never, ctx)
     await controller.startBox(authContext as never, 'box-1', ctx)
     await controller.stopBox(authContext as never, 'box-1', ctx)
     await controller.removeBox(authContext as never, 'box-1', ctx)

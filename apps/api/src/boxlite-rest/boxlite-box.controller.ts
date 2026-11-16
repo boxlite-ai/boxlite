@@ -14,6 +14,7 @@ import {
   Body,
   Param,
   Query,
+  Headers,
   HttpCode,
   UseGuards,
   UsePipes,
@@ -47,10 +48,12 @@ import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto, InboundNetworkSpecDto, OutboundNetworkSpecDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
+import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
 import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { BoxRequestReplayService, fingerprintOf } from './box-request-replay.service'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 
@@ -87,6 +90,7 @@ export class BoxliteBoxController {
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
     private readonly checkpointRecoverService: CheckpointRecoverService,
+    private readonly requestReplay: BoxRequestReplayService,
   ) {}
 
   @Post()
@@ -129,32 +133,56 @@ export class BoxliteBoxController {
   })
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Body() dto: CreateBoxDto,
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
-    if (dto.checkpoint_id !== undefined) {
-      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
+    const replay = await this.requestReplay.session(
+      authContext.organizationId,
+      authContext.userId,
+      'createBox',
+      idempotencyKey,
+      fingerprintOf('POST', '/boxes', dto),
+    )
+    if (replay.response) {
+      // The stored status is always 201 for a successful create, matching
+      // this handler's @HttpCode. The body is the original serialized DTO;
+      // returning it parsed lets NestJS serialize it identically.
+      return JSON.parse(replay.response.body) as BoxResponseDto
     }
 
-    // Attaching a managed volume grants the box read/write access to its data,
-    // so it is authorized independently of WRITE_BOXES: the caller must hold the
-    // volume permissions too. WRITE_BOXES alone must not reach another key's
-    // volumes (GHSA-2qqv-7cwv-mj8h).
-    if (dto.volumes?.length) {
-      this.assertCanAttachVolumes(authContext)
-    }
+    try {
+      if (dto.checkpoint_id !== undefined) {
+        const response = await this.createBoxFromCheckpoint(authContext, dto, ctx, request)
+        await replay.complete({ status: 201, body: JSON.stringify(response) })
+        return response
+      }
 
-    const organization = authContext.organization
-    const createBoxDto = createBoxToCreateBox(dto)
-    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+      // Attaching a managed volume grants the box read/write access to its data,
+      // so it is authorized independently of WRITE_BOXES: the caller must hold the
+      // volume permissions too. WRITE_BOXES alone must not reach another key's
+      // volumes (GHSA-2qqv-7cwv-mj8h).
+      if (dto.volumes?.length) {
+        this.assertCanAttachVolumes(authContext)
+      }
 
-    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
-    if (request) request[AUDIT_TARGET_ID] = box.id
-    if (box.state !== BoxState.STARTED) {
-      box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      const organization = authContext.organization
+      const createBoxDto = createBoxToCreateBox(dto)
+      const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
+
+      let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
+      if (request) request[AUDIT_TARGET_ID] = box.id
+      if (box.state !== BoxState.STARTED) {
+        box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      }
+      const response = boxToBoxResponse(box)
+      await replay.complete({ status: 201, body: JSON.stringify(response) })
+      return response
+    } catch (error) {
+      await replay.releaseSafe(error instanceof BoxCreationLimitExceededError)
+      throw error
     }
-    return boxToBoxResponse(box)
   }
 
   /** Admit an inherited configuration, record its request, then wait without losing its identity. */

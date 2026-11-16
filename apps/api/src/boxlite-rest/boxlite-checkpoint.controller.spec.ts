@@ -28,6 +28,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxService } from '../box/services/box.service'
+import { BoxRequestReplayService, ReplaySession } from './box-request-replay.service'
 
 // Real HTTP, Passport API-key validation and organization permission guards;
 // credential storage, membership, Redis and checkpoint persistence are fixtures.
@@ -105,6 +106,10 @@ describe('Checkpoint REST authentication and request admission', () => {
       controllers: [BoxliteCheckpointController, BoxliteBoxController],
       providers: [
         { provide: CheckpointService, useValue: checkpoints },
+        {
+          provide: BoxRequestReplayService,
+          useValue: { session: async () => new ReplaySession(undefined, undefined, undefined) },
+        },
         { provide: CheckpointRecoverService, useValue: recovery },
         { provide: BoxService, useValue: boxes },
         { provide: BoxStateWaiterService, useValue: waiter },

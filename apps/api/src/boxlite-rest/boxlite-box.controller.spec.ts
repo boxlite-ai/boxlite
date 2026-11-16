@@ -15,6 +15,7 @@ import { AuditInterceptor } from '../audit/interceptors/audit.interceptor'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { ReplaySession } from './box-request-replay.service'
 import { Context } from '../common/context/context'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { Box } from '../box/entities/box.entity'
@@ -29,7 +30,7 @@ describe('BoxliteBoxController existing box lookup', () => {
       findOneByIdOrName: jest.fn().mockResolvedValue(box),
       toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
     }
-    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any)
+    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any, {} as any)
     const response = await controller.getBox({ organizationId: organization.id, organization } as any, box.name)
     expect(response.box_id).toBe(box.id)
     expect(response).not.toHaveProperty('reuse_error')
@@ -208,6 +209,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxStateWaiter as any,
       commerceBoxLimitService as any,
       {} as any,
+      { session: async () => new ReplaySession(undefined, undefined, undefined) } as any,
     )
     return { controller, boxService }
   }
@@ -241,9 +243,9 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('refuses a WRITE_BOXES-only key that attaches a volume', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(keyContext([WRITE_BOXES]), dtoWithVolume, Context.user())).rejects.toThrow(
-      /managed volume/,
-    )
+    await expect(
+      controller.createBox(keyContext([WRITE_BOXES]), undefined, dtoWithVolume, Context.user()),
+    ).rejects.toThrow(/managed volume/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
 
@@ -251,7 +253,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
     const { controller, boxService } = makeController()
 
     await expect(
-      controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES]), dtoWithVolume, Context.user()),
+      controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES]), undefined, dtoWithVolume, Context.user()),
     ).rejects.toThrow(/write:volumes/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
@@ -260,7 +262,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
     const { controller, boxService } = makeController()
 
     await expect(
-      controller.createBox(keyContext([WRITE_BOXES, WRITE_VOLUMES]), dtoWithVolume, Context.user()),
+      controller.createBox(keyContext([WRITE_BOXES, WRITE_VOLUMES]), undefined, dtoWithVolume, Context.user()),
     ).rejects.toThrow(/read:volumes/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
@@ -268,7 +270,12 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('allows a key holding both volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dtoWithVolume, Context.user())
+    await controller.createBox(
+      keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]),
+      undefined,
+      dtoWithVolume,
+      Context.user(),
+    )
 
     expect(boxService.create).toHaveBeenCalledTimes(1)
   })
@@ -276,7 +283,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('does not gate a volume-free create on volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(keyContext([WRITE_BOXES]), { image: 'alpine:latest' } as any, Context.user())
+    await controller.createBox(keyContext([WRITE_BOXES]), undefined, { image: 'alpine:latest' } as any, Context.user())
 
     expect(boxService.create).toHaveBeenCalledTimes(1)
   })
@@ -291,8 +298,8 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       organizationUser: { role: 'owner', assignedRoles: [] },
     } as any
 
-    await controller.createBox(admin, dtoWithVolume, Context.user())
-    await controller.createBox(owner, dtoWithVolume, Context.user())
+    await controller.createBox(admin, undefined, dtoWithVolume, Context.user())
+    await controller.createBox(owner, undefined, dtoWithVolume, Context.user())
 
     expect(boxService.create).toHaveBeenCalledTimes(2)
   })
@@ -302,6 +309,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
 
     await controller.createBox(
       memberContext([{ permissions: [READ_VOLUMES, WRITE_VOLUMES] }]),
+      undefined,
       dtoWithVolume,
       Context.user(),
     )
@@ -313,7 +321,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
     const { controller, boxService } = makeController()
 
     await expect(
-      controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume, Context.user()),
+      controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), undefined, dtoWithVolume, Context.user()),
     ).rejects.toThrow(/managed volume/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
@@ -321,9 +329,9 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('refuses a member that carries no assigned roles', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(memberContext(undefined), dtoWithVolume, Context.user())).rejects.toThrow(
-      /managed volume/,
-    )
+    await expect(
+      controller.createBox(memberContext(undefined), undefined, dtoWithVolume, Context.user()),
+    ).rejects.toThrow(/managed volume/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
 })

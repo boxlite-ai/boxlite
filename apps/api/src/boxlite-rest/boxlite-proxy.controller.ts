@@ -16,6 +16,7 @@ import {
   Req,
   Res,
   Next,
+  Headers,
   UseGuards,
   Logger,
   NotFoundException,
@@ -31,7 +32,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
-import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
+import { createProxyMiddleware, fixRequestBody, responseInterceptor, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -51,6 +52,7 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { BoxRequestReplayService, fingerprintOf } from './box-request-replay.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -118,6 +120,7 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
+    private readonly requestReplay: BoxRequestReplayService,
   ) {}
 
   @All(':boxId/exec')
@@ -132,10 +135,40 @@ export class BoxliteProxyController {
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    if (req.method !== 'POST' || !idempotencyKey) {
+      return this.proxyToRunner(
+        authContext,
+        boxId,
+        (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
+        req,
+        res,
+        next,
+        USER_OPERATION,
+        {
+          operation: req.method === 'POST' ? 'box.exec' : undefined,
+          admit: req.method === 'POST' ? requireExecReady : undefined,
+        },
+      )
+    }
+
+    const body = (req as Request & { body?: unknown }).body
+    const replay = await this.requestReplay.session(
+      authContext.organizationId,
+      authContext.userId,
+      'startExecution',
+      idempotencyKey,
+      fingerprintOf(req.method, req.originalUrl, body),
+    )
+    if (replay.response) {
+      res.status(replay.response.status).type('application/json').send(replay.response.body)
+      return
+    }
+
     return this.proxyToRunner(
       authContext,
       boxId,
@@ -145,8 +178,11 @@ export class BoxliteProxyController {
       next,
       USER_OPERATION,
       {
-        operation: req.method === 'POST' ? 'box.exec' : undefined,
-        admit: req.method === 'POST' ? requireExecReady : undefined,
+        operation: 'box.exec',
+        admit: requireExecReady,
+        captureResponse: async (status, body) => {
+          await replay.complete({ status, body })
+        },
       },
     )
   }
@@ -520,7 +556,14 @@ export class BoxliteProxyController {
     policy: ProxyActivityPolicy,
     // admit throws to refuse the request after activity is recorded and before
     // any resume.
-    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission; operation?: ProxiedOperation },
+    opts?: {
+      ws?: boolean
+      proxyTimeoutMs?: number
+      admit?: ProxyAdmission
+      operation?: ProxiedOperation
+      /** When set, the proxied response is buffered for the capture before reaching the caller. */
+      captureResponse?: (status: number, body: string) => Promise<void>
+    },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -574,6 +617,7 @@ export class BoxliteProxyController {
       throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
     }
 
+    const capture = opts?.captureResponse
     const proxyOptions: Options = {
       target: targetUrl,
       secure: false,
@@ -581,11 +625,20 @@ export class BoxliteProxyController {
       autoRewrite: true,
       ws: opts?.ws ?? false,
       pathRewrite: () => targetPathForRunnerBox(box.id),
+      // selfHandleResponse routes the response through the interceptor instead
+      // of piping it directly; required for response capture.
+      selfHandleResponse: !!capture,
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
+        proxyRes: capture
+          ? responseInterceptor(async (responseBuffer: Buffer, proxyRes: any, _req: any, res: any) => {
+              await capture(proxyRes.statusCode, responseBuffer.toString('utf8'))
+              return responseBuffer
+            })
+          : undefined,
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }
