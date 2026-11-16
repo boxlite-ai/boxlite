@@ -48,9 +48,8 @@ VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
 GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
 # RACE=1 runs the Go suites under the race detector; the detector's slowdown
-# blows past go test's 10m default on the full SDK suite, so race runs get a
-# longer leash.
-GOTEST_RACE      = $(if $(RACE),-race -timeout 30m,)
+# pushes the full SDK suite past half an hour, so race runs get an hour.
+GOTEST_RACE      = $(if $(RACE),-race -timeout 60m,)
 
 # The Rust unit-test crate set, shared by test:unit:rust and the coverage
 # targets so coverage measures exactly what the unit suite runs. Test builds
