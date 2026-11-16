@@ -57,6 +57,7 @@ func TestCreateAdmitsWellFormedBoxId(t *testing.T) {
 	// the test hermetic; the guard assertions below are untouched.
 	useVolumeMountBasePath(t, t.TempDir())
 	c := testClient(t)
+	c.homeDir = t.TempDir()
 
 	// A well-formed box id passes the guard, so the failure must come from
 	// the later mount work — here the volume-id guard. That contrast is what

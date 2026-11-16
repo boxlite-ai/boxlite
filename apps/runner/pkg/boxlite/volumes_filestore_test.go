@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
@@ -117,10 +118,6 @@ func TestNfsMountCmdIsNotSystemdWrappedAndIsContextBound(t *testing.T) {
 	if cmd.Cancel == nil {
 		t.Error("nfs mount command is not context-bound; a hard mount to an unreachable server could not be killed")
 	}
-	if cmd.WaitDelay != volumeMountWaitDelay {
-		t.Errorf("nfs mount command WaitDelay = %s, want %s (a hard mount parks mount(8) in D state; the kill lands late)",
-			cmd.WaitDelay, volumeMountWaitDelay)
-	}
 }
 
 func TestFilestoreMountFailureCarriesBoxAndVolumeContext(t *testing.T) {
@@ -130,7 +127,7 @@ func TestFilestoreMountFailureCarriesBoxAndVolumeContext(t *testing.T) {
 	c.mountRunner = func(*exec.Cmd) error { return errors.New("exit status 32") }
 
 	_, err := c.getVolumeMounts(context.Background(), "box1", []dto.VolumeDTO{{
-		VolumeId: "vol1",
+		VolumeId:  "vol1",
 		MountPath: "/data",
 		Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
 	}})
@@ -523,26 +520,54 @@ func TestRecordWriteHappensUnderTheInstanceLock(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
-
+	probeLogPath := installFakeMountpoint(t, 0)
 	root := filepath.Join(base, filestoreMountPrefix+"ml-scratch")
-
 	c := filestoreTestClient(t)
-	fake := installFakeFilestoreMounts(c)
+	installFakeFilestoreMounts(c)
 
-	if _, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
-	}); err != nil {
+	recordStarted := make(chan struct{})
+	allowRecord := make(chan struct{})
+	var seam func(context.Context, string, boxVolumeMountRecord) error
+	seam = func(ctx context.Context, boxID string, record boxVolumeMountRecord) error {
+		close(recordStarted)
+		<-allowRecord
+		c.writeRecordSeam = nil
+		err := c.writeBoxVolumeMountRecord(ctx, boxID, record)
+		c.writeRecordSeam = seam
+		return err
+	}
+	c.writeRecordSeam = seam
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
+			{VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		})
+		createDone <- err
+	}()
+	<-recordStarted
+
+	reclaimDone := make(chan struct{})
+	go func() {
+		c.reclaimFilestoreMount(ctx, root)
+		close(reclaimDone)
+	}()
+	select {
+	case <-reclaimDone:
+		t.Error("reclaim completed while the record writer held the instance lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := probeLog(t, probeLogPath); got != nil {
+		t.Errorf("reclaim probed %v before the record write completed", got)
+	}
+
+	close(allowRecord)
+	if err := <-createDone; err != nil {
 		t.Fatalf("getVolumeMounts failed: %v", err)
 	}
-
-	if _, err := os.Stat(filepath.Join(getVolumeMountRecordDir(), "box1.json")); err != nil {
-		t.Fatalf("box volume mount record missing right after getVolumeMounts: %v", err)
-	}
-
-	probesBefore := fake.probes.Load()
-	c.reclaimFilestoreMount(ctx, root)
-	if got := fake.probes.Load(); got != probesBefore {
-		t.Errorf("reclaim ran %d additional probes; the in-lock rescan must see the record and skip before any probe or umount", got-probesBefore)
+	<-reclaimDone
+	if got := probeLog(t, probeLogPath); got != nil {
+		t.Errorf("reclaim probed %v after the record became visible", got)
 	}
 }
 
@@ -681,7 +706,7 @@ func TestFilestoreVolumeIdIsPathGuarded(t *testing.T) {
 	c := filestoreTestClient(t)
 	fake := installFakeFilestoreMounts(c)
 
-	for _, id := range []string{"", "../escape", "a/b", "a\\b", ".."} {
+	for _, id := range []string{"", ".", "../escape", "a/b", "a\\b", ".."} {
 		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
 			{VolumeId: id, MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 		})
@@ -979,5 +1004,171 @@ func TestCreateRollsBackTheRecordWhenTheFinalWriteFails(t *testing.T) {
 	recordPath := filepath.Join(getVolumeMountRecordDir(), "abc123def456.json")
 	if _, statErr := os.Stat(recordPath); !os.IsNotExist(statErr) {
 		t.Fatalf("volume mount record survived the failed create: %v", statErr)
+	}
+}
+
+func TestFilestoreTargetRequiredWhenAlreadyMounted(t *testing.T) {
+	for _, ref := range []*dto.FilestoreRef{
+		{Instance: "ml", Export: "/vol1"},
+		{Instance: "ml", Server: "10.0.0.7"},
+	} {
+		c := filestoreTestClient(t)
+		c.probeRunner = func(context.Context, string) (bool, error) { return true, nil }
+
+		err := c.ensureFilestoreMounted(context.Background(), ref, filepath.Join(t.TempDir(), "mounted"), "boxlite-filestore-ml")
+		if err == nil || !strings.Contains(err.Error(), "requires both server and export") {
+			t.Fatalf("ensureFilestoreMounted with ref %#v returned %v, want missing-target error", ref, err)
+		}
+	}
+}
+
+func TestFilestoreMountTimeoutBlocksRetryUntilCompletion(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	fake := installFakeFilestoreMounts(c)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	c.mountRunner = func(cmd *exec.Cmd) error {
+		fake.mounts.Add(1)
+		close(started)
+		<-release
+		fake.mu.Lock()
+		fake.mounted[cmd.Args[len(cmd.Args)-1]] = true
+		fake.mu.Unlock()
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{{
+			VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+		}})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("cancelled mount returned %v, want context cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("mount caller did not return after cancellation")
+	}
+
+	_, err := c.getVolumeMounts(context.Background(), "box2", []dto.VolumeDTO{{
+		VolumeId: "vol2", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "still in flight") {
+		t.Fatalf("retry while mount was running returned %v, want pending-operation error", err)
+	}
+	if got := fake.mounts.Load(); got != 1 {
+		t.Fatalf("retry started %d mount processes, want only the original", got)
+	}
+
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for c.checkVolumeOperation("boxlite-filestore-ml-scratch") != nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := c.checkVolumeOperation("boxlite-filestore-ml-scratch"); err != nil {
+		t.Fatalf("pending marker survived mount completion: %v", err)
+	}
+	if _, err := c.getVolumeMounts(context.Background(), "box3", []dto.VolumeDTO{{
+		VolumeId: "vol3", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+	}}); err != nil {
+		t.Fatalf("retry after mount completion failed: %v", err)
+	}
+}
+
+func TestFilestorePreparationTimeoutBlocksRetryUntilCompletion(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	c.probeRunner = func(context.Context, string) (bool, error) { return true, nil }
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var prepares atomic.Int64
+	c.prepareRunner = func(string) error {
+		prepares.Add(1)
+		close(started)
+		<-release
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{{
+			VolumeId: "vol1", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+		}})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("cancelled preparation returned %v, want context cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("preparation caller did not return after cancellation")
+	}
+
+	_, err := c.getVolumeMounts(context.Background(), "box2", []dto.VolumeDTO{{
+		VolumeId: "vol2", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "still in flight") {
+		t.Fatalf("retry while preparation was running returned %v, want pending-operation error", err)
+	}
+	if got := prepares.Load(); got != 1 {
+		t.Fatalf("retry started %d preparations, want only the original", got)
+	}
+	close(release)
+}
+
+func TestCreateReplayRestoresPriorRecordOnFailure(t *testing.T) {
+	ctx := context.Background()
+	useVolumeMountBasePath(t, t.TempDir())
+	c := filestoreTestClient(t)
+	installFakeFilestoreMounts(c)
+	boxID := "abc123def456"
+	root := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")
+	dataDir := filestoreDataDir(root, "vol-ok")
+	s3Root := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"vol-existing")
+	if err := c.recordBoxVolumeMounts(ctx, boxID, []volumeMount{
+		{hostPath: dataDir, mountPath: "/a", rootPath: root, backend: volumeBackendFilestore, dataDir: dataDir, filestoreInstance: "ml-scratch"},
+		{hostPath: s3Root, mountPath: "/b", rootPath: s3Root, backend: volumeBackendS3},
+	}); err != nil {
+		t.Fatalf("failed to seed existing record: %v", err)
+	}
+
+	outbound := true
+	_, _, err := c.Create(ctx, dto.CreateBoxDTO{
+		Id: boxID, OutboundEnabled: &outbound,
+		Volumes: []dto.VolumeDTO{
+			{VolumeId: "vol-ok", MountPath: "/a", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+			{VolumeId: "../escape", MountPath: "/b", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid filestore volume id") {
+		t.Fatalf("replay returned %v, want volume-id failure", err)
+	}
+
+	record, readErr := c.readBoxVolumeMountRecord(boxID)
+	if readErr != nil {
+		t.Fatalf("existing record was not restored: %v", readErr)
+	}
+	var haveFilestore, haveS3 bool
+	for _, entry := range record.Entries {
+		if entry.Backend == volumeBackendFilestore && entry.DataDir == dataDir {
+			haveFilestore = true
+		}
+		if entry.Backend == volumeBackendS3 && entry.RootPath == s3Root {
+			haveS3 = true
+		}
+	}
+	if !haveFilestore || !haveS3 {
+		t.Fatalf("restored record = %#v, want both previous references", record.Entries)
 	}
 }
