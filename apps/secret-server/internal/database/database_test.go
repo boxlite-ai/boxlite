@@ -351,6 +351,47 @@ func TestIntegration(t *testing.T) {
 	}) {
 		return
 	}
+	t.Run("canary commit failure rolls back enrollment", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `CREATE FUNCTION reject_canary_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'deferred failure'; END $$`); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "DROP FUNCTION reject_canary_commit() CASCADE"); err != nil {
+				t.Error(err)
+			}
+		})
+		if _, err := pool.Exec(ctx, `CREATE CONSTRAINT TRIGGER reject_canary_commit AFTER INSERT ON key_verification_canary DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_canary_commit()`); err != nil {
+			t.Fatal(err)
+		}
+		err := VerifyKey(ctx, pool, cipher)
+		if err == nil || !strings.Contains(err.Error(), "commit key verification") {
+			t.Fatalf("commit error = %v", err)
+		}
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("canary count after failed commit = %d, %v; want 0", count, err)
+		}
+	})
+	t.Run("invalid existing secret headers prevent enrollment", func(t *testing.T) {
+		id := "20000000-0000-0000-0000-000000000006"
+		_, err := pool.Exec(ctx, `INSERT INTO secret(id,organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by) VALUES ($1,'10000000-0000-0000-0000-000000000001','org','bad_headers','BAD_HEADERS','x','y','env:key',ARRAY['host'],'{"Authorization":123}','p','test')`, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM secret WHERE id=$1", id); err != nil {
+				t.Error(err)
+			}
+		})
+		err = VerifyKey(ctx, pool, cipher)
+		if err == nil || !strings.Contains(err.Error(), "decode existing secret headers") {
+			t.Fatalf("invalid headers error = %v", err)
+		}
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM key_verification_canary").Scan(&count); err != nil || count != 0 {
+			t.Fatalf("canary count after invalid headers = %d, %v; want 0", count, err)
+		}
+	})
 	if !t.Run("concurrent canary enrollment with repeatable read default", func(t *testing.T) {
 		if _, err := pool.Exec(ctx, "DELETE FROM key_verification_canary"); err != nil {
 			t.Fatal(err)
