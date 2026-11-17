@@ -341,7 +341,7 @@ fn each_environment_entry_stays_one_kernel_parameter() {
 }
 
 #[test]
-fn the_vm_config_keeps_the_disks_in_attach_order() {
+fn the_vm_config_keeps_disk_ids_and_attach_order() {
     let test_box = TestBox::new();
     let kernel = test_box.stage_kernel(&fake_kernel(), Some(b"070701"));
     let spec = runtime_like_spec(&test_box, Some(kernel.clone()));
@@ -355,17 +355,26 @@ fn the_vm_config_keeps_the_disks_in_attach_order() {
     let disks: Vec<_> = config
         .disks
         .iter()
-        .map(|disk| (disk.path.clone(), disk.format, disk.read_only))
+        .map(|disk| {
+            (
+                disk.block_id.as_str(),
+                disk.path.clone(),
+                disk.format,
+                disk.read_only,
+            )
+        })
         .collect();
     assert_eq!(
         disks,
         [
             (
+                "vda",
                 PathBuf::from("/disks/disk.qcow2"),
                 boxlite_vmm::DiskFormat::Qcow2,
                 false
             ),
             (
+                "vdb",
                 PathBuf::from("/bases/guest.ext4"),
                 boxlite_vmm::DiskFormat::Raw,
                 true
@@ -477,18 +486,26 @@ async fn reports_a_missing_kernel_through_the_exit_file() {
 }
 
 #[test]
-fn a_resize_of_a_missing_disk_is_invalid() {
-    use crate::vmm::control::{ControlError, ControlOp};
+fn a_resize_of_a_missing_disk_leaves_file_size_limits_unchanged() {
+    use crate::vmm::control::ControlError;
+    fn limits() -> (libc::rlim_t, libc::rlim_t) {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: limit is a valid out-pointer.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit) },
+            0
+        );
+        (limit.rlim_cur, limit.rlim_max)
+    }
+    let before = limits();
     assert_eq!(
-        super::engine::control(
-            &[],
-            ControlOp::ResizeDisk {
-                index: 0,
-                bytes: 1 << 30
-            }
-        ),
-        Err(ControlError::InvalidInput("no disk 0".into()))
+        super::engine::prepare_disk_grow(&["vda".into()].into(), "missing", u64::MAX),
+        Err(ControlError::InvalidInput("no disk \"missing\"".into()))
     );
+    assert_eq!(limits(), before);
 }
 
 #[tokio::test]
@@ -538,7 +555,7 @@ async fn grows_a_disk_through_the_shim_control_socket() {
     let grow = ControlRequest {
         version: VERSION,
         op: ControlOp::ResizeDisk {
-            index: 0,
+            block_id: "vda".into(),
             bytes: 2 << 20,
         },
     };

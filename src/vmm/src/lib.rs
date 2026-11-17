@@ -27,6 +27,7 @@ mod bus;
 )]
 mod chipset;
 mod config;
+mod control;
 #[cfg(target_arch = "x86_64")]
 mod cpu_features;
 #[cfg_attr(
@@ -80,9 +81,9 @@ pub use chipset::{BusKind, Conflict};
 pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
+pub use control::VmControl;
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
-pub use virtio::blk::control::DiskHandle;
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test

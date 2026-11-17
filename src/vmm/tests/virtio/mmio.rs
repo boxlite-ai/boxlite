@@ -968,9 +968,11 @@ fn add_device_puts_each_device_in_its_own_slot() {
     let events = EventLoop::new().unwrap();
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let workers = VirtioWorkers::new(events.sender()).unwrap();
+    let mut controls = crate::control::ControlRegistry::default();
     let ctx = DeviceContext {
         memory: &memory,
         workers: &workers,
+        controls: &mut controls,
     };
 
     let mut slots = Slots::new();

@@ -8,7 +8,7 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `DiskHandle`, `Error`
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
 and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
 carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
@@ -27,7 +27,7 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `disk_handle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -739,7 +739,7 @@ took, and then announces that slot on the kernel command line.
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
   `/dev/vdb`, and so on.
-- **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
+- **Configuration.** `DiskConfig { block_id, path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
   `Error::OpenDisk` for an image it cannot open and `add_all` fails with
@@ -780,17 +780,28 @@ took, and then announces that slot on the kernel command line.
   and at most 128 MiB, so a conforming guest splits a larger range; imago
   zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
-- **Online grow.** `devices::add_all` returns one `blk::control::DiskHandle`
-  per disk and `Vm::disk_handle(index)` hands it out. `DiskHandle::grow(bytes,
-  timeout)` queues the absolute target and writes one byte to a doorbell socket
-  pair; the device registers the other end at each activation, after the
-  backend source, and on its `BackendReady` drains the doorbell and applies
+- **Disk identity.** `block_id` is a nonempty host control ID, unique within
+  the VM. The native adapter preserves the ID assigned by BoxLite. IDs do not
+  affect attachment order or Linux device names. Invalid IDs fail VM creation
+  before host resources or images are opened.
+- **Online grow.** `Vm::control()` returns a cloneable `VmControl`. Its
+  `resize_disk(block_id, bytes, timeout)` routes to the private sender registered
+  by that device during construction. The registry becomes immutable when
+  construction finishes; `devices::add_all` returns `Result<()>`. An unknown
+  ID returns `InvalidInput`. A request queues the absolute target and writes
+  one byte to a doorbell socket pair; the device registers the other end at
+  each activation, after the backend source, and on its `BackendReady` drains the doorbell and applies
   every queued target on the worker thread. A grow refuses a read-only disk
   (`PermissionDenied`) and a smaller or unaligned size (`InvalidInput`),
   succeeds unchanged at the current size, and otherwise calls `resize_grow`,
   re-encodes the configuration space and raises the configuration interrupt.
   A target sent while the device is inactive waits for the next activation;
-  the caller times out with `TimedOut` and may retry.
+  the caller times out with `TimedOut` and may retry. A timeout does not cancel
+  the queued operation. A dropped device returns `BrokenPipe`.
+
+  For example, `vm.control().resize_disk("data", 2 << 30, timeout)` grows the
+  disk configured with `block_id: "data"` to 2 GiB, regardless of its position
+  in `VmConfig.disks`; the caller supplies the ID before VM creation.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
   backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already

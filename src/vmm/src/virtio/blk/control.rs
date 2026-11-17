@@ -3,7 +3,7 @@
 
 //! Growing a disk while the VM runs.
 //!
-//! A [`DiskHandle`] queues the request and rings a doorbell socket. The block
+//! A [`DiskSender`] queues the request and rings a doorbell socket. The block
 //! device registers the doorbell's other end with the workers at each
 //! activation and applies queued requests on the worker thread, between
 //! guest requests, so the handle never touches the device. A request sent
@@ -24,24 +24,24 @@ use crate::virtio::EventSource;
 
 /// Grows one disk of a running VM from any thread.
 #[derive(Clone)]
-pub struct DiskHandle {
+pub(crate) struct DiskSender {
     requests: Sender<Grow>,
     bell: Arc<UnixStream>,
 }
 
-impl fmt::Debug for DiskHandle {
+impl fmt::Debug for DiskSender {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DiskHandle").finish_non_exhaustive()
+        f.debug_struct("DiskSender").finish_non_exhaustive()
     }
 }
 
-impl DiskHandle {
+impl DiskSender {
     /// Grows the disk to `bytes` and returns its new size in bytes, after
     /// the guest has been told. `bytes` must be a multiple of 512 and no
     /// smaller than the current size; the current size succeeds unchanged, so
     /// a retry after a timeout is safe. A timeout leaves the request queued:
     /// the device still applies it when the guest activates it.
-    pub fn grow(&self, bytes: u64, timeout: Duration) -> io::Result<u64> {
+    pub(crate) fn grow(&self, bytes: u64, timeout: Duration) -> io::Result<u64> {
         let (reply, done) = mpsc::sync_channel(1);
         self.requests
             .send(Grow { bytes, reply })
@@ -108,13 +108,13 @@ impl Controls {
 }
 
 /// Creates one disk's handle and the device's end.
-pub(crate) fn channel() -> io::Result<(DiskHandle, Controls)> {
+pub(crate) fn channel() -> io::Result<(DiskSender, Controls)> {
     let (ring, bell) = UnixStream::pair()?;
     ring.set_nonblocking(true)?;
     bell.set_nonblocking(true)?;
     let (requests, queue) = mpsc::channel();
     Ok((
-        DiskHandle {
+        DiskSender {
             requests,
             bell: Arc::new(ring),
         },

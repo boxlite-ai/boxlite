@@ -11,13 +11,13 @@ use boxlite_hypervisor::Vm as HostVm;
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
+    control::{ControlRegistry, VmControl},
     devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
     virtio::{
         DeviceContext,
-        blk::control::DiskHandle,
         worker::{ShutdownError, VirtioWorkers},
     },
 };
@@ -74,8 +74,7 @@ pub struct Vm<H: HostVm> {
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
     console: Mutex<Option<ConsoleWorker>>,
-    /// One grow handle per disk, in `VmConfig::disks` order.
-    disks: Vec<DiskHandle>,
+    control: VmControl,
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
@@ -118,20 +117,15 @@ impl Vm<boxlite_hypervisor::KvmVm> {
         )?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
-        let mut disks = Vec::new();
         let mut vm = Self::build(
             config,
             move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
             true,
             VirtioWorkers::new,
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| {
-                disks = crate::devices::add_all(chipset, ctx, config, writer)?;
-                Ok(())
-            },
+            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
         vm.console = Mutex::new(Some(worker));
-        vm.disks = disks;
         Ok(vm)
     }
 }
@@ -204,11 +198,13 @@ impl<H: HostVm> Vm<H> {
         // early return leaves nothing running.
         let workers = create_workers(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
+        let mut controls = ControlRegistry::default();
         devices(
             &mut chipset,
             DeviceContext {
                 memory: ram.memory(),
                 workers: &workers,
+                controls: &mut controls,
             },
             &mut config,
         )?;
@@ -229,7 +225,7 @@ impl<H: HostVm> Vm<H> {
             chipset: Some(chipset),
             workers: Some(workers),
             console: Mutex::new(None),
-            disks: Vec::new(),
+            control: controls.finish(),
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
@@ -249,10 +245,9 @@ impl<H: HostVm> Vm<H> {
         StopHandle(self.sender.clone())
     }
 
-    /// A handle that grows disk `index` (in `VmConfig::disks` order) from
-    /// another thread while the VM runs; `None` past the last disk.
-    pub fn disk_handle(&self, index: usize) -> Option<DiskHandle> {
-        self.disks.get(index).cloned()
+    /// Controls the VM from another thread, addressing disks by their configured IDs.
+    pub fn control(&self) -> VmControl {
+        self.control.clone()
     }
 }
 
@@ -394,3 +389,7 @@ impl<H: HostVm> Drop for Vm<H> {
 #[cfg(test)]
 #[path = "../tests/vm/mod.rs"]
 mod tests;
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "../tests/control/mod.rs"]
+mod control_tests;

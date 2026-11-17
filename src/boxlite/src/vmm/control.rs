@@ -36,8 +36,8 @@ pub(crate) struct ControlRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ControlOp {
-    /// Grows disk `index` (attach order) to `bytes`.
-    ResizeDisk { index: usize, bytes: u64 },
+    /// Grows the disk with the configured `block_id` to `bytes`.
+    ResizeDisk { block_id: String, bytes: u64 },
 }
 
 /// The shim's answer.

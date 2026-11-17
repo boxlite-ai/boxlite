@@ -560,16 +560,25 @@ logged.
   reach a running box. Each connection carries one length-prefixed JSON request
   naming a protocol version and one answer; an unknown version or operation is
   refused, and a bad request ends only its own connection. The one operation is
-  `resize_disk`. libkrun serves no control socket.
-- **Online disk grow.** `Vm::disk_handle(index)` returns a `DiskHandle` before `run`.
-  - `DiskHandle::grow` queues an absolute target and rings a doorbell socket,
-    registered at each activation. The worker applies it between guest
-    requests; the handle never takes the device lock.
+  `resize_disk`, with `block_id` and an absolute target `bytes`. The native
+  adapter owns the socket and rejects unknown IDs before changing RLIMIT.
+  Version 1 requires `block_id`; index-only requests are invalid. libkrun
+  serves no control socket.
+- **Online disk grow.** `Vm::control()` returns a cloneable `VmControl` before `run`.
+  - The adapter copies `BlockDevice.block_id` into `DiskConfig`. IDs are
+    nonempty and unique within the VM, independent of guest enumeration.
+    Devices register private control channels under their IDs during
+    construction; the completed registry is immutable.
+  - `VmControl::resize_disk(block_id, bytes, timeout)` selects the registered
+    sender, queues an absolute target and rings a doorbell socket, registered
+    at each activation. The worker applies it between guest requests; callers
+    receive neither a concrete device nor its per-disk sender.
   - The device grows the image with imago, updates capacity and configuration
     space, then raises the configuration interrupt. `PreallocateMode::None`
     supports qcow2 backing files and makes the new range read as zeroes.
   - Smaller, unaligned and read-only targets fail; the current size succeeds,
     making retries safe. Requests sent before driver activation wait for it.
+    A timeout leaves the request queued; dropping the device closes its channel.
 - **File size limits.** Before growing, the shim raises its soft `RLIMIT_FSIZE`.
   - The jailer computes hard as `min(max(2 TiB, max_file_size), inherited hard)`
     for both engines. The existing `max_file_size` supplies the initial soft

@@ -34,7 +34,7 @@ use super::{
     VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_IN,
     VIRTIO_BLK_T_OUT,
     backend::{CompletedRequest, DiskBackend, DiskInfo, Request, RequestKind, SubmitOutcome},
-    control::{self, DiskHandle},
+    control::{self, DiskSender},
     device::VirtioBlk,
     imago::ImagoBackend,
 };
@@ -267,7 +267,7 @@ struct Fixture {
     interrupt: Arc<TestInterrupt>,
     registrar: Arc<TestRegistrar>,
     fake: Option<Arc<Mutex<FakeState>>>,
-    handle: DiskHandle,
+    handle: DiskSender,
 }
 
 impl Fixture {

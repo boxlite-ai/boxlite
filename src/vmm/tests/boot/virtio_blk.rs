@@ -399,6 +399,7 @@ fn boots_linux_with_a_raw_virtio_disk_through_the_public_api() {
     let log = SerialLog::default();
     let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
     config.disks = vec![DiskConfig {
+        block_id: "container".into(),
         path: image.0.clone(),
         format: DiskFormat::Raw,
         read_only: false,
@@ -432,6 +433,7 @@ fn boots_linux_with_a_qcow2_virtio_disk_over_a_backing_file() {
     let log = SerialLog::default();
     let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
     config.disks = vec![DiskConfig {
+        block_id: "container".into(),
         path: image.0.clone(),
         format: DiskFormat::Qcow2,
         read_only: false,
@@ -484,7 +486,7 @@ fn boots_linux_with_a_qcow2_virtio_disk_over_a_backing_file() {
     eprintln!("blk public API, qcow2: {elapsed:?}");
 }
 
-/// The host grows a qcow2 disk through `Vm::disk_handle` while the guest
+/// The host grows a qcow2 disk through `VmControl::resize_disk` while the guest
 /// runs; the guest sees the new size in sysfs without a restart.
 #[test]
 #[ignore = "requires Linux x86_64 KVM, VMM_KERNEL and VMM_DISK_GROW_INIT"]
@@ -500,13 +502,20 @@ fn the_guest_sees_a_disk_grown_while_it_runs() {
     let log = SerialLog::default();
     let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
     config.disks = vec![DiskConfig {
+        block_id: "container".into(),
         path: image.0.clone(),
         format: DiskFormat::Qcow2,
         read_only: false,
     }];
     let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
-    let handle = vm.disk_handle(0).expect("the disk has a handle");
-    assert!(vm.disk_handle(1).is_none());
+    let control = vm.control();
+    assert_eq!(
+        control
+            .resize_disk("missing", 512, Duration::ZERO)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
     let grown_bytes = 2 * IMAGE_SECTORS * 512;
     let grower = {
         let log = log.clone();
@@ -518,7 +527,7 @@ fn the_guest_sees_a_disk_grown_while_it_runs() {
                 }
                 thread::sleep(Duration::from_millis(10));
             }
-            Some(handle.grow(grown_bytes, Duration::from_secs(5)))
+            Some(control.resize_disk("container", grown_bytes, Duration::from_secs(5)))
         })
     };
 

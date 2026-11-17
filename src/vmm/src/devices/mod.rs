@@ -24,37 +24,32 @@ use self::{console::ConsoleWriter, x86_64::add_legacy_devices};
 use crate::{
     chipset::ChipsetBuilder,
     config::VmConfig,
-    error::{Error, Result},
+    error::Result,
     memory::ReclaimPolicy,
     virtio::{
-        DeviceContext,
-        blk::{self, control::DiskHandle},
-        fs,
+        DeviceContext, blk, fs,
         mmio::{self, Slot, Slots},
     },
 };
 
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
-/// vsock, network and console. Returns one grow handle per disk, in order.
+/// vsock, network and console.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
-    ctx: DeviceContext<'_>,
+    mut ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
-) -> Result<Vec<DiskHandle>> {
+) -> Result<()> {
     add_legacy_devices(chipset, console.clone())?;
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
-    let mut disks = Vec::with_capacity(config.disks.len());
     for (index, disk) in config.disks.iter().enumerate() {
-        let (handle, controls) = blk::control::channel().map_err(Error::DiskControl)?;
         add_slot_device(&mut slots, &mut used, |slot| {
-            blk::add_disk(chipset, &ctx, disk, index, slot, controls)
+            blk::add_disk(chipset, &mut ctx, disk, index, slot)
         })?;
-        disks.push(handle);
     }
     // The balloon follows the disks so it never renumbers them: the guest
     // names virtio devices by slot order, so adding it ahead of storage would
@@ -93,8 +88,7 @@ pub(crate) fn add_all(
     }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.
-    mmio::announce(&mut config.cmdline, &used)?;
-    Ok(disks)
+    mmio::announce(&mut config.cmdline, &used)
 }
 
 /// Takes the next slot, runs `attach` with it, and records it for

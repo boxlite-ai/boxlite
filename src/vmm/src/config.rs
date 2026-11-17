@@ -31,6 +31,8 @@ pub enum DiskFormat {
 /// A disk image the guest sees as a virtio-blk device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiskConfig {
+    /// Nonempty, unique host control ID; independent of guest enumeration.
+    pub block_id: String,
     /// The image file.
     pub path: PathBuf,
     /// The image format, stated rather than probed: the runtime always knows
@@ -116,6 +118,15 @@ impl VmConfig {
         if self.disks.len() > MAX_DISKS {
             return Err(Error::InvalidDiskCount(self.disks.len()));
         }
+        for (index, disk) in self.disks.iter().enumerate() {
+            if disk.block_id.is_empty()
+                || self.disks[..index]
+                    .iter()
+                    .any(|other| other.block_id == disk.block_id)
+            {
+                return Err(Error::InvalidDiskId(disk.block_id.clone()));
+            }
+        }
         if self.cmdline.len() >= MAX_CMDLINE_BYTES {
             return Err(Error::InvalidCommandLine("2048 bytes or longer"));
         }
@@ -157,12 +168,18 @@ mod tests {
     #[test]
     fn rejects_more_disks_than_the_slots_and_names_can_take() {
         let disk = DiskConfig {
+            block_id: "container".into(),
             path: "disk.raw".into(),
             format: DiskFormat::Raw,
             read_only: false,
         };
         VmConfig {
-            disks: vec![disk.clone(); MAX_DISKS],
+            disks: (0..MAX_DISKS)
+                .map(|index| DiskConfig {
+                    block_id: format!("disk-{index}"),
+                    ..disk.clone()
+                })
+                .collect(),
             ..config(1, 1)
         }
         .validate()

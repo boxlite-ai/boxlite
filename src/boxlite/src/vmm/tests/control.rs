@@ -1,10 +1,13 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
-fn grow_to(index: usize, bytes: u64) -> ControlRequest {
+fn grow_to(block_id: &str, bytes: u64) -> ControlRequest {
     ControlRequest {
         version: VERSION,
-        op: ControlOp::ResizeDisk { index, bytes },
+        op: ControlOp::ResizeDisk {
+            block_id: block_id.into(),
+            bytes,
+        },
     }
 }
 
@@ -13,9 +16,11 @@ fn a_request_reaches_the_handler_and_its_answer_returns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("control.sock");
     serve(&path, |op| match op {
-        ControlOp::ResizeDisk { index: 0, bytes } => Ok(ControlReply::DiskSize(bytes)),
-        ControlOp::ResizeDisk { index, .. } => {
-            Err(ControlError::InvalidInput(format!("no disk {index}")))
+        ControlOp::ResizeDisk { block_id, bytes } if block_id == "container" => {
+            Ok(ControlReply::DiskSize(bytes))
+        }
+        ControlOp::ResizeDisk { block_id, .. } => {
+            Err(ControlError::InvalidInput(format!("no disk {block_id}")))
         }
     })
     .unwrap();
@@ -24,12 +29,12 @@ fn a_request_reaches_the_handler_and_its_answer_returns() {
 
     let timeout = Duration::from_secs(5);
     assert_eq!(
-        request(&path, &grow_to(0, 4096), timeout).unwrap(),
+        request(&path, &grow_to("container", 4096), timeout).unwrap(),
         Ok(ControlReply::DiskSize(4096))
     );
     assert_eq!(
-        request(&path, &grow_to(3, 4096), timeout).unwrap(),
-        Err(ControlError::InvalidInput("no disk 3".into()))
+        request(&path, &grow_to("missing", 4096), timeout).unwrap(),
+        Err(ControlError::InvalidInput("no disk missing".into()))
     );
 }
 
@@ -39,14 +44,14 @@ fn another_version_is_unsupported_and_the_shim_keeps_serving() {
     let path = dir.path().join("control.sock");
     serve(&path, |_| Ok(ControlReply::DiskSize(1))).unwrap();
     let timeout = Duration::from_secs(5);
-    let mut future = grow_to(0, 512);
+    let mut future = grow_to("container", 512);
     future.version = VERSION + 1;
     assert!(matches!(
         request(&path, &future, timeout).unwrap(),
         Err(ControlError::Unsupported(_))
     ));
     assert_eq!(
-        request(&path, &grow_to(0, 512), timeout).unwrap(),
+        request(&path, &grow_to("container", 512), timeout).unwrap(),
         Ok(ControlReply::DiskSize(1))
     );
 }
@@ -74,7 +79,7 @@ fn an_oversized_or_unknown_request_is_bounded() {
     // A client that never sends is dropped after the timeout; serving goes on.
     let _silent = UnixStream::connect(&path).unwrap();
     assert_eq!(
-        request(&path, &grow_to(0, 512), Duration::from_secs(5)).unwrap(),
+        request(&path, &grow_to("container", 512), Duration::from_secs(5)).unwrap(),
         Ok(ControlReply::DiskSize(1))
     );
 }
@@ -86,7 +91,30 @@ fn serving_replaces_a_stale_socket() {
     drop(UnixListener::bind(&path).unwrap());
     serve(&path, |_| Ok(ControlReply::DiskSize(7))).unwrap();
     assert_eq!(
-        request(&path, &grow_to(0, 7), Duration::from_secs(5)).unwrap(),
+        request(&path, &grow_to("container", 7), Duration::from_secs(5)).unwrap(),
         Ok(ControlReply::DiskSize(7))
     );
+}
+
+#[test]
+fn resize_requires_a_block_id_and_rejects_index_only_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("control.sock");
+    serve(&path, |_| {
+        panic!("invalid requests must not reach the handler")
+    })
+    .unwrap();
+    for body in [
+        br#"{"version":1,"op":"resize_disk","bytes":4096}"#.as_slice(),
+        br#"{"version":1,"op":"resize_disk","index":0,"bytes":4096}"#.as_slice(),
+    ] {
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write_frame(&mut stream, body).unwrap();
+        let response: ControlResponse =
+            serde_json::from_slice(&read_frame(&mut stream).unwrap()).unwrap();
+        assert!(matches!(response, Err(ControlError::InvalidInput(_))));
+    }
 }

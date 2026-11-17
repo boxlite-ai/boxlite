@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use self::{control::Controls, device::VirtioBlk, imago::ImagoBackend};
+use self::{device::VirtioBlk, imago::ImagoBackend};
 use super::{
     DeviceContext, VirtioDevice,
     mmio::{self, Slot},
@@ -48,18 +48,17 @@ const CHIPSET_NAMES: [&str; MAX_DISKS] = [
 
 /// Adds `disk` as a virtio-blk device behind a virtio-mmio transport in
 /// `slot`, run by the VM's workers. `index` selects the chipset name;
-/// `controls` carries the grow requests of the disk's handle.
+/// the disk's configured ID registers its private control channel.
 #[cfg_attr(
     not(all(target_os = "linux", target_arch = "x86_64")),
     expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds disks yet.")
 )]
 pub(crate) fn add_disk(
     chipset: &mut ChipsetBuilder,
-    ctx: &DeviceContext<'_>,
+    ctx: &mut DeviceContext<'_>,
     disk: &DiskConfig,
     index: usize,
     slot: Slot,
-    controls: Controls,
 ) -> Result<()> {
     let name = CHIPSET_NAMES
         .get(index)
@@ -71,6 +70,10 @@ pub(crate) fn add_disk(
                 source,
             }
         })?;
+    let controls = ctx
+        .controls
+        .register_disk(&disk.block_id)
+        .map_err(Error::DiskControl)?;
     let device: Arc<Mutex<dyn VirtioDevice>> =
         Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend), controls)));
     mmio::add_device(chipset, ctx, name, slot, device)

@@ -40,6 +40,8 @@ pub enum Error {
     InvalidCommandLine(&'static str),
     /// More disks than `config::MAX_DISKS`.
     InvalidDiskCount(usize),
+    /// A disk control ID is empty or duplicated.
+    InvalidDiskId(String),
     /// Opening a disk image failed.
     OpenDisk { path: PathBuf, source: io::Error },
     /// Creating the channel that grows a disk failed.
@@ -114,6 +116,7 @@ impl fmt::Display for Error {
                 write!(f, "invalid kernel command line: {reason}")
             }
             Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
+            Self::InvalidDiskId(id) => write!(f, "empty or duplicate disk ID: {id:?}"),
             Self::DiskControl(_) => f.write_str("failed to create a disk grow channel"),
             Self::OpenDisk { path, .. } => {
                 write!(f, "failed to open the disk image {}", path.display())
@@ -166,6 +169,7 @@ impl error::Error for Error {
             | Self::GuestMemoryAddressLimit { .. }
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
+            | Self::InvalidDiskId(_)
             | Self::VirtioSlotsExhausted
             | Self::ChipsetConflicts(_)
             | Self::LineNotArmed(_)
