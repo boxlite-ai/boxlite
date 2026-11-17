@@ -5,7 +5,7 @@
 
 import { PaymentBrand } from './PaymentBrand'
 import type { PaymentMethod } from '@/billing-api'
-import { AsciiButton, BRAND, Panel, SectionTitle } from '@/components/ascii'
+import { AsciiButton, BRAND, Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 
@@ -84,9 +84,6 @@ export function PaymentMethodsPanel({
   return (
     <section>
       <SectionTitle title="Payment Method" />
-      <p className="mb-3 font-sans text-meta text-muted-foreground">
-        Connecting or updating a card places a temporary $0.50 hold to verify it; the hold is released automatically.
-      </p>
 
       {isLoading ? (
         <Panel className="flex items-center gap-5 px-[22px] py-5">
@@ -144,6 +141,9 @@ export function PaymentMethodsPanel({
           <SetupButton connected={false} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       )}
+      <PanelNote>
+        Connecting or updating a card places a temporary $0.50 hold, which is released automatically after verification.
+      </PanelNote>
     </section>
   )
 }

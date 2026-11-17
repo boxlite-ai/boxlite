@@ -346,7 +346,7 @@ choosing Check card status refreshes the wallet and saved payment methods.
 A connected card allows the user to continue without waiting for reward delivery.
 Both entry points tell the user that connecting or updating a card places a
 temporary $0.50 hold that is released automatically: Welcome below
-**Verify card**, Wallet under the Payment Method title.
+**Verify card**, Wallet below the Payment Method panel.
 
 Both pages redeem coupons through `useRedeemCouponMutation`. Success invalidates
 wallet, transactions, invoices, plan, and usage so the next view reflects the
