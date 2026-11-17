@@ -12,6 +12,7 @@ import {
   ExecutionLease,
   ExecutionScope,
 } from '@boxlite-ai/ci-listener'
+import { subscribeBusinessEvents } from '../common/utils/business-event.util'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeHost } from './ci-native-host'
 import { CiListenerService } from './ci-listener.service'
@@ -739,6 +740,38 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     } finally {
       info.mockRestore()
       warn.mockRestore()
+    }
+  })
+  it('maps actual execution evidence to replay-stable Cloud events without repository metadata', () => {
+    const observed: Readonly<Record<string, string>>[] = []
+    const dispose = subscribeBusinessEvents((event) => observed.push(event))
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {})
+    try {
+      const evidence = {
+        organization: org,
+        installation: 10,
+        boxId: 'CloudBox1234',
+        job: { repository: 30, run: 40, job: 50 },
+        startedAt: '2026-11-01T00:00:00.000Z',
+      }
+      host.observeExecution(evidence)
+      host.observeExecution(evidence)
+      host.observeExecution({ ...evidence, job: { ...evidence.job, job: 51 } })
+      expect(observed[0]).toMatchObject({
+        'event.name': 'cloud.feature.use',
+        'event.outcome': 'success',
+        'organization.id': org,
+        'correlation.id': evidence.boxId,
+        'event.timestamp': evidence.startedAt,
+        'feature.name': 'ci',
+        'feature.evidence': 'executed_job',
+      })
+      expect(observed[1]['event.id']).toBe(observed[0]['event.id'])
+      expect(observed[2]['event.id']).not.toBe(observed[0]['event.id'])
+      expect(JSON.stringify(observed)).not.toMatch(/repository|installation|binding|actor/)
+    } finally {
+      dispose()
+      log.mockRestore()
     }
   })
 })

@@ -26,7 +26,10 @@ import {
   PostgresStateDatabase,
   VerifiedWebhook,
   WorkerEvent,
+  JobExecutionEvent,
 } from '@boxlite-ai/ci-listener'
+import { v5 } from 'uuid'
+import { recordBusinessEvent } from '../common/utils/business-event.util'
 import { TypedConfigService } from '../config/typed-config.service'
 import { CiGitHubService } from './ci-github.service'
 import { CiNativeState, CiNativeAuthority } from './ci-native-state'
@@ -369,6 +372,20 @@ export class CiNativeHost implements ListenerHost {
   }
   report(error: unknown, operation: string): void {
     this.logger.warn({ operation, error: error instanceof Error ? error.name : 'Unknown' })
+  }
+  observeExecution(event: JobExecutionEvent): void {
+    recordBusinessEvent({
+      name: 'cloud.feature.use',
+      outcome: 'success',
+      organizationId: event.organization,
+      correlationId: event.boxId,
+      occurredAt: new Date(event.startedAt),
+      eventId: v5(
+        `boxlite:ci-execution:${event.installation}:${event.job.repository}:${event.job.run}:${event.job.job}`,
+        v5.URL,
+      ),
+      feature: { name: 'ci', evidence: 'executed_job', source: 'api' },
+    })
   }
   observe(event: WorkerEvent): void {
     if (event.level === 'warn') this.logger.warn(event)

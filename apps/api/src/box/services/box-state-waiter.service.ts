@@ -11,6 +11,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { BoxDto } from '../dto/box.dto'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { BoxReadinessError } from '../errors/box-readiness.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxService } from './box.service'
@@ -168,7 +169,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
 
   private assertNotFailed(state: BoxState, errorReason?: string | null) {
     if (state === BoxState.ERROR) {
-      throw new BadRequestError(`Box state transition failed: ${errorReason || 'Unknown error'}`)
+      throw new BoxReadinessError(`Box state transition failed: ${errorReason || 'Unknown error'}`)
     }
     if (state === BoxState.DESTROYED || state === BoxState.DESTROYING) {
       throw new BadRequestError('Box has been destroyed and cannot be resumed')

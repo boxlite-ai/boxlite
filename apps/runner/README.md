@@ -195,17 +195,17 @@ Path prefix: `/boxes`. Every endpoint here is a thin controller that
 calls into `r.Boxlite` (the Go SDK / Rust core). State transitions and
 crash handling live in the runtime, not the runner.
 
-| Method | Path | Controller | Purpose |
-| --- | --- | --- | --- |
-| `POST` | `/boxes` | `Create` | Allocate box, pull/use artifact, return runtime version |
-| `POST` | `/boxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
-| `POST` | `/boxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
-| `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
-| `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
-| `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
+| Method | Path                          | Controller              | Purpose                                                          |
+| ------ | ----------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| `POST` | `/boxes`                      | `Create`                | Allocate box, pull/use artifact, return runtime version          |
+| `POST` | `/boxes/:id/start`            | `Start`                 | Boot a stopped box (optional auth token + metadata)              |
+| `POST` | `/boxes/:id/stop`             | `Stop`                  | Graceful or `force` shutdown                                     |
+| `POST` | `/boxes/:id/destroy`          | `Destroy`               | Tear down completely                                             |
+| `POST` | `/boxes/:id/recover`          | `Recover`               | Bring an `error` box back via a named strategy                   |
+| `POST` | `/boxes/:id/is-recoverable`   | `IsRecoverable`         | Static check against `common.IsRecoverable(reason)`              |
 | `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set the outbound policy (`outboundEnabled` / `outboundAllowNet`) |
-| `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
-| `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
+| `POST` | `/boxes/:id/backup`           | `CreateBackup`          | Kick off async backup; updates `BackupInfoCache`                 |
+| `GET`  | `/boxes/:id`                  | `Info`                  | Combined state + backup state + runtime version                  |
 
 `Create` and `Recover` take the outbound network policy as
 `outboundEnabled` and an `outboundAllowNet` entry list. `outboundEnabled` is
@@ -234,16 +234,16 @@ sidecar**: the controller returns `202`, a goroutine runs the operation,
 and the result is recorded in `ArtifactErrorCache` keyed by artifact ref
 (or destination ref if pull is mirroring).
 
-| Method | Path | Controller | Purpose |
-| --- | --- | --- | --- |
-| `POST` | `/artifacts/pull` | `PullArtifact` | Mirror image; optional push to destination registry |
-| `POST` | `/artifacts/build` | `BuildArtifact` | Build from Dockerfile + context hashes |
-| `GET` | `/artifacts/exists` | `ArtifactExists` | Yes/no local cache check |
-| `GET` | `/artifacts/info` | `GetArtifactInfo` | Size, entrypoint, hash — `422` if error cached |
-| `POST` | `/artifacts/remove` | `RemoveArtifact` | Delete local image + clear error cache |
-| `POST` | `/artifacts/tag` | `TagImage` | Re-tag existing local image (deprecated) |
-| `POST` | `/artifacts/inspect` | `InspectArtifactInRegistry` | Remote digest + size lookup |
-| `GET` | `/artifacts/logs` | `GetBuildLogs` | Tail build log file; `follow=true` polls until image exists |
+| Method | Path                 | Controller                  | Purpose                                                     |
+| ------ | -------------------- | --------------------------- | ----------------------------------------------------------- |
+| `POST` | `/artifacts/pull`    | `PullArtifact`              | Mirror image; optional push to destination registry         |
+| `POST` | `/artifacts/build`   | `BuildArtifact`             | Build from Dockerfile + context hashes                      |
+| `GET`  | `/artifacts/exists`  | `ArtifactExists`            | Yes/no local cache check                                    |
+| `GET`  | `/artifacts/info`    | `GetArtifactInfo`           | Size, entrypoint, hash — `422` if error cached              |
+| `POST` | `/artifacts/remove`  | `RemoveArtifact`            | Delete local image + clear error cache                      |
+| `POST` | `/artifacts/tag`     | `TagImage`                  | Re-tag existing local image (deprecated)                    |
+| `POST` | `/artifacts/inspect` | `InspectArtifactInRegistry` | Remote digest + size lookup                                 |
+| `GET`  | `/artifacts/logs`    | `GetBuildLogs`              | Tail build log file; `follow=true` polls until image exists |
 
 **Why a separate error cache.** Pull/build are decoupled from the
 request, so clients can't see failures via the HTTP response. They poll
@@ -265,15 +265,15 @@ a long-lived bidirectional stdio channel between an SDK client and a
 process inside a VM. The endpoints below split create / status / kill
 (REST, idempotent) from stdio (`/attach` WebSocket, stateful).
 
-| Method | Path | Controller | Purpose |
-| --- | --- | --- | --- |
-| `POST` | `exec` | `BoxliteExec` | Create execution; returns `{execution_id}` |
-| `GET` | `executions` | `BoxliteListExecutions` | Live guest inventory, including main; never boots a stopped box |
-| `GET` | `executions/:id/attach` | `BoxliteExecAttach` | WebSocket upgrade; bidirectional stdio + control |
-| `GET` | `executions/:id` | `BoxliteGetExecution` | Status (`running` / `completed`, `exit_code` when done) |
-| `POST` | `executions/:id/signal` | `BoxliteExecSignal` | Send a cooperative signal (whitelist) |
-| `POST` | `executions/:id/resize` | `BoxliteExecResize` | Resize TTY (cols, rows) — TTY-only |
-| `DELETE` | `executions/:id` | `BoxliteExecKill` | Atomic kill + evict |
+| Method   | Path                    | Controller              | Purpose                                                         |
+| -------- | ----------------------- | ----------------------- | --------------------------------------------------------------- |
+| `POST`   | `exec`                  | `BoxliteExec`           | Create execution; returns `{execution_id}`                      |
+| `GET`    | `executions`            | `BoxliteListExecutions` | Live guest inventory, including main; never boots a stopped box |
+| `GET`    | `executions/:id/attach` | `BoxliteExecAttach`     | WebSocket upgrade; bidirectional stdio + control                |
+| `GET`    | `executions/:id`        | `BoxliteGetExecution`   | Status (`running` / `completed`, `exit_code` when done)         |
+| `POST`   | `executions/:id/signal` | `BoxliteExecSignal`     | Send a cooperative signal (whitelist)                           |
+| `POST`   | `executions/:id/resize` | `BoxliteExecResize`     | Resize TTY (cols, rows) — TTY-only                              |
+| `DELETE` | `executions/:id`        | `BoxliteExecKill`       | Atomic kill + evict                                             |
 
 Inventory returns the guest's real `execution_id`, `argv`, `started_at` (Unix
 milliseconds), `tty`, and `is_main_session`. Status, signal, resize, kill, and
@@ -429,7 +429,7 @@ Notable properties:
   intermediary's idle timeout (CloudFront default 30 s, ALB 60 s,
   Heroku 55 s).
 - **The close is a handshake.** RFC 6455 §5.5.1 lets an endpoint drop the
-  TCP connection only once a Close has been both sent *and received*, so
+  TCP connection only once a Close has been both sent _and received_, so
   after its own the server waits for the client's — or for the client to
   drop the socket — bounded at 5 s. Dropping it unilaterally strands any
   intermediary still relaying the `101`, which an external load balancer
@@ -450,13 +450,13 @@ Completed recovered sessions still use the same retention period. All three
 timers for manager-started executions are independently configurable via
 environment variables.
 
-| Trigger | Action | Default | Env var |
-| --- | --- | --- | --- |
-| Age since `created` > cap | atomic kill + evict | 24 h | `BOXLITE_MAX_SESSION_LIFETIME` |
-| `Done` fired ≥ 5 min ago | evict (no signal) | 5 min | (not configurable) |
-| `!Connected` and idle > grace | SIGHUP | 5 min | `BOXLITE_RECONNECT_GRACE` |
-| After SIGHUP, idle > shutdown grace | SIGTERM | 30 s | `BOXLITE_SHUTDOWN_GRACE` |
-| After SIGTERM, idle > shutdown grace | SIGKILL + evict | 30 s | `BOXLITE_SHUTDOWN_GRACE` |
+| Trigger                              | Action              | Default | Env var                        |
+| ------------------------------------ | ------------------- | ------- | ------------------------------ |
+| Age since `created` > cap            | atomic kill + evict | 24 h    | `BOXLITE_MAX_SESSION_LIFETIME` |
+| `Done` fired ≥ 5 min ago             | evict (no signal)   | 5 min   | (not configurable)             |
+| `!Connected` and idle > grace        | SIGHUP              | 5 min   | `BOXLITE_RECONNECT_GRACE`      |
+| After SIGHUP, idle > shutdown grace  | SIGTERM             | 30 s    | `BOXLITE_SHUTDOWN_GRACE`       |
+| After SIGTERM, idle > shutdown grace | SIGKILL + evict     | 30 s    | `BOXLITE_SHUTDOWN_GRACE`       |
 
 Reattaching inside the reconnect grace resets `SignaledHUP` and
 `SignaledTERM` so a subsequent disconnect starts a fresh clock.
@@ -474,8 +474,8 @@ warning and falls through to `Kill()` immediately. Exercised in
 `DELETE /executions/:id` instead; the signal endpoint _needs_ the
 atomic kill+evict that DELETE provides.
 
-| Allowed | Rejected with 400 |
-| --- | --- |
+| Allowed                                                                           | Rejected with 400                                            |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | 1 (HUP), 2 (INT), 3 (QUIT), 6 (ABRT), 10 (USR1), 12 (USR2), 15 (TERM), 28 (WINCH) | 9 (KILL), 17/19/23 (STOP variants), 18 (CONT), anything else |
 
 STOP/CONT are rejected because they bypass PTY line discipline (so a
@@ -485,10 +485,10 @@ a feature.
 
 ### 4. File I/O
 
-| Method | Path | Controller | Purpose |
-| --- | --- | --- | --- |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream tar body → temp file → `CopyInto(box, tmp, dest)` |
-| `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpDir)` → walk dir, write `application/x-tar` |
+| Method | Path                                 | Controller            | Purpose                                                           |
+| ------ | ------------------------------------ | --------------------- | ----------------------------------------------------------------- |
+| `PUT`  | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload`   | Stream tar body → temp file → `CopyInto(box, tmp, dest)`          |
+| `GET`  | `/v1/boxes/:boxId/files?path=<src>`  | `BoxliteFileDownload` | `CopyOut(box, src, tmpDir)` → walk dir, write `application/x-tar` |
 
 Tar framing is used in both directions so a single endpoint can move
 files, directories, and symlinks uniformly. Temp files live under
@@ -505,11 +505,11 @@ durations, and network counters. All values come from
 
 ### 6. Runner info + Prometheus
 
-| Method | Path | Controller | Purpose |
-| --- | --- | --- | --- |
-| `GET` | `/` | `HealthCheck` | Liveness + version (public) |
-| `GET` | `/info` | `RunnerInfo` | Host metrics + service health + version |
-| `GET` | `/metrics` | promhttp | Prometheus scrape endpoint |
+| Method | Path       | Controller    | Purpose                                 |
+| ------ | ---------- | ------------- | --------------------------------------- |
+| `GET`  | `/`        | `HealthCheck` | Liveness + version (public)             |
+| `GET`  | `/info`    | `RunnerInfo`  | Host metrics + service health + version |
+| `GET`  | `/metrics` | promhttp      | Prometheus scrape endpoint              |
 
 `/info` combines:
 
@@ -525,12 +525,12 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ### 7. Guest SSH
 
-| Method | Path | Controller | Purpose |
-| --- | --- | --- | --- |
-| `POST` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHConfigure` | Strict `SshConfig` parse → one `SSH().Configure` on a running box |
-| `POST` | `/v1/boxes/:boxId/ssh/enable` | `BoxliteSSHEnable` | Enable saved configuration on a running box; otherwise `409` |
-| `GET` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHStatus` | `SshStatus`; stopped boxes answer disabled from persisted state |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Disable on a running box; otherwise `409`. Repeatable while running; never boots |
+| Method   | Path                          | Controller            | Purpose                                                                          |
+| -------- | ----------------------------- | --------------------- | -------------------------------------------------------------------------------- |
+| `POST`   | `/v1/boxes/:boxId/ssh`        | `BoxliteSSHConfigure` | Strict `SshConfig` parse → one `SSH().Configure` on a running box                |
+| `POST`   | `/v1/boxes/:boxId/ssh/enable` | `BoxliteSSHEnable`    | Enable saved configuration on a running box; otherwise `409`                     |
+| `GET`    | `/v1/boxes/:boxId/ssh`        | `BoxliteSSHStatus`    | `SshStatus`; stopped boxes answer disabled from persisted state                  |
+| `DELETE` | `/v1/boxes/:boxId/ssh`        | `BoxliteSSHDisable`   | Disable on a running box; otherwise `409`. Repeatable while running; never boots |
 
 - **Running-state checks.** Configure on a box observed as not running answers
   `409 invalid_state`; the API resumes a box first when its policy allows. The
@@ -858,42 +858,42 @@ the API, which matches everything infra provisions today.
 All routes are gated by `Bearer <BOXLITE_RUNNER_TOKEN>` except `/` and
 the Swagger UI (development only).
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/` | Health check (public) |
-| `GET` | `/info` | Runner metrics + service health |
-| `GET` | `/metrics` | Prometheus scrape |
-| `POST` | `/boxes` | Create box |
-| `GET` | `/boxes/:id` | Box info (state + backup state + runtime version) |
-| `POST` | `/boxes/:id/start` | Start |
-| `POST` | `/boxes/:id/stop` | Stop (graceful or `force`) |
-| `POST` | `/boxes/:id/destroy` | Destroy |
-| `POST` | `/boxes/:id/backup` | Async backup |
-| `POST` | `/boxes/:id/recover` | Recover from error state |
-| `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
-| `POST` | `/boxes/:id/network-settings` | Update the outbound policy |
-| `POST` | `/artifacts/pull` | Async pull (mirror + optional push) |
-| `POST` | `/artifacts/build` | Async build |
-| `GET` | `/artifacts/exists` | Local existence check |
-| `GET` | `/artifacts/info` | Image info; `422` if cached error |
-| `POST` | `/artifacts/remove` | Delete image + clear error cache |
-| `POST` | `/artifacts/tag` | Re-tag (deprecated) |
-| `POST` | `/artifacts/inspect` | Remote digest + size |
-| `GET` | `/artifacts/logs` | Stream build log (`follow=true` polls until image exists) |
-| `POST` | `/v1/boxes/:boxId/exec` | Create execution |
-| `GET` | `/v1/boxes/:boxId/executions` | Live guest inventory (including main), without booting |
-| `GET` | `/v1/boxes/:boxId/executions/:execId` | Execution status |
-| `DELETE` | `/v1/boxes/:boxId/executions/:execId` | Kill + evict |
-| `GET` | `/v1/boxes/:boxId/executions/:execId/attach` | WebSocket stdio + control |
-| `POST` | `/v1/boxes/:boxId/executions/:execId/signal` | Cooperative signal (whitelist) |
-| `POST` | `/v1/boxes/:boxId/executions/:execId/resize` | Resize TTY |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload tar |
-| `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
-| `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
-| `POST` | `/v1/boxes/:boxId/ssh` | Configure guest SSH once; running boxes only |
-| `POST` | `/v1/boxes/:boxId/ssh/enable` | Enable saved guest SSH configuration on a running box; otherwise `409`; never boots |
-| `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH on a running box; otherwise `409`; never boots |
+| Method   | Path                                         | Purpose                                                                             |
+| -------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `GET`    | `/`                                          | Health check (public)                                                               |
+| `GET`    | `/info`                                      | Runner metrics + service health                                                     |
+| `GET`    | `/metrics`                                   | Prometheus scrape                                                                   |
+| `POST`   | `/boxes`                                     | Create box                                                                          |
+| `GET`    | `/boxes/:id`                                 | Box info (state + backup state + runtime version)                                   |
+| `POST`   | `/boxes/:id/start`                           | Start                                                                               |
+| `POST`   | `/boxes/:id/stop`                            | Stop (graceful or `force`)                                                          |
+| `POST`   | `/boxes/:id/destroy`                         | Destroy                                                                             |
+| `POST`   | `/boxes/:id/backup`                          | Async backup                                                                        |
+| `POST`   | `/boxes/:id/recover`                         | Recover from error state                                                            |
+| `POST`   | `/boxes/:id/is-recoverable`                  | Check whether an error reason is recoverable                                        |
+| `POST`   | `/boxes/:id/network-settings`                | Update the outbound policy                                                          |
+| `POST`   | `/artifacts/pull`                            | Async pull (mirror + optional push)                                                 |
+| `POST`   | `/artifacts/build`                           | Async build                                                                         |
+| `GET`    | `/artifacts/exists`                          | Local existence check                                                               |
+| `GET`    | `/artifacts/info`                            | Image info; `422` if cached error                                                   |
+| `POST`   | `/artifacts/remove`                          | Delete image + clear error cache                                                    |
+| `POST`   | `/artifacts/tag`                             | Re-tag (deprecated)                                                                 |
+| `POST`   | `/artifacts/inspect`                         | Remote digest + size                                                                |
+| `GET`    | `/artifacts/logs`                            | Stream build log (`follow=true` polls until image exists)                           |
+| `POST`   | `/v1/boxes/:boxId/exec`                      | Create execution                                                                    |
+| `GET`    | `/v1/boxes/:boxId/executions`                | Live guest inventory (including main), without booting                              |
+| `GET`    | `/v1/boxes/:boxId/executions/:execId`        | Execution status                                                                    |
+| `DELETE` | `/v1/boxes/:boxId/executions/:execId`        | Kill + evict                                                                        |
+| `GET`    | `/v1/boxes/:boxId/executions/:execId/attach` | WebSocket stdio + control                                                           |
+| `POST`   | `/v1/boxes/:boxId/executions/:execId/signal` | Cooperative signal (whitelist)                                                      |
+| `POST`   | `/v1/boxes/:boxId/executions/:execId/resize` | Resize TTY                                                                          |
+| `PUT`    | `/v1/boxes/:boxId/files?path=<dest>`         | Upload tar                                                                          |
+| `GET`    | `/v1/boxes/:boxId/files?path=<src>`          | Download tar                                                                        |
+| `GET`    | `/v1/boxes/:boxId/metrics`                   | Per-box metrics                                                                     |
+| `POST`   | `/v1/boxes/:boxId/ssh`                       | Configure guest SSH once; running boxes only                                        |
+| `POST`   | `/v1/boxes/:boxId/ssh/enable`                | Enable saved guest SSH configuration on a running box; otherwise `409`; never boots |
+| `GET`    | `/v1/boxes/:boxId/ssh`                       | Guest SSH status; never boots                                                       |
+| `DELETE` | `/v1/boxes/:boxId/ssh`                       | Disable guest SSH on a running box; otherwise `409`; never boots                    |
 
 ---
 
@@ -1009,3 +1009,15 @@ Omission retains the one-core default; explicit zero, non-finite values, and exc
 The HTTP and v2 job paths preserve the number through the Go SDK; recovery validates it before destroying the old Box.
 Fractional Linux allocations use the Runtime's cgroup quota and rounded-up guest topology, with its existing best-effort membership behavior.
 Upgrade all Runners and matching native libraries before enabling fractional creation in the API, including migration destinations.
+
+## Cloud feature usage
+
+Runner drains accepted SSH authentication evidence only from running Cloud Boxes, using an independent native handle per read.
+Its background collector polls every five seconds, reads at most 64 Boxes per round with four workers,
+and applies a one-second deadline to each read. Larger inventories rotate between rounds.
+No read starts a VM. Older Guests are skipped with a diagnostic; the local SDK never uploads analytics automatically.
+
+The shared reporter uses the existing API URL and Runner token. It enqueues locally without waiting,
+then sends batches over its own HTTP transport. Full queues drop observations; shutdown cancels collection
+before closing the native client. Invalid reporter configuration disables telemetry without stopping Runner.
+See [collection, loss boundaries and query semantics](../api/README.md#cloud-feature-use-evidence).

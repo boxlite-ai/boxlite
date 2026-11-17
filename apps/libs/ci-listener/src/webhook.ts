@@ -3,7 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { ListenerState } from './state/store'
 import { Json, StateConflict, StateCorrupt } from './state/database'
 import { parseResourceLabels } from './resource-labels'
-import { DemandIdentityConflict, JobObservation, observeDemand } from './demand'
+import { DemandIdentityConflict, executionStartedAt, JobObservation, observeDemand } from './demand'
 
 export interface WakeHint {
   installationId: number
@@ -127,6 +127,9 @@ export function verifyWebhook(
               observation: {
                 status: (value as { workflow_job: { status: JobObservation['status'] } }).workflow_job.status,
                 labels: [...(value as { workflow_job: { labels: string[] } }).workflow_job.labels],
+                startedAt: executionStartedAt(
+                  (value as { workflow_job: { started_at?: unknown } }).workflow_job.started_at,
+                ),
                 runner: (value as { workflow_job: { runner_id?: number | null } }).workflow_job.runner_id || null,
               },
             }

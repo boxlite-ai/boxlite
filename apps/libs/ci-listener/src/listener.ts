@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { ExecutionJournal } from './execution/journal'
 import { decodeScope, ExecutionScope, object, positive, scopeKey } from './execution/model'
 import { DiscoveryRequest, DiscoverySnapshot } from './directory'
-import { PoolBackend, PoolSettings, WorkerEvent, WorkerPool } from './execution/pool'
+import { JobExecutionEvent, PoolBackend, PoolSettings, WorkerEvent, WorkerPool } from './execution/pool'
 import { JobNotice, jobMatches, WorkflowJob } from './jobs'
 import { LeaseLost, StateConflict, StateCorrupt, StateRecord } from './state/database'
 import { ExecutionLease, ListenerState } from './state/store'
@@ -31,6 +31,7 @@ export interface ListenerHost {
   accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'>
   report(error: unknown, operation: string): void
   observe?(event: WorkerEvent): void
+  observeExecution?(event: JobExecutionEvent): void
   /** Permanently retire background discovery/replay and their local handles. */
   close?(): Promise<void>
 }
@@ -304,6 +305,7 @@ export class Listener {
           this.worker,
           (event) => this.options.host.observe?.(event),
           { queue: session.execution, wake: () => this.wake?.() },
+          (event) => this.options.host.observeExecution?.(event),
         ),
       }
       session.runtimes.set(key, runtime)

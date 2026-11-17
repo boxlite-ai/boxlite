@@ -15,6 +15,12 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constant
 jest.mock('../../common/utils/business-event.util', () => ({ recordBusinessEvent: jest.fn() }))
 
 describe('JobStateHandlerService business events', () => {
+  const timing = {
+    id: 'job-1',
+    createdAt: new Date('2026-09-29T08:00:00.000Z'),
+    startedAt: new Date('2026-09-29T08:00:01.000Z'),
+    completedAt: new Date('2026-09-29T08:00:03.000Z'),
+  }
   function makeService(
     desiredState: BoxDesiredState,
     update = jest.fn().mockResolvedValue(undefined),
@@ -29,15 +35,18 @@ describe('JobStateHandlerService business events', () => {
   }
 
   function job(type: JobType, status: JobStatus, errorMessage?: string): Job {
-    return new Job({
-      id: 'job-1',
-      type,
-      status,
-      runnerId: 'runner-1',
-      resourceType: ResourceType.BOX,
-      resourceId: 'box-1',
-      errorMessage,
-    })
+    return Object.assign(
+      new Job({
+        id: 'job-1',
+        type,
+        status,
+        runnerId: 'runner-1',
+        resourceType: ResourceType.BOX,
+        resourceId: 'box-1',
+        errorMessage,
+      }),
+      timing,
+    )
   }
 
   beforeEach(() => jest.mocked(recordBusinessEvent).mockClear())
@@ -49,6 +58,9 @@ describe('JobStateHandlerService business events', () => {
 
     expect(recordBusinessEvent).toHaveBeenCalledWith({
       name: 'box.create',
+      job: timing,
+      occurredAt: timing.completedAt,
+      eventId: expect.any(String),
       outcome: 'exception',
       correlationId: 'box-1',
       organizationId: 'org-1',
@@ -63,6 +75,9 @@ describe('JobStateHandlerService business events', () => {
 
     expect(recordBusinessEvent).toHaveBeenCalledWith({
       name: 'box.start',
+      job: timing,
+      occurredAt: timing.completedAt,
+      eventId: expect.any(String),
       outcome: 'success',
       correlationId: 'box-1',
       organizationId: 'org-1',
@@ -76,6 +91,9 @@ describe('JobStateHandlerService business events', () => {
 
     expect(recordBusinessEvent).toHaveBeenCalledWith({
       name: 'box.start',
+      job: timing,
+      occurredAt: timing.completedAt,
+      eventId: expect.any(String),
       outcome: 'exception',
       correlationId: 'box-1',
       organizationId: 'org-1',
@@ -90,6 +108,9 @@ describe('JobStateHandlerService business events', () => {
 
     expect(recordBusinessEvent).toHaveBeenCalledWith({
       name: 'box.delete',
+      job: timing,
+      occurredAt: timing.completedAt,
+      eventId: expect.any(String),
       outcome: 'success',
       correlationId: 'box-1',
       organizationId: 'org-1',
@@ -103,6 +124,9 @@ describe('JobStateHandlerService business events', () => {
 
     expect(recordBusinessEvent).toHaveBeenCalledWith({
       name: 'box.stop',
+      job: timing,
+      occurredAt: timing.completedAt,
+      eventId: expect.any(String),
       outcome: 'success',
       correlationId: 'box-1',
       organizationId: 'org-1',

@@ -60,7 +60,9 @@ pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout,
     Execution, ExecutionId, ExecutionInfo, ExecutionsHandle, HealthState, HealthStatus,
 };
-pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
+pub use litebox::{
+    SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus, SshUsageBatch, SshUsageEvent,
+};
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
     AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, NetworkRateLimit,

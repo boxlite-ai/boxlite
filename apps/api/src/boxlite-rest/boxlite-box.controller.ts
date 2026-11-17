@@ -53,6 +53,7 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
+import { ObserveBoxReadiness } from '../box/interceptors/box-readiness.interceptor'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -90,6 +91,7 @@ export class BoxliteBoxController {
   ) {}
 
   @Post()
+  @ObserveBoxReadiness('create')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(201)
   @ApiResponse({
@@ -309,6 +311,7 @@ export class BoxliteBoxController {
     targetIdFromRequest: (req) => req.params.boxId,
     targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
   })
+  @ObserveBoxReadiness('start')
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,

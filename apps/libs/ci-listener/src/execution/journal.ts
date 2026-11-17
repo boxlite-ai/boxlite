@@ -1,5 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { createHash, randomUUID } from 'node:crypto'
+import { executionStartedAt } from '../demand'
 import { JobNotice } from '../jobs'
 import { Json, StateConflict, StateCorrupt, StateRecord } from '../state/database'
 import { ExecutionLease, ListenerState, StateChange, StateCheck } from '../state/store'
@@ -239,7 +240,15 @@ export class ExecutionJournal {
     )
   }
   async claimedRunners(lease: ExecutionLease, scope: ExecutionScope, ids: readonly number[]): Promise<Set<number>> {
-    const known = new Set<number>()
+    return new Set((await this.runnerClaims(lease, scope, ids)).keys())
+  }
+
+  async runnerClaims(
+    lease: ExecutionLease,
+    scope: ExecutionScope,
+    ids: readonly number[],
+  ): Promise<Map<number, JobNotice & { startedAt?: string }>> {
+    const known = new Map<number, JobNotice & { startedAt?: string }>()
     for (let offset = 0; offset < ids.length; offset += 100) {
       const keys = ids.slice(offset, offset + 100).map((id) => `runner-claim/${scope.installation.id}/${id}`)
       if (!keys.length) continue
@@ -260,7 +269,13 @@ export class ExecutionJournal {
             : !scope.runners.repositories.includes(repository)
         )
           throw new StateCorrupt()
-        if (!row.payload.ambiguous) known.add(Number(row.key.split('/')[2]))
+        if (!row.payload.ambiguous)
+          known.set(Number(row.key.split('/')[2]), {
+            repository,
+            run: row.payload.run as number,
+            job: row.payload.job as number,
+            startedAt: executionStartedAt(row.payload.startedAt),
+          })
       }
     }
     return known

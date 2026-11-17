@@ -43,6 +43,14 @@ export interface PoolSettings {
   labels: readonly string[]
 }
 /** Observed worker facts, not a verdict on the triggering GitHub job. */
+export interface JobExecutionEvent {
+  organization: string
+  installation: number
+  boxId: string
+  job: JobNotice
+  startedAt: string
+}
+
 export interface WorkerEvent {
   event:
     | 'ci-worker-exited'
@@ -143,6 +151,7 @@ export class WorkerPool {
   private readonly settings: PoolSettings
   private readonly jit = new Map<string, JitRegistration>()
   private readonly sessions = new Set<RunnerSession>()
+  private readonly executions = new Map<string, string>()
   private demandAfter = 0
   private executionAfter = 0
   private readonly idleRetryAt = new Map<string, number>()
@@ -154,6 +163,7 @@ export class WorkerPool {
     settings: PoolSettings,
     private readonly observe: (event: WorkerEvent) => void = () => {},
     private readonly execution?: { queue: WorkQueue; wake(): void },
+    private readonly observeExecution: (event: JobExecutionEvent) => void = () => {},
   ) {
     validateWorkerResources(settings)
     if (
@@ -319,7 +329,8 @@ export class WorkerPool {
       const retiring = new Set<string>()
       const active = new Set(allocations.map((row) => row.record.key))
       for (const key of this.idleRetryAt.keys()) if (!active.has(key)) this.idleRetryAt.delete(key)
-      const claims = await this.journal.claimedRunners(
+      for (const key of this.executions.keys()) if (!active.has(key)) this.executions.delete(key)
+      const claims = await this.journal.runnerClaims(
         lease,
         scope.scope,
         allocations.flatMap((row) =>
@@ -355,6 +366,24 @@ export class WorkerPool {
             supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
           }
           continue
+        }
+        const claim = runner && claims.get(runner.id)
+        if (claim?.startedAt && row.value.box.id) {
+          const identity = `${claim.repository}:${claim.run}:${claim.job}`
+          if (this.executions.get(row.record.key) !== identity) {
+            this.executions.set(row.record.key, identity)
+            try {
+              this.observeExecution({
+                organization: scope.scope.organization,
+                installation: scope.scope.installation.id,
+                boxId: row.value.box.id,
+                job: { repository: claim.repository, run: claim.run, job: claim.job },
+                startedAt: claim.startedAt,
+              })
+            } catch {
+              /* Telemetry cannot stop reconciliation. */
+            }
+          }
         }
         if (runner?.busy) {
           if (!claims.has(runner.id)) unknownBusy.add(selection.label)

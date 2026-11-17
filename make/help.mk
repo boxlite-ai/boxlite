@@ -114,6 +114,7 @@ help:
 
 	@echo "    make test:apps:ci-listener  - Run shared CI state contracts (optional local PostgreSQL)"
 	@echo "    make test:apps:github-ci-runner - Run standalone Listener boundary tests"
+	@echo "    make test:apps:feature-usage - Run shared feature reporter tests (FILTER=<pattern>)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:secret-server - Run Secret Server Go tests with the race detector"
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"

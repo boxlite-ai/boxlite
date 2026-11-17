@@ -7,6 +7,7 @@
 import { Module } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
+import { FeatureUsageController } from './controllers/feature-usage.controller'
 import { BoxService } from './services/box.service'
 import { BoxExitCodeService } from './services/box-exit-code.service'
 import { TypeOrmModule } from '@nestjs/typeorm'
@@ -117,6 +118,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     JobController,
     CustomDomainController,
     CustomDomainMaintenanceController,
+    FeatureUsageController,
   ],
   providers: [
     CheckpointService,

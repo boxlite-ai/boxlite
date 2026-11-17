@@ -25,6 +25,7 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AttachTicketService } from '../box/services/attach-ticket.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AttachAuditSession } from './attach-audit-session'
+import { requestTiming } from '../common/utils/request-timing.util'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -124,6 +125,7 @@ export class BoxliteWsProxyService {
    * proxy middleware. Closes the socket cleanly on any failure.
    */
   async upgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
+    const timing = requestTiming(req)
     const match = this.matchAttachPath(req.url)
     if (!match) {
       socket.destroy()
@@ -154,7 +156,7 @@ export class BoxliteWsProxyService {
         return
       }
       if (box.autoResume) {
-        await this.autoResume.ensureReady(box.id, auth.organization)
+        await this.autoResume.ensureReady(box.id, auth.organization, undefined, timing)
       }
       // Opening a WS attach is user activity,
       // so the autostop cron does not reap a session that's still connected.

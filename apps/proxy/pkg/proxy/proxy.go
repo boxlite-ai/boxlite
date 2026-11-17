@@ -27,6 +27,7 @@ import (
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/common-go/pkg/featureusage"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 )
 
@@ -74,6 +75,7 @@ type Proxy struct {
 	guestPortTransport         *http.Transport
 	wakeGroup                  singleflight.Group
 	guestPortGroup             singleflight.Group
+	featureUsage               *featureusage.Reporter
 	// wakeDeadlines maps a box being woken to the end of its wake budget, so
 	// requests that arrive mid-wake join it.
 	wakeDeadlines sync.Map
@@ -85,6 +87,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	}
 
 	proxy.apiclient = config.ApiClient
+	usageContext, stopUsage := context.WithCancel(ctx)
+	defer stopUsage()
+	proxy.startFeatureUsage(usageContext)
 	proxy.guestPortTransport = proxy.newGuestPortTransport()
 
 	if config.Redis != nil {

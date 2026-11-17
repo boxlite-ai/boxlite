@@ -203,6 +203,7 @@ lint\:c:
 	done
 
 fmt\:go:
+	@cd apps/libs/common-go && gofmt -w pkg/featureusage
 	@echo "🔧 Formatting Go code..."
 	@cd sdks/go && gofmt -w .
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w .

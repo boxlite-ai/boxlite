@@ -1878,6 +1878,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         BoxImpl::ssh_status(self).await
     }
 
+    async fn ssh_take_usage(&self) -> BoxliteResult<crate::SshUsageBatch> {
+        BoxImpl::ssh_take_usage(self).await
+    }
+
     async fn ssh_disable(&self) -> BoxliteResult<SshStatus> {
         BoxImpl::ssh_disable(self).await
     }

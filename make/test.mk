@@ -8,6 +8,7 @@ PHONY_TARGETS += test\:apps\:mbuild
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += test\:apps\:ci-listener
+PHONY_TARGETS += test\:apps\:feature-usage
 PHONY_TARGETS += _local-registry
 PHONY_TARGETS += _guest-boot-probe
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
@@ -774,6 +775,8 @@ test\:apps\:proxy:
 PHONY_TARGETS += test\:apps\:secret-server
 test\:apps\:secret-server:
 	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
+test\:apps\:feature-usage:
+	@cd apps/libs/common-go && go test ./pkg/featureusage $(GOTEST_FILTER)
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

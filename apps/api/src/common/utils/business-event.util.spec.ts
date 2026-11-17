@@ -4,7 +4,7 @@
  */
 
 import { Logger } from '@nestjs/common'
-import { recordBusinessEvent, recordOutcomes } from './business-event.util'
+import { recordBusinessEvent, recordOutcomes, subscribeBusinessEvents } from './business-event.util'
 import { Context } from '../context/context'
 import { PlatformReason } from '../context/platform-reason.enum'
 
@@ -41,7 +41,66 @@ describe('recordBusinessEvent', () => {
       'event.reason': 'auto_delete',
       'service.type': 'api',
       'event.timestamp': '2026-09-30T08:00:00.000Z',
+      'event.id': expect.any(String),
     })
+  })
+
+  it('shares one occurrence ID with observers and keeps separate occurrences distinct', () => {
+    const observed: Readonly<Record<string, string>>[] = []
+    const dispose = subscribeBusinessEvents((attributes) => observed.push(attributes))
+    try {
+      recordBusinessEvent({ name: 'box.start', outcome: 'requested', correlationId: 'box-1' })
+      recordBusinessEvent({ name: 'box.start', outcome: 'success', correlationId: 'box-1' })
+      expect(observed[0]['event.id']).toMatch(/^[0-9a-f-]{36}$/)
+      expect(observed[1]['event.id']).not.toBe(observed[0]['event.id'])
+      expect(logSpy.mock.calls.map(([, attributes]) => attributes)).toEqual(observed)
+    } finally {
+      dispose()
+    }
+  })
+
+  it('preserves source occurrence identity and time', () => {
+    const event = {
+      name: 'box.start' as const,
+      outcome: 'success' as const,
+      correlationId: 'box-1',
+      eventId: '11111111-1111-4111-8111-111111111111',
+      occurredAt: new Date('2026-09-29T08:00:00.000Z'),
+    }
+    recordBusinessEvent(event)
+    expect(logSpy.mock.calls[0][1]).toMatchObject({
+      'event.id': event.eventId,
+      'event.timestamp': event.occurredAt.toISOString(),
+    })
+  })
+
+  it('falls back to observation time for an invalid source clock', () => {
+    const event = {
+      name: 'box.start' as const,
+      outcome: 'success' as const,
+      correlationId: 'box-1',
+      occurredAt: new Date(NaN),
+    }
+    expect(() => recordBusinessEvent(event)).not.toThrow()
+    expect(logSpy.mock.calls[0][1]['event.timestamp']).toBe(now.toISOString())
+  })
+
+  it("isolates an observer that attempts to alter another observer's attributes", () => {
+    const mutate = subscribeBusinessEvents((attributes) => {
+      const writable = attributes as Record<string, string>
+      writable['event.name'] = 'user.login'
+    })
+    const observed = jest.fn()
+    const dispose = subscribeBusinessEvents(observed)
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    try {
+      recordBusinessEvent({ name: 'box.start', outcome: 'success', correlationId: 'box-1' })
+      expect(observed).toHaveBeenCalledWith(expect.objectContaining({ 'event.name': 'box.start' }))
+      expect(Logger.prototype.warn).toHaveBeenCalledWith('Business event analytics capture failed')
+    } finally {
+      mutate()
+      dispose()
+    }
   })
 
   it('omits optional attributes the event does not carry', () => {
@@ -126,6 +185,26 @@ describe('recordOutcomes', () => {
 
   afterEach(() => jest.restoreAllMocks())
 
+  it('keeps occurrence overrides out of a shared lifecycle input', async () => {
+    const source = {
+      ...event,
+      eventId: '11111111-1111-4111-8111-111111111111',
+      occurredAt: new Date('2000-01-01T00:00:00Z'),
+    }
+    await recordOutcomes(
+      source,
+      async () => 42,
+      () => 'internal',
+    )
+    const attributes = logSpy.mock.calls.map(([, attributes]) => attributes)
+    expect(attributes).toHaveLength(2)
+    expect(new Set(attributes.map((attributes) => attributes['event.id'])).size).toBe(2)
+    for (const observed of attributes) {
+      expect(observed['event.id']).not.toBe(source.eventId)
+      expect(observed['event.timestamp']).not.toBe(source.occurredAt.toISOString())
+    }
+  })
+
   it('records requested before the operation and success after it, and returns its result', async () => {
     const op = jest.fn(async () => {
       expect(logSpy.mock.calls.map(([message]) => message)).toEqual(['user.registration requested'])
@@ -135,6 +214,9 @@ describe('recordOutcomes', () => {
     await expect(recordOutcomes(event, op, () => 'internal')).resolves.toBe('created')
 
     expect(op).toHaveBeenCalledTimes(1)
+    const ids = logSpy.mock.calls.map(([, attributes]) => attributes['event.id'])
+    expect(ids).toEqual([expect.any(String), expect.any(String)])
+    expect(new Set(ids).size).toBe(2)
     expect(logSpy.mock.calls.map(([message]) => message)).toEqual([
       'user.registration requested',
       'user.registration success',

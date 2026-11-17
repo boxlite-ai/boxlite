@@ -39,6 +39,7 @@ import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AuditModule } from '../audit/audit.module'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { BoxReadinessInterceptor } from '../box/interceptors/box-readiness.interceptor'
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     BoxliteInvitationController,
   ],
   providers: [
+    BoxReadinessInterceptor,
     BoxliteWsProxyService,
     CommerceBoxLimitService,
     CiConnectService,

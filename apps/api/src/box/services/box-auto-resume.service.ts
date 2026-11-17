@@ -12,6 +12,10 @@ import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { Organization } from '../../organization/entities/organization.entity'
+import { Context } from '../../common/context/context'
+import { PlatformReason } from '../../common/context/platform-reason.enum'
+import { beginBoxOperation } from '../utils/box-operation.util'
+import { RequestTiming, requestTiming } from '../../common/utils/request-timing.util'
 
 export const AUTO_RESUME_TIMEOUT_SECONDS = 30
 
@@ -38,19 +42,41 @@ export class BoxAutoResumeService {
   ) {}
 
   /** Submit or join Start and return only after the Box is actually STARTED. */
-  async ensureReady(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<void> {
-    let box = await this.submitOrJoinStart(boxId, organization, admit)
-
-    const stopping =
-      box.state === BoxState.STOPPING ||
-      (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STOPPED)
-    if (stopping) {
-      await this.boxStateWaiter.waitForStopped(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
-      box = await this.submitOrJoinStart(box.id, organization, admit)
-    }
-
-    if (box.state !== BoxState.STARTED) {
-      await this.boxStateWaiter.waitForStarted(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
+  async ensureReady(
+    boxId: string,
+    organization: Organization,
+    admit?: ProxyAdmission,
+    timing: RequestTiming = requestTiming(),
+  ): Promise<void> {
+    let finish: ReturnType<typeof beginBoxOperation> | undefined
+    const begin = () =>
+      beginBoxOperation({
+        kind: 'resume',
+        organizationId: organization.id,
+        ctx: Context.platform(PlatformReason.AUTO_RESUME),
+        scope: 'proxy_api',
+        boxId,
+        timing,
+      })
+    try {
+      let box = await this.submitOrJoinStart(boxId, organization, admit)
+      const stopping =
+        box.state === BoxState.STOPPING ||
+        (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STOPPED)
+      if (box.state === BoxState.STARTED && !stopping) return
+      finish = begin()
+      if (stopping) {
+        await this.boxStateWaiter.waitForStopped(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
+        box = await this.submitOrJoinStart(box.id, organization, admit)
+      }
+      if (box.state !== BoxState.STARTED) {
+        await this.boxStateWaiter.waitForStarted(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
+      }
+      finish({ outcome: 'success', boxId: box.id })
+    } catch (error) {
+      finish ??= begin()
+      finish({ outcome: 'exception', error })
+      throw error
     }
   }
 

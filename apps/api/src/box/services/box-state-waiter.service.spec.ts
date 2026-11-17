@@ -8,6 +8,7 @@ import { HttpStatus, RequestTimeoutException } from '@nestjs/common'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { BoxReadinessError } from '../errors/box-readiness.error'
 import { BoxStateWaiterService } from './box-state-waiter.service'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 
@@ -24,6 +25,18 @@ function makeWaiter(initialState = BoxState.STARTING, toBoxDto?: (box: any) => P
 }
 
 describe('BoxStateWaiterService', () => {
+  it('identifies a runtime transition failure while preserving the existing HTTP response', async () => {
+    const { waiter, boxService } = makeWaiter(BoxState.ERROR)
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-1',
+      state: BoxState.ERROR,
+      errorReason: 'runtime failed',
+    })
+    const error = await waiter.waitForStarted('box-1', 'org-1', 1).catch((error) => error)
+    expect(error).toBeInstanceOf(BoxReadinessError)
+    expect(error.getStatus()).toBe(400)
+    expect(error.getResponse()).toBe('Box state transition failed: runtime failed')
+  })
   it('resolves concurrent waiters for the same box from one state event', async () => {
     const { waiter, subscriber } = makeWaiter()
     const first = waiter.waitForStarted('box-1', 'org-1', 5)
