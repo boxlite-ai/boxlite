@@ -25,7 +25,7 @@ impl FilesInterface {
         }
     }
 
-    /// Upload a tar file to the guest and extract at dest_path.
+    /// Stream a tar file to the guest and extract at `dest_path`.
     pub async fn upload_tar(
         &mut self,
         tar_path: &std::path::Path,
@@ -34,59 +34,37 @@ impl FilesInterface {
         mkdir_parents: bool,
         overwrite: bool,
     ) -> BoxliteResult<()> {
-        let dest = dest_path.to_string();
-        let cid = container_id.unwrap_or_default().to_string();
-
-        // Read entire tar file and build chunks
-        // Note: For very large files, consider streaming with async_stream crate
         let mut file = File::open(tar_path)
             .await
             .map_err(|e| BoxliteError::Storage(format!("Failed to open tar file: {}", e)))?;
-
-        let mut chunks = Vec::new();
-        let mut buf = vec![0u8; CHUNK_SIZE];
-        let mut first = true;
-
-        loop {
-            match file.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = UploadChunk {
-                        dest_path: if first { dest.clone() } else { String::new() },
-                        container_id: cid.clone(),
-                        data: buf[..n].to_vec(),
-                        mkdir_parents,
-                        overwrite,
-                    };
-                    first = false;
-                    chunks.push(chunk);
-                }
-                Err(e) => {
-                    return Err(BoxliteError::Storage(format!(
-                        "Failed to read tar file: {}",
-                        e
-                    )));
+        // Keep file-read failures classified as Storage, including when the
+        // guest accepts the prefix it received before the read failed.
+        let read_error = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let read_error_slot = read_error.clone();
+        let stream = async_stream::stream! {
+            let mut buf = vec![0u8; CHUNK_SIZE];
+            loop {
+                match file.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => yield Ok(buf[..n].to_vec()),
+                    Err(error) => {
+                        *read_error_slot.lock().await = Some(error.to_string());
+                        yield Err(error);
+                        break;
+                    }
                 }
             }
+        };
+        let result = self
+            .upload_stream(stream, dest_path, container_id, mkdir_parents, overwrite)
+            .await;
+
+        if let Some(error) = read_error.lock().await.take() {
+            return Err(BoxliteError::Storage(format!(
+                "Failed to read tar file: {error}"
+            )));
         }
-
-        // Use futures::stream::iter for the upload stream
-        let stream = futures::stream::iter(chunks);
-
-        let response = self
-            .client
-            .upload(stream)
-            .await
-            .map_err(map_tonic_err)?
-            .into_inner();
-
-        if response.success {
-            Ok(())
-        } else {
-            Err(BoxliteError::Internal(
-                response.error.unwrap_or_else(|| "Upload failed".into()),
-            ))
-        }
+        result
     }
 
     /// Download a path from guest into a local tar file.

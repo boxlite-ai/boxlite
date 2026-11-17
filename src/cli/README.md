@@ -743,6 +743,11 @@ List cached images.
 
 ### `boxlite cp`
 
+Native copies stream tar chunks while packing or extracting, without staging a
+complete archive. Transfers can leave partial destination files on failure;
+failed uploads can also leave root-owned files because ownership is adjusted
+after successful extraction. Older remote peers may buffer transfers.
+
 Copy files or directories between host and box.
 
 **Usage:** `boxlite cp [OPTIONS] SRC DST`
