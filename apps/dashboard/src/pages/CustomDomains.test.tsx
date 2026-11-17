@@ -4,6 +4,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider, QueryObserver, focusManager } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import CustomDomains from './CustomDomains'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import type { CustomDomain, CustomDomainList, HeldDomain } from '@/api/domain-types'
@@ -73,7 +74,9 @@ describe('Custom domains setup', () => {
     act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <CustomDomains key={organizationId} organizationId={organizationId} canManage={canManage} held={held} />
+          <MemoryRouter>
+            <CustomDomains key={organizationId} organizationId={organizationId} canManage={canManage} held={held} />
+          </MemoryRouter>
         </QueryClientProvider>,
       ),
     )
@@ -96,6 +99,40 @@ describe('Custom domains setup', () => {
     })
   }
 
+  it.each([
+    { target: { type: 'box', box: 'box-1', port: 8080 }, cells: ['Box', 'box-1', '8080'] },
+    { target: { type: 'app', app: 'web-app' }, cells: ['App', 'web-app', '—'] },
+    { target: null, cells: ['Unbound', '—', '—'] },
+    { target: undefined, cells: ['Unbound', '—', '—'] },
+  ] satisfies { target: HeldDomain['target'] | undefined; cells: string[] }[])(
+    'shows binding columns for $cells',
+    async ({ target, cells }) => {
+      held = [
+        {
+          hostname: 'other.example.com',
+          url: 'https://other.example.com',
+          target: { type: 'box', box: 'other', port: 80 },
+        },
+        ...(target === undefined ? [] : [{ hostname: domain.hostname, url: `https://${domain.hostname}`, target }]),
+      ]
+      await render()
+      expect([...document.querySelectorAll('th')].map((cell) => cell.textContent)).toEqual([
+        'Domain',
+        'Target type',
+        'Associated with',
+        'Port',
+        'Status',
+      ])
+      const row = button('Manage app.example.com').closest('tr')!
+      expect([...row.querySelectorAll('td')].slice(1, 4).map((cell) => cell.textContent)).toEqual(cells)
+      expect(row.querySelector('a')?.getAttribute('href')).toBe(
+        target?.type === 'box' ? '/dashboard/boxes/box-1' : undefined,
+      )
+      await click('Manage app.example.com')
+      expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    },
+  )
+
   it.each(['active', 'unavailable'] as const)(
     'quietly refreshes pending status each minute until ready with subscription %s',
     async (subscription) => {
@@ -106,7 +143,7 @@ describe('Custom domains setup', () => {
         await render()
         const row = button('Manage app.example.com')
         const toolbar = document.querySelector('.resource-toolbar')
-        expect(row.textContent).toContain('Waiting for HTTPS CA')
+        expect(row.closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
         let finish!: (value: CustomDomainList) => void
         api.listCustomDomains.mockImplementationOnce(
           () =>
@@ -124,14 +161,14 @@ describe('Custom domains setup', () => {
         expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
         expect(button('Manage app.example.com')).toBe(row)
         expect(document.body.textContent).not.toContain('Loading custom domains')
-        expect(row.textContent).toContain('Waiting for HTTPS CA')
+        expect(row.closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
         await act(async () => {
           finish({ ...response, domains: [domain] })
         })
         await settle()
         expect(button('Manage app.example.com')).toBe(row)
         expect(document.querySelector('.resource-toolbar')).toBe(toolbar)
-        expect(row.textContent).toContain(subscription === 'active' ? 'Ready' : 'Setup completed')
+        expect(row.closest('tr')!.textContent).toContain(subscription === 'active' ? 'Ready' : 'Setup completed')
         await act(async () => {
           await vi.advanceTimersByTimeAsync(120_000)
         })
@@ -162,7 +199,7 @@ describe('Custom domains setup', () => {
       await settle()
       expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
       expect(button('Manage app.example.com')).toBe(row)
-      expect(row.textContent).toContain('Waiting for HTTPS CA')
+      expect(row.closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
       expect(document.body.textContent).not.toContain('Unable to load custom domains.')
       expect(document.body.textContent).not.toContain('Loading custom domains')
       await act(async () => {
@@ -231,13 +268,13 @@ describe('Custom domains setup', () => {
           await vi.advanceTimersByTimeAsync(60_000)
         })
         expect(api.listCustomDomains).toHaveBeenCalledTimes(3)
-        expect(button('Manage app.example.com').textContent).toContain('Waiting for HTTPS CA')
+        expect(button('Manage app.example.com').closest('tr')!.textContent).toContain('Waiting for HTTPS CA')
         await act(async () => {
           await vi.advanceTimersByTimeAsync(60_000)
         })
         await settle()
         expect(document.querySelector('[role="dialog"]')).toBe(dialog)
-        expect(button('Manage app.example.com').textContent).toContain(
+        expect(button('Manage app.example.com').closest('tr')!.textContent).toContain(
           outcome === 'success' ? 'Setup completed' : 'Needs attention',
         )
         expect(dialog?.textContent).toContain(
@@ -311,7 +348,7 @@ describe('Custom domains setup', () => {
       await settle()
       expect(api.listCustomDomains).toHaveBeenCalledTimes(2)
       expect(document.querySelector('[role="dialog"]')).toBeNull()
-      expect(button('Manage app.example.com').textContent).toContain('Ready')
+      expect(button('Manage app.example.com').closest('tr')!.textContent).toContain('Ready')
     } finally {
       vi.useRealTimers()
       focusManager.setFocused(undefined)

@@ -1,6 +1,8 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import React, { useEffect, useState } from 'react'
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { generatePath, Link } from 'react-router-dom'
+import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -290,28 +292,77 @@ export default function CustomDomains({
         <ResourceEmptyState icon={<Globe className="size-6" />} title="Bring your own domain" />
       )}
       {data && data.domains.length > 0 && (
-        <div className="mt-[14px] border-t border-border">
-          {data.domains.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-label={`Manage ${item.hostname}`}
-              className="flex w-full flex-wrap items-center gap-4 border-b border-border/60 px-4 py-5 text-left transition-colors hover:bg-accent/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
-              onClick={() => {
-                setSelected(item.id)
-                action.reset()
-                setDeleting(null)
-                setBox('')
-                setOpen(true)
-                if (item.confirmed && !item.ready && item.phase !== 'superseded') void query.refetch()
-              }}
-            >
-              <Globe className="size-6 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 break-all font-mono font-semibold">{item.hostname}</span>
-              <DomainStatus domain={item} active={data.subscription === 'active'} />
-              <ArrowRightIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-            </button>
-          ))}
+        <div className="resource-content scroll-edge mt-[14px]">
+          <table className="resource-table w-full min-w-[800px] table-fixed text-left font-sans text-body">
+            <colgroup>
+              <col style={{ width: '30%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '24%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '22%' }} />
+            </colgroup>
+            <thead className="border-b border-border text-meta text-muted-foreground">
+              <tr>
+                {['Domain', 'Target type', 'Associated with', 'Port', 'Status'].map((label) => (
+                  <th key={label} scope="col" className="h-11 px-4 py-3 font-medium">
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.domains.map((item) => {
+                const target = held.find((value) => value.hostname === item.hostname)?.target
+                return (
+                  <tr
+                    key={item.id}
+                    className="border-b border-border/60 transition-colors hover:bg-accent/40 focus-within:bg-accent/40"
+                  >
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        aria-label={`Manage ${item.hostname}`}
+                        className="flex w-full min-w-0 items-center gap-3 text-left hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                        onClick={() => {
+                          setSelected(item.id)
+                          action.reset()
+                          setDeleting(null)
+                          setBox('')
+                          setOpen(true)
+                          if (item.confirmed && !item.ready && item.phase !== 'superseded') void query.refetch()
+                        }}
+                      >
+                        <Globe className="size-5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 break-all font-mono font-semibold">{item.hostname}</span>
+                        <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {target ? (target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
+                    </td>
+                    <td className="truncate px-4 py-3 font-mono text-muted-foreground">
+                      {target?.type === 'box' ? (
+                        <Link
+                          to={generatePath(RoutePath.BOX_DETAILS, { boxId: encodeURIComponent(target.box) })}
+                          className="text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                        >
+                          {target.box}
+                        </Link>
+                      ) : (
+                        (target?.app ?? '—')
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
+                      {target?.type === 'box' ? target.port : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <DomainStatus domain={item} active={data.subscription === 'active'} />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
       <Dialog

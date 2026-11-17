@@ -641,6 +641,10 @@ The **Managed domain** tab lists only held platform hostnames, using the API's
 state apply to those platform names. **Custom domain** shows setup progress and
 the separate one-domain allowance, including drafts but excluding replaced configurations.
 
+The custom table shows Target type, Associated with and Port from held-domain bindings.
+Box targets link to their details page; drafts and unbound hostnames show Unbound and —.
+Select the hostname to manage DNS, HTTPS and binding.
+
 Both views use the shared underline tabs: transparent surfaces, a 2px active
 indicator and independent keyboard focus. The API still returns the complete
 held-domain list for binding details in the custom view and Box pages.
