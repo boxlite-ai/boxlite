@@ -13,6 +13,10 @@ use tokio::sync::{Mutex, watch};
 
 use crate::util::map_err;
 
+#[cfg(test)]
+#[path = "agents/tests/forwarding.rs"]
+mod forwarding_tests;
+
 #[napi(js_name = "Agents")]
 #[derive(Debug, Default)]
 pub struct JsAgents {

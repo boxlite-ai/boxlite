@@ -12,6 +12,10 @@ use tokio::sync::Mutex;
 
 use crate::util::map_err;
 
+#[cfg(test)]
+#[path = "agents/tests/forwarding.rs"]
+mod forwarding_tests;
+
 #[pyclass]
 pub(crate) struct PyAgents {
     agents: Agents,
