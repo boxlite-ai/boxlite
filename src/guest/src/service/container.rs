@@ -335,6 +335,9 @@ impl ContainerService for GuestServer {
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
         for m in &init_req.mounts {
             let volume_dir = container_layout.volume_dir(&m.volume_name);
+            // Managed volume with a sub_path: pin that subdirectory at its own
+            // mountpoint and use the pinned path as the mount source. A failed
+            // pin fails the container init outright.
             let source = if !m.volume_sub_path.is_empty() {
                 match crate::storage::resolved_mount::ResolvedMount::pin(
                     &volume_dir,
@@ -356,8 +359,10 @@ impl ContainerService for GuestServer {
                     }
                 }
             } else if m.subpath.is_empty() {
+                // Whole-volume mount: share the container's volume folder as-is.
                 volume_dir
             } else {
+                // Single-file mount: bind just the one file within the shared dir.
                 volume_dir.join(&m.subpath)
             };
             user_mounts.push(UserMount {
