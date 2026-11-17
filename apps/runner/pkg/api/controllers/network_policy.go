@@ -13,21 +13,15 @@ import (
 
 // BoxliteSetOutboundNetwork handles a complete replacement, never a patch.
 func BoxliteSetOutboundNetwork(ctx *gin.Context) {
-	var policy dto.OutboundNetworkPolicy
-	decoder := json.NewDecoder(http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&policy); err != nil {
-		respondError(ctx, 400, "invalid outbound policy", "InvalidArgumentError", "invalid_argument")
+	if len(ctx.Request.Header.Values("If-Match")) != 0 || len(ctx.Request.Header.Values("X-Boxlite-Outbound-Revision")) != 0 {
+		respondError(ctx, http.StatusBadRequest, "use the revisioned snapshot resource for conditional replacement", "UnsupportedError", "unsupported")
 		return
 	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		respondError(ctx, 400, "expected one outbound policy", "InvalidArgumentError", "invalid_argument")
+	policy, valid := readOutboundPolicy(ctx)
+	if !valid {
 		return
 	}
-	if err := policy.Validate(); err != nil {
-		respondError(ctx, http.StatusBadRequest, err.Error(), "InvalidArgumentError", "invalid_argument")
-		return
-	}
+
 	r, err := runner.GetInstance(nil)
 	if err != nil {
 		respondError(ctx, 500, "runner unavailable", "InternalError", "internal_error")
@@ -43,4 +37,23 @@ func BoxliteSetOutboundNetwork(ctx *gin.Context) {
 		policy.AllowNet = []string{}
 	}
 	ctx.JSON(http.StatusOK, policy)
+}
+
+func readOutboundPolicy(ctx *gin.Context) (dto.OutboundNetworkPolicy, bool) {
+	var policy dto.OutboundNetworkPolicy
+	decoder := json.NewDecoder(http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		respondError(ctx, 400, "invalid outbound policy", "InvalidArgumentError", "invalid_argument")
+		return policy, false
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		respondError(ctx, 400, "expected one outbound policy", "InvalidArgumentError", "invalid_argument")
+		return policy, false
+	}
+	if err := policy.Validate(); err != nil {
+		respondError(ctx, http.StatusBadRequest, err.Error(), "InvalidArgumentError", "invalid_argument")
+		return policy, false
+	}
+	return policy, true
 }

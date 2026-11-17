@@ -263,6 +263,23 @@ Durable-control tests use the real Runtime operation lock and SQLite database wi
 They cover lost ACKs, pending readback, late requests, competing writers, failed pending writes, fresh restoration identities, stale compensation, and restoration persistence failure.
 These tests exercise the new revision protocol; the existing unversioned setter's compatibility behavior is covered separately.
 
+### Runner control resources
+
+Runner exposes policy GET, status GET, and dedicated snapshot PUT under its existing bearer-authenticated Box network routes.
+Reads use request-owned Runtime handles without starting a VM; replacements require a running Box.
+
+The independent network handle retains its native ownership after the temporary Box wrapper closes.
+Readback leaves borrowed lifecycle cache entries untouched.
+
+Policy GET returns the policy body and persisted revision as a strong ETag.
+
+Snapshot PUT requires one strong expected revision and one fresh candidate header before acquiring a Runtime handle.
+A stale comparison returns 412; only the explicit `applied` outcome returns the matching policy and candidate ETag.
+
+Runner tests execute its production bearer and error middleware over HTTP.
+Missing, malformed, and wrong credentials cannot reach control lookup; the configured bearer can use all three resources.
+A separate client test crosses the actual Go/C/Rust transport against a controlled Runtime peer, including stopped-Box reads and refused mutation.
+
 ### Runtime readback and coordinator recovery
 
 `NetworkHandle::outbound_status` compares a durable snapshot with the backend's observed snapshot and installation phase.
