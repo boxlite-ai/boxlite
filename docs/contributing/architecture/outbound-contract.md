@@ -432,6 +432,7 @@ These rules follow [RFC 9110 list parsing and whitespace](https://www.rfc-editor
 
 Reads require organization membership; writes also require the existing Box write permission.
 Status describes control-state agreement and does not probe destination connectivity.
+MCP access to these outbound resources requires an API key under its OAuth default-deny policy.
 
 The HTTP authorization suite runs actual API-key and signed-JWT strategies and organization guards with controlled credential, membership, Redis, and Box storage.
 It checks canonical, organization-prefixed, and legacy paths; it does not boot the production Cloud application or guest VMs.

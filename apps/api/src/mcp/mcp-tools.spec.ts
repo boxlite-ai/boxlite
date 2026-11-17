@@ -161,6 +161,8 @@ const API_KEY_ONLY = [
   'revokeTunnel',
   'updateInboundNetwork',
   'updateOutboundNetwork',
+  'getOutboundNetwork',
+  'getOutboundStatus',
   'listDomains',
   'claimDomain',
   'bindDomain',
