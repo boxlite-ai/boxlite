@@ -44,10 +44,14 @@ GHCR publication runs in the `publish` job of `mbuild-release` on `main`, indepe
 Local operators dispatch the workflow; direct GHCR CLI writes outside that context are refused before registry access.
 
 ```bash
-gh workflow run mbuild-release.yml --repo boxlite-ai/boxlite --ref main -f command=publish -f tag=vX.Y.Z
+gh workflow run mbuild-release.yml --repo boxlite-ai/boxlite --ref main -f command=publish -f tag=vX.Y.Z -f build-only=true
 npm run mbuild verify -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite
 npm run mbuild import-release -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite --stage prod
 ```
+
+This publication-only example skips deployment, E2E, and Slack reporting.
+Omit `build-only` for the default [release pipeline](../docs/release.md):
+wait for release assets, validate dev, and create the same tag's prod deployment for human approval.
 
 The address is `ghcr.io/<owner>/<repository>/<artifact>:vX.Y.Z-<full-sha>`.
 Artifact names and tags match Artifact Registry's layout; GHCR has no stage suffix.
